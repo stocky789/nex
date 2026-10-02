@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -35,11 +36,13 @@ type swapLab struct {
 
 const labVirsh = `S="$LAB"
 echo "$*" >> "$S/log"
+if [ -e "$S/stall_$3" ]; then touch "$S/stalled"; exec sleep 30; fi
 case "$3" in
-domstate) cat "$S/state";;
+domstate) cat "$S/state"; if [ -e "$S/settle" ]; then rm "$S/settle"; echo "shut off" > "$S/state"; fi;;
 domjobinfo) echo "Job type: None";;
 shutdown) [ -e "$S/fail_shutdown" ] && { echo "error: guest agent not responding" >&2; exit 1; }
   [ -e "$S/hang_shutdown" ] || echo "shut off" > "$S/state";;
+destroy) echo "shut off" > "$S/state";;
 start) [ -e "$S/fail_start" ] && { echo "error: cannot start" >&2; exit 1; }
   XML="$S/inactive.xml"; [ -e "$S/stale_live" ] && XML="$S/live.xml"
   grep -o 'system-[0-9a-f]*\.img' "$XML" | head -1 > "$S/booted"
@@ -61,6 +64,11 @@ func newSwapLab(t *testing.T) *swapLab {
 	e := testEngine(t)
 	e.swapPoll = time.Millisecond
 	e.shutdownWait = 50 * time.Millisecond
+	// The temporary directories are not on a known local filesystem: the host reports ext4 with room to spare.
+	e.statfs = func(_ string, st *syscall.Statfs_t) error {
+		st.Type, st.Bsize, st.Bavail = 0xef53, 4096, 1<<30
+		return nil
+	}
 	l := &swapLab{t: t, e: e, id: "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d", state: t.TempDir(), ready: map[string]bool{}}
 	dir := filepath.Join(e.config.StorageDir, l.id)
 	if err := os.MkdirAll(dir, 0o711); err != nil {
@@ -93,6 +101,8 @@ func newSwapLab(t *testing.T) *swapLab {
 	l.ready[l.oldSHA] = true
 	l.ready[l.newSHA] = true
 	fakeCommand(t, "virsh", labVirsh)
+	// The data disk is a plain qcow2: no backing file, no external data file.
+	fakeCommand(t, "qemu-img", `case "$*" in *--backing-chain*) echo '[{"filename":"'"$DATA"'","format":"qcow2"}]';; *) echo '{"format":"qcow2"}';; esac`)
 	t.Setenv("LAB", l.state)
 	t.Setenv("NEWSHA", l.newSHA)
 	t.Setenv("DATA", l.data)
@@ -146,8 +156,34 @@ func (l *swapLab) probe(ctx context.Context, url string) error {
 }
 
 func (l *swapLab) swap(hook func(stage string) error) (Operation, error) {
+	return l.swapWith(context.Background(), hook)
+}
+
+func (l *swapLab) swapWith(ctx context.Context, hook func(stage string) error) (Operation, error) {
 	l.e.swapHook = hook
-	return l.e.SwapAppliance(context.Background(), l.req)
+	return l.e.SwapAppliance(ctx, l.req)
+}
+
+// cancelOnStall returns a context that is cancelled the moment a command stalls, the way the service's
+// context ends when it stops in the middle of a step. A fake command stalls when it sees its stall flag.
+func (l *swapLab) cancelOnStall() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	l.t.Cleanup(func() { close(done); cancel() })
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(time.Millisecond):
+			}
+			if _, err := os.Stat(filepath.Join(l.state, "stalled")); err == nil {
+				cancel()
+				return
+			}
+		}
+	}()
+	return ctx
 }
 
 func (l *swapLab) newPath() string {
@@ -585,5 +621,445 @@ func TestSwapReadinessNeedsTheExpectedImageToRun(t *testing.T) {
 	}
 	if dep := l.deployment(); dep.System != l.oldPath() {
 		t.Fatalf("deployment must keep the old image: %+v", dep)
+	}
+}
+
+// Power is lost after the domain was redefined and before the journal recorded a start. The Controller is
+// autostarted from the new definition, so the new image runs on the data disk while the journal still
+// says swap_define: the rollback must restore the checkpoint, not hand the old image a migrated disk.
+func TestSwapRestoresDataWhenLibvirtAutostartedTheNewImage(t *testing.T) {
+	l := newSwapLab(t)
+	if _, err := l.swap(crashAt(swapDefine)); err == nil {
+		t.Fatal("expected the simulated crash")
+	}
+	l.setDomain(l.newPath())
+	l.put("state", "running\n")
+	l.put("booted", "system-"+l.newSHA+".img\n")
+	if err := os.WriteFile(l.data, []byte("controller state\nwritten-by-new-image\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	op, err := l.swap(nil)
+	if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" {
+		t.Fatalf("expected a rollback: %+v %v", op, err)
+	}
+	if got := l.dataContent(); got != "controller state\n" {
+		t.Fatalf("the old image was given the data the new image wrote: %q", got)
+	}
+	if l.deployment().System != l.oldPath() || !strings.Contains(l.read("booted"), l.oldSHA) {
+		t.Fatalf("the old image is not running again: %s", l.read("booted"))
+	}
+}
+
+// A service that stops while a step runs is an interruption, not a failure of the step: the journal
+// keeps the step, no rollback starts, no terminal status is written, and repeating the request finishes.
+func TestSwapCancelledContextInterruptsEveryStep(t *testing.T) {
+	real, err := exec.LookPath("cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, stage, stall, copyEnd string
+		restore                     bool
+	}{
+		{"checkpoint copy", swapCheckpoint, "cp", "controller-data.qcow2.pre-7.part", false},
+		{"define", swapDefine, "define", "", false},
+		{"start", swapStart, "start", "", false},
+		{"restore copy", swapRestore, "cp", "controller-data.qcow2.part", true},
+		{"redefine", swapRedefine, "define", "", true},
+		{"restart", swapRestart, "start", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newSwapLab(t)
+			l.ready[l.newSHA] = !tc.restore
+			t.Setenv("STALLCP", tc.copyEnd)
+			fakeCommand(t, "cp", `case "$*" in *"$STALLCP") if [ -e "$LAB/stall_cp" ]; then touch "$LAB/stalled"; exec sleep 30; fi;; esac
+exec `+real+` "$@"`)
+			stall := func(stage string) error {
+				if stage == tc.stage {
+					l.put("stall_"+tc.stall, "")
+				}
+				return nil
+			}
+			op, err := l.swapWith(l.cancelOnStall(), stall)
+			if !errors.Is(err, context.Canceled) || op.Status != "running" || op.Stage != tc.stage {
+				t.Fatalf("a cancelled context must leave the journal at %s: %+v %v", tc.stage, op, err)
+			}
+			if j, err := l.e.load(l.req.RequestID); err != nil || j.Status != "running" || j.Stage != tc.stage {
+				t.Fatalf("journal after the interruption: %+v %v", j, err)
+			}
+			for _, name := range []string{"stall_" + tc.stall, "stalled"} {
+				if err := os.Remove(filepath.Join(l.state, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			op, err = l.swap(nil)
+			if tc.restore {
+				if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" || l.dataContent() != "controller state\n" || l.deployment().System != l.oldPath() {
+					t.Fatalf("the resumed rollback did not finish: %+v %v data %q", op, err, l.dataContent())
+				}
+			} else if err != nil || op.Status != "completed" || l.deployment().System != l.newPath() {
+				t.Fatalf("the resumed swap did not finish: %+v %v", op, err)
+			}
+		})
+	}
+}
+
+// A graceful shutdown already under way (the request was repeated while the guest was still stopping) is
+// waited for. Failing here would end the swap with the Controller about to power off and nothing to start it.
+func TestSwapWaitsForAShutdownAlreadyUnderWay(t *testing.T) {
+	l := newSwapLab(t)
+	if _, err := l.swap(crashAt(swapShutdown)); err == nil {
+		t.Fatal("expected the simulated crash")
+	}
+	l.put("state", "in shutdown\n")
+	l.put("settle", "")
+	op, err := l.swap(nil)
+	if err != nil || op.Status != "completed" {
+		t.Fatalf("resume during a shutdown: %+v %v", op, err)
+	}
+	if l.count("shutdown") != 0 || l.count("destroy") != 0 {
+		t.Fatalf("a shutdown already under way must be waited for, not requested or forced again:\n%s", l.read("log"))
+	}
+}
+
+// A new image that never booted far enough to run the guest agent cannot be shut down gracefully. It is
+// the only writer of a data disk that the checkpoint replaces, so the rollback forces it off, and only it.
+func TestSwapRollbackForcesOnlyANewImageThatNeverBecameReady(t *testing.T) {
+	for name, file := range map[string]string{"no guest agent": "fail_shutdown", "guest ignores the shutdown": "hang_shutdown"} {
+		t.Run(name, func(t *testing.T) {
+			l := newSwapLab(t)
+			l.ready[l.newSHA] = false
+			op, err := l.swap(func(stage string) error {
+				if stage == swapProbe {
+					l.put(file, "")
+				}
+				return nil
+			})
+			if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" {
+				t.Fatalf("expected a rollback: %+v %v", op, err)
+			}
+			if l.count("destroy") != 1 || l.dataContent() != "controller state\n" || l.deployment().System != l.oldPath() || l.read("state") != "running" || !strings.Contains(l.read("booted"), l.oldSHA) {
+				t.Fatalf("the old image was not restored after the forced stop (data %q):\n%s", l.dataContent(), l.read("log"))
+			}
+		})
+	}
+	t.Run("never any other guest", func(t *testing.T) {
+		l := newSwapLab(t)
+		l.ready[l.newSHA] = false
+		if _, err := l.swap(crashAt(swapRestore)); err == nil {
+			t.Fatal("expected the simulated crash")
+		}
+		// The definition names the new image but the running domain is not it, and its agent does not answer.
+		inactive := l.read("inactive.xml")
+		l.setDomain(l.oldPath())
+		l.put("inactive.xml", inactive)
+		l.put("state", "running\n")
+		l.put("fail_shutdown", "")
+		op, err := l.swap(nil)
+		if codeOf(err) != SwapNeedsAttention || op.Status != "needs_attention" || l.count("destroy") != 0 {
+			t.Fatalf("a guest that is not the failed new image must never be forced: %+v %v\n%s", op, err, l.read("log"))
+		}
+	})
+}
+
+// A replay of a refused swap answers with the code the first call returned.
+func TestSwapReplayAnswersWithTheCodeOfTheFirstRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name, code string
+		break_     func(*testing.T, *swapLab)
+	}{
+		{"digest", SwapDigestMismatch, func(t *testing.T, l *swapLab) {
+			if err := os.WriteFile(l.source, []byte("tampered"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"staging", SwapStageFailed, func(t *testing.T, l *swapLab) { fakeCommand(t, "cp", "exit 1") }},
+		{"shutdown", SwapShutdownFailed, func(t *testing.T, l *swapLab) { l.put("fail_shutdown", "") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newSwapLab(t)
+			tc.break_(t, l)
+			if _, err := l.swap(nil); codeOf(err) != tc.code {
+				t.Fatalf("first answer %v, want %s", err, tc.code)
+			}
+			if op, err := l.swap(nil); codeOf(err) != tc.code || op.Status != "failed" {
+				t.Fatalf("replay answered %+v %v, want %s", op, err, tc.code)
+			}
+		})
+	}
+}
+
+// The guards every other Controller action runs also stand before a swap, so a Controller whose disk or
+// storage is not what it deployed is refused before it is stopped.
+func TestSwapAdmissionRunsTheOwnershipGuards(t *testing.T) {
+	for name, setup := range map[string]func(*testing.T, *swapLab){
+		"data disk replaced by a symlink": func(t *testing.T, l *swapLab) {
+			if err := os.Rename(l.data, l.data+".real"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(l.data+".real", l.data); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"storage not local": func(t *testing.T, l *swapLab) {
+			l.e.statfs = func(_ string, st *syscall.Statfs_t) error { st.Type = 0x6969; return nil } // NFS
+		},
+		"data disk with a backing file": func(t *testing.T, l *swapLab) {
+			fakeCommand(t, "qemu-img", `echo '{"format":"qcow2","backing-filename":"base.qcow2"}'`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := newSwapLab(t)
+			setup(t, l)
+			if op, err := l.swap(nil); err == nil || op.Status == "completed" {
+				t.Fatalf("the swap was admitted: %+v %v", op, err)
+			}
+			if l.count("shutdown") != 0 || l.read("state") != "running" {
+				t.Fatalf("the Controller was stopped for a swap that must be refused:\n%s", l.read("log"))
+			}
+			if _, err := l.e.load(l.req.RequestID); err == nil {
+				t.Fatal("a refused swap left a journal")
+			}
+		})
+	}
+}
+
+// Without extent sharing (ext4) the checkpoint and a restore each copy the data disk. That has to fit
+// before the Controller is stopped, not be found out by a failed copy after it was.
+func TestSwapRefusesBeforeShutdownWhenTheCheckpointCannotFit(t *testing.T) {
+	real, err := exec.LookPath("cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := func(l *swapLab, free uint64) {
+		l.e.statfs = func(_ string, st *syscall.Statfs_t) error {
+			st.Type, st.Bsize, st.Bavail = 0xef53, 4096, free
+			return nil
+		}
+	}
+	t.Run("no reflink and no room", func(t *testing.T) {
+		l := newSwapLab(t)
+		if err := os.WriteFile(l.data, []byte(strings.Repeat("x", 1<<20)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		fakeCommand(t, "cp", `case "$*" in *--reflink=always*) echo "cp: failed to clone: Operation not supported" >&2; exit 1;; esac
+exec `+real+` "$@"`)
+		room(l, 1)
+		if op, err := l.swap(nil); codeOf(err) != SwapNoRoom || op.Status == "completed" {
+			t.Fatalf("expected a refusal for lack of room: %+v %v", op, err)
+		}
+		if l.count("shutdown") != 0 || l.read("state") != "running" {
+			t.Fatalf("the Controller was stopped for a checkpoint that cannot fit:\n%s", l.read("log"))
+		}
+		room(l, 1<<30)
+		if op, err := l.swap(nil); err != nil || op.Status != "completed" {
+			t.Fatalf("the same swap with room must go ahead: %+v %v", op, err)
+		}
+	})
+	t.Run("reflink needs no room", func(t *testing.T) {
+		l := newSwapLab(t)
+		fakeCommand(t, "cp", `case "$*" in *--reflink=always*) exit 0;; esac
+exec `+real+` "$@"`)
+		room(l, 0)
+		if op, err := l.swap(nil); err != nil || op.Status != "completed" {
+			t.Fatalf("a filesystem that shares extents needs no free space for the checkpoint: %+v %v", op, err)
+		}
+	})
+}
+
+// Power is lost after the swap shut the Controller down and before the definition changed; libvirt
+// autostarts the old image on reboot and it writes to the data disk. The swap stops it gracefully, takes
+// the checkpoint again from the quiescent disk, and goes on: a checkpoint older than that guest's writes
+// would lose them on a rollback.
+func TestSwapContinuesWhenLibvirtAutostartedTheOldImage(t *testing.T) {
+	const late = "controller state\nwritten-by-old-image\n"
+	for _, stage := range []string{swapCheckpoint, swapDefine} {
+		for _, ready := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s ready=%v", stage, ready), func(t *testing.T) {
+				l := newSwapLab(t)
+				l.ready[l.newSHA] = ready
+				if _, err := l.swap(crashAt(stage)); err == nil {
+					t.Fatal("expected the simulated crash")
+				}
+				// After the reboot the old image runs again from the unchanged definition and writes.
+				l.put("state", "running\n")
+				if err := os.WriteFile(l.data, []byte(late), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				op, err := l.swap(nil)
+				if cp, _ := os.ReadFile(l.data + ".pre-7"); string(cp) != late {
+					t.Fatalf("the checkpoint lost what the old image wrote: %q (%+v %v)", cp, op, err)
+				}
+				// The first shutdown, the restarted old image's, and on a rollback the failed new image's.
+				shutdowns := 2
+				if !ready {
+					shutdowns = 3
+				}
+				if l.count("destroy") != 0 || l.count("shutdown") != shutdowns {
+					t.Fatalf("the restarted old image must be stopped once, gracefully:\n%s", l.read("log"))
+				}
+				if ready {
+					if err != nil || op.Status != "completed" || l.deployment().System != l.newPath() || l.dataContent() != late+"written-by-new-image\n" {
+						t.Fatalf("the swap did not go on: %+v %v data %q", op, err, l.dataContent())
+					}
+				} else if codeOf(err) != SwapRolledBack || l.dataContent() != late || l.deployment().System != l.oldPath() {
+					t.Fatalf("the rollback lost the old image's writes: %+v %v data %q", op, err, l.dataContent())
+				}
+			})
+		}
+	}
+}
+
+// A restarted old image that will not stop is not forced: the swap ends having changed nothing, and the
+// Controller keeps serving its image. A replay answers the same.
+func TestSwapEndsWithoutChangesWhenARestartedOldImageWillNotStop(t *testing.T) {
+	for _, stage := range []string{swapCheckpoint, swapDefine} {
+		t.Run(stage, func(t *testing.T) {
+			l := newSwapLab(t)
+			if _, err := l.swap(crashAt(stage)); err == nil {
+				t.Fatal("expected the simulated crash")
+			}
+			l.put("state", "running\n")
+			l.put("fail_shutdown", "")
+			for i := 0; i < 2; i++ {
+				op, err := l.swap(nil)
+				if codeOf(err) != SwapShutdownFailed || op.Status != "failed" {
+					t.Fatalf("attempt %d: %+v %v", i, op, err)
+				}
+			}
+			if l.count("destroy") != 0 || l.read("state") != "running" || l.deployment().System != l.oldPath() || !strings.Contains(l.read("inactive.xml"), l.oldPath()) {
+				t.Fatalf("the swap must change nothing:\n%s", l.read("log"))
+			}
+			if _, err := os.Stat(l.data + ".pre-7"); !os.IsNotExist(err) {
+				t.Fatalf("a stale checkpoint was left behind: %v", err)
+			}
+		})
+	}
+}
+
+// The staged image is on disk before the journal moves past staging: its data is synced before the rename
+// can expose it under its final name, and the directory entry after the rename.
+func TestSwapSyncsTheStagedImageBeforeTheJournalAdvances(t *testing.T) {
+	for _, placed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("placed by an earlier run=%v", placed), func(t *testing.T) {
+			l := newSwapLab(t)
+			if placed {
+				if err := os.WriteFile(l.newPath(), []byte("new system image"), 0o444); err != nil {
+					t.Fatal(err)
+				}
+			}
+			part := l.newPath() + ".part"
+			exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+			var events []string
+			l.e.syncPath = func(p string) error {
+				switch p {
+				case part:
+					if placed || exists(l.newPath()) || !exists(part) {
+						t.Errorf("the temporary file must be synced before the rename, while the final name is absent")
+					}
+					if sum, _, err := fileSHA256(part); err != nil || sum != l.newSHA {
+						t.Errorf("the temporary file was synced before it was complete: %v", err)
+					}
+					events = append(events, "file")
+				case l.newPath():
+					if !placed {
+						t.Errorf("a copied image is synced under its temporary name")
+					}
+					events = append(events, "file")
+				case filepath.Dir(l.newPath()):
+					if !exists(l.newPath()) || exists(part) {
+						t.Errorf("the directory must be synced after the rename")
+					}
+					events = append(events, "dir")
+				default:
+					t.Errorf("unexpected sync of %s", p)
+				}
+				return nil
+			}
+			seen := false
+			op, err := l.swap(func(stage string) error {
+				if stage == swapShutdown {
+					seen = true
+					if got := strings.Join(events, ","); got != "file,dir" {
+						t.Errorf("the journal advanced after syncs %q, want file,dir", got)
+					}
+				}
+				return nil
+			})
+			if err != nil || op.Status != "completed" || !seen {
+				t.Fatalf("swap: %+v %v (hook seen %v)", op, err, seen)
+			}
+		})
+	}
+}
+
+// A journal written before the code was recorded still replays with the code the swap then answered with.
+func TestSwapReplaysAJournalWithoutACode(t *testing.T) {
+	l := newSwapLab(t)
+	l.put("fail_shutdown", "")
+	if _, err := l.swap(nil); codeOf(err) != SwapShutdownFailed {
+		t.Fatalf("first answer %v", err)
+	}
+	j, err := l.e.load(l.req.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Swap.Code = ""
+	if err = l.e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	if op, err := l.swap(nil); codeOf(err) != SwapShutdownFailed || op.Status != "failed" {
+		t.Fatalf("replay answered %+v %v", op, err)
+	}
+}
+
+// A copy that fails halfway leaves no temporary file behind, and a temporary file a crash left is pruned
+// when the next swap commits.
+func TestSwapLeavesNoPartialImages(t *testing.T) {
+	t.Run("failed copy", func(t *testing.T) {
+		l := newSwapLab(t)
+		fakeCommand(t, "cp", `for a; do d="$a"; done; echo partial > "$d"; exit 1`)
+		if _, err := l.swap(nil); codeOf(err) != SwapStageFailed {
+			t.Fatalf("expected %s: %v", SwapStageFailed, err)
+		}
+		if _, err := os.Stat(l.newPath() + ".part"); !os.IsNotExist(err) {
+			t.Fatalf("a partial image was left: %v", err)
+		}
+	})
+	t.Run("crash leftover", func(t *testing.T) {
+		l := newSwapLab(t)
+		stale := filepath.Join(filepath.Dir(l.data), "system-"+strings.Repeat("c", 64)+".img.part")
+		if err := os.WriteFile(stale, []byte("cut"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		if op, err := l.swap(nil); err != nil || op.Status != "completed" {
+			t.Fatalf("swap: %+v %v", op, err)
+		}
+		if _, err := os.Stat(stale); !os.IsNotExist(err) {
+			t.Fatalf("a stale partial image outlived the commit: %v", err)
+		}
+	})
+}
+
+// A service that stops during the admission probe is an interruption, not a storage verdict: no refusal
+// is published and no journal exists.
+func TestSwapAdmissionInterruptedByCancelIsNotAStorageRefusal(t *testing.T) {
+	real, err := exec.LookPath("cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := newSwapLab(t)
+	fakeCommand(t, "cp", `case "$*" in *reflink-probe) touch "$LAB/stalled"; exec sleep 30;; esac
+exec `+real+` "$@"`)
+	l.e.statfs = func(_ string, st *syscall.Statfs_t) error {
+		st.Type, st.Bsize, st.Bavail = 0xef53, 4096, 0
+		return nil
+	}
+	_, err = l.swapWith(l.cancelOnStall(), nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the cancellation, got %v", err)
+	}
+	if _, err = l.e.load(l.req.RequestID); err == nil {
+		t.Fatal("an interrupted admission must not leave a journal")
 	}
 }

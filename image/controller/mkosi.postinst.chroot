@@ -29,7 +29,15 @@ chown -R root:root /usr/local/lib/nex /usr/local/share/nex /etc/systemd/system/n
 chmod 755 /usr/local/lib/nex/*
 chmod -R a+rX /usr/local/share/nex
 install -d -m 700 /etc/nex-controller
-useradd --system --home /var/lib/nex-controller nex-controller
+# The account comes from the sysusers.d file of this image with a fixed uid/gid: /etc/nex-controller and the Controller's state
+# live on the data disk and keep the numeric owner firstboot gave them across image swaps, so the id must never move with the
+# package set (useradd --system would take whatever system id is free at build time). sysusers only suggests an id and takes
+# another when it is held, so the result is checked.
+systemd-sysusers nex-controller.conf
+[ "$(id -u nex-controller):$(id -g nex-controller)" = 280:280 ] || { echo "nex-controller is not 280:280; another package holds the id" >&2; exit 1; }
+# Name resolution: networkd passes the DNS servers of the netplan configuration to systemd-resolved, whose stub is the resolver.
+# The link is part of the image (the package's tmpfiles rule `L!` only creates it at boot, and only when nothing is there).
+ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 # The readiness marker the host probes is written by firstboot; the root is read-only, so it lands on the data disk.
 ln -s /var/lib/nex-controller/appliance-ready.json /usr/local/share/nex/dist/appliance-ready.json
 
@@ -37,7 +45,7 @@ ln -s /var/lib/nex-controller/appliance-ready.json /usr/local/share/nex/dist/app
 sh /usr/local/lib/nex/package-service-policy runtime-qnetd
 rm -f /usr/local/lib/nex/package-service-policy
 
-systemctl enable qemu-guest-agent nex-appliance-init nex-controller corosync-qnetd ssh
+systemctl enable qemu-guest-agent nex-appliance-init nex-controller corosync-qnetd ssh systemd-resolved systemd-timesyncd
 if [ -e /usr/lib/systemd/system/systemd-networkd.service ]; then systemctl enable systemd-networkd; fi
 passwd -l root
 rm -f /var/lib/systemd/random-seed

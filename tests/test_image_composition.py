@@ -210,7 +210,7 @@ class FinalizeTest(unittest.TestCase):
         r = t.finalize(units_enable=["a.service"], provides=["a"])
         self.assertFalse((t.layer / "etc").exists())
         self.assertEqual((t.layer / "usr/share/factory/etc/zfs/zed.d/zed.rc").read_text(), "ZED=1\n")
-        self.assertIn("C /etc/zfs - - - -", (t.layer / "usr/lib/tmpfiles.d/nex-test-etc.conf").read_text())
+        self.assertIn("C+ /etc/zfs - - - -", (t.layer / "usr/lib/tmpfiles.d/nex-test-etc.conf").read_text())
         self.assertEqual(r["etc_to_factory"], ["/etc/zfs"])
         rel = t.layer / "usr/lib/extension-release.d"
         self.assertEqual([p.name for p in rel.iterdir()], ["extension-release.nex-test"])
@@ -281,6 +281,25 @@ class FinalizeTest(unittest.TestCase):
         r = t.finalize()
         self.assertEqual(r["packages"], ["zfs-zed", "zfsutils-linux"])
 
+    @unittest.skipUnless(shutil.which("systemd-tmpfiles"), "needs systemd-tmpfiles")
+    def test_package_defaults_reach_a_shared_etc_directory_without_replacing_operator_files(self):
+        # tmpfiles.d(5): a plain C rule skips the whole copy when the destination directory exists and is not empty,
+        # which is what /etc/default, /etc/logrotate.d and the like are on every host. Run the real consumer.
+        t = Tree(self)
+        t.put(t.layer, "etc/default/zfs", "package default\n")
+        t.put(t.layer, "etc/default/shared", "package version\n")
+        t.put(t.layer, "etc/zfs/zed.d/zed.rc", "ZED=1\n")
+        t.finalize()
+        host = Path(t.tmp.name, "host")
+        shutil.copytree(t.layer / "usr", host / "usr")
+        t.put(host, "etc/default/other", "operator file\n")
+        t.put(host, "etc/default/shared", "operator edit\n")
+        subprocess.run(["systemd-tmpfiles", "--root", str(host), "--create"], check=True, capture_output=True)
+        self.assertEqual((host / "etc/default/zfs").read_text(), "package default\n")
+        self.assertEqual((host / "etc/default/shared").read_text(), "operator edit\n")
+        self.assertEqual((host / "etc/default/other").read_text(), "operator file\n")
+        self.assertEqual((host / "etc/zfs/zed.d/zed.rc").read_text(), "ZED=1\n")
+
     def test_host_specific_etc_files_are_not_shared_through_factory(self):
         t = Tree(self)
         t.put(t.layer, "etc/hostid", "abcd")
@@ -305,6 +324,24 @@ class FinalizeTest(unittest.TestCase):
         t2.put(t2.layer, "usr/lib/systemd/system/early.service", "[Unit]\n[Install]\nWantedBy=sysinit.target\n")
         with self.assertRaisesRegex(lf.Failure, "sysinit.target"):
             t2.finalize()
+
+    def test_units_hung_off_early_targets_by_wants_or_requires_directories_fail(self):
+        for target, suffix in (("sysinit.target", "wants"), ("sysinit.target", "requires"), ("local-fs.target", "requires"),
+                               ("basic.target", "requires"), ("basic.target", "upholds")):
+            with self.subTest(directory=f"{target}.{suffix}"):
+                t = Tree(self)
+                t.put(t.layer, "usr/lib/systemd/system/early.service", "[Service]\nExecStart=/bin/true\n")
+                link = t.layer / f"usr/lib/systemd/system/{target}.{suffix}/early.service"
+                link.parent.mkdir(parents=True)
+                link.symlink_to("../early.service")
+                with self.assertRaisesRegex(lf.Failure, f"units hang off {re.escape(target)}"):
+                    t.finalize()
+        t = Tree(self)
+        t.put(t.layer, "usr/lib/systemd/system/late.service", "[Service]\nExecStart=/bin/true\n")
+        link = t.layer / "usr/lib/systemd/system/multi-user.target.requires/late.service"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("../late.service")
+        t.finalize()
 
     def test_modules_for_a_kernel_the_base_lacks_fail(self):
         t = Tree(self)
@@ -371,6 +408,60 @@ class ReproducibilityTest(unittest.TestCase):
             self.assertRegex(sysusers, "(?m)" + line)
         spec = json.loads((IMAGE / "mkosi.images/nex-cluster/layer.json").read_text())
         self.assertEqual(spec["allow_var"], [])
+
+
+class ControllerImageTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("systemd-sysusers"), "needs systemd-sysusers")
+    def test_the_controller_account_gets_fixed_ids_while_other_system_ids_are_taken_dynamically(self):
+        # firstboot gives /etc/nex-controller and /var/lib/nex-controller to this account on the data disk, which outlives
+        # every system image; a uid taken from whatever system id was free at build time would not survive a swap.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "usr/lib/sysusers.d").mkdir(parents=True)
+            shutil.copy(IMAGE / "controller/mkosi.extra/usr/lib/sysusers.d/nex-controller.conf", root / "usr/lib/sysusers.d")
+            (root / "etc").mkdir()
+            (root / "etc/passwd").write_text("root:x:0:0:root:/root:/bin/bash\nsvc:x:999:999::/:/usr/sbin/nologin\nsvc2:x:998:998::/:/usr/sbin/nologin\n")
+            (root / "etc/group").write_text("root:x:0:\nsvc:x:999:\nsvc2:x:998:\n")
+            subprocess.run(["systemd-sysusers", "--root", tmp, "nex-controller.conf"], check=True, capture_output=True)
+            entry = next(line for line in (root / "etc/passwd").read_text().splitlines() if line.startswith("nex-controller:"))
+            self.assertEqual(entry.split(":")[2:], ["280", "280", "Nex Controller", "/var/lib/nex-controller", "/usr/sbin/nologin"])
+            self.assertIn("nex-controller:x:280:", (root / "etc/group").read_text())
+
+
+class ZfsModuleBuildTest(unittest.TestCase):
+    """scripts/build-zfs-modules.sh in a copy of the tree with a fake docker: only the sources the builder is given matter."""
+
+    def sources(self, **env):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts").mkdir()
+            shutil.copy(ROOT / "scripts/build-zfs-modules.sh", root / "scripts")
+            (root / "image/mkosi.images/nex-zfs/zfs-builder").mkdir(parents=True)
+            (root / "image/mkosi.images/nex-zfs/zfs-builder/Dockerfile").write_text("FROM scratch\n")
+            (root / "image/snapshot").write_text("20300101T000000Z\n")
+            (root / "bin").mkdir()
+            fake = root / "bin/docker"
+            fake.write_text('#!/bin/sh\n[ "$1" != run ] || cat >/dev/null\nexit 0\n')
+            fake.chmod(0o755)
+            (root / "module.key").write_text("key\n")
+            (root / "module.crt").write_text("cert\n")
+            environ = {k: v for k, v in os.environ.items() if not k.startswith("NEX_") and k != "ZFS_DKMS_VERSION"}
+            environ.update(PATH=f"{root / 'bin'}:{os.environ['PATH']}", NEX_MODULE_KEY=str(root / "module.key"),
+                           NEX_MODULE_CERT=str(root / "module.crt"), **env)
+            subprocess.run(["sh", str(root / "scripts/build-zfs-modules.sh"), "--base-tree", str(root / "base"), "--kver", "6.12.0-test",
+                            "--out", str(root / "out")], env=environ, check=True, capture_output=True)
+            return (root / ".cache/image-builder/zfs/sources.list").read_text()
+
+    def test_modules_are_built_from_the_snapshot_the_image_is_pinned_to(self):
+        # The layer's zfsutils-linux and zfs-zed come from image/snapshot; modules from another snapshot would be another OpenZFS.
+        text = self.sources()
+        self.assertIn("snapshot.debian.org/archive/debian/20300101T000000Z/", text)
+        self.assertIn("snapshot.debian.org/archive/debian-security/20300101T000000Z/", text)
+
+    def test_an_explicit_snapshot_still_overrides_the_pin(self):
+        text = self.sources(NEX_SNAPSHOT="20310202T000000Z")
+        self.assertIn("archive/debian/20310202T000000Z/", text)
+        self.assertNotIn("20300101T000000Z", text)
 
 
 if __name__ == "__main__":

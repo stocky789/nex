@@ -4,6 +4,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -49,6 +51,26 @@ func TestLivePeersReadTheMembersAnswerOverTheRealTransport(t *testing.T) {
 	result, err = peers.Step(context.Background(), member, stage)
 	if err != nil || result.Done || result.Code != "insufficient_space" || result.Message != "no room" {
 		t.Fatalf("a refused stage over the transport = %+v %v", result, err)
+	}
+}
+
+// A member that predates the rollout routes answers 404 over the real transport. That is not
+// "unreachable": the master tells the operator to upgrade it, which the host-local route
+// documents as upgrade_required.
+func TestAMemberWithoutTheRoutesIsAnUpgradeNotAnOutage(t *testing.T) {
+	old := httptest.NewServer(http.NotFoundHandler())
+	defer old.Close()
+	req, err := http.NewRequest(http.MethodGet, old.URL+poolUpdateStatusPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = doPoolUpdate(old.Client(), req, "member-old", &protocol.PoolUpdateHostStatus{}); !errors.Is(err, errPoolUpdateUnsupported) {
+		t.Fatalf("a 404 from the step route = %v", err)
+	}
+	lab := newUpdateLab(t, 3)
+	lab.pool.host("member-2").capability = false // the fake answers errPoolUpdateUnsupported, as doPoolUpdate does
+	if code := refusalCode(lab.start("old-member", "refuse")); code != "upgrade_required" {
+		t.Fatalf("preflight over a member without the routes = %q", code)
 	}
 }
 

@@ -6,8 +6,9 @@
 # The installer puts /var on its own filesystem. This script mounts it read-write, seeds
 # /var/lib/nex/etc and /var/roothome from the root filesystem's /etc and /root on first
 # boot, and binds them back over /etc and /root. After that the root filesystem's own
-# copies are shadowed and never change. A host whose fstab has no /var entry (installed
-# before this layout) is left exactly as it was.
+# copies are shadowed and never change. The only condition is a /var entry in fstab, so any
+# host with a separate /var is converted, whoever installed it. A host without one
+# (installed before this layout) is left exactly as it was.
 case ${1:-} in
 prereqs) exit 0 ;;
 esac

@@ -25,3 +25,9 @@ systemd-boot
 systemd-boot-efi
 systemd-boot-efi-amd64-signed
 linux-image-amd64
+
+# Name resolution and time. netplan renders DNS servers for networkd, which only systemd-resolved consumes (it is the
+# resolver behind /etc/resolv.conf), and the Controller's TLS validity and qnetd witness must not rest on the hypervisor
+# clock alone; the packages are separate in trixie and mkosi installs no recommends.
+systemd-resolved
+systemd-timesyncd

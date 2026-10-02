@@ -58,7 +58,9 @@ Record `docs/changes/2026-10-01-image-installer.json`; CHANGELOG entry under `[U
   downloaded image the same way before the disks change; their payloads can only be checked after download, once
   `nex-data` exists (a failure there leaves an installed host and says so). The Controller-package stamp
   `/etc/nex/core-release` ships in the image (`image/mkosi.skeleton`) because the package's `preinst` needs it at
-  build time; the installer no longer seeds a copy. Repair clears nothing.
+  build time; the installer no longer seeds a copy. Repair writes the image and boot partitions but places no
+  payloads; like install it first stops the arrays that hold a selected disk and refuses, before any write, if one
+  cannot be stopped.
 - `installer/gui/wizard-text.sh` and templates: 24 GiB floor, **Repair image** question only when `probe` finds
   a complete data volume, fixed disk set, own confirmation.
 - `installer/netinst-manifest.py`, `netinst-fetch.sh`: `payloads.tsv` (renamed from `netinst.tsv`) with
@@ -88,8 +90,10 @@ Record `docs/changes/2026-10-01-image-installer.json`; CHANGELOG entry under `[U
    the `nex-core-local` deb is outside this write set (packaging) and not done: the image edition stages
    `dist/appliance` directly and the classic path is untouched.
 4. `installer/check.sh` and netinst tests pass: **reached**.
-5. QEMU image-edition install: **not run**. `image/out/` held no release directory (only a 0-byte
-   `nex-hostimage` placeholder and a build log) and no ISO was built.
+5. QEMU image-edition install: **not run in this pass** (this page's own pass had no release directory and no ISO).
+   It was run later from a **lab ISO** (not a `build.sh` release ISO; real installer script and wizard components, small
+   payload fixture) in QEMU/OVMF: see [phase 6 lab 1](phase6-lab1.md) and [lab 2](phase6-lab2.md) for which installs and
+   which Repair ran and which scenarios did not. The shell-level tests in this pass use fake tools and are simulation only.
 
 ## Outstanding
 
@@ -112,4 +116,6 @@ Record `docs/changes/2026-10-01-image-installer.json`; CHANGELOG entry under `[U
   `\EFI\systemd\systemd-bootx64.efi` (a Secure Boot firmware cannot start it directly and falls back to the removable
   path); retargeting it at shim is a change in `internal/hostimage`, not made here.
 - The net installer verifies its payloads (appliance, VirtIO ISO) only after download, once `nex-data` exists, because
-  they exceed installer memory; a failure at that point leaves an installed host without payloads.
+  they exceed installer memory; a failure at that point leaves an installed host without payloads. The installer
+  unmounts and stops the `nex-data` array before it exits, and the only recovery is fetching the payloads from Nex
+  Core or running Erase and install again (Repair does not place payloads).

@@ -34,32 +34,44 @@ func stagedLayers(refs []LayerRef, dir string) []vmhost.StagedLayer {
 	return out
 }
 
-// stageLayers downloads the layers of the verified release and places them in the layer store. Every
-// layer is staged unless it is on_demand and the operator has not enabled it on this host. A layer that
-// is not for exactly this release's base never gets here (VerifyManifest refuses it) and the store
-// refuses it again. The slot is untouched until this returns.
-func (e *Engine) stageLayers(ctx context.Context, id string, v *verified, dir string) ([]LayerRef, error) {
+// layersToStage picks the layers of the manifest that are staged with the release: every one but an
+// on_demand layer the operator has not enabled on this host. carries reports whether the release has
+// layers at all. stageLayers downloads exactly these and checkSpace counts exactly these.
+func (e *Engine) layersToStage(ctx context.Context, m Manifest) (stage []Component, carries bool, err error) {
 	var comps []Component
-	for _, c := range v.manifest.Components {
+	for _, c := range m.Components {
 		if c.Kind == "layer" {
 			comps = append(comps, c)
 		}
 	}
 	if len(comps) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	if e.cfg.Layers == nil {
-		return nil, refuse(409, "layers_unavailable", "the release carries layers and this host has no layer store")
+		return nil, true, refuse(409, "layers_unavailable", "the release carries layers and this host has no layer store")
 	}
 	enabled, err := e.cfg.Layers.EnabledNames(ctx)
 	if err != nil {
-		return nil, refuse(500, "layers_unavailable", "the layer record of this host cannot be read")
+		return nil, true, refuse(500, "layers_unavailable", "the layer record of this host cannot be read")
+	}
+	for _, c := range comps {
+		if !c.OnDemand || contains(enabled, c.ID) {
+			stage = append(stage, c)
+		}
+	}
+	return stage, true, nil
+}
+
+// stageLayers downloads the layers of the verified release (layersToStage) and places them in the layer
+// store. A layer that is not for exactly this release's base never gets here (VerifyManifest refuses it)
+// and the store refuses it again. The slot is untouched until this returns.
+func (e *Engine) stageLayers(ctx context.Context, id string, v *verified, dir string) ([]LayerRef, error) {
+	comps, carries, err := e.layersToStage(ctx, v.manifest)
+	if err != nil || !carries {
+		return nil, err
 	}
 	var refs []LayerRef
 	for _, c := range comps {
-		if c.OnDemand && !contains(enabled, c.ID) {
-			continue
-		}
 		if _, err = fetchBlob(ctx, v.src, blobName(c), c, dir, func(done, total int64) {
 			e.setProgress(id, OpProgress{Component: c.ID, BytesDone: done, BytesTotal: total})
 		}); err != nil {
@@ -99,6 +111,37 @@ func (e *Engine) switchLayers(ctx context.Context, r ReleaseRecord) error {
 		return refuse(500, "layers_unavailable", "the layer record of this host cannot be updated")
 	}
 	return nil
+}
+
+// recordRunningLayers writes the layer files the running base's signed manifest lists on its record, unless
+// the record has them already (a release this engine staged does; the base an image was installed with, or
+// one adopted from the disk, does not). It runs before the first switch away from that base: rolling back
+// switches enabled.json back from these refs. A base whose manifest the layer store cannot read has none to
+// record; the layers it enabled are then judged by the layer manager at boot.
+func (e *Engine) recordRunningLayers(ctx context.Context) {
+	cur := e.st.Current
+	if e.cfg.Layers == nil || cur == nil || len(cur.Layers) > 0 || cur.Label == "" || cur.Sequence == 0 {
+		return
+	}
+	infos, err := e.cfg.Layers.Inventory(ctx)
+	if err != nil {
+		return
+	}
+	for _, i := range infos {
+		if i.SHA256 != "" && i.RequiresBase == buildOf(cur) {
+			// The inventory does not carry sizes; a recorded base is never downloaded again, so none is kept.
+			cur.Layers = append(cur.Layers, LayerRef{ID: i.Name, SHA256: i.SHA256, RequiresBase: i.RequiresBase})
+		}
+	}
+}
+
+// restoreLayers records the running release's layers as the enabled versions again after an arm or rollback
+// that switched them and then failed. The failure being reported is the arm's: a failed restore adds nothing
+// to it, and the layer manager refuses a layer that does not match the base at boot.
+func (e *Engine) restoreLayers(ctx context.Context, running *ReleaseRecord) {
+	if running != nil {
+		_ = e.switchLayers(context.WithoutCancel(ctx), *running)
+	}
 }
 
 // pruneLayers drops the layer files and release manifests of every base that is no longer bootable.

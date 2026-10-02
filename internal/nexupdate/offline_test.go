@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -54,7 +55,12 @@ func newLayerRig(t *testing.T) *layerRig {
 	r.write("releases/base-1/manifest.json", old)
 	enabled, _ := json.Marshal(layerStateFile{Format: 1, Layers: map[string]layerEntryFile{"nex-zfs": {Enabled: true, SHA256: r.oldSHA, Base: "base-1", Changed: "2026-10-01T00:00:00Z"}}})
 	r.write("enabled.json", enabled)
-	r.cfg.Layers = vmhost.NewLayers(vmhost.LayerConfig{Dir: r.dir})
+	osRelease := filepath.Join(t.TempDir(), "os-release")
+	if err := os.WriteFile(osRelease, []byte("BUILD_ID=base-1\nSYSEXT_LEVEL=base-1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.write("releases/base-1/manifest.sig", []byte("sig"))
+	r.cfg.Layers = vmhost.NewLayers(vmhost.LayerConfig{Dir: r.dir, OSRelease: osRelease, Verify: func(_, _ []byte) error { return nil }})
 	r.restart()
 	return r
 }
@@ -152,6 +158,8 @@ func TestLayersStageWithTheBaseAndSwitchOnlyAtActivate(t *testing.T) {
 	}
 }
 
+// The base the host was installed with has no layer refs on its record (the engine never staged it); the
+// first update records them from the running base's signed manifest, so rolling back switches them back.
 func TestRollbackSwitchesTheLayersBack(t *testing.T) {
 	r := newLayerRig(t)
 	newLayer := []byte("zfs-for-v2-2")
@@ -161,19 +169,33 @@ func TestRollbackSwitchesTheLayersBack(t *testing.T) {
 	if _, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"}); err != nil {
 		t.Fatal(err)
 	}
+	if e := r.enabled(); e.SHA256 != hexOf(newLayer) || e.Base != "v2-2" {
+		t.Fatalf("activate must switch to the new base's layer: %+v", e)
+	}
 	r.plat.boot(Booted{RootHash: b2.rootHash, Label: "v2", Sequence: 2}, true)
-	r.status()
-	// The record of the booted base has no layer refs (recovered from the disk), so a rollback has nothing to
-	// switch for the new current; the previous's own refs are what it needs. Seed them as a staged release does.
-	r.eng.mu.Lock()
-	r.eng.st.Previous.Layers = []LayerRef{{ID: "nex-zfs", SHA256: r.oldSHA, Bytes: int64(len(r.oldLayer)), RequiresBase: "base-1"}}
-	_ = r.eng.save()
-	r.eng.mu.Unlock()
+	if st := r.status(); st.Phase != PhaseCommitted {
+		t.Fatalf("%+v", st)
+	}
 	if _, _, err := r.eng.Rollback(context.Background(), ActionRequest{RequestID: "req-rollback-01"}); err != nil {
 		t.Fatal(err)
 	}
-	if e := r.enabled(); e.SHA256 != r.oldSHA || e.Base != "base-1" {
+	if e := r.enabled(); e.SHA256 != r.oldSHA || e.Base != "base-1" || !e.Enabled {
 		t.Fatalf("rolling back must record the previous base's layer: %+v", e)
+	}
+}
+
+// An arm that fails after the layers were switched switches them back: the host keeps running the old base.
+func TestFailedArmSwitchesTheLayersBack(t *testing.T) {
+	r := newLayerRig(t)
+	r.pub.addComponents(r.pub.layerComponent("nex-zfs", []byte("zfs-for-v2-2"), "v2-2", false))
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	r.plat.armErr = errors.New("esp write failed")
+	if _, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"}); err == nil {
+		t.Fatal("activate did not fail")
+	}
+	if e := r.enabled(); e.SHA256 != r.oldSHA || e.Base != "base-1" || !e.Enabled {
+		t.Fatalf("a failed arm left the layers of the base that is not running: %+v", e)
 	}
 }
 

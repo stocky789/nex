@@ -44,6 +44,48 @@ class ApplianceTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn('--base-image, --base-sha256 and --signing-key are required', result.stderr)
 
+    def test_both_profiles_stage_every_file_the_dockerfile_copies(self):
+        spec = importlib.util.spec_from_file_location('appliance_build', ROOT / 'appliance/build.py')
+        build = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build)
+        copied = [name for line in (ROOT / 'appliance/Dockerfile').read_text().splitlines()
+                  if line.startswith('COPY ') for name in line.split()[1:-1]]
+        self.assertTrue(copied)
+
+        class Stop(Exception):
+            pass
+
+        for profile in ('single-disk', 'controller'):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                temporary = Path(temporary)
+                fake_root = temporary / 'repo'
+                (fake_root / 'dist').mkdir(parents=True)
+                with tarfile.open(fake_root / 'dist/nex-source.tar.gz', 'w:gz') as archive:
+                    for path in (ROOT / 'appliance').iterdir():
+                        if path.is_file():
+                            archive.add(path, arcname='nex-source/appliance/' + path.name)
+                base = temporary / 'base.qcow2'
+                base.write_bytes(b'base')
+                key = temporary / 'key.pem'
+                key.write_text('key')
+                key.chmod(0o600)
+                staged = []
+
+                def fake_run(argv, **kwargs):
+                    if argv[1:2] == ['build']:
+                        staged.extend(sorted(p.name for p in Path(argv[-1]).iterdir()))
+                    elif argv[1:2] == ['run']:
+                        raise Stop
+                    return subprocess.CompletedProcess(argv, 0)
+
+                argv = ['build.py', '--profile', profile, '--version', '1', '--output', str(temporary / 'out'), '--docker', 'docker']
+                if profile == 'single-disk':
+                    argv += ['--base-image', str(base), '--base-sha256', hashlib.sha256(b'base').hexdigest(), '--signing-key', str(key)]
+                with patch.object(build, 'ROOT', fake_root), patch.object(build.subprocess, 'run', fake_run), \
+                        patch('sys.argv', argv), self.assertRaises(Stop):
+                    build.main()
+                self.assertTrue(set(copied) | {'Dockerfile'} <= set(staged), (profile, staged))
+
     def test_both_debian_builders_verify_supported_go_before_extracting(self):
         expected = '63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445'
         for name in ('appliance/Dockerfile', 'packaging/core-local/Dockerfile'):

@@ -10,7 +10,7 @@ hardware is visible. SIMULATION of the display and the hardware only; the instal
   tests/integration/installer-gui-repair.py [--image IMAGE] [--out DIR]
 
 Needs docker and an image with gcc, pkg-config, GTK 2 dev files, xvfb, xdotool, imagemagick (default nex-lab-gtk:phase6).
-Writes welcome.png (the choice), repair-chosen.png (Repair image selected) and page1..4.png (Begin setup, then Continue).
+Exits non-zero unless Repair is offered only when a data volume is found and can be selected. Writes welcome-no-repair.png, welcome.png (the choice), repair-chosen.png (Repair image selected) and page1..4.png (Begin setup, then Continue).
 """
 import argparse
 import os
@@ -26,7 +26,7 @@ mkdir -p /cdrom/nex /run/nex-installer /usr/lib/nex-installer /usr/share/nex-ins
 echo image > /cdrom/nex/edition
 cat > /cdrom/nex/nex-image-install.sh <<'EOT'
 #!/bin/sh
-[ "$1" = probe ] && printf 'layout=raid1\ndisks=/dev/vda,/dev/vdb\n'
+[ "$1" = probe ] && [ ! -e /tmp/norepair ] && printf 'layout=raid1\ndisks=/dev/vda,/dev/vdb\n'
 EOT
 cp /w/installer/assets/nex-core-lockup.png /usr/share/nex-installer/
 printf 'UTC\nAustralia/Sydney\n' > /usr/share/nex-installer/timezones
@@ -37,6 +37,16 @@ cc -O2 -Wall -Wextra -Wno-deprecated-declarations $(pkg-config --cflags gtk+-2.0
 export DISPLAY=:99
 Xvfb :99 -screen 0 1024x768x24 >/tmp/xvfb.log 2>&1 &
 sleep 2
+# True only when compare prints a pixel count above 200: ImageMagick error text or a tiny change (a focus ring) is no difference.
+differs() { n=$(compare -metric AE "$1" "$2" null: 2>&1 || true); case "$n" in ''|*[!0-9]*) return 1;; esac; [ "$n" -gt 200 ]; }
+# Control: with no complete data volume the wizard must not offer Repair.
+touch /tmp/norepair
+/tmp/nex-wizard >/tmp/wizard.log 2>&1 &
+WIZARD=$!
+sleep 4
+import -window root /out/welcome-no-repair.png
+kill $WIZARD; wait $WIZARD 2>/dev/null || true
+rm /tmp/norepair
 /tmp/nex-wizard >/tmp/wizard.log 2>&1 &
 sleep 4
 import -window root /out/welcome.png
@@ -45,12 +55,16 @@ sleep 1
 xdotool key Down
 sleep 1
 import -window root /out/repair-chosen.png
+# The Repair choice appears only when a data volume is found, and Down selects it.
+differs /out/welcome-no-repair.png /out/welcome.png || { echo "FAIL: Repair image is not offered when nex-data is found"; exit 1; }
+differs /out/welcome.png /out/repair-chosen.png || { echo "FAIL: Down did not select Repair image"; exit 1; }
 for i in 1 2 3 4; do
     xdotool mousemove 952 733 click 1
     sleep 2
     import -window root /out/page$i.png
 done
-echo done
+differs /out/repair-chosen.png /out/page1.png || { echo "FAIL: Begin setup did not leave the welcome page"; exit 1; }
+echo "PASS: Repair offered only with a data volume and selectable (screenshot comparison; the installer behind the wizard is not run)"
 '''
 
 

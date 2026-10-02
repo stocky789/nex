@@ -251,3 +251,106 @@ func TestInventoryImageReportsTheSourceAndMedia(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// stalledUpdater never answers a check until released, the way an update server that accepts the
+// connection and then says nothing does; it ignores its context on purpose.
+type stalledUpdater struct {
+	fakeUpdater
+	release chan struct{}
+}
+
+func (s *stalledUpdater) Check(context.Context) (nexupdate.ImageStatus, error) {
+	<-s.release
+	return nexupdate.ImageStatus{}, nil
+}
+
+// One stalled engine call must not hold the managed worker, which runs every command of the host one at a
+// time: the worker gets a definite failed result at the deadline and goes on.
+func TestRelayedImageUpdateGivesUpOnAStalledEngine(t *testing.T) {
+	engine := &stalledUpdater{release: make(chan struct{})}
+	defer close(engine.release)
+	SetImageUpdater(engine)
+	t.Cleanup(func() { SetImageUpdater(nil) })
+	prev := imageCheckDeadline
+	imageCheckDeadline = 50 * time.Millisecond
+	t.Cleanup(func() { imageCheckDeadline = prev })
+
+	started := time.Now()
+	result := ExecuteImageUpdate(context.Background(), imageCommand("check", nil))
+	if result.Status != "failed" || !strings.HasPrefix(result.Error, "internal: ") {
+		t.Fatalf("a stalled check = %+v", result)
+	}
+	if took := time.Since(started); took > 5*time.Second {
+		t.Fatalf("the worker waited %v for a stalled engine", took)
+	}
+	// The next command runs: the settings change that could fix the URL is not stuck behind the check.
+	if result = ExecuteImageUpdate(context.Background(), imageCommand("settings", func(r *protocol.ImageUpdateRequest) {
+		r.Channel, r.BaseURL = "dev", "https://updates.example.test"
+	})); result.Status != "succeeded" {
+		t.Fatalf("the command after a stalled check: %+v", result)
+	}
+}
+
+// ctxUpdater blocks every call until released and reports the context error it saw, so a test can tell a
+// cancelled engine call from one left to finish.
+type ctxUpdater struct {
+	fakeUpdater
+	release chan struct{}
+	seen    chan error
+}
+
+func (c *ctxUpdater) wait(ctx context.Context) {
+	<-c.release
+	c.seen <- ctx.Err()
+}
+func (c *ctxUpdater) Check(ctx context.Context) (nexupdate.ImageStatus, error) {
+	c.wait(ctx)
+	return nexupdate.ImageStatus{}, nil
+}
+func (c *ctxUpdater) Activate(ctx context.Context, _ nexupdate.ActionRequest) (nexupdate.Operation, bool, error) {
+	c.wait(ctx)
+	return nexupdate.Operation{}, false, nil
+}
+func (c *ctxUpdater) Rollback(ctx context.Context, _ nexupdate.ActionRequest) (nexupdate.Operation, bool, error) {
+	c.wait(ctx)
+	return nexupdate.Operation{}, false, nil
+}
+
+// A relayed activate or rollback that outlives the worker's wait is reported as still running, not failed,
+// and the engine call is not cancelled: cancelling it mid-arm would leave the ESPs half written. A check
+// is read-only and is cancelled.
+func TestRelayedImageUpdateDoesNotCancelStateChangingActions(t *testing.T) {
+	prevAction, prevCheck := imageActionDeadline, imageCheckDeadline
+	imageActionDeadline, imageCheckDeadline = 50*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { imageActionDeadline, imageCheckDeadline = prevAction, prevCheck })
+	t.Cleanup(func() { SetImageUpdater(nil) })
+
+	for _, action := range []string{"activate", "rollback"} {
+		engine := &ctxUpdater{release: make(chan struct{}), seen: make(chan error, 1)}
+		SetImageUpdater(engine)
+		started := time.Now()
+		result := ExecuteImageUpdate(context.Background(), imageCommand(action, nil))
+		if took := time.Since(started); took > 5*time.Second {
+			t.Fatalf("%s: the worker waited %v", action, took)
+		}
+		if result.Status != "needs_attention" || !strings.HasPrefix(result.Error, "still_running: ") {
+			t.Fatalf("%s past the wait = %+v", action, result)
+		}
+		time.Sleep(50 * time.Millisecond) // let any (wrong) cancellation propagate
+		close(engine.release)
+		if err := <-engine.seen; err != nil {
+			t.Fatalf("%s: the engine call was cancelled by the relay: %v", action, err)
+		}
+	}
+
+	engine := &ctxUpdater{release: make(chan struct{}), seen: make(chan error, 1)}
+	SetImageUpdater(engine)
+	result := ExecuteImageUpdate(context.Background(), imageCommand("check", nil))
+	if result.Status != "failed" {
+		t.Fatalf("a stalled check = %+v", result)
+	}
+	close(engine.release)
+	if err := <-engine.seen; err == nil {
+		t.Fatal("the stalled check kept running under a live context")
+	}
+}

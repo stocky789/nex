@@ -26,13 +26,24 @@ def run(*argv):
     return code, out.getvalue(), err.getvalue()
 
 
+def seal(directory):
+    """List every file of a release directory in its manifest.json with size and SHA-256, as image/release.py does."""
+    manifest = json.loads((directory / "manifest.json").read_text())
+    manifest["files"] = {str(path.relative_to(directory)): {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                                           "size": path.stat().st_size}
+                         for path in sorted(directory.rglob("*")) if path.is_file() and path.name != "manifest.json"}
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+
+
 def fake_release(directory, label, sequence, roothash="ab" * 32):
     directory.mkdir(parents=True)
-    for name, body in (("root.erofs", b"erofs"), ("root.verity", b"verity"), ("roothash", roothash.encode())):
+    for name, body in (("root.erofs", b"erofs"), ("root.verity", b"verity"), ("roothash", roothash.encode()),
+                       (f"nex-core_{label}_{sequence}.efi", b"uki")):
         (directory / name).write_bytes(body)
     (directory / "esp/EFI").mkdir(parents=True)
     (directory / "esp/EFI/loader.efi").write_bytes(b"loader")
     (directory / "manifest.json").write_text(json.dumps({"label": label, "sequence": sequence, "roothash": roothash}))
+    seal(directory)
     return directory
 
 
@@ -109,7 +120,8 @@ class UpdatePublishTests(unittest.TestCase):
         self.assertEqual(slot["encoding"], "tar+zstd")
         raw = subprocess.run(["zstd", "-dc"], input=(self.base / slot["url"]).read_bytes(), capture_output=True, check=True).stdout
         with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
-            self.assertEqual(sorted(archive.getnames()), ["esp/EFI/loader.efi", "manifest.json", "root.erofs", "root.verity", "roothash"])
+            self.assertEqual(sorted(archive.getnames()), ["esp/EFI/loader.efi", "manifest.json", "nex-core_1.1_2.efi", "root.erofs",
+                                                          "root.verity", "roothash"])
 
     def test_a_published_sequence_is_immutable(self):
         key = ["--release-key", str(self.keys / "release.key")]
@@ -127,6 +139,7 @@ class UpdatePublishTests(unittest.TestCase):
         self.assertEqual({p: p.read_bytes() for p in tracked}, before, "an identical republish rewrites nothing")
         # Changed content under the same sequence and label (the UKI differs, the roothash does not).
         (release / "esp/EFI/loader.efi").write_bytes(b"another loader")
+        seal(release)
         code, _, err = run(*argv)
         self.assertEqual(code, 1)
         self.assertIn("already published with different content", err)
@@ -134,6 +147,7 @@ class UpdatePublishTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (self.base / "blobs").iterdir()), blobs, "and stores no blob")
         # A flag that changes the signed compat block is also a change.
         (release / "esp/EFI/loader.efi").write_bytes(b"loader")
+        seal(release)
         code, _, err = run(*argv, "--state-format", "4")
         self.assertEqual(code, 1)
         self.assertEqual({p: p.read_bytes() for p in tracked}, before)
@@ -275,6 +289,199 @@ class UpdatePublishTests(unittest.TestCase):
         before = (self.keys / "root.key").read_bytes()
         self.assertEqual(run("keygen", "--out", str(self.keys))[0], 1)
         self.assertEqual((self.keys / "root.key").read_bytes(), before)
+
+    def trust(self, *extra, keys=None, base=None):
+        keys = keys or self.keys
+        return run("trust", "--base", str(base or self.base), "--root-key", str(keys / "root.key"),
+                   "--release-key", str(keys / "release.key"), *extra)
+
+    def trust_doc(self, name="trust.json"):
+        return json.loads((self.base / name).read_text())
+
+    def test_trust_rotation_is_signed_by_the_old_root_key_and_keeps_the_overlap(self):
+        self.assertEqual(self.trust()[0], 0)
+        new_keys = self.tmp / "keys2"
+        self.assertEqual(run("keygen", "--out", str(new_keys))[0], 0)
+        v1 = (self.base / "trust.json").read_bytes()
+        # The new root key is not one the hosts trust yet, so it cannot sign its own introduction.
+        code, _, err = self.trust(keys=new_keys)
+        self.assertEqual(code, 1)
+        self.assertIn("--sign-with", err)
+        code, _, err = self.trust("--sign-with", str(self.keys / "root.key"), keys=new_keys)
+        self.assertEqual(code, 0, err)
+        self.assertTrue(self.verify(self.keys / "root.key", self.base / "trust.json", self.base / "trust.sig"))
+        self.assertFalse(self.verify(new_keys / "root.key", self.base / "trust.json", self.base / "trust.sig"))
+        v2 = self.trust_doc()
+        self.assertEqual(v2["version"], 2)
+        self.assertEqual({k["id"] for k in v2["keys"]}, {"root-1", "release-1", "root-2", "release-2"},
+                         "the old keys stay listed so manifests signed with the old release key still verify")
+        # Every version is published under its own name, and the version 1 document of an older tree is kept.
+        self.assertEqual((self.base / "trust.2.json").read_bytes(), (self.base / "trust.json").read_bytes())
+        self.assertEqual((self.base / "trust.2.sig").read_bytes(), (self.base / "trust.sig").read_bytes())
+        self.assertEqual((self.base / "trust.1.json").read_bytes(), v1)
+        self.assertTrue(self.verify(self.keys / "root.key", self.base / "trust.1.json", self.base / "trust.1.sig"))
+        # A replay is refused, and the next version is signed by the new root key and revokes the old keys.
+        self.assertEqual(self.trust("--version", "2", "--sign-with", str(self.keys / "root.key"), keys=new_keys)[0], 1)
+        code, _, err = self.trust("--revoke", "release-1", "--revoke", "root-1", keys=new_keys)
+        self.assertEqual(code, 0, err)
+        v3 = self.trust_doc()
+        self.assertEqual(v3["version"], 3)
+        self.assertEqual({k["id"]: k.get("revoked", False) for k in v3["keys"]},
+                         {"root-1": True, "release-1": True, "root-2": False, "release-2": False})
+        self.assertTrue(self.verify(new_keys / "root.key", self.base / "trust.json", self.base / "trust.sig"))
+        self.assertTrue(self.verify(self.keys / "root.key", self.base / "trust.2.json", self.base / "trust.2.sig"))
+        # A revoked key cannot be named again, and an id that is not in the document is an error.
+        self.assertEqual(self.trust(keys=self.keys, base=self.base)[0], 1)
+        self.assertEqual(self.trust("--revoke", "nope", keys=new_keys)[0], 1)
+        # Dropping ends an overlap: the next version no longer lists the revoked keys at all.
+        self.assertEqual(self.trust("--drop-key", "root-1", "--drop-key", "release-1", keys=new_keys)[0], 0)
+        self.assertEqual({k["id"] for k in self.trust_doc()["keys"]}, {"root-2", "release-2"})
+
+    def test_bundle_carries_every_trust_version(self):
+        bundle_spec = importlib.util.spec_from_file_location("update_bundle", ROOT / "scripts/update-bundle.py")
+        update_bundle = importlib.util.module_from_spec(bundle_spec)
+        bundle_spec.loader.exec_module(update_bundle)
+        key = str(self.keys / "release.key")
+        self.assertEqual(self.trust()[0], 0)
+        self.assertEqual(self.trust()[0], 0)  # version 2, same keys
+        self.assertEqual(self.publish("1.0", 1)[0], 0)
+        out = self.tmp / "media"
+        self.assertEqual(update_bundle.main(["--base", str(self.base), "--channel", "dev", "--out", str(out), "--release-key", key]), 0)
+        for name in ("trust.json", "trust.sig", "trust.1.json", "trust.1.sig", "trust.2.json", "trust.2.sig"):
+            self.assertEqual((out / name).read_bytes(), (self.base / name).read_bytes(), name)
+
+    def test_compat_flags_reach_the_signed_manifest(self):
+        controller = self.tmp / "controller.qcow2"
+        controller.write_bytes(b"appliance")
+        code, _, err = self.publish_with("1.0", 1, "--controller-first", "--no-mixed-pool", "--min-controller-api-epoch", "2",
+                                         "--payload", f"vm-image:controller={controller}")
+        self.assertEqual(code, 0, err)
+        compat = json.loads((self.base / "releases/1/manifest.json").read_text())["compat"]
+        self.assertEqual((compat["controller_first"], compat["mixed_pool"], compat["min_controller_api_epoch"]), (True, False, 2))
+        code, _, err = self.publish_with("1.1", 2)
+        self.assertEqual(code, 0, err)
+        compat = json.loads((self.base / "releases/2/manifest.json").read_text())["compat"]
+        self.assertEqual((compat["controller_first"], compat["mixed_pool"], compat["min_controller_api_epoch"]), (False, True, 0))
+        code, _, err = self.publish_with("1.2", 3, "--controller-first")
+        self.assertEqual(code, 1)
+        self.assertIn("--controller-first needs the Controller image", err)
+        self.assertFalse((self.base / "releases/3").exists())
+
+    def test_the_channel_floor_only_goes_up(self):
+        self.assertEqual(self.publish("1.0", 1)[0], 0)
+        self.assertEqual(self.publish_with("1.1", 2, "--min-sequence", "2")[0], 0)
+        self.assertEqual(self.publish("1.2", 3)[0], 0, "a later publish without the flag")
+        self.assertEqual(json.loads((self.base / "dev/channel.json").read_text())["min_sequence"], 2)
+        key = str(self.keys / "release.key")
+        self.assertEqual(run("promote", "--base", str(self.base), "--channel", "dev", "--sequence", "2", "--release-key", key)[0], 0)
+        self.assertEqual(json.loads((self.base / "dev/channel.json").read_text())["min_sequence"], 2)
+        code, _, err = run("promote", "--base", str(self.base), "--channel", "dev", "--sequence", "1", "--release-key", key)
+        self.assertEqual(code, 1)
+        self.assertIn("below the channel's min_sequence", err)
+        self.assertEqual(json.loads((self.base / "dev/channel.json").read_text())["sequence"], 2)
+
+    def test_a_repeat_publish_with_a_higher_floor_re_signs_and_a_bad_floor_stores_nothing(self):
+        self.assertEqual(self.publish("1.0", 1)[0], 0)
+        channel = self.base / "dev/channel.json"
+        self.assertEqual(json.loads(channel.read_text())["min_sequence"], 0)
+        self.assertEqual(self.publish_with("1.0", 1, "--min-sequence", "1")[0], 0)
+        after = json.loads(channel.read_text())
+        self.assertEqual((after["min_sequence"], after["channel_serial"]), (1, 2), "the cutoff is not dropped by the idempotent path")
+        self.assertTrue(self.verify(self.keys / "release.key", channel, self.base / "dev/channel.sig"))
+        blobs = sorted(p.name for p in (self.base / "blobs").iterdir())
+        code, _, err = self.publish_with("1.1", 2, "--min-sequence", "3")
+        self.assertEqual(code, 1)
+        self.assertIn("below the channel's min_sequence", err)
+        self.assertFalse((self.base / "releases/2").exists())
+        self.assertEqual(sorted(p.name for p in (self.base / "blobs").iterdir()), blobs, "no blob is stored for a refused floor")
+
+    def test_trust_version_must_be_the_next_one_and_the_signer_must_be_unexpired(self):
+        for version in ("0", "-1", "5"):
+            self.assertEqual(self.trust("--version", version)[0], 1, version)
+        self.assertFalse((self.base / "trust.json").exists())
+        self.assertEqual(self.trust("--version", "1")[0], 0)
+        code, _, err = self.trust("--version", "3")
+        self.assertEqual(code, 1)
+        self.assertIn("must be 2", err)
+        self.assertEqual(self.trust_doc()["version"], 1)
+
+        long_ago = update_publish.now() - update_publish.datetime.timedelta(days=3 * 365)
+        expired = self.tmp / "expired-base"
+        with unittest.mock.patch.object(update_publish, "now", return_value=long_ago):
+            self.assertEqual(self.trust(base=expired)[0], 0)
+        code, _, err = self.trust(base=expired)
+        self.assertEqual(code, 1)
+        self.assertIn("not a usable root key", err)
+        self.assertEqual(json.loads((expired / "trust.json").read_text())["version"], 1)
+
+    def test_a_release_key_that_still_signs_published_metadata_is_not_dropped_without_the_flag(self):
+        self.assertEqual(self.trust()[0], 0)
+        new_keys = self.tmp / "keys2"
+        self.assertEqual(run("keygen", "--out", str(new_keys))[0], 0)
+        self.assertEqual(self.trust("--sign-with", str(self.keys / "root.key"), keys=new_keys)[0], 0)
+        self.assertEqual(self.publish("1.0", 1)[0], 0)
+        for flag in ("--revoke", "--drop-key"):
+            code, _, err = self.trust(flag, "release-1", "--sign-with", str(new_keys / "root.key"), keys=new_keys)
+            self.assertEqual(code, 1, flag)
+            self.assertIn("still signs published metadata", err)
+            self.assertIn("releases/1/manifest.json", err)
+            self.assertEqual(self.trust_doc()["version"], 2)
+        # The root key of the old pair is not a release signer; dropping it is not held back.
+        self.assertEqual(self.trust("--drop-key", "root-1", "--sign-with", str(new_keys / "root.key"), keys=new_keys)[0], 0)
+        self.assertEqual(self.trust("--drop-key", "release-1", "--allow-orphaned-signatures", "--sign-with", str(new_keys / "root.key"),
+                                    keys=new_keys)[0], 0)
+        self.assertEqual({k["id"] for k in self.trust_doc()["keys"]}, {"root-2", "release-2"})
+
+    def test_a_release_directory_that_disagrees_with_its_manifest_is_never_signed(self):
+        def tamper_image(release):
+            (release / "root.erofs").write_bytes(b"other erofs")
+
+        def drop_uki(release):
+            manifest = json.loads((release / "manifest.json").read_text())
+            del manifest["files"]["nex-core_1.0_1.efi"]
+            (release / "manifest.json").write_text(json.dumps(manifest))
+
+        def wrong_roothash_file(release):
+            (release / "roothash").write_text("cd" * 32)
+            seal(release)
+
+        def unlisted_file(release):
+            (release / "extra.bin").write_bytes(b"not in the manifest")
+
+        def no_file_list(release):
+            manifest = json.loads((release / "manifest.json").read_text())
+            del manifest["files"]
+            (release / "manifest.json").write_text(json.dumps(manifest))
+
+        def missing_file(release):
+            (release / "esp/EFI/loader.efi").unlink()
+
+        def nested_manifest(release):
+            (release / "sub").mkdir()
+            (release / "sub/manifest.json").write_text("{}")
+
+        def linked_directory(release):
+            moved = self.tmp / "moved-esp"
+            shutil.move(str(release / "esp"), str(moved))
+            (release / "esp").symlink_to(moved)
+
+        for name, damage, message in (
+                ("a changed image", tamper_image, "does not match its size and sha256"),
+                ("no UKI", drop_uki, "exactly one UKI"),
+                ("a roothash file that disagrees", wrong_roothash_file, "roothash file does not match"),
+                ("an unlisted file", unlisted_file, "not listed in the release manifest"),
+                ("an unlisted manifest.json in a subdirectory", nested_manifest, "sub/manifest.json"),
+                ("a listed file behind a linked directory", linked_directory, "goes through the link"),
+                ("no file list", no_file_list, "lists no files"),
+                ("a listed file that is gone", missing_file, "not a file")):
+            with self.subTest(name):
+                release = fake_release(self.tmp / f"rel-{abs(hash(name))}", "1.0", 1)
+                damage(release)
+                code, _, err = run("publish", "--base", str(self.base), "--release-dir", str(release), "--release-key",
+                                   str(self.keys / "release.key"), "--source", str(self.source), "--compliance", str(self.compliance))
+                self.assertEqual(code, 1)
+                self.assertIn(message, err)
+                self.assertFalse((self.base / "releases/1").exists(), "nothing is signed for a broken release")
 
 
 if __name__ == "__main__":

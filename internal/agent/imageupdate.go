@@ -55,6 +55,14 @@ func currentImageUpdater() ImageUpdater {
 
 func imageUpdateAvailable() bool { return currentImageUpdater() != nil }
 
+// How long the worker waits for one relayed engine call. A check reads a handful of small metadata files; the
+// other actions take the update lock and write records or boot entries. They are variables so tests need not
+// wait them out.
+var (
+	imageCheckDeadline  = 2 * time.Minute
+	imageActionDeadline = 5 * time.Minute
+)
+
 // ExecuteImageUpdate runs one relayed update action on this host's engine. Refusals are definite
 // failed results carrying the engine's stable code and its one literal message.
 func ExecuteImageUpdate(ctx context.Context, cmd protocol.Command) protocol.Result {
@@ -73,7 +81,6 @@ func ExecuteImageUpdate(ctx context.Context, cmd protocol.Command) protocol.Resu
 		result.Error = "unsupported_edition: this host does not run the image edition"
 		return result
 	}
-	var err error
 	offline, hasOffline := engine.(OfflineUpdater)
 	switch req.Action {
 	case "settings", "media", "import", "fetch":
@@ -83,27 +90,88 @@ func ExecuteImageUpdate(ctx context.Context, cmd protocol.Command) protocol.Resu
 		}
 	}
 	action := nexupdate.ActionRequest{RequestID: req.RequestID, RunningVMs: req.RunningVMs}
-	switch req.Action {
-	case "check":
-		_, err = engine.Check(ctx)
-	case "apply":
-		_, _, err = engine.Apply(ctx, nexupdate.ApplyRequest{RequestID: req.RequestID, Sequence: req.Sequence, Activate: req.Activate, RunningVMs: req.RunningVMs})
-	case "activate":
-		_, _, err = engine.Activate(ctx, action)
-	case "rollback":
-		_, _, err = engine.Rollback(ctx, action)
-	case "cancel":
-		_, _, err = engine.Cancel(ctx, action)
-	case "settings":
-		_, err = offline.UpdateSettings(ctx, nexupdate.Settings{Channel: req.Channel, BaseURL: req.BaseURL})
-	case "media":
-		// A rescan: the host records the list and reports it in Inventory.image.media.
-		_, err = offline.Media(ctx)
-	case "import":
-		_, _, err = offline.Import(ctx, nexupdate.ImportRequest{RequestID: req.RequestID, Media: req.Media, Channel: req.Channel,
-			Sequence: req.Sequence, Activate: req.Activate, RunningVMs: req.RunningVMs})
-	case "fetch":
-		_, _, err = offline.FetchComponent(ctx, req.Component, nexupdate.FetchRequest{RequestID: req.RequestID, Media: req.Media, Channel: req.Channel})
+	// The managed worker runs one command at a time, so an engine call that never returns (an update
+	// server that accepts the connection and stalls, a media mount that hangs) would hold every other
+	// command of this host behind it, including the settings change that could fix the URL. The call
+	// runs under a deadline and the worker stops waiting when it expires, whether or not the engine
+	// honours its context.
+	limit := imageActionDeadline
+	if req.Action == "check" {
+		limit = imageCheckDeadline
+	}
+	// Only read-only calls are cancelled when the worker stops waiting. A state-changing call may be
+	// midway through writing boot entries or records; cancelling it would leave that half done while
+	// the Controller is told it failed. Those run under the engine's own lifetime instead, and the
+	// deadline only bounds how long the worker waits for them.
+	cancellable := req.Action == "check" || req.Action == "media"
+	callCtx, cancel := ctx, context.CancelFunc(func() {})
+	if cancellable {
+		callCtx, cancel = context.WithTimeout(ctx, limit)
+	} else {
+		callCtx = context.WithoutCancel(ctx)
+	}
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		var err error
+		switch req.Action {
+		case "check":
+			_, err = engine.Check(callCtx)
+		case "apply":
+			_, _, err = engine.Apply(callCtx, nexupdate.ApplyRequest{RequestID: req.RequestID, Sequence: req.Sequence, Activate: req.Activate, RunningVMs: req.RunningVMs})
+		case "activate":
+			_, _, err = engine.Activate(callCtx, action)
+		case "rollback":
+			_, _, err = engine.Rollback(callCtx, action)
+		case "cancel":
+			_, _, err = engine.Cancel(callCtx, action)
+		case "settings":
+			_, err = offline.UpdateSettings(callCtx, nexupdate.Settings{Channel: req.Channel, BaseURL: req.BaseURL})
+		case "media":
+			// A rescan: the host records the list and reports it in Inventory.image.media.
+			_, err = offline.Media(callCtx)
+		case "import":
+			_, _, err = offline.Import(callCtx, nexupdate.ImportRequest{RequestID: req.RequestID, Media: req.Media, Channel: req.Channel,
+				Sequence: req.Sequence, Activate: req.Activate, RunningVMs: req.RunningVMs})
+		case "fetch":
+			_, _, err = offline.FetchComponent(callCtx, req.Component, nexupdate.FetchRequest{RequestID: req.RequestID, Media: req.Media, Channel: req.Channel})
+		}
+		finished <- err
+	}()
+	var err error
+	if cancellable {
+		select {
+		case err = <-finished:
+		case <-callCtx.Done():
+			// The engine may have answered at the same moment: its answer wins.
+			select {
+			case err = <-finished:
+			default:
+				if ctx.Err() == nil {
+					result.Error = "internal: the update engine did not answer in time"
+					return result
+				}
+				err = ctx.Err()
+			}
+		}
+	} else {
+		timer := time.NewTimer(limit)
+		defer timer.Stop()
+		select {
+		case err = <-finished:
+		case <-timer.C:
+			select {
+			case err = <-finished:
+			default:
+				return imageStillRunning(result)
+			}
+		case <-ctx.Done():
+			select {
+			case err = <-finished:
+			default:
+				return imageStillRunning(result)
+			}
+		}
 	}
 	if err != nil {
 		var refusal *nexupdate.Error
@@ -115,5 +183,13 @@ func ExecuteImageUpdate(ctx context.Context, cmd protocol.Command) protocol.Resu
 		return result
 	}
 	result.Status, result.ObservedAt = "succeeded", time.Now().UTC()
+	return result
+}
+
+// imageStillRunning is the result for a state-changing action that outlived the worker's wait: the
+// engine keeps going and its record (Inventory.image) is the truth, so this is not a failure.
+func imageStillRunning(result protocol.Result) protocol.Result {
+	result.Status, result.ObservedAt = "needs_attention", time.Now().UTC()
+	result.Error = "still_running: the update engine is still working on this action; check the update status"
 	return result
 }

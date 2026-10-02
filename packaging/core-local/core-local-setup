@@ -12,25 +12,9 @@ import subprocess
 CONFIG = Path('/etc/nex/core-local.env')
 STATE = Path('/var/lib/nex/core-local')
 BUNDLE = Path('/usr/share/nex/appliance')
-# Image edition: the signed appliance lives outside the verified slot, one directory per image digest.
+# Image edition: the Controller system image is an on-demand payload outside the verified slot, one directory per digest.
 PAYLOAD = Path('/var/lib/nex/payload')
 ISSUE = Path('/run/issue.d/50-nex-local.issue')
-
-
-def appliance_files():
-    """Return (image, manifest, signature) of the Controller appliance.
-
-    A package that carries the appliance (classic edition) wins. Otherwise controller.sha256, written at build
-    time, names the payload directory under /var/lib/nex/payload that holds it. The trust key always comes
-    from the package; Core verifies the image and manifest against it before every deployment.
-    """
-    root = BUNDLE
-    if not (BUNDLE / 'controller.qcow2').is_file():
-        pin = BUNDLE / 'controller.sha256'
-        digest = pin.read_text().strip() if pin.is_file() else ''
-        if re.fullmatch(r'[0-9a-f]{64}', digest):
-            root = PAYLOAD / digest
-    return root / 'controller.qcow2', root / 'manifest.json', root / 'manifest.sig'
 
 
 def console_notice(text):
@@ -180,9 +164,8 @@ def main():
         # The digest in the signed release manifest is the only integrity check of the system image.
         argv += ['--controller-system-image', str(profile[0]), '--controller-system-image-sha256', profile[1]]
     else:
-        image, manifest, signature = appliance_files()
-        argv += ['--image', str(image), '--manifest', str(manifest),
-                 '--signature', str(signature), '--trusted-key', str(BUNDLE / 'release.pub')]
+        argv += ['--image', str(BUNDLE / 'controller.qcow2'), '--manifest', str(BUNDLE / 'manifest.json'),
+                 '--signature', str(BUNDLE / 'manifest.sig'), '--trusted-key', str(BUNDLE / 'release.pub')]
     if args.action == 'prepare-recovery':
         if not args.request_file:
             parser.error('prepare-recovery requires --request-file')

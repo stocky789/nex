@@ -125,7 +125,7 @@ export function PoolRollout({ pool, hosts, api, busy, initial }: { pool: Pool; h
   const [error, setError] = useState("");
   const [sequence, setSequence] = useState("");
   const [shutdown, setShutdown] = useState(false);
-  const [confirming, setConfirming] = useState<{ action: RolloutControl; host?: RolloutHost } | undefined>();
+  const [confirming, setConfirming] = useState<{ action: RolloutControl | "start"; host?: RolloutHost } | undefined>();
   const held = useRef({ id: "", signature: "" });
   const nameOf = (id?: string) => hosts.find(h => h.id === id)?.hostname ?? id ?? "—";
   const offered = offeredSequence(hosts);
@@ -163,6 +163,13 @@ export function PoolRollout({ pool, hosts, api, busy, initial }: { pool: Pool; h
   const control = (action: RolloutControl, host?: RolloutHost) =>
     submit("control", () => submitControl(api, pool.id, rollout!.id, action, held.current, host?.host_id));
   const ask = (action: RolloutControl, host?: RolloutHost) => (action === "abort" || action === "rollback_host") ? setConfirming({ action, host }) : void control(action, host);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    if (!element) return;
+    if (confirming && !element.open) element.showModal();
+    else if (!confirming && element.open) element.close();
+  }, [confirming]);
 
   const live = view && unread ? { ...view, connection: "unreachable" } : view;
   const controls = rolloutControls(live);
@@ -170,6 +177,11 @@ export function PoolRollout({ pool, hosts, api, busy, initial }: { pool: Pool; h
   const fresh = live?.connection === "fresh";
   const active = rollout?.state === "running" || rollout?.state === "paused";
   const unsupported = view && !view.supported;
+  const startable = Boolean(fresh && !unsupported && wanted && !active);
+  const confirmable = !confirming ? false : confirming.action === "start" ? startable
+    : confirming.action === "abort" ? controls.abort.enabled
+    : Boolean(confirming.host && canRollBackHost(live, confirming.host));
+  const poolHosts = hosts.filter(h => !h.revoked).length;
 
   return <Section icon="refresh" title="Pool rollout" count={rollout ? rollout.hosts.length : undefined}>
     {!view ? <p className="note">Reading the pool master's rollout record…</p> : <>
@@ -216,15 +228,21 @@ export function PoolRollout({ pool, hosts, api, busy, initial }: { pool: Pool; h
           <button type="button" className="sm" disabled={busy || sending || !fresh || unsupported || !wanted} title={!wanted ? "No release sequence is known. Check each host first." : undefined}
             onClick={() => void submit("check", () => submitRollout(api, pool.id, "check", held.current, wanted, shutdown))}>Run preflight</button>
           <button type="button" className="sm primary" disabled={busy || sending || !fresh || unsupported || !wanted}
-            onClick={() => void submit("start", () => submitRollout(api, pool.id, "start", held.current, wanted, shutdown))}>Start rollout</button>
+            onClick={() => setConfirming({ action: "start" })}>Start rollout</button>
         </div>
       </form>}
-      {confirming && <div className="confirm" role="alertdialog" aria-label={`Confirm ${confirming.action === "abort" ? "abort" : "host rollback"}`}>
-        <p>{confirming.action === "abort"
-          ? "Abort the rollout? Hosts that already committed the release stay on it. The host in progress is taken out of maintenance and its stopped guests are restarted."
-          : `Reboot ${nameOf(confirming.host?.host_id)} into its previous release? The host restarts now.`}</p>
-        <div className="actions"><button type="button" className="sm primary" disabled={sending} onClick={() => void control(confirming.action, confirming.host)}>{confirming.action === "abort" ? "Abort rollout" : "Roll back host"}</button><button type="button" className="sm" onClick={() => setConfirming(undefined)}>Keep as is</button></div>
-      </div>}
+      <dialog ref={dialog} className="confirm-dialog" aria-labelledby="rollout-confirm-title" onCancel={e => { if (sending) e.preventDefault(); }} onClose={() => setConfirming(undefined)}>
+        {confirming && <form aria-label={`Confirm ${confirming.action === "start" ? "start rollout" : confirming.action === "abort" ? "abort" : "host rollback"}`} onSubmit={e => { e.preventDefault(); if (!confirmable) return; if (confirming.action === "start") void submit("start", () => submitRollout(api, pool.id, "start", held.current, wanted, shutdown)); else void control(confirming.action, confirming.host); }}>
+          <h2 id="rollout-confirm-title">{confirming.action === "start" ? "Start rollout?" : confirming.action === "abort" ? "Abort rollout?" : `Roll back ${nameOf(confirming.host?.host_id)}?`}</h2>
+          <p>{confirming.action === "start"
+            ? `Start rollout of release sequence ${wanted} on ${poolHosts} host${poolHosts === 1 ? "" : "s"}? Every host reboots, one at a time, the master last. Running guests: ${shutdown ? "shut down gracefully, then restarted on the same host" : "the rollout waits for each host's guests to stop"}.`
+            : confirming.action === "abort"
+              ? "Abort the rollout? Hosts that already committed the release stay on it. The host in progress is taken out of maintenance and its stopped guests are restarted."
+              : `Reboot ${nameOf(confirming.host?.host_id)} into its previous release? The host restarts now.`}</p>
+          {!confirmable && <p className="task-error" role="alert">This is no longer possible with the pool's current state.</p>}
+          <div className="actions"><button type="button" onClick={() => setConfirming(undefined)}>Keep as is</button><button className="primary" disabled={sending || !confirmable}>{confirming.action === "start" ? "Start rollout" : confirming.action === "abort" ? "Abort rollout" : "Roll back host"}</button></div>
+        </form>}
+      </dialog>
       <p className="note">The pool master runs the rollout and keeps its record, so it carries on if this Controller is replaced. Members update first, the master last, one host at a time, and nothing is ever forced.</p>
     </>}
   </Section>;

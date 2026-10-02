@@ -35,7 +35,10 @@ ln -sf ../usr/lib/os-release /etc/os-release
 rm -f /var/lib/dbus/machine-id
 rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
 rm -f /etc/hostname
-rm -rf /root/.ssh /root/.bash_history
+# Root's home must be writable (authorized_keys, shell history, known_hosts) but the image is read-only: /root is a link
+# into the data volume, where tmpfiles.d creates /var/roothome (mode 0700) before any login.
+rm -rf /root
+ln -s var/roothome /root
 # open-iscsi's postinst draws a random InitiatorName. Debian's own mechanism for images: with GenerateName=yes the first
 # start of iscsid (its ExecStartPre, /usr/lib/open-iscsi/startup-checks.sh) writes a unique name into /etc (the overlay
 # upper), once. One writer only, so it cannot race the daemon.

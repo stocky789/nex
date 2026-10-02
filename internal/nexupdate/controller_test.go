@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/vmhost"
 )
@@ -16,13 +17,22 @@ type fakeAppliance struct {
 	mu       sync.Mutex
 	requests []vmhost.SwapRequest
 	err      error
+	gate     chan struct{} // when set, a swap waits for it (or for its context) before answering
 }
 
-func (f *fakeAppliance) SwapAppliance(_ context.Context, req vmhost.SwapRequest) (vmhost.Operation, error) {
+func (f *fakeAppliance) SwapAppliance(ctx context.Context, req vmhost.SwapRequest) (vmhost.Operation, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.requests = append(f.requests, req)
-	return vmhost.Operation{ID: req.RequestID, Kind: "swap", Status: "completed"}, f.err
+	gate, err := f.gate, f.err
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return vmhost.Operation{}, ctx.Err()
+		}
+	}
+	return vmhost.Operation{ID: req.RequestID, Kind: "swap", Status: "completed"}, err
 }
 
 func controllerRig(t *testing.T) (*rig, *fakeAppliance, Component) {
@@ -107,5 +117,45 @@ func TestControllerScopeRefusals(t *testing.T) {
 	}
 	if op := r.wait(); op.Error == nil || op.Error.Code != "no_controller_image" {
 		t.Fatalf("%+v", op)
+	}
+}
+
+// An interrupted swap is resumed by repeating its request_id; the vmhost journal of that ID is keyed by the
+// release it started with, so a channel that moved in between must not change the release it goes on with.
+func TestControllerSwapResumesWithTheSequenceItStartedWith(t *testing.T) {
+	r, fake, _ := controllerRig(t)
+	fake.gate = make(chan struct{})
+	if _, _, err := r.applyController("req-ctl-0006"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fake.mu.Lock()
+		n := len(fake.requests)
+		fake.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the swap never started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	r.restart() // the interrupted swap: the first engine is closed while the appliance is mid-swap
+	fake.mu.Lock()
+	fake.gate = nil
+	fake.mu.Unlock()
+	r.pub.serial++
+	r.pub.release(3, "v3", true) // the channel moves on
+	if _, _, err := r.applyController("req-ctl-0006"); err != nil {
+		t.Fatal(err)
+	}
+	if op := r.wait(); op.Error != nil || op.Phase != PhaseCommitted || op.Sequence != 2 {
+		t.Fatalf("%+v", op)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.requests) != 2 || fake.requests[1].Sequence != 2 || fake.requests[1].SHA256 != fake.requests[0].SHA256 {
+		t.Fatalf("the resumed swap asked for %+v after %+v", fake.requests[1:], fake.requests[:1])
 	}
 }

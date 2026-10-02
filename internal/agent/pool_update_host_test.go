@@ -127,8 +127,9 @@ func TestHostStatusReportsTheEngineAndGuests(t *testing.T) {
 	engine.status.Slots = append(engine.status.Slots, nexupdate.SlotStatus{Role: "staged", Sequence: 2})
 	engine.status.Available = &nexupdate.Available{Sequence: 2, Compat: nexupdate.Compat{StateFormat: 2, MixedPool: true, MinControllerAPIEpoch: 1},
 		Components: []nexupdate.ComponentInfo{{Bytes: 100, Required: true}, {Bytes: 900, Required: true, OnDemand: true}, {Bytes: 5}}}
+	previousFree := poolUpdateFreeBytes
 	poolUpdateFreeBytes = func() uint64 { return 4096 }
-	t.Cleanup(func() { poolUpdateFreeBytes = func() uint64 { return 0 } })
+	t.Cleanup(func() { poolUpdateFreeBytes = previousFree })
 	got, err := PoolUpdateHostStatusFor(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +194,15 @@ func TestHostStepsMapOntoTheEngine(t *testing.T) {
 	if res := PoolUpdateHostStep(ctx, s, step("confirm")); !res.Done {
 		t.Fatalf("confirm committed = %+v", res)
 	}
+	// A host that runs the release without ever having updated (phase idle) has nothing to commit.
+	engine.status.Phase = nexupdate.PhaseIdle
+	if res := PoolUpdateHostStep(ctx, s, step("confirm")); !res.Done {
+		t.Fatalf("confirm idle on the release = %+v", res)
+	}
+	engine.status.Phase = nexupdate.PhaseBooted
+	if res := PoolUpdateHostStep(ctx, s, step("confirm")); res.Done || res.Code != "" {
+		t.Fatalf("confirm booted but not committed = %+v", res)
+	}
 	engine.status.Slots, engine.status.Phase = []nexupdate.SlotStatus{{Role: "booted", Sequence: 1}}, nexupdate.PhaseRolledBack
 	if res := PoolUpdateHostStep(ctx, s, step("confirm")); res.Code != "rolled_back" {
 		t.Fatalf("confirm after fallback = %+v", res)
@@ -240,11 +250,34 @@ func TestHostGuestStepsTouchOnlyTheListedGuests(t *testing.T) {
 	if !guests.running["other"] {
 		t.Fatal("an unlisted guest was touched")
 	}
-	if guests.opIDs[0] != guests.opIDs[len(guests.opIDs)-3] && poolUpdateOpID("a", "b") != poolUpdateOpID("a", "b") {
-		t.Fatal("operation IDs are not deterministic")
+	// opIDs: the drain's shutdown, the refused start, the start that worked. A repeated step repeats
+	// its operation ID; the drain and the undrain are different steps, and so are different guests.
+	if len(guests.opIDs) != 3 || guests.opIDs[1] != guests.opIDs[2] || guests.opIDs[0] == guests.opIDs[1] {
+		t.Fatalf("operation IDs of the guest actions = %v", guests.opIDs)
+	}
+	if guests.opIDs[1] != poolUpdateOpID(step("undrain", "listed").StepID, "listed") {
+		t.Fatal("the operation ID is not derived from the step and the guest")
 	}
 	if poolUpdateOpID("a", "b") == poolUpdateOpID("a", "c") {
 		t.Fatal("two guests share an operation ID")
+	}
+	if poolUpdateOpID("a", "b") == poolUpdateOpID("d", "b") {
+		t.Fatal("two steps share an operation ID for one guest")
+	}
+}
+
+// The engine offers no release a host already runs (it clears "available" once the sequence is not
+// newer), so the check of a host that is on the release is done without asking the engine: a
+// rollout can still be started for the hosts that are not.
+func TestHostCheckIsDoneForAReleaseTheHostAlreadyRuns(t *testing.T) {
+	s, engine, _ := hostStepLab(t)
+	engine.status.Slots = []nexupdate.SlotStatus{{Role: "booted", Sequence: 2}}
+	if res := PoolUpdateHostStep(context.Background(), s, step("check")); !res.Done || res.Code != "" || len(engine.calls) != 0 {
+		t.Fatalf("check on a host running the release = %+v calls %v", res, engine.calls)
+	}
+	engine.status.Slots = []nexupdate.SlotStatus{{Role: "booted", Sequence: 1}}
+	if res := PoolUpdateHostStep(context.Background(), s, step("check")); res.Code != "release_unavailable" {
+		t.Fatalf("check on a host running an older release that is not offered = %+v", res)
 	}
 }
 

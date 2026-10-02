@@ -25,6 +25,20 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def stage_build_context(source, context):
+    """Extract appliance/Dockerfile and every file it COPYs from the source archive into a Docker context."""
+    context.mkdir()
+    with tarfile.open(source) as archive:
+        dockerfile = archive.extractfile('nex-source/appliance/Dockerfile').read()
+        (context / 'Dockerfile').write_bytes(dockerfile)
+        for line in dockerfile.decode().splitlines():
+            fields = line.split()
+            if fields and fields[0] == 'COPY':
+                for name in fields[1:-1]:
+                    (context / name).write_bytes(archive.extractfile('nex-source/appliance/' + name).read())
+                    (context / name).chmod(0o755)
+
+
 def build_controller_image(args, output):
     """The vm-image component: the payload tree from the appliance builder, then image/build.sh controller."""
     source = ROOT / 'dist/nex-source.tar.gz'
@@ -33,12 +47,7 @@ def build_controller_image(args, output):
     with tempfile.TemporaryDirectory(prefix='nex-appliance-input-') as temporary:
         inputs = Path(temporary)
         shutil.copyfile(source, inputs / 'nex-source.tar.gz')
-        (inputs / 'appliance').mkdir()
-        with tarfile.open(inputs / 'nex-source.tar.gz') as archive:
-            for name in ('Dockerfile', 'build-inside.sh', 'build-controller-payload.sh'):
-                (inputs / 'appliance' / name).write_bytes(archive.extractfile('nex-source/appliance/' + name).read())
-        (inputs / 'appliance' / 'build-inside.sh').chmod(0o755)
-        (inputs / 'appliance' / 'build-controller-payload.sh').chmod(0o755)
+        stage_build_context(inputs / 'nex-source.tar.gz', inputs / 'appliance')
         subprocess.run([args.docker, 'build', '-t', 'nex-appliance-builder', str(inputs / 'appliance')], check=True)
         payload = output / 'payload'
         subprocess.run([args.docker, 'run', '--rm', '--entrypoint', '/usr/local/bin/nex-appliance-controller-payload', '-e', f'OUTPUT_UID={os.getuid()}', '-e', f'OUTPUT_GID={os.getgid()}', '-e', f'NEX_VERSION={args.version}', '-v', f'{inputs}:/input:ro', '-v', f'{output}:/output', 'nex-appliance-builder'], check=True)
@@ -98,11 +107,7 @@ def main():
         inputs = Path(temporary)
         shutil.copyfile(source, inputs / 'nex-source.tar.gz')
         shutil.copyfile(args.base_image, inputs / 'base.qcow2')
-        (inputs / 'appliance').mkdir()
-        with tarfile.open(inputs / 'nex-source.tar.gz') as archive:
-            for name in ('Dockerfile', 'build-inside.sh'):
-                (inputs / 'appliance' / name).write_bytes(archive.extractfile('nex-source/appliance/' + name).read())
-        (inputs / 'appliance' / 'build-inside.sh').chmod(0o755)
+        stage_build_context(inputs / 'nex-source.tar.gz', inputs / 'appliance')
         subprocess.run([args.docker, 'build', '-t', 'nex-appliance-builder', str(inputs / 'appliance')], check=True)
         # libguestfs customizes the image several times faster under KVM. The image forces
         # TCG so a host without /dev/kvm still builds; lift that only when the daemon can

@@ -13,6 +13,7 @@ verity UUID and salt, file order. The same tree gives the same roothash.
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,11 @@ TREE = f"{OUT}/base"
 SDE = os.environ.get("SOURCE_DATE_EPOCH") or "1790000000"
 LABEL = os.environ.get("NEX_LABEL", "dev")
 SEQ = int(os.environ.get("NEX_SEQUENCE", "0"))
+# The label is part of the UKI file name and nex-hostimage (release.go ukiNameRE) refuses any other characters;
+# '+' would also read as a boot counter.
+LABEL_RE = r"[A-Za-z0-9.~_-]+"
+if not re.fullmatch(LABEL_RE, LABEL) or SEQ < 0:
+    sys.exit(f"NEX_LABEL {LABEL!r} must match {LABEL_RE} and NEX_SEQUENCE {SEQ} must not be negative")
 EROFS_UUID = "5e1ec7ed-0000-4000-8000-0000000000e1"
 VERITY_UUID = "5e1ec7ed-0000-4000-8000-0000000000e2"
 VERITY_SALT = "5e1ec7ed000040008000000000000e3a5e1ec7ed000040008000000000000e3a"
@@ -41,6 +47,14 @@ def sha256(path):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def uki_os_release(name, image_id):
+    """os-release embedded in a UKI. sd-boot orders the entries of one IMAGE_ID by IMAGE_VERSION (VERSION only
+    when that is absent), compared as version strings, newest first. Both carry the zero-padded sequence alone,
+    so that order is the numeric sequence order nex-hostimage assumes whatever the label looks like."""
+    return (f'NAME="{name}"\nID={image_id}\nPRETTY_NAME="{name} {LABEL} ({SEQ})"\nVERSION_ID="{LABEL}"\n'
+            f'VERSION="{SEQ:010d}"\nIMAGE_ID={image_id}\nIMAGE_VERSION="{SEQ:010d}"\nBUILD_ID="{LABEL}-{SEQ}"\n')
 
 
 def base(tree=TREE, dest=OUT):
@@ -65,7 +79,7 @@ def base(tree=TREE, dest=OUT):
 
 def initrd_overlay(dst, only=None):
     """newc cpio of image/initrd (units and config appended to the initrd), reproducibly. `only` limits it to
-    the listed paths below image/initrd (the Controller guest takes the /etc overlay, not the md RAID parts)."""
+    the listed paths below image/initrd (the Controller guest takes the /etc overlay and the paced reboot only: no md RAID parts)."""
     src = "/nex/image/initrd"
     stage = "/tmp/nex-initrd"
     shutil.rmtree(stage, ignore_errors=True)
@@ -116,10 +130,7 @@ def release():
     uki = f"nex-core_{LABEL}_{SEQ}.efi"
     osrel = "/tmp/uki-os-release"
     with open(osrel, "w") as f:
-        # sd-boot sorts entries by this version; the sequence is zero-padded so it sorts numerically.
-        f.write(f'NAME="Nex Core"\nID=nex-core\nPRETTY_NAME="Nex Core {LABEL} ({SEQ})"\n'
-                f'VERSION_ID="{LABEL}"\nVERSION="{SEQ:010d}"\nIMAGE_ID=nex-core\nIMAGE_VERSION="{LABEL}.{SEQ}"\n'
-                f'BUILD_ID="{LABEL}-{SEQ}"\n')
+        f.write(uki_os_release("Nex Core", "nex-core"))
     overlay = "/tmp/nex-initrd.cpio"
     initrd_overlay(overlay)
     ukify = ["ukify", "build", f"--linux={OUT}/base.vmlinuz", f"--initrd={OUT}/base.initrd", f"--initrd={overlay}",
@@ -185,12 +196,14 @@ def controller():
     os.makedirs(f"{esp}/EFI/Linux")
     osrel = "/tmp/uki-os-release-controller"
     with open(osrel, "w") as f:
-        f.write(f'NAME="Nex Controller"\nID=nex-controller\nPRETTY_NAME="Nex Controller {LABEL} ({SEQ})"\n'
-                f'VERSION_ID="{LABEL}"\nVERSION="{SEQ:010d}"\nIMAGE_ID=nex-controller\nIMAGE_VERSION="{LABEL}.{SEQ}"\n'
-                f'BUILD_ID="{LABEL}-{SEQ}"\n')
+        f.write(uki_os_release("Nex Controller", "nex-controller"))
     overlay = "/tmp/nex-controller-initrd.cpio"
+    # The guest's UKI has no boot counter: a failed initrd step reboots after a pause (nex-initrd-reboot-paced.service),
+    # never to a locked shell. The counted-reboot unit is skipped there (no counter) but the shared drop-ins name it.
     initrd_overlay(overlay, only=["usr/lib/systemd/system/nex-etc-overlay.service",
                                   "usr/lib/systemd/system/initrd-fs.target.wants/nex-etc-overlay.service",
+                                  "usr/lib/systemd/system/nex-initrd-reboot.service",
+                                  "usr/lib/systemd/system/nex-initrd-reboot-paced.service",
                                   "usr/lib/systemd/system/emergency.service.d/10-nex-reboot.conf",
                                   "usr/lib/systemd/system/rescue.service.d/10-nex-reboot.conf"])
     uki = f"{esp}/EFI/Linux/nex-controller_{LABEL}_{SEQ}.efi"

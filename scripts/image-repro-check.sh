@@ -54,15 +54,16 @@ fi
 mkdir -p "$report"
 report=$(cd "$report" && pwd)
 snapshot=$(cat "$repo/image/snapshot")
+docker=${NEX_DOCKER:-docker}
 tools=${NEX_TOOLS_IMAGE:-nex-image-tools}
 if [ -z "${NEX_TOOLS_IMAGE:-}" ]; then
-    docker build -q -t "$tools" --build-arg "SNAPSHOT=$snapshot" "$repo/image/tools" >/dev/null
+    $docker build -q -t "$tools" --build-arg "SNAPSHOT=$snapshot" "$repo/image/tools" >/dev/null
 fi
 # Every container runs under the same caps as image/build.sh (the workstation may be shared).
 caps="--cpus ${NEX_DOCKER_CPUS:-4} --memory ${NEX_DOCKER_MEMORY:-8g}"
 # Root-owned products of an earlier check can only be removed from inside the container.
 # shellcheck disable=SC2086
-docker run --rm $caps -v "$report":/r "$tools" sh -c 'rm -rf /r/run1 /r/run2 /r/diff /r/src /r/summary.tsv /r/inputs.txt /r/run1.log /r/run2.log'
+$docker run --rm $caps -v "$report":/r "$tools" sh -c 'rm -rf /r/run1 /r/run2 /r/diff /r/src /r/summary.tsv /r/inputs.txt /r/run1.log /r/run2.log'
 mkdir -p "$report/diff"
 
 src=$report/src
@@ -79,7 +80,7 @@ export NEX_SEQUENCE=${NEX_SEQUENCE:-1}
     echo "snapshot	$snapshot"
     echo "source_date_epoch	$SOURCE_DATE_EPOCH"
     echo "label_sequence	$NEX_LABEL $NEX_SEQUENCE"
-    echo "tools_image_id	$(docker image inspect -f '{{.Id}}' "$tools")"
+    echo "tools_image_id	$($docker image inspect -f '{{.Id}}' "$tools")"
     echo "go	$(go version)"
     echo "layers	${layers:-none}"
     echo "parallel	$parallel"
@@ -145,18 +146,30 @@ for l in $layers; do artifacts="$artifacts $l.raw"; done
 printf 'artifact\trun1\trun2\tequal\n' > "$report/summary.tsv"
 status=0
 # shellcheck disable=SC2016
-fn='manifest() ( cd "$1" || exit 1; find . -print0 | LC_ALL=C sort -z | xargs -0 stat -c "%n|%a|%u:%g|%F|%s|%Y|%N"; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ); digest() { if [ -d "$1" ]; then manifest "$1" | sha256sum | cut -d" " -f1; else sha256sum "$1" | cut -d" " -f1; fi; }; '
+fn='manifest() ( cd "$1" || exit 1; find . -print0 | LC_ALL=C sort -z | xargs -0 stat -c "%n|%a|%u:%g|%F|%s|%Y|%N"; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ); digest() { if [ -d "$1" ]; then manifest "$1" > /tmp/manifest || return 1; [ -s /tmp/manifest ] || return 1; h=$(sha256sum < /tmp/manifest) || return 1; else h=$(sha256sum "$1") || return 1; fi; echo "${h%% *}"; }; '
+# A digest is 64 hex digits or the artifact is unusable: a missing artifact, a failed container or an empty manifest
+# must not turn into an equal pair of empty (or constant empty-input) digests.
+digest_of() {
+    # shellcheck disable=SC2086
+    d=$($docker run --rm $caps -v "$report":/r "$tools" sh -c "$fn"'digest "/r/run'"$1"'/'"$2"'"') || d=""
+    printf '%s' "$d"
+}
+is_digest() { printf '%s' "$1" | grep -Eq '^[0-9a-f]{64}$'; }
 for a in $artifacts; do
-    # shellcheck disable=SC2086
-    h1=$(docker run --rm $caps -v "$report":/r "$tools" sh -c "$fn"'digest "/r/run1/'"$a"'"')
-    # shellcheck disable=SC2086
-    h2=$(docker run --rm $caps -v "$report":/r "$tools" sh -c "$fn"'digest "/r/run2/'"$a"'"')
+    h1=$(digest_of 1 "$a")
+    h2=$(digest_of 2 "$a")
+    if ! is_digest "$h1" || ! is_digest "$h2"; then
+        echo "cannot digest $a (run 1: '$h1', run 2: '$h2'): the artifact is missing or the digest failed" >&2
+        printf '%s\t%s\t%s\t%s\n' "$a" "$h1" "$h2" error >> "$report/summary.tsv"
+        status=1
+        continue
+    fi
     if [ "$h1" = "$h2" ]; then eq=yes; else eq=no; status=1; fi
     printf '%s\t%s\t%s\t%s\n' "$a" "$h1" "$h2" "$eq" >> "$report/summary.tsv"
     if [ "$eq" = no ]; then
         echo "difference in $a: listing and running diffoscope" >&2
         # shellcheck disable=SC2086
-        docker run --rm $caps -v "$report":/r -e A="$a" "$tools" sh -c "$fn"'
+        $docker run --rm $caps -v "$report":/r -e A="$a" "$tools" sh -c "$fn"'
             mkdir -p /r/diff/files
             if [ -d "/r/run1/$A" ]; then
                 manifest "/r/run1/$A" > /tmp/m1

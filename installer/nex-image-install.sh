@@ -246,21 +246,26 @@ verify_payloads() {
         for main in virtio-win.iso controller.qcow2; do
             [ -f "$dir$main" ] || continue
             printf '%s  %s\n' "$name" "$dir$main" | sha256sum -c - >/dev/null 2>&1 || {
-                umount "$WORK/data"
                 die "Payload $main does not match its recorded SHA-256; the media or download is damaged."
             }
         done
     done
 }
 
+# Leave nothing mounted or assembled when placing payloads fails, so a rerun in the same
+# session is not refused by release_disks.
+cleanup_data() {
+    umount "$WORK/data" >/dev/null 2>&1 || true
+    [ "$layout" != raid1 ] || mdadm --stop "$DEV/md/nex-data" >/dev/null 2>&1 || true
+}
+
 place_payloads() {
+    trap cleanup_data EXIT
     mount_data
     if [ -n "$NETWORK" ]; then
         say 'Downloading the Controller appliance and VirtIO driver payloads'
-        if ! NEX_NETINST_ROWS='payload/' sh "$MEDIA/netinst-fetch.sh" "$WORK/data/lib/nex" >/dev/null; then
-            umount "$WORK/data"
-            die 'Payload download failed verification. The system is installed; rerun the net installer in Repair mode after fixing the network, or fetch payloads from Nex Core.'
-        fi
+        NEX_NETINST_ROWS='payload/' sh "$MEDIA/netinst-fetch.sh" "$WORK/data/lib/nex" >/dev/null \
+            || die 'Payload download failed verification. The system is installed but carries no Controller appliance or VirtIO payloads (Repair does not place them). Fetch them from Nex Core, or run Erase and install again once the network is fixed.'
     else
         say 'Copying the Controller appliance and VirtIO driver payloads'
         copy_payloads
@@ -268,6 +273,7 @@ place_payloads() {
     verify_payloads
     sync
     umount "$WORK/data"
+    trap - EXIT
     [ "$layout" != raid1 ] || mdadm --stop "$DEV/md/nex-data" >/dev/null 2>&1 || true
 }
 
@@ -319,6 +325,8 @@ repair)
         || die "Repair must name exactly the disks that hold the Nex Core data ($FOUND_DISKS). No disk has been changed."
     install_binary
     [ -z "$NETWORK" ] || download_image
+    # Repair re-lays the table, so an array holding a selected disk must stop first; refuse before any write.
+    release_disks
     say "Repairing the system image on $disks ($layout); nex-data is kept"
     run_hostimage repair --layout "$layout" --disks "$disks" --image-dir "$IMAGE" \
         || die 'nex-hostimage could not repair the image; see the installer log.'

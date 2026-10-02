@@ -294,7 +294,7 @@ func TestInstallSingleDisk(t *testing.T) {
 		t.Errorf("ESP not formatted: %v", rec.calls)
 	}
 	esp := filepath.Join(espMountBase, filepath.Base(disk+"1"))
-	for rel, want := range map[string]string{"EFI/BOOT/BOOTX64.EFI": "boot-loader", "loader/loader.conf": "timeout 0\n", "EFI/Linux/nex-core_r1_1.efi": "uki-r11"} {
+	for rel, want := range map[string]string{"EFI/BOOT/BOOTX64.EFI": "boot-loader", "loader/loader.conf": "timeout 0\n", "EFI/Linux/nex-core_r1_1.efi": "uki-r1-1-1"} {
 		if b, err := os.ReadFile(filepath.Join(esp, rel)); err != nil || string(b) != want {
 			t.Errorf("ESP %s: %q %v", rel, b, err)
 		}
@@ -445,6 +445,38 @@ func TestWriteSlotOrderingAndTornSlot(t *testing.T) {
 	}
 }
 
+// Parts holds only the used GPT entries: a slot found by label on a disk with a gap in the entry numbers must still be
+// checked at its own entry, not at Index-1 of the compacted list.
+func TestWriteSlotOnTableWithEmptyEntry(t *testing.T) {
+	sandbox(t)
+	d1 := sparseDisk(t, testDisk)
+	installed(t, LayoutSingle, d1)
+	d, err := OpenDisk(d1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb, err := d.ReadTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb.Parts = tb.Parts[1:] // entry 1 (the ESP) is gone
+	if err = d.WriteTable(tb); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	rel2 := makeRelease(t, "r2", 2, 2, 16)
+	r2, _ := ReadRelease(rel2)
+	w := &Writer{Runner: &recorder{}}
+	if err = w.WriteSlot(context.Background(), openDisks(t, d1), "b", r2, ""); err != nil {
+		t.Fatal(err)
+	}
+	rootID, verityID, _ := SlotIDs(r2.Manifest.RootHash)
+	after := readTable(t, d1)
+	if part(t, after, "nex-root-b").ID != rootID || part(t, after, "nex-verity-b").ID != verityID {
+		t.Error("slot B not selected by roothash")
+	}
+}
+
 func TestWriteSlotRefusesRunningSlot(t *testing.T) {
 	sandbox(t)
 	d1 := sparseDisk(t, testDisk)
@@ -467,32 +499,32 @@ func TestRepairKeepsData(t *testing.T) {
 	sandbox(t)
 	d1, d2 := sparseDisk(t, testDisk), sparseDisk(t, testDisk)
 	installed(t, LayoutRAID1, d1, d2)
-	before := readTable(t, d1)
-	data := part(t, before, DataLabel)
+	disks := []string{d1, d2}
+	before := map[string]*Table{}
+	data := map[string]Partition{}
 	marker := bytes.Repeat([]byte("keep"), 2048)
-	for _, p := range []string{d1, d2} {
+	for _, p := range disks {
+		before[p] = readTable(t, p)
+		data[p] = part(t, before[p], DataLabel)
 		f, _ := os.OpenFile(p, os.O_RDWR, 0)
-		f.WriteAt(marker, before.Offset(data)+7*MiB)
-		f.WriteAt([]byte("old-esp"), before.Offset(part(t, before, ESPLabel)))
+		f.WriteAt(marker, before[p].Offset(data[p])+7*MiB)
+		f.WriteAt([]byte("old-esp"), before[p].Offset(part(t, before[p], ESPLabel)))
 		f.Close()
 	}
 	rel2 := makeRelease(t, "r2", 2, 2, 16)
 	rec := &recorder{}
-	if err := (&Writer{Runner: rec}).Repair(context.Background(), Options{Layout: LayoutRAID1, Disks: []string{d1, d2}, ImageDir: rel2}); err != nil {
+	if err := (&Writer{Runner: rec}).Repair(context.Background(), Options{Layout: LayoutRAID1, Disks: disks, ImageDir: rel2}); err != nil {
 		t.Fatal(err)
 	}
 	r2, _ := ReadRelease(rel2)
 	rootID, _, _ := SlotIDs(r2.Manifest.RootHash)
-	for _, p := range []string{d1, d2} {
+	for _, p := range disks {
 		after := readTable(t, p)
-		if got := part(t, after, DataLabel); got != data && p == d1 {
-			t.Errorf("%s: nex-data entry changed: %+v -> %+v", p, data, got)
+		if got := part(t, after, DataLabel); got != data[p] {
+			t.Errorf("%s: nex-data entry changed: %+v -> %+v", p, data[p], got)
 		}
-		if after.DiskID != before.DiskID && p == d1 {
-			t.Error("disk GUID changed")
-		}
-		if got := readPart(t, p, after, DataLabel, 0); got != nil {
-			_ = got
+		if after.DiskID != before[p].DiskID {
+			t.Errorf("%s: disk GUID changed", p)
 		}
 		f, _ := os.Open(p)
 		b := make([]byte, len(marker))

@@ -7,11 +7,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -487,4 +490,447 @@ func TestRollbackIsRefusedWhileAnUpdateIsArmedButNotBooted(t *testing.T) {
 	if len(r.plat.rolled) != 0 {
 		t.Fatalf("rolled back before the armed update ever booted: %v", r.plat.rolled)
 	}
+}
+
+// A release that an earlier apply already staged is finished, not downloaded and written again: a
+// stage_only apply followed by one that arms it, or a resumed request after a restart.
+func TestApplyOfAnAlreadyStagedReleaseDoesNotStageItAgain(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	blobReads := func() int {
+		r.src.mu.Lock()
+		defer r.src.mu.Unlock()
+		return len(r.src.offsets)
+	}
+	if len(r.plat.staged) != 1 || blobReads() == 0 {
+		t.Fatalf("setup: staged %v, blob reads %d", r.plat.staged, blobReads())
+	}
+	before := blobReads()
+	r.restart()
+	r.mustApply("req-apply-0002", func(a *ApplyRequest) { a.Activate = "reboot" })
+	select {
+	case <-r.reboot:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reboot after the second apply")
+	}
+	if len(r.plat.staged) != 1 || blobReads() != before {
+		t.Fatalf("the staged release was written again: staged %v, blob reads %d -> %d", r.plat.staged, before, blobReads())
+	}
+	if st := r.status(); st.Phase != PhaseArmed || len(r.plat.armed) != 1 || r.plat.armed[0] != 2 {
+		t.Fatalf("%+v %v", st, r.plat.armed)
+	}
+}
+
+// Cancel must not turn an Activate that is arming into "idle": the reboot is already on its way.
+func TestCancelIsRefusedWhileAnActivationIsInFlight(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	gate := make(chan struct{})
+	r.cfg.RunningVMs = func(context.Context) ([]string, error) { <-gate; return nil, nil }
+	r.restart()
+	activated := make(chan error, 1)
+	go func() {
+		_, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"})
+		activated <- err
+	}()
+	for range 2000 {
+		if r.status().Running {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancelled := make(chan error, 1)
+	go func() {
+		_, _, err := r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-001"})
+		cancelled <- err
+	}()
+	var err error
+	select {
+	case err = <-cancelled:
+	case <-time.After(5 * time.Second):
+		close(gate) // a Cancel that waits for the activation to end is the defect
+		t.Fatal("Cancel waited for the activation instead of refusing")
+	}
+	wantCode(t, err, "update_in_progress")
+	close(gate)
+	if err = <-activated; err != nil {
+		t.Fatal(err)
+	}
+	if st := r.status(); st.Phase != PhaseArmed || len(r.plat.armed) != 1 {
+		t.Fatalf("the activation was undone: %+v", st)
+	}
+}
+
+// A stage the data volume cannot hold is refused before anything is downloaded, with the code the pool
+// coordinator uses, and leaves the old state alone.
+func TestApplyRefusesWhenTheVolumeCannotHoldTheRelease(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	prev := freeBytes
+	freeBytes = func(string) (uint64, error) { return 1 << 20, nil }
+	t.Cleanup(func() { freeBytes = prev })
+	if _, _, err := r.apply("req-apply-0001", nil); err != nil {
+		t.Fatal(err)
+	}
+	op := r.wait()
+	if op.Error == nil || op.Error.Code != "insufficient_space" {
+		t.Fatalf("%+v", op)
+	}
+	r.src.mu.Lock()
+	reads := len(r.src.offsets)
+	r.src.mu.Unlock()
+	if st := r.status(); reads != 0 || len(r.plat.staged) != 0 || st.Phase != PhaseIdle {
+		t.Fatalf("a refused stage went on: blob reads %d, staged %v, %+v", reads, r.plat.staged, st)
+	}
+	freeBytes = prev
+	r.mustApply("req-apply-0002", nil)
+}
+
+func TestDiskFullIsReportedAsInsufficientSpace(t *testing.T) {
+	wantCode(t, diskFull(fmt.Errorf("write: %w", syscall.ENOSPC)), "insufficient_space")
+	other := errors.New("permission denied")
+	if diskFull(other) != other {
+		t.Fatal("another error was rewritten")
+	}
+}
+
+// A failed activation that stays on record (an arming error, not a refusal) is still a failure when the
+// caller repeats the request: the pool rollout would otherwise report the host as armed.
+func TestRepeatedFailedActivationReturnsItsError(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	r.plat.armErr = errors.New("disk offline")
+	_, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"})
+	if err == nil {
+		t.Fatal("activation succeeded although arming failed")
+	}
+	_, _, err = r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"})
+	wantCode(t, err, "internal")
+	r.plat.armErr = nil
+	if _, _, err = r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-02"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The running image must say which release it is: a missing or non-numeric sequence would make staging
+// prune the boot entry the host runs from.
+func TestHostPlatformRefusesAnImageWithoutASequence(t *testing.T) {
+	dir := t.TempDir()
+	cmdline := filepath.Join(dir, "cmdline")
+	if err := os.WriteFile(cmdline, []byte("quiet roothash="+strings.Repeat("a", 64)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldCmd, oldOS := CmdlinePath, OSReleasePath
+	CmdlinePath, OSReleasePath = cmdline, filepath.Join(dir, "os-release")
+	t.Cleanup(func() { CmdlinePath, OSReleasePath = oldCmd, oldOS })
+	for build, want := range map[string]int{"": 0, "v1": 0, "v1-x": 0, "v1-0": 0, "-3": 0, "my-label-7": 7} {
+		if err := os.WriteFile(OSReleasePath, []byte("BUILD_ID="+build+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b, err := hostPlatform{}.Booted(context.Background())
+		if (want == 0) != (err != nil) || b.Sequence != want {
+			t.Errorf("BUILD_ID=%q: %+v %v", build, b, err)
+		}
+	}
+}
+
+// waitFailure polls the status until the record carries a failure with the code.
+func (r *rig) waitFailure(code string) ImageStatus {
+	r.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if st := r.status(); (st.Failure != nil && st.Failure.Code == code) || (code == "" && st.Failure == nil) {
+			return st
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	r.t.Fatalf("no failure %q on the record: %+v", code, r.status())
+	return ImageStatus{}
+}
+
+// A restart that fails is not silent: the record says reboot_failed while the release stays armed, and
+// repeating activate (a new request_id, or the same one) restarts again.
+func TestFailedRebootIsRecordedAndActivateRepeatsIt(t *testing.T) {
+	for _, sameID := range []bool{false, true} {
+		t.Run(fmt.Sprint("same_request_id=", sameID), func(t *testing.T) {
+			r := newRig(t)
+			r.pub.release(2, "v2", true)
+			r.mustApply("req-apply-0001", nil)
+			var calls atomic.Int32
+			r.cfg.Reboot = func(context.Context) error {
+				if calls.Add(1) == 1 {
+					return errors.New("systemctl: Failed to connect to bus")
+				}
+				r.reboot <- struct{}{}
+				return nil
+			}
+			r.restart()
+			ctx := context.Background()
+			if _, _, err := r.eng.Activate(ctx, ActionRequest{RequestID: "req-activate-01"}); err != nil {
+				t.Fatal(err)
+			}
+			if st := r.waitFailure("reboot_failed"); st.Phase != PhaseArmed {
+				t.Fatalf("%+v", st)
+			}
+			id := "req-activate-02"
+			if sameID {
+				id = "req-activate-01"
+			}
+			if _, _, err := r.eng.Activate(ctx, ActionRequest{RequestID: id}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-r.reboot:
+			case <-time.After(5 * time.Second):
+				t.Fatal("activate did not restart the host again")
+			}
+			if st := r.waitFailure(""); st.Phase != PhaseArmed || len(r.plat.armed) != 1 {
+				t.Fatalf("the release is armed once and stays armed: %+v armed=%v", st, r.plat.armed)
+			}
+		})
+	}
+}
+
+// An arm that fails on a later disk and cannot take its entry back from the earlier ones leaves a release
+// that may boot: the record says armed with the failure, and nothing restarts the host. Cancel takes the
+// entry back (and refuses while that fails); once the release did boot it is refused for good.
+func TestArmThatCouldNotBeUndoneIsRecordedAsArmed(t *testing.T) {
+	r := newRig(t)
+	b2 := r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	r.plat.armErr = fmt.Errorf("%w: /dev/vdb1: write failed", hostimage.ErrArmNotUndone)
+	r.plat.entries = append(r.plat.entries, hostimage.UKIEntry{Sequence: 2, Counted: true, Tries: 3}) // the first disk still has it
+	_, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"})
+	wantCode(t, err, "arm_incomplete")
+	if st := r.status(); st.Phase != PhaseArmed || st.Failure == nil || st.Failure.Code != "arm_incomplete" {
+		t.Fatalf("%+v", st)
+	}
+	r.plat.disarmErr = errors.New("umount: device busy")
+	_, _, err = r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-0001"})
+	wantCode(t, err, "arm_incomplete")
+	if st := r.status(); st.Phase != PhaseArmed || st.Slots[len(st.Slots)-1].Role != "armed" {
+		t.Fatalf("a Cancel that could not take the entry back must leave the release armed: %+v", st)
+	}
+	// The release started on the disk that kept it: it is booted, no longer cancellable.
+	r.plat.disarmErr = nil
+	r.plat.boot(Booted{RootHash: b2.rootHash, Label: "v2", Sequence: 2}, false)
+	_, _, err = r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-0002"})
+	wantCode(t, err, "already_armed")
+	if len(r.plat.disarmed) != 0 {
+		t.Fatalf("a release that booted was disarmed: %v", r.plat.disarmed)
+	}
+	select {
+	case <-r.reboot:
+		t.Fatal("the host was restarted after a half-done arm")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// The way out of arm_incomplete when the half-armed disk never boots: Cancel takes the entry back from
+// every disk, restores the running base's layers and discards the stage like any Cancel of a staged release.
+func TestCancelAfterAnArmThatCouldNotBeUndoneDisarmsAndRestoresTheLayers(t *testing.T) {
+	r := newLayerRig(t)
+	r.pub.addComponents(r.pub.layerComponent("nex-zfs", []byte("zfs-for-v2-2"), "v2-2", false))
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	r.plat.armErr = fmt.Errorf("%w: /dev/vdb1: write failed", hostimage.ErrArmNotUndone)
+	r.plat.entries = append(r.plat.entries, hostimage.UKIEntry{Sequence: 2, Counted: true, Tries: 3})
+	_, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"})
+	wantCode(t, err, "arm_incomplete")
+	if e := r.enabled(); e.Base != "v2-2" {
+		t.Fatalf("the layers follow the release that may boot: %+v", e)
+	}
+	if _, _, err = r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-0001"}); err != nil {
+		t.Fatal(err)
+	}
+	st := r.status()
+	if st.Phase != PhaseIdle || st.Failure != nil || len(r.plat.disarmed) != 1 || r.plat.disarmed[0] != 2 {
+		t.Fatalf("%+v disarmed=%v", st, r.plat.disarmed)
+	}
+	if e := r.enabled(); e.SHA256 != r.oldSHA || e.Base != "base-1" || !e.Enabled {
+		t.Fatalf("the layers of the running base are not back: %+v", e)
+	}
+}
+
+// Activate after arm_incomplete takes the entry back and arms the release again, whole this time.
+func TestActivateAfterAnArmThatCouldNotBeUndoneArmsAgain(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	r.plat.armErr = fmt.Errorf("%w: /dev/vdb1: write failed", hostimage.ErrArmNotUndone)
+	r.plat.entries = append(r.plat.entries, hostimage.UKIEntry{Sequence: 2, Counted: true, Tries: 3})
+	_, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"})
+	wantCode(t, err, "arm_incomplete")
+	r.plat.disarmErr = errors.New("umount: device busy")
+	_, _, err = r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-02"})
+	wantCode(t, err, "arm_incomplete")
+	if len(r.plat.armed) != 0 {
+		t.Fatalf("armed again over an entry that could not be taken back: %v", r.plat.armed)
+	}
+	r.plat.disarmErr, r.plat.armErr = nil, nil
+	if _, _, err = r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-03"}); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.status(); st.Phase != PhaseArmed || st.Failure != nil || len(r.plat.disarmed) != 1 || len(r.plat.armed) != 1 {
+		t.Fatalf("%+v disarmed=%v armed=%v", st, r.plat.disarmed, r.plat.armed)
+	}
+	select {
+	case <-r.reboot:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the retry did not restart the host")
+	}
+}
+
+// When the half-armed entry is gone from every disk (the boot assessment finds none), the record goes back
+// to staged and the layers to the running base's, like a failed arm that was undone.
+func TestReconcileOfAnArmedReleaseWithoutEntriesRestoresTheLayers(t *testing.T) {
+	r := newLayerRig(t)
+	r.pub.addComponents(r.pub.layerComponent("nex-zfs", []byte("zfs-for-v2-2"), "v2-2", false))
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	r.plat.armErr = fmt.Errorf("%w: /dev/vdb1: write failed", hostimage.ErrArmNotUndone)
+	_, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"})
+	wantCode(t, err, "arm_incomplete")
+	if st := r.status(); st.Phase != PhaseStaged || st.Failure != nil || st.Slots[len(st.Slots)-1].Role != "staged" {
+		t.Fatalf("%+v", st)
+	}
+	if e := r.enabled(); e.SHA256 != r.oldSHA || e.Base != "base-1" || !e.Enabled {
+		t.Fatalf("the layers of the running base are not back: %+v", e)
+	}
+}
+
+// The same through apply with activate=reboot: the failing arm must not put the record back to staged.
+func TestApplyWhoseArmCouldNotBeUndoneStaysArmed(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.plat.armErr = fmt.Errorf("%w: /dev/vdb1: write failed", hostimage.ErrArmNotUndone)
+	r.plat.entries = append(r.plat.entries, hostimage.UKIEntry{Sequence: 2, Counted: true, Tries: 3}) // the first disk still has it
+	if _, _, err := r.apply("req-apply-0001", func(a *ApplyRequest) { a.Activate = "reboot" }); err != nil {
+		t.Fatal(err)
+	}
+	if op := r.wait(); op.Error == nil || op.Error.Code != "arm_incomplete" {
+		t.Fatalf("%+v", op)
+	}
+	if st := r.status(); st.Phase != PhaseArmed {
+		t.Fatalf("%+v", st)
+	}
+}
+
+// A release that replaces a staged one takes the files of the old stage with it.
+func TestRestagingDropsTheStagingDirectoryOfTheReplacedRelease(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	old := filepath.Join(r.cfg.Dir, "staging", "2")
+	if _, err := os.Stat(old); err != nil {
+		t.Fatal(err)
+	}
+	r.pub.serial = 2
+	r.pub.release(3, "v3", true)
+	r.mustApply("req-apply-0002", nil)
+	if _, err := os.Stat(old); err == nil {
+		t.Error("the staging directory of the replaced release is kept")
+	}
+	if _, err := os.Stat(filepath.Join(r.cfg.Dir, "staging", "3", "release")); err != nil {
+		t.Error(err)
+	}
+}
+
+// A rollback that fails with no disk changed leaves the running release's layers; one that failed after a
+// disk was switched keeps the previous release's layers and the record says armed with the failure, and
+// repeating the rollback finishes the disks that are left.
+func TestRollbackThatReachedSomeDisksIsRecordedAndRepeatable(t *testing.T) {
+	setup := func(t *testing.T) (*layerRig, string) {
+		r := newLayerRig(t)
+		newLayer := []byte("zfs-for-v2-2")
+		r.pub.addComponents(r.pub.layerComponent("nex-zfs", newLayer, "v2-2", false))
+		b2 := r.pub.release(2, "v2", true)
+		r.mustApply("req-apply-0001", nil)
+		if _, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"}); err != nil {
+			t.Fatal(err)
+		}
+		r.plat.boot(Booted{RootHash: b2.rootHash, Label: "v2", Sequence: 2}, true)
+		if st := r.status(); st.Phase != PhaseCommitted {
+			t.Fatalf("%+v", st)
+		}
+		return r, hexOf(newLayer)
+	}
+	t.Run("no disk changed", func(t *testing.T) {
+		r, newSHA := setup(t)
+		r.plat.rollErr = errors.New("no UKI of sequence 1 to roll back to")
+		_, _, err := r.eng.Rollback(context.Background(), ActionRequest{RequestID: "req-rollback-01"})
+		wantCode(t, err, "previous_unavailable")
+		if e := r.enabled(); e.SHA256 != newSHA || e.Base != "v2-2" {
+			t.Fatalf("the layers of the running release are not back: %+v", e)
+		}
+		if st := r.status(); st.Phase != PhaseCommitted || st.Failure != nil {
+			t.Fatalf("%+v", st)
+		}
+	})
+	t.Run("after a disk changed", func(t *testing.T) {
+		r, _ := setup(t)
+		r.plat.rollErr = fmt.Errorf("%w: /dev/vdb1: input/output error", hostimage.ErrRollbackPartial)
+		r.plat.entries = append(r.plat.entries, hostimage.UKIEntry{Sequence: 1, Counted: true, Tries: 3}) // the previous UKI, on the disk the rollback reached
+		_, _, err := r.eng.Rollback(context.Background(), ActionRequest{RequestID: "req-rollback-01"})
+		wantCode(t, err, "rollback_incomplete")
+		st := r.status()
+		if st.Phase != PhaseArmed || st.Failure == nil || st.Failure.Code != "rollback_incomplete" {
+			t.Fatalf("%+v", st)
+		}
+		if e := r.enabled(); e.SHA256 != r.oldSHA || e.Base != "base-1" {
+			t.Fatalf("the layers must follow the previous release that already boots on a disk: %+v", e)
+		}
+		if _, _, err = r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-0001"}); err == nil {
+			t.Fatal("a half-done rollback was cancelled")
+		}
+		// Repeating it, with the fault gone, finishes the job; the running release stays the current one.
+		r.plat.rollErr = nil
+		if _, _, err = r.eng.Rollback(context.Background(), ActionRequest{RequestID: "req-rollback-02"}); err != nil {
+			t.Fatal(err)
+		}
+		st = r.status()
+		if st.Phase != PhaseArmed || st.Failure != nil || len(r.plat.rolled) != 1 || r.plat.rolled[0] != [2]int{2, 1} {
+			t.Fatalf("%+v rolled=%v", st, r.plat.rolled)
+		}
+		if e := r.enabled(); e.SHA256 != r.oldSHA {
+			t.Fatalf("%+v", e)
+		}
+	})
+}
+
+// The space estimate counts the layers stageLayers downloads: an on_demand layer the operator has enabled
+// follows its base (it is not required, so only the predicate of stageLayers includes it); one that is not
+// enabled is not counted.
+func TestSpaceCheckCountsTheLayersThatAreStaged(t *testing.T) {
+	r := newLayerRig(t)
+	zfs := r.pub.layerComponent("nex-zfs", bytes.Repeat([]byte("z"), 8<<20), "v2-2", true)
+	cluster := r.pub.layerComponent("nex-cluster", bytes.Repeat([]byte("c"), 8<<20), "v2-2", true)
+	r.pub.addComponents(zfs, cluster)
+	r.pub.release(2, "v2", true)
+	st, err := r.eng.Check(context.Background())
+	if err != nil || st.Available == nil {
+		t.Fatalf("%+v %v", st, err)
+	}
+	var slot int64
+	for _, c := range st.Available.Components {
+		if c.Kind == "slot-image" {
+			slot = c.Bytes
+		}
+	}
+	// Room for the image and the enabled layer once each, not twice (the blob and its tree).
+	prev := freeBytes
+	freeBytes = func(string) (uint64, error) { return uint64(2*slot) + spaceReserve + uint64(zfs.Bytes), nil }
+	t.Cleanup(func() { freeBytes = prev })
+	if _, _, err = r.apply("req-apply-0001", nil); err != nil {
+		t.Fatal(err)
+	}
+	if op := r.wait(); op.Error == nil || op.Error.Code != "insufficient_space" {
+		t.Fatalf("the enabled on_demand layer was not counted: %+v", op)
+	}
+	// Room for both copies of the enabled layer; the unenabled one needs none.
+	freeBytes = func(string) (uint64, error) { return uint64(2*slot) + spaceReserve + uint64(2*zfs.Bytes), nil }
+	r.mustApply("req-apply-0002", nil)
 }

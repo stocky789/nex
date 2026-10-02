@@ -7,7 +7,7 @@ physical hardware.
 
 API impact: new on-host command contract (`nex-core-local layers`, `LayerInfo`, `layer-unavailable`); no HTTP route,
 report command or Inventory field. State owner: `core` (`/var/lib/nex/layers/enabled.json`;
-`/var/lib/nex/payload/<sha256>/`). Change record: `docs/changes/2026-10-01-image-layers-packaging.json`.
+`/var/lib/nex/payload/<sha256>/` for the Controller system image only). Change record: `docs/changes/2026-10-01-image-layers-packaging.json`.
 
 ## What changed
 
@@ -22,12 +22,11 @@ report command or Inventory field. State owner: `core` (`/var/lib/nex/layers/ena
    volume, ticks exactly the disks it names and cannot be changed, skips the host and disk pages, writes
    `Install.mode=repair`, shows its own review and confirmation text. The disk floor is 24 GiB on the image edition
    and 16 GiB on Classic. `installer/check.sh` pins the shared contract.
-3. **Appliance split.** `packaging/core-local/build.py --appliance-packaging split` (env `NEX_APPLIANCE_PACKAGING` in
-   `build-inside.sh`) writes `payload/<sha256>/{controller.qcow2,manifest.json,manifest.sig}` beside the deb instead of
-   inside it. The default `bundled` mode is the old package layout. Either way the package carries
-   `controller.sha256` (the payload directory it expects), the source offer, notices, update helpers and the trust key.
-   `core-local-setup` prefers the bundled image and otherwise reads `/var/lib/nex/payload/<sha256>/`; a pin that is not a
-   SHA-256 is ignored, so no path leaves the payload store.
+3. **Appliance split (removed).** This slice added `build.py --appliance-packaging split`, which wrote the appliance beside the
+   deb. It was removed again in the review fixes: the package always carries the appliance, and the image edition takes the
+   Controller image from the release's `vm-image` component. `core-local-setup` reads
+   `/var/lib/nex/payload/<sha256>/` only for `configure --controller-image-sha256` (the image edition's Controller system image),
+   not as a fallback for the appliance; a digest that is not a SHA-256 is ignored, so no path leaves the payload store.
 4. **Docs.** Layer contract in `docs/API.md` and `docs/api/local-openapi.json` (`x-commands` entry, `LayerInfo`);
    `docs/api/local.html` regenerated; guide page `docs/guide/optional-host-features.md`; CHANGELOG `[Unreleased]`.
 5. **Integration pins.** `tests/integration/installer-handoff.py` now asserts the image-edition hook: preflight, then
@@ -41,10 +40,9 @@ report command or Inventory field. State owner: `core` (`/var/lib/nex/layers/ena
 
 - `python3 scripts/generate_api.py`, then `--check`: all three references current. `tests/test_api_contract.py`: 74 tests OK.
 - `python3 -m unittest tests.test_storage_packaging tests.test_core_local_package`: 43 tests OK
-  (includes the appliance split, classic precedence and traversal-safe pin tests).
+  (when run, this included the since-removed appliance split tests).
 - `sh installer/check.sh`: all PASS. `bash -n`/`sh -n` on `build-inside.sh` and `recheck.sh`.
-- Smoke of the `build-inside.sh` appliance block against a stub bundle: `bundled` leaves the three files in the
-  package; `split` writes them to `payload/<sha256>/` and leaves them out of the package; any other value exits 1.
+- Smoke of the `build-inside.sh` appliance block against a stub bundle (when it still had a `split` mode, now removed).
 - `tests/integration/installer-handoff.py`: all PASS, including the new image-edition case.
 - Throwaway `debian:trixie-slim` container (apt `gcc pkg-config libglib2.0-dev libgtk2.0-dev xvfb xdotool`):
   `installer/gui/nex-wizard.c` and `nex-config.c` compile with the project's flags and no warnings, and
@@ -53,10 +51,8 @@ report command or Inventory field. State owner: `core` (`/var/lib/nex/layers/ena
 ## Not run / limits
 
 - The wizard's Repair choice was compiled and pinned by text, never drawn or clicked: no GUI walk-through exists.
-- No `nex-core-local` deb was built (Docker build of the package not run), so the split output and the vendor wants link
-  in a real package are checked by script and tests only. `installer/build.sh` reads the appliance manifest from the
-  deb for the classic edition; the image edition stages `dist/appliance` directly, so it does not yet consume the split
-  payload output. That wiring belongs to the installer build.
+- No `nex-core-local` deb was built (Docker build of the package not run), so the vendor wants link in a real package is
+  checked by script and tests only. `installer/build.sh` reads the appliance manifest from the deb for the classic edition.
 - `nex-layers.service` was shown to merge and verify in the lab VM in [layers](phase2-layers.md); the packaged
   unit, preset and wants link were not booted.
 - Nothing calls `layers ensure` from a ZFS or cluster operation, and nothing places layer files on a host.

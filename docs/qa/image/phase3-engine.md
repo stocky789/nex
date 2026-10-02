@@ -116,7 +116,7 @@ kernel under another; the finding itself was observed in the previous session.
   (names follow the BLS convention and sd-boot's version sort by os-release `VERSION` is assumed); power-cuts on a real block device or
   FAT file system (the "crash" tests stop at named points in the code: they model ordering, not a torn sector); Secure Boot; a real
   Range-capable HTTP server (HTTPSource has no test against `httptest`: only DirSource with injected faults ran).
-- **Not wired (outside this slice's write set):** `Inventory.image` is defined but nothing fills or sends it; `nex-state-guard.service`
+- **Not wired at the end of slice I-3a (outside this slice's write set; wired afterwards, see phase3-boot.md, phase3-controller.md and phase3-layers-update.md: `Inventory.image` is produced by `internal/agent/image_status.go`, the image ships `nex-boot-check` and the `nex-state-guard` drop-ins, Controller scope is implemented in `internal/nexupdate/controller.go`, and the pool rollout coordinator exists):** `Inventory.image` is defined but nothing fills or sends it; `nex-state-guard.service`
   (boot the recovery profile when committed `state_format` exceeds the image's); the image's `/usr/libexec/nex/nex-boot-check`,
   `boot-complete.target` and the `chrony-wait` finding from phase2-build.md; the pinned `/usr/share/nex/update/trust.json` in the image;
   pool rollout gates (activate and rollback evaluate none); Controller scope (`scope_unavailable`). Layer components, `PUT …/settings`

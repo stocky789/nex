@@ -27,8 +27,10 @@ import tempfile
 import time
 import urllib.request
 
-OVMF_CODE = next((p for p in ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/edk2/OVMF_CODE_4M.fd", "/usr/share/OVMF/x64/OVMF_CODE.4m.fd") if os.path.exists(p)), None)
-OVMF_VARS = next((p for p in ("/usr/share/OVMF/OVMF_VARS_4M.fd", "/usr/share/edk2/OVMF_VARS_4M.fd", "/usr/share/OVMF/x64/OVMF_VARS.4m.fd") if os.path.exists(p)), None)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import image_boot as lab  # noqa: E402  (OVMF paths, lab container caps, workspace mounts)
+
+OVMF_CODE, OVMF_VARS = lab.OVMF_CODE, lab.OVMF_VARS
 MAC = "52:54:00:c0:de:01"
 PORT = 18443
 PASSWORD = "Nex-image-boot-test-1"
@@ -177,10 +179,15 @@ def main():
     args = ap.parse_args()
     if not OVMF_CODE or not OVMF_VARS:
         sys.exit("OVMF firmware not found")
+    for tool in ("qemu-system-x86_64", "mkfs.vfat", "mcopy", "openssl", "sfdisk"):
+        if not shutil.which(tool):
+            sys.exit(f"missing {tool}")
+    if not os.access("/dev/kvm", os.R_OK | os.W_OK):
+        sys.exit("no usable /dev/kvm (the QEMU labs need KVM: the runner must expose it and the user must be in the kvm group)")
     system = os.path.join(args.release, "system.img")
     if not os.path.isfile(system):
         sys.exit(f"{system} not found")
-    work = tempfile.mkdtemp(prefix="nex-controller-boot-")
+    work = lab.scratch_dir(args.release, "nex-controller-boot-")
     vm = None
     try:
         certificate, key, cert_path = make_certificate(work)
@@ -189,7 +196,7 @@ def main():
         if shutil.which("qemu-img"):
             sh("qemu-img", "create", "-f", "qcow2", data, "2G", stdout=subprocess.DEVNULL)
         else:  # the pinned tools image of image/build.sh carries qemu-utils
-            sh("docker", "run", "--rm", "-v", f"{work}:/w", "-u", f"{os.getuid()}:{os.getgid()}", "nex-image-tools", "qemu-img", "create", "-f", "qcow2", "/w/controller-data.qcow2", "2G", stdout=subprocess.DEVNULL)
+            sh("docker", "run", "--rm", *lab.docker_caps(), "-v", f"{lab.host_mount(work)}:/w", "-u", f"{os.getuid()}:{os.getgid()}", "nex-image-tools", "qemu-img", "create", "-f", "qcow2", "/w/controller-data.qcow2", "2G", stdout=subprocess.DEVNULL)
 
         vm = VM(work, "boot1", system, data, seed)
         marker = ready(cert_path, args.boot_deadline, vm)

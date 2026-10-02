@@ -16,10 +16,10 @@ Status is updated as work lands; anything not listed under "Observed" was not ru
 |---|---|---|
 | 1 | `go test ./internal/vmhost -run Layer` (inventory, ensure, disable, activate, tamper, crash convergence, busy-command) | pass |
 | 1 | `nex-core-local layers activate|list|ensure|disable` (new `cmd/nex-core-local/layers.go`) | exercised in the lab VM below |
-| 2 | `scripts/layer-finalize.py` + `tests/test_image_composition.py` (16 tests: etc to factory, sysusers, enablement links, var/collision/unit-order refusals, package names, hostid) | pass |
+| 2 | `scripts/layer-finalize.py` + `tests/test_image_composition.py` (29 tests in the file; the finalizer ones cover etc to factory, sysusers, enablement links, var/collision/unit-order refusals, package names, hostid, early-target `.wants`/`.requires`/`.upholds` directories, and the `C+` copy into a shared `/etc` directory run through the real `systemd-tmpfiles`) | pass |
 | 3 | `scripts/build-zfs-modules.sh --kver 6.12.107+deb13-amd64 --dev-key`: `spl.ko.xz`, `zfs.ko.xz` from `zfs-dkms` 2.3.9-0+deb13u1 (Debian source `zfs-linux`), signed with a throwaway key under `.cache/image-keys/`; `modinfo` shows the dev signer and vermagic `6.12.107+deb13-amd64` | built |
 | 3 | `image/mkosi.images/build-layer.sh nex-zfs` on a lab base tree: mkosi overlay install of `zfsutils-linux zfs-zed` + `nex-zfs-modules` (a local .deb that `Provides: zfs-modules`, so zfs-dkms is not pulled), `layer-finalize`, erofs `nex-zfs.raw` 5.0 MB, regenerated `modules.dep*` for base+layer | built |
-| 3 | `nex-cluster` layer (`layer.json`, `layer.packages`, `mkosi.conf`) | **written, never built** (needs the Nex `dlm-controld +nex1` and libvirt `+nex4` debs, not available here) |
+| 3 | `nex-cluster` layer (`layer.json`, `layer.packages`, `mkosi.conf`, `mkosi.extra` state folders and accounts) | built for [lab 3](phase6-lab3.md) with the stock Debian `dlm-controld` and libvirt (the Nex `+nex1`/`+nex4` debs were not built, so GFS2/dlm as intended is **not run**), live-merged there, Corosync and Pacemaker started after two layer fixes (state folders, accounts). Not built by this lab. |
 | 5 | Lab VM (QEMU/KVM, direct kernel boot of the lab base, kernel 6.12.107, no Secure Boot): `nex-core-local layers ensure nex-zfs` live-merged the sysext (`systemd-sysext status` /usr nex-zfs), loaded `zfs`/`spl`, `zfs version` 2.3.9, `zpool create` + `zfs create` succeeded; `layers disable` refused with `in_use` while the pool existed | pass |
 | 5 | Reboot: `nex-layers.service` verified the store file and merged the layer before the rest of boot, `zfs` loaded, pool importable (`zpool import -d /var` found it; **automatic cache import was not shown**) | pass with that caveat |
 | 5 | Tamper: one flipped byte in the store file, then `layers activate` run by hand in the same boot: it refused the file (`digest_mismatch`), removed the layer's `/run/extensions` link, exited 0 and reported in `/run/nex/layers/status.json`. **The layer stayed merged**: the same log's `layers list` still shows `"merged": true, "verified": false`, because `activate` only links and the merge from earlier in that boot was not undone. What is shown is refusal and reporting; it is **not** shown that a tampered store file is unmerged in a running system, nor, after a reboot, that the unit then leaves it out (by code, `nex-layers.service` runs `activate` before `systemd-sysext refresh`, so a refused layer has no link to merge; no tampered-file reboot was run in a VM; `TestLayerTamperedStoreFileIsNotLinkedOrMergedAfterReboot` shows it by unit test with the run directories emptied as a reboot leaves them: the tampered file is not linked, not merged and listed unverified). Removing an already-merged layer from a running system is deliberately not done (open). | refusal and report pass; unmerge not shown |
@@ -36,7 +36,7 @@ Status is updated as work lands; anything not listed under "Observed" was not ru
 - Layer package list: mkosi's overlay output has no dpkg database, so `layer-finalize` names packages from
   `usr/share/doc/<pkg>/copyright` (no versions). 6 packages were found for `nex-zfs`.
 - Old layer versions are not garbage-collected (the plan keeps them until the new slot is committed); no store GC exists yet.
-- Layers are not yet part of the release manifest/`release.py`; `build-layer.sh` writes `<layer>.raw.json` for it.
+- Layers are components of the release manifest (`update-publish.py publish --layer`, from the `<layer>.raw.json` fragment `build-layer.sh` writes), and the update engine stages them with the base (phase I-3d, unit-tested; see [phase3-engine.md](phase3-engine.md)). `release.py` itself does not build them. No booted installed image has staged a layered release: the labs laid the store files in by hand.
 
 ## Findings
 
@@ -56,6 +56,15 @@ Status is updated as work lands; anything not listed under "Observed" was not ru
 - **Boot merge.** The stock `systemd-sysext.service` runs before `/var` is mounted, so it never sees a `/var`-resident layer, and
   ordering `nex-layers.service` after `systemd-tmpfiles-setup.service` made an ordering cycle with it. `nex-layers.service` now links
   and runs `systemd-sysext refresh` itself, with no sandboxing options (a private mount namespace hides the merge).
+- **`/etc` defaults in shared directories (2026-10-02 review fix).** `layer-finalize` moved each top-level `/etc` entry to
+  `usr/share/factory/etc` with a plain tmpfiles `C` rule; tmpfiles.d(5) skips the whole copy when the destination directory exists and is not
+  empty (`/etc/default`, `/etc/logrotate.d`, `/etc/dbus-1`, ...), so package defaults for such directories never reached the host. The rule is now
+  `C+`, which merges missing files and still leaves every existing file alone (tested with the real `systemd-tmpfiles --root`, systemd 261;
+  the code paths of v257, the trixie version, were read, not run). A file the operator deletes comes back at the next tmpfiles run.
+- **Early-target check (2026-10-02 review fix).** Package-created `*.requires` directories under a unit directory were compared with a name cut for
+  `.wants` only, so `sysinit.target.requires/x.service` (and `local-fs`, `basic`) passed the finalizer; the suffix is now cut properly and `.upholds` is checked too.
+- **Module snapshot (2026-10-02 review fix).** `scripts/build-zfs-modules.sh` defaulted its snapshot to a literal that merely equalled `image/snapshot`;
+  it now reads `image/snapshot`, so modules and the layer's `zfsutils-linux`/`zfs-zed` cannot come from different OpenZFS versions. `NEX_SNAPSHOT` still overrides.
 - **Tooling.** `cp -al` fails across the btrfs subvolumes of the work tree (reflink copies are used); mkosi needs `reprepro` in the
   tools image for `--package-directory` (asked ImageBuild-3 to add it to `image/tools/Dockerfile`); root-owned build products must be
   removed from inside the container.

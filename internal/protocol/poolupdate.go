@@ -11,7 +11,10 @@ import (
 // rollout routes unless the master and every member advertise it.
 const PoolUpdateRolloutCapability = "pool-update-rollout-v1"
 
-// Rollout states. A rollout is "running" or "paused" until it ends as "finalized" or "aborted".
+// Rollout states. A rollout is "running" or "paused" until it ends as "finalized" or "aborted". An
+// abort whose cleanup is unconfirmed (a host not back in service, a guest not running again) does
+// not end: it stays "paused" with the code abort_cleanup_pending until the cleanup is confirmed or
+// an operator forces it.
 const (
 	PoolUpdateRunning   = "running"
 	PoolUpdatePaused    = "paused"
@@ -32,6 +35,10 @@ const (
 	PoolUpdateHostBusy          = "host_busy"
 	PoolUpdateHAEnabled         = "ha_enabled"
 	PoolUpdateMembershipChanged = "membership_changed"
+	// PoolUpdateAbortCleanupPending is an abort that has not yet put back every host's
+	// maintenance mode and stopped guests. The coordinator keeps retrying it (bounded); the
+	// rollout becomes aborted only once that is confirmed, or by an abort with Force.
+	PoolUpdateAbortCleanupPending = "abort_cleanup_pending"
 )
 
 // PoolUpdateRequest is the body of the pool-update command. "update-rollout" starts (or, with
@@ -42,12 +49,19 @@ type PoolUpdateRequest struct {
 	DryRun     bool   `json:"dry_run,omitempty"`
 	RolloutID  string `json:"rollout_id,omitempty"`
 	Control    string `json:"control,omitempty"` // pause, resume, abort, rollback_host
-	HostID     string `json:"host_id,omitempty"`
+	// Force ends an abort whose cleanup is still pending (pause code abort_cleanup_pending) without
+	// confirming it: guests the rollout stopped may stay off and maintenance mode may stay on, as
+	// the hosts' error fields say. Accepted only with control abort on such a rollout.
+	Force  bool   `json:"force,omitempty"`
+	HostID string `json:"host_id,omitempty"`
 }
 
 func (r PoolUpdateRequest) Valid(action string) error {
 	if len(r.RolloutID) > 128 || len(r.HostID) > 128 {
 		return errors.New("pool update identity is too long")
+	}
+	if r.Force && (action != "update-control" || r.Control != "abort") {
+		return errors.New("force applies to a rollout abort only")
 	}
 	switch action {
 	case "update-rollout":
@@ -79,19 +93,25 @@ func (r PoolUpdateRequest) Valid(action string) error {
 // step of that host; the host's own state.json holds the image truth.
 type PoolUpdateHost struct {
 	HostID string `json:"host_id"`
-	// Stage runs: pending, staged, gate, maintenance, drain, activate, boot, confirm, release,
-	// restart, soak, done.
+	// Stage runs: pending, staged, teardown, drain, activate, boot, confirm, release, restart,
+	// soak, done; rolled_back after a fallback or an operator rollback, until a resume.
 	Stage string `json:"stage"`
 	// StoppedByUpdate lists the guests this rollout shut down on this host. It is written before
-	// the shutdown is requested, so a crash can never lose which guests to restart.
+	// the shutdown is requested, so a crash can never lose which guests to restart. An abort
+	// empties it once the host confirms those guests run again; a non-empty list on an aborted
+	// rollout is what a forced abort left for the operator to start by hand.
 	StoppedByUpdate []string  `json:"stopped_by_update,omitempty"`
 	StepStartedAt   time.Time `json:"step_started_at"`
-	DeadlineAt      time.Time `json:"deadline_at"`
-	SoakUntil       time.Time `json:"soak_until"`
-	Error           string    `json:"error,omitempty"`
-	// Attempt counts how often the rollout has sent this host through staging again (a resume
-	// after a rollback). It is part of every step identity, so a new attempt is never a replay
-	// of the engine operations the earlier one left behind.
+	// RetryStartedAt opens the retry window of a guest step that failed; StepStartedAt, which
+	// bounds the whole step, is not moved by it. Records written before it existed load as zero.
+	RetryStartedAt time.Time `json:"retry_started_at,omitzero"`
+	DeadlineAt     time.Time `json:"deadline_at"`
+	SoakUntil      time.Time `json:"soak_until"`
+	Error          string    `json:"error,omitempty"`
+	// Attempt counts how often the rollout has sent this host through a step again (a resume
+	// after a rollback or a failed step, or a guest start retried after the host reported it
+	// failed). It is part of every step identity, so a new attempt is never a replay of the
+	// engine operations the earlier one left behind.
 	Attempt int `json:"attempt,omitempty"`
 }
 

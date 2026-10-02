@@ -133,6 +133,7 @@ func (p *flowPlatform) Arm(_ context.Context, rel *hostimage.Release) error {
 	p.entries = append(p.entries, hostimage.UKIEntry{Sequence: rel.Manifest.Sequence, Counted: true, Tries: 3})
 	return nil
 }
+func (*flowPlatform) Disarm(context.Context, nexupdate.ReleaseRecord) error { return nil }
 func (*flowPlatform) Rollback(context.Context, nexupdate.ReleaseRecord, nexupdate.ReleaseRecord) error {
 	return nil
 }

@@ -19,8 +19,9 @@ action goes through the Controller's routes; the master's host-local API is only
   pool_rollout_lab.py login | enroll | layer | fence   passwords, Controller enrolment and pool join, nex-cluster layer, BMC profiles
   pool_rollout_lab.py publish --release D/release   add one more release to the update tree (the channel moves to it)
   pool_rollout_lab.py guest GUEST.raw              a Nex-managed VM on host 2 that answers ACPI shutdown
-  pool_rollout_lab.py rollout [--running-vms refuse|shutdown] [--kill-controller] [--cut-master-at b:soak]
+  pool_rollout_lab.py rollout [--running-vms refuse|shutdown] [--expect finalized|paused|aborted|any] [--kill-controller] [--cut-master-at b:soak]
   pool_rollout_lab.py promote N                    preflight, then promote host N through the Controller (the master is gone)
+  pool_rollout_lab.py control pause|resume|abort [--rollout-id ID]   pause, resume or abort the rollout through the Controller
   pool_rollout_lab.py boot N | cut N               start / power-cut host N's VM
   pool_rollout_lab.py watch | api N METHOD PATH [JSON] | capi METHOD PATH [JSON] | sh N CMD
   pool_rollout_lab.py resume | down                start the same disks again | kill everything and verify with pgrep
@@ -193,11 +194,7 @@ def run_bmc(port):
     want = "Basic " + base64.b64encode(f"{BMC_USER}:{BMC_SECRET}".encode()).decode()
 
     def pid(n):
-        try:
-            p = int(open(path(f"h{n}/qemu.pid")).read())
-            return p if os.path.exists(f"/proc/{p}") else None
-        except (OSError, ValueError):
-            return None
+        return read_pidfile(path(f"h{n}/qemu.pid"), "qemu-system")
 
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -235,8 +232,7 @@ def run_bmc(port):
             if n is None or parts[4:] != ["Actions", "ComputerSystem.Reset"]:
                 return self.reply(404)
             p = pid(n)
-            if p:
-                kill_pid(p)
+            if p and kill_qemu(path(f"h{n}/qemu.pid")):
                 sys.stderr.write(f"ForceOff sys-{n}: killed QEMU {p}\n")
             self.reply(204)
 
@@ -422,14 +418,10 @@ class Host:
             return ""
 
     def pid(self):
-        try:
-            return int(open(f"{self.dir}/qemu.pid").read())
-        except (OSError, ValueError):
-            return None
+        return read_pidfile(f"{self.dir}/qemu.pid", "qemu-system")
 
     def alive(self):
-        p = self.pid()
-        return p is not None and os.path.exists(f"/proc/{p}")
+        return self.pid() is not None
 
     def booted(self):
         """The kernel has started since the firmware last did. The lab shell is a second serial port that the firmware also reads
@@ -468,17 +460,7 @@ l=$(losetup -fP --show /w/d0.img)
 trap 'losetup -d $l' EXIT
 nex-hostimage install --layout single --disks $l --image-dir /rel --etc-seed /seed
 """
-    name = f"nex-pool-lab-{os.getpid()}-{h['n']}"
-    cmd = ["docker", "run", "--rm", "--name", name, "--privileged", "--cpus", "2", "--memory", "4g", "-v", "/dev:/dev",
-           "-v", f"{path('h%d' % h['n'])}:/w", "-v", f"{release}:/rel:ro", "-v", f"{hostimage}:/usr/bin/nex-hostimage:ro",
-           "nex-image-tools", "sh", "-c", script]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        subprocess.run(["docker", "kill", name], capture_output=True)
-        sys.exit(f"install exceeded {timeout}s; container killed")
-    if res.returncode:
-        sys.exit(f"install failed:\n{res.stdout[-1500:]}\n{res.stderr[-1500:]}")
+    lab.run_install(path(f"h{h['n']}"), release, hostimage, script, timeout, f"pool-lab-{h['n']}")
 
 
 def spawn(args, log, **kw):
@@ -634,18 +616,57 @@ def source_archive():
     return os.path.join(LAB, "nex-source.tar.gz")
 
 
-def kill_pid(pid, sig=signal.SIGKILL):
+def is_ours(pid, want):
+    """True when /proc/<pid>/cmdline still names the process we started (a recorded pid may have been reused)."""
+    if not pid:
+        return False
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return want in f.read().decode(errors="replace")
+    except OSError:
+        return False
+
+
+def read_pidfile(file, want):
+    """The pid in a pidfile when it is still the process `want`, else None."""
+    try:
+        with open(file) as f:
+            pid = int(f.read())
+    except (OSError, ValueError):
+        return None
+    return pid if is_ours(pid, want) else None
+
+
+def kill_pid(pid, want, sig=signal.SIGKILL):
+    """SIGKILL `pid` only when its cmdline contains `want`; False when it is gone or no longer ours."""
+    if not is_ours(pid, want):
+        return False
     try:
         os.kill(pid, sig)
     except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def kill_qemu(pidfile):
+    """Power-cut the QEMU named by a pidfile, then delete the pidfile. False when there was no live QEMU."""
+    pid = read_pidfile(pidfile, "qemu-system")
+    ok = kill_pid(pid, "qemu-system")
+    try:
+        os.unlink(pidfile)
+    except OSError:
         pass
+    return ok
 
 
 def cmd_resume(a):
     """Start the services and the three VMs again from the disks `up` made (after `down`, or a killed scope)."""
     st = state()
+    had_bmc = st.pop("bmc_pid", None)
     st["pids"] = []
     start_services(st)
+    if had_bmc:
+        start_bmc(st)
     start_controller(st)
     hosts = [Host(h, st) for h in st["hosts"]]
     for host in hosts:
@@ -811,7 +832,8 @@ def cmd_boot(a):
 def cmd_cut(a):
     """Power cut: kill -9 host N's QEMU, as the lab management controller does on a ForceOff."""
     st = state()
-    kill_pid(Host(st["hosts"][a.n - 1], st).pid())
+    if not kill_qemu(path(f"h{a.n}/qemu.pid")):
+        sys.exit(f"host {a.n}: no running QEMU to cut")
     print(time.strftime("%H:%M:%S"), f"host {a.n}: power cut")
 
 
@@ -883,7 +905,7 @@ def cmd_rollout(a):
             last = line
         stage = " ".join(cur.get("stage", []))
         if a.kill_controller and not killed and ("b:soak" in stage or "a:drain" in stage):
-            kill_pid(st["controller_pid"])
+            kill_pid(st["controller_pid"], "nex-controller")
             killed = time.time()
             print(time.strftime("%H:%M:%S"), "CONTROLLER KILLED", flush=True)
         if killed and not st.get("ctrl_restarted") and time.time() > killed + 25:
@@ -892,7 +914,7 @@ def cmd_rollout(a):
             save(st)
             print(time.strftime("%H:%M:%S"), "CONTROLLER RESTARTED (same data directory)", flush=True)
         if a.cut_master_at and a.cut_master_at in stage.split():
-            kill_pid(Host(st["hosts"][0], st).pid())
+            kill_qemu(path("h1/qemu.pid"))
             print(time.strftime("%H:%M:%S"), f"MASTER VM POWER CUT (kill -9 QEMU) at {a.cut_master_at}", flush=True)
             return
         state_ = cur.get("state", "")
@@ -902,6 +924,9 @@ def cmd_rollout(a):
         time.sleep(3)
     print("final:", last)
     check(maxmaint <= 1, "never more than one host in maintenance at a poll", maxmaint)
+    if a.expect != "any":
+        final = (json.loads(last).get("state", "") if last else "").split("/")[0]
+        check(final == a.expect, f"the rollout ended {a.expect}", last)
     status, body = ctrl_api(st).call("GET", f"/api/v1/pools/{pool}/updates")
     print("Controller GET:", status, json.dumps((body or {}).get("rollout", body))[:600])
 
@@ -931,13 +956,10 @@ def cmd_down(a):
     except OSError:
         st = {"pids": []}
     for n in (1, 2, 3):
-        try:
-            kill_pid(int(open(path(f"h{n}/qemu.pid")).read()))
-        except (OSError, ValueError):
-            pass
-    for pid in st.get("pids", []) + [st.get("controller_pid", 0)]:
-        if pid:
-            kill_pid(pid)
+        kill_qemu(path(f"h{n}/qemu.pid"))
+    for pid in st.get("pids", []):
+        kill_pid(pid, "pool_rollout_lab.py")
+    kill_pid(st.get("controller_pid", 0), "nex-controller")
     time.sleep(1)
     out = subprocess.run(["pgrep", "-af", "qemu-system|nex-controller|pool_rollout_lab.py (serve|hub)|nex-pool-lab"], capture_output=True, text=True).stdout
     left = [l for l in out.splitlines() if "pgrep" not in l and str(os.getpid()) != l.split()[0]]
@@ -978,6 +1000,8 @@ def main():
     r.add_argument("--running-vms", default="refuse")
     r.add_argument("--seconds", type=int, default=480)
     r.add_argument("--kill-controller", action="store_true")
+    r.add_argument("--expect", choices=["finalized", "paused", "aborted", "any"], default="finalized",
+                   help="the state the record must end in (default finalized; any for runs steered by hand)")
     r.add_argument("--attach", action="store_true", help="do not start a rollout; watch the one that exists (after a pause and resume)")
     r.add_argument("--cut-master-at", default="", help="power-cut the master VM when the record shows this host:stage, e.g. b:soak")
     r = sub.add_parser("watch")
@@ -1004,7 +1028,6 @@ def main():
     r.add_argument("n", type=int)
     r.add_argument("command")
     r.add_argument("--timeout", type=int, default=60)
-    sub.add_parser("status")
     s = sub.add_parser("api")
     s.add_argument("n", type=int)
     s.add_argument("method")
@@ -1059,6 +1082,8 @@ def main():
         c.login()
         status, body = c.call(a.method, a.path, json.loads(a.body) if a.body else None)
         print(status, json.dumps(body, indent=1))
+    if upd.check.failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -22,12 +22,29 @@ const ArmTries = 3
 // for a power cut there: the function returns without undoing anything.
 var crashPoint func(point string) error
 
+// powerCut marks an error from a crash point: the process is gone at that moment, so nothing runs
+// after it, undo included.
+type powerCut struct{ error }
+
+func (p powerCut) Unwrap() error { return p.error }
+
 func crash(point string) error {
 	if crashPoint != nil {
-		return crashPoint(point)
+		if err := crashPoint(point); err != nil {
+			return powerCut{err}
+		}
 	}
 	return nil
 }
+
+// ErrArmNotUndone is wrapped by the error of an Arm that failed after it had touched an ESP and then
+// could not take its entry back from every ESP it reached: some disk may still boot the release.
+var ErrArmNotUndone = errors.New("arm failed and could not be undone on every ESP")
+
+// ErrRollbackPartial is wrapped by the error of a Rollback that failed after it had changed an ESP: some
+// disk may boot the previous release already and the others the running one. An error without it left every
+// ESP as it was.
+var ErrRollbackPartial = errors.New("rollback failed after it changed an ESP")
 
 var ukiNameParseRE = regexp.MustCompile(`^nex-core_(.+)_([0-9]+)(?:\+([0-9]+)(?:-([0-9]+))?)?\.efi$`)
 
@@ -71,8 +88,10 @@ func ukiName(label string, sequence int, suffix string) string {
 }
 
 // BootOrder is the order systemd-boot tries the entries of one ESP: entries with tries left (or no
-// counter) before exhausted ones, then the higher sequence first (the UKI's os-release VERSION is
-// the zero-padded sequence). The first element is the default entry.
+// counter) before exhausted ones, then the higher sequence first. sd-boot compares the UKI's os-release
+// IMAGE_VERSION (VERSION when that is absent) as a version string, so image/release.py makes both the
+// zero-padded sequence and nothing else: only then is that comparison the numeric sequence order modelled
+// here, whatever the label looks like. The first element is the default entry.
 func BootOrder(entries []UKIEntry) []UKIEntry {
 	out := append([]UKIEntry(nil), entries...)
 	sort.SliceStable(out, func(i, j int) bool {
@@ -316,6 +335,10 @@ func requireSlot(disks []*Disk, rootHash string) error {
 // written to a .new name (which the boot loader ignores), flushed, and renamed: the rename is the
 // only moment the entry appears. The slot must already be staged on every disk; ESPs are armed one
 // after the other, and an ESP that has not been reached boots its old, self-consistent slot.
+//
+// Arm is all or nothing as far as the disks allow: when an ESP fails, the entry is taken back from
+// every ESP reached so far (the failed one included), so a failed Arm leaves the release staged. If
+// that undo fails too, the error wraps ErrArmNotUndone and the caller must treat the release as armed.
 func (h *Host) Arm(ctx context.Context, rel *Release) error {
 	disks, err := h.openDisks()
 	if err != nil {
@@ -330,9 +353,9 @@ func (h *Host) Arm(ctx context.Context, rel *Release) error {
 	if err != nil {
 		return err
 	}
-	for _, n := range nodes {
+	for i, n := range nodes {
 		if err = h.W.WithESP(ctx, n, func(root string) error { return armESP(root, rel, ArmTries) }); err != nil {
-			return fmt.Errorf("%s: %w", n, err)
+			return h.undoArm(ctx, rel.Manifest.Sequence, nodes[:i+1], fmt.Errorf("%s: %w", n, err))
 		}
 		h.W.logf("armed %s", n)
 		if err = crash("arm.esp-done"); err != nil {
@@ -340,6 +363,52 @@ func (h *Host) Arm(ctx context.Context, rel *Release) error {
 		}
 	}
 	return nil
+}
+
+// undoArm takes the entry of a failed Arm back from the ESPs it reached and returns cause, or cause
+// wrapped with ErrArmNotUndone when an ESP could not be cleaned. A power cut is not undone: nothing
+// runs after it. The undo does not stop for a cancelled ctx: leaving the entry behind is the worse end.
+func (h *Host) undoArm(ctx context.Context, sequence int, nodes []string, cause error) error {
+	var pc powerCut
+	if errors.As(cause, &pc) {
+		return cause
+	}
+	ctx = context.WithoutCancel(ctx)
+	var failed []error
+	for _, n := range nodes {
+		if err := h.W.WithESP(ctx, n, func(root string) error { return disarmESP(root, sequence) }); err != nil {
+			failed = append(failed, fmt.Errorf("undo %s: %w", n, err))
+		}
+	}
+	if len(failed) == 0 {
+		return cause
+	}
+	return fmt.Errorf("%w: %w; %w", ErrArmNotUndone, cause, errors.Join(failed...))
+}
+
+// disarmESP is armESP's inverse for the boot entry: every UKI of the sequence (under whatever counter)
+// and every half-written file goes, so the ESP boots what it booted before the Arm. The loader files
+// armESP refreshed stay: they are the release's own and boot the old UKI as well.
+func disarmESP(root string, sequence int) error {
+	dir := filepath.Join(root, ukiDir)
+	us, err := readUKIs(root, "")
+	if err != nil {
+		return err
+	}
+	for _, u := range us {
+		if u.Sequence == sequence {
+			if err = os.Remove(filepath.Join(dir, u.Name)); err != nil {
+				return err
+			}
+		}
+	}
+	if err = removeTemps(root); err != nil {
+		return err
+	}
+	if _, err = os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return syncDir(dir)
 }
 
 func armESP(root string, rel *Release, tries int) error {
@@ -428,6 +497,8 @@ func copyFile(src, dst string) error {
 // +3 counter first (the running version, with a higher sequence, still sorts first and boots if
 // the host is interrupted here), and only then is the running version's UKI marked exhausted
 // (+0-3) so the previous one sorts first. The previous slot must still be selected on every disk.
+// A failure before any ESP changed leaves every disk as it was; one after it wraps ErrRollbackPartial.
+// Repeating the call finishes the ESPs that are left.
 func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRootHash string) error {
 	disks, err := h.openDisks()
 	if err != nil {
@@ -459,9 +530,18 @@ func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRoo
 			return fmt.Errorf("%s: %w", n, err)
 		}
 	}
-	for _, n := range nodes {
-		if err = h.W.WithESP(ctx, n, func(root string) error { return rollbackESP(root, fromSequence, toSequence) }); err != nil {
-			return fmt.Errorf("%s: %w", n, err)
+	for i, n := range nodes {
+		changed := false
+		if err = h.W.WithESP(ctx, n, func(root string) (err error) {
+			changed, err = rollbackESP(root, fromSequence, toSequence)
+			return err
+		}); err != nil {
+			err = fmt.Errorf("%s: %w", n, err)
+			var pc powerCut
+			if (i > 0 || changed) && !errors.As(err, &pc) {
+				return fmt.Errorf("%w: %w", ErrRollbackPartial, err)
+			}
+			return err
 		}
 		if err = crash("rollback.esp-done"); err != nil {
 			return err
@@ -470,11 +550,29 @@ func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRoo
 	return nil
 }
 
-func rollbackESP(root string, from, to int) error {
+// Disarm takes the entry of an armed release back from every ESP, so that every disk boots what it booted
+// before the Arm: the way out of an Arm that could not be undone (ErrArmNotUndone). Every ESP is tried; the
+// error joins the ones that failed, and then the release may still boot.
+func (h *Host) Disarm(ctx context.Context, sequence int) error {
+	nodes, err := h.espNodes()
+	if err != nil {
+		return err
+	}
+	var failed []error
+	for _, n := range nodes {
+		if err = h.W.WithESP(ctx, n, func(root string) error { return disarmESP(root, sequence) }); err != nil {
+			failed = append(failed, fmt.Errorf("%s: %w", n, err))
+		}
+	}
+	return errors.Join(failed...)
+}
+
+// rollbackESP reports whether it renamed anything: an error with changed false left the ESP as it was.
+func rollbackESP(root string, from, to int) (changed bool, err error) {
 	dir := filepath.Join(root, ukiDir)
 	us, err := readUKIs(root, "")
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, u := range us {
 		if u.Sequence != to {
@@ -483,12 +581,13 @@ func rollbackESP(root string, from, to int) error {
 		dst := ukiName(u.Label, u.Sequence, fmt.Sprintf("+%d", ArmTries))
 		if u.Name != dst {
 			if err = os.Rename(filepath.Join(dir, u.Name), filepath.Join(dir, dst)); err != nil {
-				return err
+				return changed, err
 			}
+			changed = true
 		}
 	}
 	if err = crash("rollback.armed"); err != nil {
-		return err
+		return changed, err
 	}
 	for _, u := range us {
 		if u.Sequence != from {
@@ -497,11 +596,12 @@ func rollbackESP(root string, from, to int) error {
 		dst := ukiName(u.Label, u.Sequence, fmt.Sprintf("+0-%d", ArmTries))
 		if u.Name != dst {
 			if err = os.Rename(filepath.Join(dir, u.Name), filepath.Join(dir, dst)); err != nil {
-				return err
+				return changed, err
 			}
+			changed = true
 		}
 	}
-	return syncDir(dir)
+	return changed, syncDir(dir)
 }
 
 // Bless drops the boot counter of the UKI with the sequence, as systemd-bless-boot does once the

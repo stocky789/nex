@@ -6,22 +6,27 @@
 # boot counter has tries left and marked bad on the last one, so the loader falls back to the previous image.
 # Nothing happens while /run/nex/maintenance-hold exists.
 #
-# NEX_BOOT_CHECK_TRIES (default 20) and NEX_BOOT_CHECK_WAIT seconds (default 10) bound how long a slow
-# start is given before the image is judged; a lab shortens them in a unit drop-in.
+# NEX_BOOT_CHECK_TRIES (default 20), NEX_BOOT_CHECK_WAIT seconds (default 10) and NEX_BOOT_CHECK_BUDGET seconds
+# (default 600) bound how long a slow start is given before the image is judged; a lab shortens them in a unit
+# drop-in. Every external command that can hang runs under timeout(1), and no new check starts once the budget is
+# used up, so the whole run ends within the budget plus one command timeout and the verdict (bad / reboot below)
+# is always reached before the unit's TimeoutStartSec (900) kills the script.
 set -u
 
 tries=${NEX_BOOT_CHECK_TRIES:-20}
 wait_seconds=${NEX_BOOT_CHECK_WAIT:-10}
+budget=${NEX_BOOT_CHECK_BUDGET:-600}
+# Whole seconds of uptime: monotonic, unlike the wall clock the boot may still be stepping, and dash has no $SECONDS.
+now() { cut -d. -f1 /proc/uptime; }
+deadline=$(($(now) + budget))
 problems=""
 note() { problems="$problems $*;"; }
 
 check_once() {
     problems=""
-    marker=/var/lib/nex/image/.boot-check.$$
-    mkdir -p /var/lib/nex/image && : > "$marker" && rm -f "$marker" || note "/var is not writable"
+    timeout 20 sh -c 'mkdir -p /var/lib/nex/image && : > "$1" && rm -f "$1"' sh /var/lib/nex/image/.boot-check.$$ || note "/var is not writable"
     [ "$(findmnt -no FSTYPE /etc)" = overlay ] || note "/etc is not the persistent overlay"
-    marker=/etc/.nex-boot-check.$$
-    : > "$marker" && rm -f "$marker" || note "/etc is not writable"
+    timeout 20 sh -c ': > "$1" && rm -f "$1"' sh /etc/.nex-boot-check.$$ || note "/etc is not writable"
     systemctl is-failed --quiet nex-state-guard.service && note "retained state needs a newer state_format than this image reads"
     if [ -x /usr/sbin/libvirtd ]; then
         timeout 30 virsh -q -c qemu:///system version > /dev/null 2>&1 || note "libvirtd does not answer"
@@ -31,7 +36,8 @@ check_once() {
     fi
     for check in /usr/lib/nex/boot-check.d/*; do
         [ -x "$check" ] || continue
-        "$check" > /dev/null 2>&1 || note "$(basename "$check") failed"
+        [ "$(now)" -lt "$deadline" ] || { note "time budget used up before $(basename "$check")"; break; }
+        timeout 30 "$check" > /dev/null 2>&1 || note "$(basename "$check") failed or took over 30 s"
     done
     [ -z "$problems" ]
 }
@@ -40,6 +46,7 @@ attempts=0
 until check_once; do
     attempts=$((attempts + 1))
     [ "$attempts" -lt "$tries" ] || break
+    [ "$(now)" -lt "$deadline" ] || break
     sleep "$wait_seconds"
 done
 [ -z "$problems" ] && exit 0
@@ -58,7 +65,7 @@ if [ -n "$var" ]; then
     if [ -n "$left" ] && [ "$left" -gt 0 ]; then
         echo "nex-boot-check: $left boot tries left, rebooting to try again" >&2
     else
-        /usr/libexec/nex/nex-bless-boot bad
+        timeout 60 /usr/libexec/nex/nex-bless-boot bad
     fi
     systemctl --no-block reboot
 fi

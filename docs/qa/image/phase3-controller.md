@@ -4,7 +4,7 @@ Date: 2026-10-02. Plan: [Immutable Nex Core](../../plans/2026-10-01-immutable-ne
 rollout" (Update API, Compatibility, work items 2 and 4). Slice I-3c: the host-local routes, a Controller relay for **one host**
 (not pool rollout), the `image-update-v1` acknowledgement and a web panel. Pool rollout, `pool-update`, layers, the Controller
 appliance swap, `PUT …/updates/settings`, media/import/component routes, `ReportResponse.controller` and `controller-epoch-v1` are
-not in this slice and do not exist.
+not in this slice; they were added afterwards (see phase3-layers-update.md, phase4-rollout.md, phase4-appliance.md).
 
 **Environment: unit and HTTP-handler tests only.** No VM, no real host, no pool, no browser session against a running Controller.
 Nothing below was observed on a running system. Resource limits: Go builds and tests ran under `systemd-run --user --scope
@@ -32,7 +32,7 @@ five image-only routes and the operations route with `409 unsupported_edition` (
 Decisions: the Controller's own APT routes (`GET /api/v1/updates`, `POST /api/v1/updates/apply`) and the Controller update panel are
 **kept**. The plan retires them with the appliance swap (work item 5, not in this slice); until then a classic Controller has no other
 way to update itself, and nothing in the new routes conflicts with them. `PUT …/updates/settings` was not cheap (URL validation and a
-persistent write of `/etc/nex/updates.conf`) and is not implemented.
+persistent write of `/etc/nex/updates.conf`) and was left out of this slice; it was added afterwards (phase3-layers-update.md).
 
 ## Verified (all automated)
 

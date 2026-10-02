@@ -6,6 +6,7 @@
 # everything runs unprivileged in a debian container.
 #   pool_lab_guest.sh OUT.raw
 set -eu
+[ $# -eq 1 ] || { echo "usage: pool_lab_guest.sh OUT.raw" >&2; exit 2; }
 out=$(readlink -f -m "$1")
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 cat > "$work/build.sh" <<'IN'

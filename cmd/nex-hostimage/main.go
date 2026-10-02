@@ -6,7 +6,7 @@
 //	nex-hostimage install --layout single|raid1 --disks /dev/a[,/dev/b] --image-dir DIR [--etc-seed DIR]
 //	nex-hostimage repair  --layout single|raid1 --disks /dev/a[,/dev/b] --image-dir DIR
 //	nex-hostimage esp-sync
-//	nex-hostimage etc-audit [--lower /etc-lower] [--upper /var/lib/nex/etc/upper]
+//	nex-hostimage etc-audit --lower DIR [--upper /var/lib/nex/etc/upper]
 //	nex-hostimage verify DIR
 package main
 
@@ -62,10 +62,16 @@ func run(args []string, stdout io.Writer) error {
 		}
 		return w.ESPSync(ctx)
 	case "etc-audit":
-		lower := fs.String("lower", "/usr/lib/nex/etc-lower", "image /etc (lower layer)")
+		// The image's /etc is hidden below the overlay and no copy of it ships, so the caller names it: a bind
+		// mount of / (not recursive, so it does not carry the /etc overlay) shows it, e.g.
+		// mount --bind / /mnt && nex-hostimage etc-audit --lower /mnt/etc
+		lower := fs.String("lower", "", "image /etc (the lower layer; required, see the comment in main.go)")
 		upper := fs.String("upper", "/var/lib/nex/etc/upper", "overlay upper layer")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		if *lower == "" {
+			return fmt.Errorf("etc-audit: --lower DIR is required (the image /etc, e.g. /mnt/etc after mount --bind / /mnt)")
 		}
 		list, err := hostimage.AuditEtc(*lower, *upper)
 		for _, s := range list {

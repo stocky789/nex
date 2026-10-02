@@ -2,6 +2,7 @@
 package vmhost
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -241,6 +242,66 @@ func TestLayerBusyCommandOutputMarksInUse(t *testing.T) {
 	if busy, why := l.inUse(context.Background(), meta); !busy || !strings.Contains(why, "tank") {
 		t.Fatalf("inUse = %v %q with an imported pool", busy, why)
 	}
+}
+
+// A probe that cannot answer is not proof the layer is idle: zpool failing must keep the layer in use.
+func TestLayerFailingBusyCommandMarksInUse(t *testing.T) {
+	f := newLayerFixture(t)
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "zpool" {
+			return nil, errors.New("zpool failed: timed out")
+		}
+		return nil, nil
+	}
+	meta := layerMeta{BusyCommands: [][]string{{"zpool", "list", "-H", "-o", "name"}}}
+	if busy, why := NewLayers(f.cfg).inUse(context.Background(), meta); !busy || !strings.Contains(why, "zpool") {
+		t.Fatalf("inUse = %v %q after the probe failed", busy, why)
+	}
+}
+
+// What a merged layer serves is only known from its metadata. When that cannot be read, Disable must refuse
+// instead of dropping the layer under a live pool or cluster stack; a layer that is not merged serves nothing.
+func TestLayerDisableFailsClosedWhenMergedMetadataIsUnreadable(t *testing.T) {
+	ctx := context.Background()
+	metaPath := func(f *layerFixture) string { return filepath.Join(f.cfg.LayerInfoDir, "nex-zfs.json") }
+	for name, corrupt := range map[string][]byte{
+		"not json":        []byte("{not json"),
+		"describes other": []byte(`{"name":"nex-other"}`),
+		"oversized":       append([]byte(`{"name":"nex-zfs","pad":"`), append(bytes.Repeat([]byte("x"), 1<<17), '"', '}')...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newLayerFixture(t)
+			if err := f.layers().Ensure(ctx, "nex-zfs"); err != nil {
+				t.Fatal(err)
+			}
+			f.write(metaPath(f), corrupt)
+			f.calls = nil
+			wantReason(t, f.layers().Disable(ctx, "nex-zfs"), LayerInUse)
+			if !f.state().Layers["nex-zfs"].Enabled {
+				t.Fatal("a refused disable cleared the journal")
+			}
+			for _, c := range f.calls {
+				if strings.HasPrefix(c, "systemctl disable") {
+					t.Fatalf("units were stopped although the layer could not be checked: %v", f.calls)
+				}
+			}
+		})
+	}
+	t.Run("not merged", func(t *testing.T) {
+		f := newLayerFixture(t)
+		if err := f.layers().Ensure(ctx, "nex-zfs"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(metaPath(f)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.layers().Disable(ctx, "nex-zfs"); err != nil {
+			t.Fatalf("a layer that is not merged could not be disabled: %v", err)
+		}
+		if f.state().Layers["nex-zfs"].Enabled {
+			t.Fatal("disable did not record the wish")
+		}
+	})
 }
 
 func TestLayerActivateConvergesAfterCrashAndRefusesTamper(t *testing.T) {

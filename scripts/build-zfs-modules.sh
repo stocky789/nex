@@ -12,7 +12,8 @@
 # Inputs (environment, never committed):
 #   NEX_APT_SOURCES    sources.list used inside the builder (default: public snapshot.debian.org URLs
 #                      at NEX_SNAPSHOT, security snapshot included). A private mirror is supplied here.
-#   NEX_SNAPSHOT       snapshot timestamp for the default sources (default 20260929T000000Z).
+#   NEX_SNAPSHOT       snapshot timestamp for the default sources (default: the contents of image/snapshot, the same pin
+#                      image/build.sh and build-layer.sh use, so modules and zfsutils come from one OpenZFS version).
 #   ZFS_DKMS_VERSION   optional exact zfs-dkms version to install (default: candidate of the sources).
 #   NEX_MODULE_KEY / NEX_MODULE_CERT   module signing key and DER or PEM certificate. Release builds
 #                      (NEX_RELEASE=1) fail closed without them. --dev-key generates a throwaway pair
@@ -42,7 +43,8 @@ if [ -z "$kver" ]; then
   kver=$(basename "$1")
 fi
 
-snapshot=${NEX_SNAPSHOT:-20260929T000000Z}
+snapshot=${NEX_SNAPSHOT:-$(cat "$root/image/snapshot")}
+[ -n "$snapshot" ] || { echo "no snapshot: image/snapshot is empty or unreadable and NEX_SNAPSHOT is unset" >&2; exit 1; }
 sde=${SOURCE_DATE_EPOCH:-1790000000}
 key=${NEX_MODULE_KEY:-}
 cert=${NEX_MODULE_CERT:-}

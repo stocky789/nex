@@ -118,6 +118,13 @@ login name followed by `@` matched only an upstream author address in the `addus
   Until `iscsid` starts, `/etc/iscsi/initiatorname.iscsi` holds `GenerateName=yes` and no name. The plan's table row says
   `nex-firstboot.service` generates it; the implemented mechanism is the one Debian ships.
 
+- **Not re-run after the review follow-up (2026-10-02).** The three checks above predate these source changes: `/root` is now a
+  link to `/var/roothome` (the erofs, so the roothash, differs from the one measured), the UKI os-release carries only the
+  zero-padded sequence as `IMAGE_VERSION`, and the initrd overlay gained `nex-initrd-reboot.service` and changed drop-ins.
+  All of them are fixed inputs (no clock, host or random data), so they are expected to leave the build reproducible, but that
+  is **not measured**: the byte-identical result recorded here is for the earlier tree, and the gate must be run again on the
+  current sources before it is quoted.
+
 ## Reproduce
 
 ```
@@ -129,6 +136,7 @@ Report: `summary.tsv`, `inputs.txt`, `run1.log`, `run2.log`, `diff/` (only when 
 
 ## Changed files
 
-`image/mkosi.postinst.chroot`, `image/release.py`, `image/mkosi.images/build-layer.sh` (container caps only),
+`image/mkosi.postinst.chroot` (also the `/root` link, follow-up), `image/release.py` (also the label check and UKI version key,
+follow-up), `image/mkosi.images/build-layer.sh` (container caps only),
 `scripts/image-repro-check.sh` (container caps, mtimes and metadata in the comparison, manifest-diff listing, plain file
 digests), `tests/test_image_composition.py`, `docs/qa/image/phase2-installer.md` (outstanding items corrected).

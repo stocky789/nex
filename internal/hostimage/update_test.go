@@ -349,3 +349,191 @@ func TestCrashDuringRollbackLeavesABootableVersion(t *testing.T) {
 		})
 	}
 }
+
+// faultRunner is a recorder whose umount fails for the calls that failUmount selects (1-based).
+type faultRunner struct {
+	recorder
+	umounts    int
+	failUmount func(n int) bool
+}
+
+func (f *faultRunner) Run(ctx context.Context, name string, args ...string) error {
+	if name == "umount" {
+		f.mu.Lock()
+		f.umounts++
+		n := f.umounts
+		f.mu.Unlock()
+		if f.failUmount(n) {
+			return errors.New("umount: device busy")
+		}
+	}
+	return f.recorder.Run(ctx, name, args...)
+}
+
+// An Arm that fails on the second ESP takes the entry back from the first one too: the release stays
+// staged and every disk boots what it booted before.
+func TestArmThatFailsOnALaterESPLeavesNothingArmed(t *testing.T) {
+	r := newRig(t, LayoutRAID1, 2)
+	ctx := context.Background()
+	rel2 := r.release(2)
+	if _, err := r.host.StageSlot(ctx, rel2, r.rels[1].Manifest.RootHash, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Arm: ESP 1 mounts and unmounts (umount 1), ESP 2 is written and its umount fails (umount 2); the
+	// undo then succeeds on both.
+	r.host.W = &Writer{Runner: &faultRunner{recorder: recorder{fail: map[string]error{}}, failUmount: func(n int) bool { return n == 2 }}}
+	err := r.host.Arm(ctx, rel2)
+	if err == nil || errors.Is(err, ErrArmNotUndone) || !strings.Contains(err.Error(), "umount") {
+		t.Fatalf("arm: %v", err)
+	}
+	r.wantDefaults(1, 1)
+	for i := range r.disks {
+		for _, e := range r.entries(i) {
+			if e.Sequence == 2 {
+				t.Errorf("disk %d keeps the entry %s of the failed arm", i, e.Name)
+			}
+		}
+		if left, _ := filepath.Glob(filepath.Join(r.esp(i), ukiDir, "*"+tempSuffix)); len(left) != 0 {
+			t.Errorf("disk %d: leftover temp files %v", i, left)
+		}
+	}
+	// The release is still staged: the same Arm now works.
+	r.host.W = &Writer{Runner: &recorder{}}
+	if err = r.host.Arm(ctx, rel2); err != nil {
+		t.Fatal(err)
+	}
+	r.wantDefaults(2, 2)
+}
+
+// When the undo fails as well, the error says so, because a disk may still boot the release.
+func TestArmThatCannotBeUndoneSaysSo(t *testing.T) {
+	r := newRig(t, LayoutRAID1, 2)
+	ctx := context.Background()
+	rel2 := r.release(2)
+	if _, err := r.host.StageSlot(ctx, rel2, r.rels[1].Manifest.RootHash, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Every umount from the second ESP's on fails: the arm of ESP 2 fails, and so does the undo of both ESPs.
+	r.host.W = &Writer{Runner: &faultRunner{recorder: recorder{fail: map[string]error{}}, failUmount: func(n int) bool { return n >= 2 }}}
+	err := r.host.Arm(ctx, rel2)
+	if !errors.Is(err, ErrArmNotUndone) {
+		t.Fatalf("arm: %v", err)
+	}
+}
+
+// A power cut stops the process: the undo must not run for it.
+func TestPowerCutDuringArmIsNotUndone(t *testing.T) {
+	r := newRig(t, LayoutRAID1, 2)
+	ctx := context.Background()
+	rel2 := r.release(2)
+	if _, err := r.host.StageSlot(ctx, rel2, r.rels[1].Manifest.RootHash, 1); err != nil {
+		t.Fatal(err)
+	}
+	withCrash(t, "arm.esp-done", 1)
+	if err := r.host.Arm(ctx, rel2); err == nil || errors.Is(err, ErrArmNotUndone) {
+		t.Fatalf("arm: %v", err)
+	}
+	r.wantDefaults(2, 1)
+}
+
+// Rollback tells a failure that changed nothing from one that reached some ESPs: the caller keeps the layers
+// of the running release only for the first, and repeating the call finishes the second.
+func TestRollbackErrorSaysWhetherAnESPWasChanged(t *testing.T) {
+	arm := func(t *testing.T) *updateRig {
+		r := newRig(t, LayoutRAID1, 2)
+		ctx := context.Background()
+		rel2 := r.release(2)
+		if _, err := r.host.StageSlot(ctx, rel2, r.rels[1].Manifest.RootHash, 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.host.Arm(ctx, rel2); err != nil {
+			t.Fatal(err)
+		}
+		for i := range r.disks {
+			Bless(r.esp(i), 2)
+		}
+		return r
+	}
+	// Rollback mounts each ESP once to check it (umounts 1, 2) and once to switch it (umounts 3, 4).
+	for _, c := range []struct {
+		name    string
+		umount  int
+		partial bool
+		want    []int
+	}{
+		{"check of the first ESP", 1, false, []int{2, 2}},
+		{"check of the second ESP", 2, false, []int{2, 2}},
+		{"switching the first ESP", 3, true, nil},
+		{"switching the second ESP", 4, true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := arm(t)
+			ctx := context.Background()
+			r.host.W = &Writer{Runner: &faultRunner{recorder: recorder{fail: map[string]error{}}, failUmount: func(n int) bool { return n == c.umount }}}
+			err := r.host.Rollback(ctx, 2, 1, r.rels[1].Manifest.RootHash)
+			if err == nil || errors.Is(err, ErrRollbackPartial) != c.partial {
+				t.Fatalf("rollback: %v (partial wanted %v)", err, c.partial)
+			}
+			if c.want != nil {
+				r.wantDefaults(c.want...)
+			}
+			r.host.W = &Writer{Runner: &recorder{}}
+			if err = r.host.Rollback(ctx, 2, 1, r.rels[1].Manifest.RootHash); err != nil {
+				t.Fatalf("repeated rollback: %v", err)
+			}
+			r.wantDefaults(1, 1)
+		})
+	}
+}
+
+// A power cut during Rollback is no partial error to act on: the process is gone.
+func TestPowerCutDuringRollbackIsNotReportedAsPartial(t *testing.T) {
+	r := newRig(t, LayoutRAID1, 2)
+	ctx := context.Background()
+	rel2 := r.release(2)
+	if _, err := r.host.StageSlot(ctx, rel2, r.rels[1].Manifest.RootHash, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.host.Arm(ctx, rel2); err != nil {
+		t.Fatal(err)
+	}
+	for i := range r.disks {
+		Bless(r.esp(i), 2)
+	}
+	withCrash(t, "rollback.esp-done", 1)
+	if err := r.host.Rollback(ctx, 2, 1, r.rels[1].Manifest.RootHash); err == nil || errors.Is(err, ErrRollbackPartial) {
+		t.Fatalf("rollback: %v", err)
+	}
+}
+
+// Disarm is the way out of an Arm that could not be undone: afterwards no disk boots the release, and a disk
+// that cannot be cleaned does not stop the others from being cleaned.
+func TestDisarmTakesTheEntryOffEveryESP(t *testing.T) {
+	r := newRig(t, LayoutRAID1, 2)
+	ctx := context.Background()
+	rel2 := r.release(2)
+	if _, err := r.host.StageSlot(ctx, rel2, r.rels[1].Manifest.RootHash, 1); err != nil {
+		t.Fatal(err)
+	}
+	r.host.W = &Writer{Runner: &faultRunner{recorder: recorder{fail: map[string]error{}}, failUmount: func(n int) bool { return n >= 2 }}}
+	if err := r.host.Arm(ctx, rel2); !errors.Is(err, ErrArmNotUndone) {
+		t.Fatalf("arm: %v", err)
+	}
+	// The first ESP keeps the entry, as the engine's record of an arm_incomplete release says it may.
+	r.host.W = &Writer{Runner: &faultRunner{recorder: recorder{fail: map[string]error{}}, failUmount: func(n int) bool { return n == 2 }}}
+	if err := r.host.Disarm(ctx, 2); err == nil {
+		t.Fatal("a disk that failed to unmount was reported clean")
+	}
+	r.host.W = &Writer{Runner: &recorder{}}
+	if err := r.host.Disarm(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	r.wantDefaults(1, 1)
+	for i := range r.disks {
+		for _, e := range r.entries(i) {
+			if e.Sequence == 2 {
+				t.Errorf("disk %d keeps the entry %s", i, e.Name)
+			}
+		}
+	}
+}

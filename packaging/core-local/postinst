@@ -142,8 +142,10 @@ RELEASE
     fi
     deb-systemd-helper enable nex-core-local.service
     # The initramfs script that persists /etc and /root on a read-only-root host only
-    # takes effect once an initramfs contains it. It does nothing on a host whose fstab
-    # has no /var entry, and nex-root-ro.service only acts where /etc and /var are mounts.
+    # takes effect once an initramfs contains it. It acts on any host whose fstab has a
+    # /var entry, not only installer-laid ones: such a host moves /etc and /root onto /var
+    # and mounts / read-only from its next boot. nex-root-ro.service only acts where /etc
+    # and /var are mounts.
     deb-systemd-helper enable nex-root-ro.service
     if [ -z "$root" ]; then
         dpkg-trigger update-initramfs

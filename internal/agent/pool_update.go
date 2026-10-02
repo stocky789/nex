@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -30,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"nex.local/nex/internal/nexupdate"
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 )
@@ -38,19 +40,18 @@ const poolUpdateStateFile = "pool-update.json"
 
 // Rollout step names, in the order a host passes through them.
 const (
-	stagePending     = "pending"
-	stageStaged      = "staged"
-	stageMaintenance = "maintenance"
-	stageTeardown    = "teardown"
-	stageDrain       = "drain"
-	stageActivate    = "activate"
-	stageBoot        = "boot"
-	stageConfirm     = "confirm"
-	stageRelease     = "release"
-	stageRestart     = "restart"
-	stageSoak        = "soak"
-	stageDone        = "done"
-	stageRolledBack  = "rolled_back"
+	stagePending    = "pending"
+	stageStaged     = "staged"
+	stageTeardown   = "teardown"
+	stageDrain      = "drain"
+	stageActivate   = "activate"
+	stageBoot       = "boot"
+	stageConfirm    = "confirm"
+	stageRelease    = "release"
+	stageRestart    = "restart"
+	stageSoak       = "soak"
+	stageDone       = "done"
+	stageRolledBack = "rolled_back"
 )
 
 // PoolUpdateError is a refusal with a stable code and one literal message.
@@ -83,6 +84,20 @@ var (
 	poolUpdatePeerFactory   = func(s *Store) poolUpdatePeers { return livePoolUpdatePeers{s} }
 	poolUpdateTickInterval  = 5 * time.Second
 	poolUpdateReplicaPushTO = 10 * time.Second
+	// poolUpdateRetryPause is how long a guest step that the host reported as failed waits before
+	// the coordinator asks again under a new step identity.
+	poolUpdateRetryPause = 15 * time.Second
+	// poolUpdateRetryWindow bounds how long a guest step that fails for a reason the host may get
+	// over by itself (libvirt not up after a reboot, a mount not there yet) is asked again before
+	// the rollout pauses needs_attention with the host's words.
+	poolUpdateRetryWindow = 5 * time.Minute
+	// poolUpdateAbortWindow bounds the coordinator's own retries of an abort's cleanup on one host
+	// (a host that is still rebooting is the usual reason); afterwards only an operator's abort
+	// tries again.
+	poolUpdateAbortWindow = 30 * time.Minute
+	// poolUpdatePassTimeout bounds one pass of Advance, which holds the lock a pause or an abort
+	// waits for, so a pool of unreachable hosts cannot hold it for long.
+	poolUpdatePassTimeout = 3 * time.Minute
 )
 
 // poolUpdatePeers is how the coordinator reaches a host, itself included.
@@ -176,10 +191,12 @@ func (c *poolUpdateCoordinator) masterMembership() (protocol.PoolMembership, err
 	return membership, nil
 }
 
-// PoolUpdatePlan is a successful preflight: the order the hosts would be updated in.
+// PoolUpdatePlan is a successful preflight: the order the hosts would be updated in, and the
+// hosts that already run and have committed the release, which the rollout leaves alone.
 type PoolUpdatePlan struct {
 	Sequence uint64   `json:"sequence"`
 	Order    []string `json:"order"`
+	Current  []string `json:"current,omitempty"`
 }
 
 // Start validates the whole pool, then (unless dryRun) records the rollout. The rollout ID is the
@@ -216,6 +233,11 @@ func (c *poolUpdateCoordinator) Start(ctx context.Context, requestID string, req
 	r := &protocol.PoolUpdateRollout{ID: requestID, PoolID: membership.PoolID, Sequence: req.Sequence,
 		RunningVMs: poolUpdateVMsPolicy(req), State: protocol.PoolUpdateRunning, Phase: "staging",
 		MembershipGeneration: membership.Generation, CreatedAt: now, UpdatedAt: now}
+	// A host that already runs the release (a member that joined on it, a host an aborted rollout
+	// had already updated) has nothing left to do; it stays in the record so finalize reads it.
+	for _, id := range plan.Current {
+		r.Hosts = append(r.Hosts, protocol.PoolUpdateHost{HostID: id, Stage: stageDone})
+	}
 	for _, id := range plan.Order {
 		r.Hosts = append(r.Hosts, protocol.PoolUpdateHost{HostID: id, Stage: stagePending})
 	}
@@ -237,7 +259,11 @@ func poolUpdateVMsPolicy(req protocol.PoolUpdateRequest) string {
 // to verify the release (a read of signed metadata) and records nothing.
 func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protocol.PoolMembership, existing *protocol.PoolUpdateRollout, req protocol.PoolUpdateRequest) (*PoolUpdatePlan, error) {
 	if poolUpdateActive(existing) {
-		return nil, updateRefusal("rollout_in_progress", "rollout %s is still %s; finish or abort it first", existing.ID, existing.State)
+		state := existing.State
+		if poolUpdateAborting(existing) {
+			state = "being aborted (the abort has not yet put everything back)"
+		}
+		return nil, updateRefusal("rollout_in_progress", "rollout %s is still %s; finish or abort it first", existing.ID, state)
 	}
 	if poolUpdateHAEnabled(c.s) {
 		return nil, updateRefusal(protocol.PoolUpdateHAEnabled, "HA is enabled and has no maintenance capability yet; turn HA off before updating the pool")
@@ -247,8 +273,9 @@ func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protoc
 		return nil, updateRefusal("evacuation_unavailable", "live migration and evacuation do not exist yet; use refuse or shutdown")
 	}
 	type view struct {
-		member protocol.PoolMember
-		status protocol.PoolUpdateHostStatus
+		member  protocol.PoolMember
+		status  protocol.PoolUpdateHostStatus
+		current bool // already runs and has committed the release
 	}
 	var views []view
 	var master protocol.PoolUpdateHostStatus
@@ -263,6 +290,9 @@ func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protoc
 			return nil, updateRefusal(protocol.PoolUpdateHostBusy, "host %s is in maintenance mode; take it out before a rollout", member.HostID)
 		}
 		check, err := c.peers.Step(ctx, member, protocol.PoolUpdateStep{RolloutID: "preflight", StepID: poolUpdateStepID("preflight", member.HostID, "check", 0), Action: "check", Sequence: req.Sequence})
+		if errors.Is(err, errPoolUpdateUnsupported) {
+			return nil, updateRefusal("upgrade_required", "host %s does not support %s; upgrade it first", member.HostID, protocol.PoolUpdateRolloutCapability)
+		}
 		if err != nil {
 			return nil, updateRefusal("host_unreachable", "host %s cannot be reached for the update check", member.HostID)
 		}
@@ -270,10 +300,13 @@ func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protoc
 			return nil, updateRefusal(check.Code, "host %s: %s", member.HostID, check.Message)
 		}
 		status, err := c.peers.Status(ctx, member)
+		if errors.Is(err, errPoolUpdateUnsupported) {
+			return nil, updateRefusal("upgrade_required", "host %s does not support %s; upgrade it first", member.HostID, protocol.PoolUpdateRolloutCapability)
+		}
 		if err != nil {
 			return nil, updateRefusal("host_unreachable", "host %s did not report its update status", member.HostID)
 		}
-		views = append(views, view{member, status})
+		views = append(views, view{member: member, status: status})
 		if member.HostID == membership.MasterHostID {
 			master = status
 		}
@@ -282,7 +315,8 @@ func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protoc
 		return nil, updateRefusal("pool_unavailable", "the pool has no host to update")
 	}
 	epoch, known := poolUpdateControllerEpoch(c.s)
-	for _, v := range views {
+	for i := range views {
+		v := &views[i]
 		st := v.status
 		switch {
 		case !slices.Contains(st.Capabilities, protocol.PoolUpdateRolloutCapability):
@@ -291,6 +325,12 @@ func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protoc
 			return nil, updateRefusal("channel_mismatch", "host %s follows channel %q, the master follows %q", v.member.HostID, st.Channel, master.Channel)
 		case st.Busy:
 			return nil, updateRefusal(protocol.PoolUpdateHostBusy, "host %s is running another update operation", v.member.HostID)
+		case st.RunningSequence == req.Sequence && poolUpdateUnconfirmed(st.Phase):
+			return nil, updateRefusal(protocol.PoolUpdateUnconfirmedHost, "host %s runs release %d but has not committed it; let that update finish first", v.member.HostID, req.Sequence)
+		case st.RunningSequence == req.Sequence:
+			// The engine offers no release a host already runs, so there is nothing to check.
+			v.current = true
+			continue
 		case st.Target == nil || st.Target.Sequence != req.Sequence:
 			return nil, updateRefusal("release_unavailable", "host %s does not offer release %d", v.member.HostID, req.Sequence)
 		case st.Target.StateFormat < st.StateFormat:
@@ -309,6 +349,9 @@ func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protoc
 	order := make([]view, 0, len(views))
 	var last *view
 	for i := range views {
+		if views[i].current {
+			continue
+		}
 		if views[i].member.HostID == membership.MasterHostID {
 			last = &views[i]
 			continue
@@ -327,6 +370,11 @@ func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protoc
 	plan := &PoolUpdatePlan{Sequence: req.Sequence}
 	for _, v := range order {
 		plan.Order = append(plan.Order, v.member.HostID)
+	}
+	for _, v := range views {
+		if v.current {
+			plan.Current = append(plan.Current, v.member.HostID)
+		}
 	}
 	return plan, nil
 }
@@ -360,6 +408,9 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 		if r.State == protocol.PoolUpdateRunning {
 			return r, nil
 		}
+		if poolUpdateAborting(r) {
+			return nil, updateRefusal(protocol.PoolUpdateAbortCleanupPending, "the rollout is being aborted and cannot resume; abort again to retry the cleanup, or abort with force")
+		}
 		if r.State != protocol.PoolUpdatePaused {
 			return nil, updateRefusal("rollout_finished", "the rollout is %s", r.State)
 		}
@@ -381,16 +432,24 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 		r.State, r.Pause, r.PauseRequested = protocol.PoolUpdateRunning, nil, false
 		r.MembershipGeneration = membership.Generation
 		for i := range r.Hosts {
-			if r.Hosts[i].Stage == stageRolledBack {
+			host := &r.Hosts[i]
+			switch {
+			case host.Stage == stageRolledBack:
 				// The rollback gave up the staged slot and the engine remembers the earlier
 				// attempt's request IDs, so the host is staged again under a new attempt.
-				r.Hosts[i].Stage, r.Hosts[i].Error = stagePending, ""
-				r.Hosts[i].Attempt++
+				host.Stage, host.Error = stagePending, ""
+				host.Attempt++
+			case host.Error != "":
+				// A step the host refused or failed is journaled by its engine under that step's
+				// request ID and answered with the same failure on every repeat, so the retry the
+				// operator asked for is a new attempt.
+				host.Error = ""
+				host.Attempt++
 			}
 			// A wait that ran out its deadline starts a fresh one: the operator looked.
-			r.Hosts[i].StepStartedAt = now
-			if r.Hosts[i].Stage == stageBoot {
-				r.Hosts[i].DeadlineAt = now.Add(poolUpdateBootDeadline)
+			host.StepStartedAt = now
+			if host.Stage == stageBoot {
+				host.DeadlineAt = now.Add(poolUpdateBootDeadline)
 			}
 		}
 		if ctl := r.Controller; ctl != nil && ctl.Stage == protocol.PoolUpdateControllerSwap {
@@ -404,9 +463,22 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 		if !poolUpdateActive(r) {
 			return nil, updateRefusal("rollout_finished", "the rollout is %s", r.State)
 		}
-		c.abortCleanup(ctx, r)
-		r.State, r.Pause, r.PauseRequested = protocol.PoolUpdateAborted, nil, false
+		switch {
+		case req.Force && !poolUpdateAborting(r):
+			return nil, updateRefusal("abort_not_pending", "force ends an abort that is still putting things back; abort the rollout first")
+		case req.Force:
+			// The operator takes over what is left: the hosts' errors and stopped_by_update stay in
+			// the record as the list of what has to be done by hand.
+			r.State, r.Pause, r.PauseRequested = protocol.PoolUpdateAborted, nil, false
+		default:
+			// An abort that cannot confirm its cleanup stays open (and is retried) instead of ending
+			// with guests nobody owes a restart.
+			c.finishAbort(ctx, r, now, true)
+		}
 	case "rollback_host":
+		if poolUpdateAborting(r) {
+			return nil, updateRefusal(protocol.PoolUpdateAbortCleanupPending, "the rollout is being aborted; abort again to retry the cleanup, or abort with force")
+		}
 		if r.State != protocol.PoolUpdatePaused {
 			return nil, updateRefusal("rollout_running", "pause the rollout before rolling a host back")
 		}
@@ -417,6 +489,11 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 		}
 		if host.Stage != stageBoot && host.Stage != stageConfirm && host.Stage != stageRelease && host.Stage != stageRestart && host.Stage != stageSoak && host.Stage != stageDone {
 			return nil, updateRefusal("host_not_activated", "host %s has not activated the release", req.HostID)
+		}
+		// The rollback arms the earlier slot and reboots the host: that is a host leaving service
+		// like any other, so the same gates apply.
+		if err = c.gate(ctx, membership, req.HostID); err != nil {
+			return nil, err
 		}
 		res, stepErr := c.peers.Step(ctx, member, protocol.PoolUpdateStep{RolloutID: r.ID, StepID: poolUpdateStepID(r.ID, req.HostID, stageRolledBack, host.Attempt), Action: "rollback", Sequence: r.Sequence})
 		if stepErr != nil || res.Code != "" {
@@ -437,28 +514,136 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 	return r, nil
 }
 
-// abortCleanup puts back what the rollout took from the host it was working on: maintenance mode
-// and the guests it stopped. A host already booting or confirming is left to the operator.
-func (c *poolUpdateCoordinator) abortCleanup(ctx context.Context, r *protocol.PoolUpdateRollout) {
+// poolUpdateAborting is a rollout whose abort has not yet been confirmed: paused, with the cleanup
+// the coordinator keeps retrying.
+func poolUpdateAborting(r *protocol.PoolUpdateRollout) bool {
+	return r != nil && r.State == protocol.PoolUpdatePaused && r.Pause != nil && r.Pause.Code == protocol.PoolUpdateAbortCleanupPending
+}
+
+// poolUpdateUnconfirmed is whether a host that runs the target release still owes a commit: it
+// booted into the release (or is armed for it) and the engine has not blessed it yet. Every other
+// phase, a host that never updated (idle) included, has nothing left to confirm.
+func poolUpdateUnconfirmed(phase string) bool {
+	return phase == nexupdate.PhaseArmed || phase == nexupdate.PhaseBooted
+}
+
+// poolUpdateRetryStart is when the host's open retry window began. A record written before
+// RetryStartedAt existed carries only StepStartedAt, which then stands in for it.
+func poolUpdateRetryStart(host *protocol.PoolUpdateHost) time.Time {
+	if host.RetryStartedAt.IsZero() {
+		return host.StepStartedAt
+	}
+	return host.RetryStartedAt
+}
+
+// poolUpdateOwes is whether an abort still owes this host something: it started on the host
+// (a host the rollout never took out of service has nothing to put back), and the host is still in
+// maintenance mode or still has guests the rollout stopped. A host that is gone or ejected owes
+// nothing that can be done.
+func poolUpdateOwes(host *protocol.PoolUpdateHost, member protocol.PoolMember, ok bool) bool {
+	switch host.Stage {
+	case stageStaged, stageTeardown, stageDrain, stageActivate, stageBoot, stageConfirm, stageRelease, stageRestart, stageRolledBack:
+	default:
+		return false
+	}
+	return ok && member.Status != "ejected" && (member.Maintenance || len(host.StoppedByUpdate) > 0)
+}
+
+// abortCleanup is one try at putting back what the rollout took from every host it had started
+// on: maintenance mode and the guests it stopped, then a check that those guests run. A host that
+// cannot be put back yet (it is rebooting, a guest will not start) keeps its StoppedByUpdate list
+// and an Error naming what is still owed. An operator's try (manual) goes at once and opens a new
+// window; the coordinator's own tries wait out each host's retry pause and stop for a host once
+// poolUpdateAbortWindow has passed since the abort began on it.
+func (c *poolUpdateCoordinator) abortCleanup(ctx context.Context, r *protocol.PoolUpdateRollout, now time.Time, manual bool) {
 	for i := range r.Hosts {
 		host := &r.Hosts[i]
-		switch host.Stage {
-		case stageMaintenance, stageTeardown, stageDrain, stageActivate, stageRelease, stageRestart, stageRolledBack:
-		default:
-			continue
-		}
 		member, ok := c.member(host.HostID)
-		if !ok {
+		if !poolUpdateOwes(host, member, ok) {
 			continue
 		}
-		if poolUpdateMaintenance(c.s, host.HostID, false) != nil {
-			host.Error = "maintenance mode could not be cleared; clear it by hand"
+		switch {
+		case manual:
+			host.StepStartedAt, host.DeadlineAt = now, time.Time{}
+		case now.Before(host.DeadlineAt) || now.Sub(host.StepStartedAt) >= poolUpdateAbortWindow:
 			continue
+		}
+		var owed []string
+		if member.Maintenance && poolUpdateMaintenance(c.s, host.HostID, false) != nil {
+			owed = append(owed, "maintenance mode could not be cleared; clear it by hand")
 		}
 		if len(host.StoppedByUpdate) > 0 {
-			_, _ = c.peers.Step(ctx, member, protocol.PoolUpdateStep{RolloutID: r.ID, StepID: poolUpdateStepID(r.ID, host.HostID, "abort", host.Attempt), Action: "undrain", Sequence: r.Sequence, VMIDs: host.StoppedByUpdate})
+			reason, journaled := c.restartStopped(ctx, r, host, member)
+			if reason == "" {
+				host.StoppedByUpdate = nil
+			} else {
+				owed = append(owed, "guests "+strings.Join(host.StoppedByUpdate, ", ")+" were stopped by the rollout and are not running again ("+reason+"); start them by hand")
+				if journaled {
+					// The engine replays a failed start under the same operation ID.
+					host.Attempt++
+				}
+			}
+		}
+		host.Error = strings.Join(owed, "; ")
+		if len(owed) > 0 {
+			host.DeadlineAt = now.Add(poolUpdateRetryPause)
 		}
 	}
+}
+
+// finishAbort tries the cleanup, then settles the record: aborted when no host owes anything, or
+// paused abort_cleanup_pending naming the hosts that do. The coordinator carries on with it
+// until poolUpdateAbortWindow has passed on every one of them; after that only an operator's
+// abort (a new try, or Force) moves it.
+func (c *poolUpdateCoordinator) finishAbort(ctx context.Context, r *protocol.PoolUpdateRollout, now time.Time, manual bool) {
+	c.abortCleanup(ctx, r, now, manual)
+	var owing []string
+	retrying := false
+	for i := range r.Hosts {
+		host := &r.Hosts[i]
+		member, ok := c.member(host.HostID)
+		if poolUpdateOwes(host, member, ok) {
+			owing = append(owing, host.HostID)
+			retrying = retrying || now.Sub(host.StepStartedAt) < poolUpdateAbortWindow
+		}
+	}
+	if len(owing) == 0 {
+		r.State, r.Pause, r.PauseRequested = protocol.PoolUpdateAborted, nil, false
+		return
+	}
+	message := "the abort has not yet put back " + strings.Join(owing, ", ") + " (maintenance mode or stopped guests; see each host's error)"
+	if retrying {
+		message += "; the coordinator keeps retrying"
+	} else {
+		message += "; automatic retries stopped: fix the cause and abort again to retry, or abort with force to end the rollout and finish by hand"
+	}
+	poolUpdatePause(r, protocol.PoolUpdateAbortCleanupPending, message)
+}
+
+// restartStopped asks the host to start the guests the rollout stopped and reads back that they run.
+// It returns why they do not, or "" when they all do; journaled says the host reported a failed
+// start, which its engine will answer again under the same operation ID.
+func (c *poolUpdateCoordinator) restartStopped(ctx context.Context, r *protocol.PoolUpdateRollout, host *protocol.PoolUpdateHost, member protocol.PoolMember) (reason string, journaled bool) {
+	res, err := c.peers.Step(ctx, member, protocol.PoolUpdateStep{RolloutID: r.ID, StepID: poolUpdateStepID(r.ID, host.HostID, "abort", host.Attempt), Action: "undrain", Sequence: r.Sequence, VMIDs: host.StoppedByUpdate})
+	switch {
+	case err != nil:
+		return "the host cannot be reached", false
+	case res.Code != "":
+		return res.Code + ": " + res.Message, false
+	}
+	status, err := c.peers.Status(ctx, member)
+	if err != nil {
+		return "the host cannot be reached to confirm", false
+	}
+	for _, id := range host.StoppedByUpdate {
+		if !slices.Contains(status.RunningVMs, id) {
+			if res.Message != "" {
+				return res.Message, true
+			}
+			return "guest " + id + " is not running", false
+		}
+	}
+	return "", false
 }
 
 func (c *poolUpdateCoordinator) member(hostID string) (protocol.PoolMember, bool) {
@@ -502,7 +687,7 @@ func poolUpdateNextHost(r *protocol.PoolUpdateRollout) *protocol.PoolUpdateHost 
 // the ones that take a host out of service and so need the gates.
 func poolUpdateBeforeReboot(stage string) bool {
 	switch stage {
-	case stagePending, stageStaged, stageMaintenance, stageTeardown, stageDrain, stageActivate, stageRolledBack:
+	case stagePending, stageStaged, stageTeardown, stageDrain, stageActivate, stageRolledBack:
 		return true
 	}
 	return false
@@ -532,17 +717,40 @@ func poolUpdateBetweenHosts(r *protocol.PoolUpdateRollout) bool {
 	return true
 }
 
+// poolUpdateProgress names where the phase and every host stand, so a pass that moved any of them
+// is told to the members that could take the rollout over.
+func poolUpdateProgress(r *protocol.PoolUpdateRollout) string {
+	var b strings.Builder
+	b.WriteString(r.Phase)
+	if r.Controller != nil {
+		b.WriteString("|" + r.Controller.Stage)
+	}
+	for _, host := range r.Hosts {
+		b.WriteString("|" + host.HostID + "=" + host.Stage)
+	}
+	return b.String()
+}
+
+// pushReplica puts the record on the members that could take the rollout over. It is best
+// effort: the probe loop pushes the pool's replica again on every tick and each member's
+// acknowledgement or failure is part of the pool's replica status, so a miss delays a promoted
+// master's view and never blocks the rollout. It is not silent, though; the miss is logged.
 func (c *poolUpdateCoordinator) pushReplica(ctx context.Context) {
-	_ = pushPoolAuthorityReplicasAfterUpdate(ctx, c.s, poolUpdateReplicaPushTO)
+	if err := pushPoolAuthorityReplicasAfterUpdate(ctx, c.s, poolUpdateReplicaPushTO); err != nil && !errors.Is(err, errPoolAuthorityReplicaBusy) && ctx.Err() == nil {
+		log.Printf("pool rollout record was not acknowledged by every member")
+	}
 }
 
 // Advance moves the rollout at most one step. It is safe to call from any number of ticks and
-// after any restart: the record decides where it stands, and a host's step is idempotent.
+// after any restart: the record decides where it stands, and a host's step is idempotent. A pass
+// is bounded by poolUpdatePassTimeout, so a pool of unreachable hosts cannot hold the lock a
+// pause or an abort is waiting for.
 func (c *poolUpdateCoordinator) Advance(ctx context.Context) error {
 	poolUpdateMu.Lock()
 	defer poolUpdateMu.Unlock()
 	r, err := LoadPoolUpdate(c.s)
-	if err != nil || r == nil || r.State != protocol.PoolUpdateRunning {
+	aborting := poolUpdateAborting(r)
+	if err != nil || r == nil || r.State != protocol.PoolUpdateRunning && !aborting {
 		return err
 	}
 	membership, err := c.masterMembership()
@@ -551,13 +759,19 @@ func (c *poolUpdateCoordinator) Advance(ctx context.Context) error {
 		// is left exactly as the authority that owns it last wrote it.
 		return nil
 	}
+	pass, cancel := context.WithTimeout(ctx, poolUpdatePassTimeout)
+	defer cancel()
 	before, _ := json.Marshal(r)
-	if membership.Generation != r.MembershipGeneration {
+	progress := poolUpdateProgress(r)
+	switch {
+	case aborting:
+		c.finishAbort(pass, r, poolUpdateNow(), false)
+	case membership.Generation != r.MembershipGeneration:
 		poolUpdatePause(r, protocol.PoolUpdateMembershipChanged, "the pool membership changed; review the pool and resume")
-	} else if poolUpdateHAEnabled(c.s) {
+	case poolUpdateHAEnabled(c.s):
 		poolUpdatePause(r, protocol.PoolUpdateHAEnabled, "HA was enabled during the rollout; turn it off and resume")
-	} else {
-		c.step(ctx, r, membership)
+	default:
+		c.step(pass, r, membership)
 	}
 	after, _ := json.Marshal(r)
 	if bytes.Equal(before, after) {
@@ -567,7 +781,7 @@ func (c *poolUpdateCoordinator) Advance(ctx context.Context) error {
 	if err = savePoolUpdate(c.s, r); err != nil {
 		return err
 	}
-	if r.State != protocol.PoolUpdateRunning {
+	if r.State != protocol.PoolUpdateRunning || poolUpdateProgress(r) != progress {
 		c.pushReplica(ctx)
 	}
 	return nil
@@ -628,6 +842,69 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 			Action: action, Sequence: r.Sequence, RunningVMs: r.RunningVMs, VMIDs: vms})
 		return res, err == nil
 	}
+	// A definite refusal of a guest step stops for an operator with the host's own words. A guest
+	// inventory that cannot be listed yet is the one code the host may recover from by itself.
+	refused := func(res protocol.PoolUpdateStepResult) bool {
+		if res.Code == "" || res.Code == "vm_inventory_unavailable" {
+			return false
+		}
+		c.needsAttention(r, host, res.Code, res.Message)
+		return true
+	}
+	// why is what the host said about a guest step that is not finished.
+	why := func(res protocol.PoolUpdateStepResult) string {
+		switch {
+		case res.Code != "" && res.Message != "":
+			return ": " + res.Code + ": " + res.Message
+		case res.Code != "":
+			return ": " + res.Code
+		case res.Message != "":
+			return ": " + res.Message
+		}
+		return ""
+	}
+	// A guest step the host cannot finish yet (libvirt not up after a reboot, a mount that is not
+	// there yet, admission refusing while the master reboots) is asked again, but bounded: the
+	// first failure opens a window of poolUpdateRetryWindow, and a failure still there when it
+	// closes pauses the rollout needs_attention with the host's own words. A shutdown or start
+	// the host reports as failed is journaled by its engine under its operation ID and replayed
+	// unchanged, so each retry is a new step identity, and waits a moment instead of failing
+	// again on every tick. An answer that is not a failure closes the window.
+	retrying := func() bool { return now.Before(host.DeadlineAt) }
+	lastWhy := func() string {
+		if host.Error == "" {
+			return ""
+		}
+		return ": " + host.Error
+	}
+	transient := func(what string, res protocol.PoolUpdateStepResult) (paused bool) {
+		inventory := res.Code == "vm_inventory_unavailable"
+		failed := res.Code == "" && res.Message != ""
+		if !inventory && !failed {
+			host.Error = ""
+			return false
+		}
+		text := res.Message
+		if text == "" {
+			text = "the running virtual machines cannot be listed"
+		}
+		if host.Error != "" && now.Sub(poolUpdateRetryStart(host)) >= poolUpdateRetryWindow {
+			if inventory {
+				what = res.Code
+			}
+			c.needsAttention(r, host, what, text)
+			return true
+		}
+		if host.Error == "" {
+			host.RetryStartedAt = now
+		}
+		host.Error = text
+		if failed {
+			host.Attempt++
+			host.DeadlineAt = now.Add(poolUpdateRetryPause)
+		}
+		return false
+	}
 	switch host.Stage {
 	case stagePending:
 		// stageEverywhere staged this host already. A host sent back here by a resume after a
@@ -641,7 +918,7 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 		case res.Done:
 			next(stageStaged)
 		}
-	case stageStaged, stageMaintenance:
+	case stageStaged:
 		// The gates, the host's own readiness and the maintenance flip are one decision: the pool
 		// is read again here, under the same lock, so nothing that changed since this pass began
 		// can slip between the check and the flip.
@@ -650,7 +927,9 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 			return
 		}
 		if status, err := c.peers.Status(ctx, member); err != nil || status.Busy {
-			if err == nil {
+			if err != nil {
+				timedOut(protocol.PoolUpdateStepTimeout, "the host cannot be reached: "+err.Error())
+			} else {
 				poolUpdatePause(r, protocol.PoolUpdateHostBusy, host.HostID+" is running another update operation")
 			}
 			return
@@ -661,8 +940,13 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 		}
 		next(stageTeardown)
 	case stageTeardown:
+		// While the pool still wants a cluster, only the host being drained leaves it: the others
+		// keep feeding their watchdogs for as long as the pool needs them. A pool that stops
+		// wanting one with this host in maintenance tears it down on every host, and the rollout
+		// waits for all of them.
+		_, wanted, _ := poolClusterIntent(c.s, membership)
 		for _, m := range membership.Members {
-			if m.Status == "ready" && poolWatchdogFeeding(m) {
+			if m.Status == "ready" && poolWatchdogFeeding(m) && (!wanted || m.HostID == host.HostID) {
 				timedOut(protocol.PoolUpdateStepTimeout, "the pool's watchdogs did not stop in time")
 				return
 			}
@@ -695,13 +979,19 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 				}
 				c.replicatedFor = key
 			}
-			res, ok := stepOn(stageDrain, "drain", host.StoppedByUpdate)
-			if !ok || !res.Done {
-				timedOut(protocol.PoolUpdateStepTimeout, "guests did not shut down in time")
+			if retrying() {
+				timedOut(protocol.PoolUpdateStepTimeout, "guests did not shut down in time"+lastWhy())
 				return
 			}
-			if res.Code != "" {
-				c.needsAttention(r, host, res.Code, res.Message)
+			res, ok := stepOn(stageDrain, "drain", host.StoppedByUpdate)
+			if ok && refused(res) {
+				return
+			}
+			if !ok || !res.Done {
+				if ok && transient("vm_shutdown_failed", res) {
+					return
+				}
+				timedOut(protocol.PoolUpdateStepTimeout, "guests did not shut down in time"+why(res))
 				return
 			}
 			status, err = c.peers.Status(ctx, member)
@@ -714,13 +1004,19 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 	case stageActivate:
 		// A host that already runs the release (the master after its own reboot) skips ahead.
 		status, statusErr := c.peers.Status(ctx, member)
-		if statusErr == nil && status.RunningSequence == r.Sequence {
+		if statusErr != nil {
+			// Not knowing whether the host is armed or already runs the release is no licence to
+			// reboot it: the gates below need that answer, so nothing is sent until it can be read.
+			timedOut(protocol.PoolUpdateStepTimeout, "the host's update status cannot be read: "+statusErr.Error())
+			return
+		}
+		if status.RunningSequence == r.Sequence {
 			next(stageConfirm)
 			return
 		}
 		// Not yet armed: this is the last moment before the host goes down, so the gates are run
 		// again on the pool as it is now. An armed host's repeat of the step changes nothing.
-		if statusErr == nil && status.Phase != "armed" {
+		if status.Phase != "armed" {
 			if err := c.regate(ctx, r, host.HostID); err != nil {
 				poolUpdatePause(r, poolUpdateRefusalCode(err), err.Error())
 				return
@@ -756,6 +1052,7 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 		res, ok := stepOn(stageConfirm, "confirm", nil)
 		switch {
 		case !ok:
+			timedOut(protocol.PoolUpdateUnconfirmedHost, "the host cannot be reached to confirm the release")
 		case res.Code == protocol.PoolUpdateRolledBack:
 			c.needsAttention(r, host, res.Code, res.Message)
 			host.Stage = stageRolledBack
@@ -774,9 +1071,19 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 		next(stageRestart)
 	case stageRestart:
 		if len(host.StoppedByUpdate) > 0 {
+			if retrying() {
+				timedOut(protocol.PoolUpdateStepTimeout, "guests did not restart in time"+lastWhy())
+				return
+			}
 			res, ok := stepOn(stageRestart, "undrain", host.StoppedByUpdate)
+			if ok && refused(res) {
+				return
+			}
 			if !ok || !res.Done {
-				timedOut(protocol.PoolUpdateStepTimeout, "guests did not restart in time: "+res.Message)
+				if ok && transient("vm_start_failed", res) {
+					return
+				}
+				timedOut(protocol.PoolUpdateStepTimeout, "guests did not restart in time"+why(res))
 				return
 			}
 		}
@@ -795,6 +1102,7 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 // stageEverywhere asks every host to stage the release, in the same pass: staging disrupts
 // nothing and never arms the next boot.
 func (c *poolUpdateCoordinator) stageEverywhere(ctx context.Context, r *protocol.PoolUpdateRollout, membership protocol.PoolMembership) {
+	now := poolUpdateNow()
 	all := true
 	for i := range r.Hosts {
 		host := &r.Hosts[i]
@@ -806,17 +1114,22 @@ func (c *poolUpdateCoordinator) stageEverywhere(ctx context.Context, r *protocol
 			poolUpdatePause(r, protocol.PoolUpdateMembershipChanged, "host "+host.HostID+" is no longer a member")
 			return
 		}
+		if host.StepStartedAt.IsZero() {
+			host.StepStartedAt = now
+		}
 		res, err := c.peers.Step(ctx, member, protocol.PoolUpdateStep{RolloutID: r.ID, StepID: poolUpdateStepID(r.ID, host.HostID, "stage", host.Attempt), Action: "stage", Sequence: r.Sequence})
 		switch {
-		case err != nil:
-			all = false
-		case res.Code != "":
+		case err == nil && res.Code != "":
 			c.needsAttention(r, host, res.Code, res.Message)
 			return
-		case res.Done:
-			host.Stage = stageStaged
-		default:
-			all = false
+		case err == nil && res.Done:
+			host.Stage, host.StepStartedAt = stageStaged, time.Time{}
+			continue
+		}
+		all = false
+		if now.Sub(host.StepStartedAt) >= poolUpdateStepTimeout {
+			poolUpdatePause(r, protocol.PoolUpdateStepTimeout, host.HostID+": the host did not finish staging the release in time")
+			return
 		}
 	}
 	if all {
@@ -849,6 +1162,9 @@ func (c *poolUpdateCoordinator) controllerFirst(ctx context.Context, r *protocol
 				return
 			}
 			status, err := c.peers.Status(ctx, member)
+			if err == nil && status.RunningSequence == r.Sequence {
+				continue // it runs the release already, so its Controller was swapped with it
+			}
 			if err != nil || status.ControllerVM && (status.Target == nil || status.Target.Sequence != r.Sequence) {
 				waiting(host.HostID + ": the host cannot be reached to look for the Controller")
 				return
@@ -893,7 +1209,7 @@ func (c *poolUpdateCoordinator) finalize(ctx context.Context, r *protocol.PoolUp
 			return
 		}
 		status, err := c.peers.Status(ctx, member)
-		if err != nil || status.RunningSequence != r.Sequence || status.Phase != "committed" {
+		if err != nil || status.RunningSequence != r.Sequence || poolUpdateUnconfirmed(status.Phase) {
 			poolUpdatePause(r, protocol.PoolUpdateUnconfirmedHost, "host "+host.HostID+" is not confirmed on the release")
 			return
 		}
@@ -1005,21 +1321,37 @@ func PoolUpdateForPool(s *Store) *protocol.PoolUpdateRollout {
 }
 
 // AdoptPoolUpdateOnPromotion is the promoted master's side: a rollout it inherits is paused
-// master_changed whatever it was doing, so an operator decides resume or abort. It is written
+// master_changed whatever it was doing, so an operator decides resume or abort; an abort whose
+// cleanup is still pending stays as it is, and the new master carries on with it. It is written
 // before the host is recorded as master, so a master that exists never lacks the record; the
 // returned function puts the earlier file back should the promotion not complete.
+//
+// What the host inherits is the authority, so it also replaces a record this host kept from an
+// earlier time as master: demotion does not clear the file, and a rollout that another master
+// since finished or aborted must not come back as the pool's rollout.
 func AdoptPoolUpdateOnPromotion(s *Store, inherited *protocol.PoolUpdateRollout) (undo func(), err error) {
 	undo = func() {}
-	if inherited == nil || !poolUpdateActive(inherited) {
+	local, _ := LoadPoolUpdate(s)
+	var r protocol.PoolUpdateRollout
+	switch {
+	case poolUpdateActive(inherited):
+		r = *inherited
+		if !poolUpdateAborting(&r) {
+			poolUpdatePause(&r, protocol.PoolUpdateMasterChanged, "the pool master changed during the rollout; resume or abort it")
+		}
+	case poolUpdateActive(local) && inherited != nil:
+		r = *inherited
+	case poolUpdateActive(local):
+		r = *local
+		r.State, r.Pause, r.PauseRequested = protocol.PoolUpdateAborted, nil, false
+	default:
 		return undo, nil
 	}
+	r.Hosts = append([]protocol.PoolUpdateHost(nil), r.Hosts...)
 	previous, readErr := os.ReadFile(poolUpdatePath(s))
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return undo, readErr
 	}
-	r := *inherited
-	r.Hosts = append([]protocol.PoolUpdateHost(nil), inherited.Hosts...)
-	poolUpdatePause(&r, protocol.PoolUpdateMasterChanged, "the pool master changed during the rollout; resume or abort it")
 	r.UpdatedAt = poolUpdateNow()
 	if err = savePoolUpdate(s, &r); err != nil {
 		return undo, err

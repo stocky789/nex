@@ -245,17 +245,7 @@ l=$(losetup -fP --show /w/d0.img)
 trap 'losetup -d $l' EXIT
 nex-hostimage install --layout single --disks $l --image-dir /rel --etc-seed /seed
 """
-    name = f"nex-image-update-{os.getpid()}"
-    cmd = ["docker", "run", "--rm", "--name", name, "--privileged", "--cpus", "2", "--memory", "4g", "-v", "/dev:/dev",
-           "-v", f"{work}:/w", "-v", f"{rel1}:/rel:ro", "-v", f"{hostimage}:/usr/bin/nex-hostimage:ro",
-           "nex-image-tools", "sh", "-c", script]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        subprocess.run(["docker", "kill", name], capture_output=True)
-        sys.exit(f"install exceeded {timeout}s; container killed")
-    if res.returncode:
-        sys.exit(f"install failed:\n{res.stdout[-1500:]}\n{res.stderr[-1500:]}")
+    lab.run_install(work, rel1, hostimage, script, timeout, "image-update")
 
 
 class VM:
@@ -407,12 +397,10 @@ def main():
     if a.run:
         RUN = a.run
     a.resume = a.resume or a.from_6d
-    for need, hint in ((lab.OVMF_CODE, "OVMF firmware"), (shutil.which("docker"), "docker"), (shutil.which("qemu-system-x86_64"), "qemu-system-x86_64")):
-        if not need:
-            sys.exit(f"missing {hint}")
+    lab.require_host_tools()
     rel1, rel2 = os.path.abspath(a.rel1), os.path.abspath(a.rel2)
-    hostimage = os.path.abspath(a.hostimage or os.path.join(rel1, "..", "nex-hostimage"))
-    work = os.path.abspath(a.workdir) if a.workdir else tempfile.mkdtemp(prefix="nex-image-update-", dir=os.path.join(REPO, "image/out"))
+    hostimage = None if a.resume else lab.hostimage_for(rel1, a.hostimage)
+    work = os.path.abspath(a.workdir) if a.workdir else lab.scratch_dir(rel1, "nex-image-update-")
     os.makedirs(work, exist_ok=True)
     vm, server = VM(work), None
     try:

@@ -2,12 +2,13 @@
 
 // nex-update drives the image update engine from a shell on the host: the same engine nex-core-local
 // serves over the host-local API, for recovery and for the QEMU lab proof. It prints the engine's JSON
-// and exits non-zero with the refusal code when the engine refuses.
+// and exits non-zero with the refusal code when the engine refuses, and when an apply, import or fetch
+// ends failed, cancelled, interrupted or still running after -wait.
 //
 //	nex-update status
 //	nex-update check
 //	nex-update apply [-sequence N] [-activate stage_only|reboot] -request-id ID
-//	nex-update settings -channel NAME [-base-url URL]
+//	nex-update settings -channel NAME [-base-url URL]    (-base-url is kept as it is unless given; "" clears it)
 //	nex-update media
 //	nex-update import -media ID [-channel NAME] [-sequence N] [-activate stage_only|reboot] -request-id ID
 //	nex-update fetch -component ID [-media ID] [-channel NAME] -request-id ID
@@ -47,9 +48,11 @@ func main() {
 	wait := fs.Duration("wait", 20*time.Minute, "apply: how long to wait for the staging to finish")
 	media := fs.String("media", "", "import and fetch: media id (inbox, inbox/NAME or label)")
 	channel := fs.String("channel", "", "settings, import and fetch: channel name")
-	baseURL := fs.String("base-url", "", "settings: update server URL (empty clears it)")
+	baseURL := fs.String("base-url", "", "settings: update server URL (leave out to keep the current one; an empty value clears it)")
 	component := fs.String("component", "", "fetch: on_demand component id")
 	_ = fs.Parse(args)
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
 	cfg := nexupdate.HostConfig()
 	cfg.Platform = nexupdate.HostPlatform()
@@ -79,24 +82,38 @@ func main() {
 			refused(err)
 		}
 		deadline := time.Now().Add(*wait)
-		for time.Now().Before(deadline) {
-			st, err := e.Status(ctx)
-			if err != nil {
+		var st nexupdate.ImageStatus
+		for {
+			var err error
+			if st, err = e.Status(ctx); err != nil {
 				refused(err)
 			}
-			if !st.Running {
+			if !st.Running || !time.Now().Before(deadline) {
 				break
 			}
 			time.Sleep(time.Second)
 		}
 		fmt.Fprintln(os.Stderr, cmd, "operation", op.ID)
-		if *activate == "reboot" {
+		final, _, err := e.Operation(op.ID)
+		if err != nil {
+			refused(err)
+		}
+		failure := outcome(final, st.Running)
+		if failure == "" && *activate == "reboot" {
 			// The engine reboots a moment after arming; keep the process alive until it does.
 			time.Sleep(30 * time.Second)
 		}
 		print(e.Status(ctx))
+		if failure != "" {
+			fail(failure)
+		}
 	case "settings":
-		print(e.UpdateSettings(ctx, nexupdate.Settings{Channel: *channel, BaseURL: *baseURL}))
+		s := nexupdate.Settings{Channel: *channel, BaseURL: *baseURL}
+		if !set["base-url"] {
+			// Switching the channel must not drop the update server; `-base-url ""` clears it on purpose.
+			s.BaseURL, _ = nexupdate.ImageSettings()
+		}
+		print(e.UpdateSettings(ctx, s))
 	case "media":
 		print(e.Media(ctx))
 	case "activate", "rollback", "cancel":
@@ -124,6 +141,23 @@ func stateGuard() {
 	if required := nexupdate.RequiredStateFormat("/"); required > supported {
 		fail(fmt.Sprintf("nex-state-guard: the retained state needs state_format %d but this image reads %d; boot the previous image", required, supported))
 	}
+}
+
+// outcome says why an operation the shell waited for did not succeed: it is still running when -wait ran
+// out (the engine stops with this process; repeating the request ID resumes it), it was abandoned, or it
+// failed with a code. An empty result is success.
+func outcome(op nexupdate.Operation, stillRunning bool) string {
+	switch {
+	case stillRunning:
+		return "nex-update: the operation is still running after -wait; repeat the request ID to resume it"
+	case op.Error != nil:
+		return op.Error.Code + ": " + op.Error.Message
+	case op.Phase == "cancelled":
+		return "nex-update: the operation was cancelled"
+	case op.FinishedAt == nil:
+		return "nex-update: the operation stopped before it finished; repeat the request ID to resume it"
+	}
+	return ""
 }
 
 func print(v any, err error) {

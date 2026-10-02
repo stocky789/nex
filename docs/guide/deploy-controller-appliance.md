@@ -11,8 +11,9 @@ management bridge. Login/session rules are described in [secure web access](secu
 
 Rebuilding media does not update an already deployed Controller VM. A Controller deployed in the two-disk profile (a read-only
 system image plus a persistent data disk) is updated by the Core that hosts it, either with the **Controller first** step of a
-[pool rollout](update-a-pool.md) or with the host-local `scope:"controller"` update; the swap is journaled, shuts the Controller down
-gracefully, checkpoints its data, and restores the previous image and data if the new one is not ready. The guest image is built by
+[pool rollout](update-a-pool.md) or with the host-local `scope:"controller"` update; the swap is journaled, checks the Controller's
+ownership and storage first, shuts the Controller down gracefully, checkpoints its data, and restores the previous image and data if the
+new one is not ready (a new image whose guest agent never started is forced off for that restore; nothing else is ever forced). The guest image is built by
 `python3 appliance/build.py --profile controller` and a host is told to deploy it with `core-local-setup configure ... --controller-image-sha256`
 (see [appliance/README.md](../../appliance/README.md#controller-profile-read-only-system-image-and-data-disk-phase-i-4b)); without that
 setting, every appliance this page deploys is still the single-disk form and is not updated this way. **Unverified:** the image was
@@ -148,7 +149,18 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
 
 - **Missing bridge or capacity:** resolve the displayed preflight blocker on the selected
   lab host, then use **Refresh**. The deployment page does not change host networking or
-  format disks. Do not bypass the blocker by choosing an unrelated interface or disk.
+  format disks. Do not bypass the blocker by choosing an unrelated interface or disk. A host set up with
+  `--controller-image-sha256` also needs that image component fetched to `/var/lib/nex/payload/<sha256>/controller-system.img`;
+  until then preflight blocks.
+- **A Controller swap is refused or failed before the new image started** (`controller_insufficient_storage`, `controller_stage_failed`,
+  `controller_digest_mismatch`, `controller_shutdown_failed`): the Controller kept running its image and nothing was changed.
+  `controller_insufficient_storage` means the storage cannot clone files (ext4), so the data checkpoint and a restore each need the data
+  disk's allocated size free; free that space and repeat with a new request ID. After `controller_shutdown_failed` the guest may still power
+  off by itself, because a graceful request cannot be withdrawn: check the Controller's state and start it with **Start** in **Virtual
+  machines**. If power was lost in the middle of a swap and the host rebooted, libvirt may have started the previous image again; repeating
+  the same request stops it gracefully (never forced), takes the data checkpoint again so nothing it wrote is lost, and carries on. If it
+  will not stop, the request ends with `controller_shutdown_failed` and the Controller keeps running the previous image. Unverified: none of
+  these was exercised on a real host.
 - **Invalid signature or incompatible appliance:** use the matching trusted package and
   release key. Do not replace the trusted key with one supplied by an untrusted image.
 - **Stale observations or expired login:** reconnect/sign in again. Security builds expire

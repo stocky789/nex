@@ -36,6 +36,9 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
       # Layout and consistency: the sources that must agree with internal/hostimage, the publisher, the appliance build
       # and the Controller profile's two-disk contract. No image is built here.
       - name: Layout and consistency tests
@@ -55,18 +58,56 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Build the Nex Core image (base and release set)
+      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      # The boot labs run QEMU on the runner itself: name every missing prerequisite here instead of deep in a lab.
+      - name: QEMU lab prerequisites (qemu, OVMF, mtools, dosfstools, openssl, sfdisk, /dev/kvm)
         run: |
-          docker info >/dev/null
+          set -euo pipefail
+          missing() {
+            local tool
+            for tool in qemu-system-x86_64 qemu-img mkfs.vfat mcopy openssl sfdisk; do
+              command -v "$tool" > /dev/null || echo "$tool"
+            done
+            [ -e /usr/share/OVMF/OVMF_CODE_4M.fd ] || [ -e /usr/share/edk2/OVMF_CODE_4M.fd ] || echo OVMF
+          }
+          if [ -n "$(missing)" ]; then
+            echo "installing for: $(missing | tr '\n' ' ')"
+            sudo=''
+            [ "$(id -u)" = 0 ] || sudo=sudo
+            $sudo apt-get update -qq
+            $sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf mtools dosfstools openssl fdisk
+          fi
+          left=$(missing | tr '\n' ' ')
+          [ -z "$left" ] || { echo "still missing: $left" >&2; exit 1; }
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "/dev/kvm is not usable: the runner must expose KVM to the job" >&2; exit 1; }
+      # The labs and builds bind-mount workspace paths into containers: on a runner whose job runs in a container the
+      # workspace is a Docker volume, so name where the Docker host sees it (as release.yml does).
+      - name: Locate the workspace on the Docker host
+        id: host
+        run: |
+          ws=$(scripts/ci-host-workspace.sh)
+          echo "workspace=$ws" >> "$GITHUB_OUTPUT"
+      - name: Build the Nex Core image (base and release set)
+        env:
+          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
+        run: |
+          export NEX_DOCKER=$PWD/scripts/ci-docker.sh
           NEX_LABEL=ci NEX_SEQUENCE=1 NEX_IMAGE_OUT="$PWD/.cache/image-ci" image/build.sh all
       # Offline UEFI install of the release with nex-hostimage onto a disk, boot under QEMU/OVMF: read-only erofs root on
       # dm-verity, persistent /etc overlay and /var, persistence across a reboot.
       - name: QEMU boot of the installed image
+        env:
+          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
         run: python3 tests/integration/image_boot.py --layout single --release .cache/image-ci/release
       # Two releases pinned to one throwaway trust, then the A/B proof: a tampered blob is refused while the host keeps
       # running, boot counting, rollback, power cuts and the state guard.
       - name: Tamper, A/B update and rollback under QEMU
+        env:
+          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
         run: |
+          export NEX_DOCKER=$PWD/scripts/ci-docker.sh
           keys="$PWD/.cache/image-ci-keys"
           python3 scripts/update-publish.py keygen --out "$keys"
           python3 scripts/update-publish.py trust --base "$keys/trust" --root-key "$keys/root.key" --release-key "$keys/release.key"
@@ -86,15 +127,55 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      # The boot labs run QEMU on the runner itself: name every missing prerequisite here instead of deep in a lab.
+      - name: QEMU lab prerequisites (qemu, OVMF, mtools, dosfstools, openssl, sfdisk, /dev/kvm)
+        run: |
+          set -euo pipefail
+          missing() {
+            local tool
+            for tool in qemu-system-x86_64 qemu-img mkfs.vfat mcopy openssl sfdisk; do
+              command -v "$tool" > /dev/null || echo "$tool"
+            done
+            [ -e /usr/share/OVMF/OVMF_CODE_4M.fd ] || [ -e /usr/share/edk2/OVMF_CODE_4M.fd ] || echo OVMF
+          }
+          if [ -n "$(missing)" ]; then
+            echo "installing for: $(missing | tr '\n' ' ')"
+            sudo=''
+            [ "$(id -u)" = 0 ] || sudo=sudo
+            $sudo apt-get update -qq
+            $sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf mtools dosfstools openssl fdisk
+          fi
+          left=$(missing | tr '\n' ' ')
+          [ -z "$left" ] || { echo "still missing: $left" >&2; exit 1; }
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "/dev/kvm is not usable: the runner must expose KVM to the job" >&2; exit 1; }
+      # The labs and builds bind-mount workspace paths into containers: on a runner whose job runs in a container the
+      # workspace is a Docker volume, so name where the Docker host sees it (as release.yml does).
+      - name: Locate the workspace on the Docker host
+        id: host
+        run: |
+          ws=$(scripts/ci-host-workspace.sh)
+          echo "workspace=$ws" >> "$GITHUB_OUTPUT"
       # The vm-image component of a release: read-only erofs+verity system disk of Core's two-disk Controller profile.
       - name: Build the Controller guest image
+        env:
+          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
         run: |
-          docker info >/dev/null
-          python3 appliance/build.py --profile controller --version 0.1.0-ci --sequence 1 --output .cache/controller-image
+          set -euo pipefail
+          export NEX_DOCKER=$PWD/scripts/ci-docker.sh
+          # Builder containers can only mount paths under the workspace, so the build inputs must live there too.
+          export TMPDIR=$PWD/.cache/tmp
+          mkdir -p "$TMPDIR"
+          python3 appliance/build.py --profile controller --version 0.1.0-ci --sequence 1 --output .cache/controller-image \
+            --docker "$NEX_DOCKER"
       # UEFI boot as vmhost defines the VM (system disk read-only, blank data disk, NoCloud seed): ready marker over the
       # deployment's own certificate, read-only root, overlay /etc, /var on the data disk, a reboot on the same data
       # disk, and a one-byte-flipped system disk that must not become ready.
       - name: Controller guest boot, persistence and tamper under QEMU
+        env:
+          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
         run: python3 tests/integration/controller_image_boot.py --release .cache/controller-image
   image-repro:
     needs: controller-image
@@ -108,7 +189,21 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      # The labs and builds bind-mount workspace paths into containers: on a runner whose job runs in a container the
+      # workspace is a Docker volume, so name where the Docker host sees it (as release.yml does).
+      - name: Locate the workspace on the Docker host
+        id: host
+        run: |
+          ws=$(scripts/ci-host-workspace.sh)
+          echo "workspace=$ws" >> "$GITHUB_OUTPUT"
       # Two clean builds from the same pinned inputs; exit 0 only when every artifact (roothash, erofs, verity, kernel,
       # initrd, base tree, UKI, ESP tree, manifest) is byte-identical. The diffoscope report stays in .cache/image-repro on a difference.
       - name: Double build and compare
-        run: scripts/image-repro-check.sh --report .cache/image-repro
+        env:
+          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
+        run: |
+          export NEX_DOCKER=$PWD/scripts/ci-docker.sh
+          scripts/image-repro-check.sh --report .cache/image-repro

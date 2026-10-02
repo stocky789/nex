@@ -195,6 +195,51 @@ class ImageInstallerTests(unittest.TestCase):
         self.assertEqual(missing.returncode, 1)
         self.assertIn('data volume', missing.stderr)
 
+    def test_a_failed_payload_copy_leaves_nothing_mounted_or_assembled(self):
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        payload = self.media / 'payload' / ('0' * 64)
+        payload.mkdir(parents=True)
+        (payload / 'extra.bin').write_text('x')
+        tools = Path(self.env['PATH'].split(':')[0])
+        (tools / 'cp').write_text('#!/bin/sh\n[ "${2##*/}" = nex-hostimage ] || [ "${1##*/}" = nex-hostimage ] && exec /bin/cp "$@"\nexit 1\n')
+        (tools / 'cp').chmod(0o755)
+        result = self.run_script('install')
+        self.assertEqual(result.returncode, 1)
+        calls = self.calls()
+        self.assertTrue(any(c.startswith('umount') for c in calls))
+        self.assertEqual(calls[-1], f'mdadm --stop {self.dev}/md/nex-data')
+
+    def stage_repair(self):
+        """A complete two-disk mirror whose nex-data array md0 is assembled, as after a previous session."""
+        (self.sys / 'firmware/efi').mkdir(parents=True)
+        for disk, minor in (('sda', 6), ('sdb', 22)):
+            self.add_data_partition(disk, 6, 'raid1', minor)
+            (self.sys / 'class/block' / disk).symlink_to(self.sys / 'devices' / disk)
+        (self.state / 'image.env').write_text('mode=repair\nlayout=raid1\ndisks=/dev/sda,/dev/sdb\n')
+        (self.media / 'bin/nex-hostimage').write_text('#!/bin/sh\necho "nex-hostimage $*" >> "$NEX_TEST_LOG"\n')
+        self.mdstat.write_text('Personalities : [raid1]\n'
+                               'md0 : active raid1 sdb6[1] sda6[0]\n      1000 blocks\n'
+                               'md1 : active raid1 sdd1[1] sdc1[0]\n      1000 blocks\n')
+
+    def test_repair_stops_the_arrays_on_the_selected_disks_before_it_writes(self):
+        self.stage_repair()
+        result = self.run_script('repair')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertEqual(calls[0], f'mdadm --stop {self.dev}/md0')
+        self.assertEqual(calls[1].split()[:2], ['nex-hostimage', 'repair'])
+        self.assertFalse([c for c in calls if 'md1' in c], 'a foreign array was touched')
+
+    def test_repair_refuses_before_any_write_when_an_array_cannot_be_stopped(self):
+        self.stage_repair()
+        tools = Path(self.env['PATH'].split(':')[0])
+        (tools / 'mdadm').write_text('#!/bin/sh\necho "mdadm $*" >> "$NEX_TEST_LOG"\nexit 1\n')
+        result = self.run_script('repair')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('Could not stop md0', result.stderr)
+        self.assertIn('No disk has been changed', result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith('nex-hostimage')])
+
 
 class MediaMenuTests(unittest.TestCase):
     """The boot menus installer/build.sh writes: the serial entries run Debian's own questions, never the Nex wizard."""

@@ -174,9 +174,18 @@ def main():
     work = os.path.abspath(a.work)
     stage = os.path.join(work, "stage")
     overlay = os.path.join(work, "overlay")
+    rel = os.path.abspath(a.release)
+    out = os.path.abspath(a.out)
+    if os.path.commonpath([rel, out]) in (rel, out):
+        sys.exit(f"--out {out} is, contains or lies inside --release {rel}")
+    if os.path.commonpath([rel, work]) in (rel, work):
+        sys.exit(f"--work {work} contains or lies inside --release {rel}")
+    marker = os.path.join(work, ".image_iso_lab")
+    if os.path.isdir(work) and os.listdir(work) and not os.path.exists(marker):
+        sys.exit(f"{work} exists and was not created by this script; pass an empty or new --work")
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    rel = os.path.abspath(a.release)
+    open(marker, "w").close()
     run(os.path.abspath(a.hostimage), "verify", rel)
 
     # 1. extract the pinned netinst ISO, nothing else is taken from it
@@ -256,7 +265,6 @@ def main():
             os.remove(os.path.join(stage, p))
 
     # 5. pack, replaying the netinst boot structure
-    out = os.path.abspath(a.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     if os.path.exists(out):
         os.remove(out)

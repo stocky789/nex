@@ -31,6 +31,7 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'Makefil
          'packaging/controller/Dockerfile', 'packaging/controller/run-controller',
          'packaging/controller/apply-update', 'packaging/controller/postinst',
          'packaging/controller/prerm',
+         'image/snapshot', 'image/mkosi.conf',
          'docs/API.md', 'docs/api/openapi.json', 'docs/api/index.html', 'docs/api/reference.css')
 TREES = {'docs/brand/logo': {'.svg', '.png', '.pdf'}, 'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
          'web/public': {'.html', '.svg'}, 'web/public/guest-os': {'', '.md', '.txt', '.png', '.ico'},

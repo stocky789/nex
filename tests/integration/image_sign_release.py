@@ -23,6 +23,9 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+SUFFIX = ".image_sign_release"
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -42,8 +45,15 @@ def main():
     a = ap.parse_args()
     rel, out = os.path.abspath(a.release), os.path.abspath(a.out)
     manifest = json.load(open(os.path.join(rel, "manifest.json")))
-    shutil.rmtree(out, ignore_errors=True)
+    if os.path.commonpath([rel, out]) in (rel, out):
+        sys.exit(f"--out {out} is, contains or lies inside --release {rel}")
+    marker = out.rstrip("/") + SUFFIX  # beside the release: a file inside it would be unlisted and refused by update-publish
+    if os.path.exists(out):
+        if not os.path.exists(marker):
+            sys.exit(f"{out} exists and was not created by this script; remove it or pass a new --out")
+        shutil.rmtree(out)
     shutil.copytree(rel, out, copy_function=shutil.copyfile)
+    open(marker, "w").close()
     uki = next(n for n in os.listdir(out) if n.endswith(".efi"))
     key, cert = os.path.abspath(a.key), os.path.abspath(a.cert)
     tmp = os.path.join(out, uki + ".signed")
@@ -62,7 +72,7 @@ def main():
     files = {}
     for root, _, names in os.walk(out):
         for n in names:
-            if n == "manifest.json":
+            if n == "manifest.json" and root == out:
                 continue
             p = os.path.join(root, n)
             files[os.path.relpath(p, out)] = {"sha256": sha256(p), "size": os.path.getsize(p)}

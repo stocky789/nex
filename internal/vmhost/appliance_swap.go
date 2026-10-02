@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -18,7 +19,8 @@ import (
 //
 // One journal under the caller's operation ID records the next step to run. Every step observes the
 // real domain and files first, so a crash at any point resumes by repeating the request: nothing is
-// replayed blindly and nothing is ever forced off.
+// replayed blindly. No guest is forced off except the failed new image during a rollback, because the
+// verified checkpoint replaces everything that image wrote.
 
 // Swap stages, in the order they run. The journal's Stage is the step still to do.
 const (
@@ -46,6 +48,8 @@ const (
 	SwapShutdownFailed = "shutdown_failed"
 	SwapRolledBack     = "rolled_back"
 	SwapNeedsAttention = "needs_attention"
+	SwapStageFailed    = "stage_failed"
+	SwapNoRoom         = "insufficient_storage"
 )
 
 // SwapError is a refusal or failure with a stable code and one literal message.
@@ -76,9 +80,11 @@ type swapState struct {
 	Old        string `json:"old"`
 	New        string `json:"new"`
 	Checkpoint string `json:"checkpoint"`
-	// Started records that the new image booted: only then can the data disk have changed.
+	// Started records that the new image may have booted: only then can the data disk have changed.
 	Started bool   `json:"started,omitempty"`
 	Cause   string `json:"cause,omitempty"`
+	// Code is the refusal code of a swap that failed before it changed anything, so a replay answers as the first call did.
+	Code string `json:"code,omitempty"`
 }
 
 const (
@@ -152,15 +158,14 @@ func (e *Engine) SwapAppliance(ctx context.Context, req SwapRequest) (Operation,
 		// and no second checkpoint.
 		return Operation{ID: req.RequestID, VMID: dep.VMID, Kind: "swap", Status: "completed", Stage: swapCommitted, Progress: 100}, nil
 	}
-	if err = e.ownedDomain(ctx, *dep); err != nil {
+	// owned is the guard every Controller action runs: the persisted ownership and storage, the domain, the
+	// data disk's format and exclusivity (a restore replaces it as a whole file, so no other domain, running
+	// or defined, may reference it and no hardlink may alias it) and the power state.
+	if err = e.owned(ctx, *dep); err != nil {
 		return Operation{}, err
 	}
-	// The data disk is replaced as a whole file at restore, so no other domain, running or defined, may
-	// reference it, and no hardlink may alias it.
-	if err = e.exclusiveDisk(ctx, *dep); err != nil {
-		return Operation{}, err
-	}
-	if err = e.powerState(ctx, dep.VMID); err != nil {
+	// Refuse now what would only fail after the Controller was stopped.
+	if err = e.checkpointRoom(ctx, *dep); err != nil {
 		return Operation{}, err
 	}
 	next := swapImagePath(*dep, req.SHA256)
@@ -184,9 +189,14 @@ func terminalError(j journal) error {
 	case "rolled_back":
 		return &SwapError{SwapRolledBack, "the new Controller image did not become ready; the previous image and its data were restored: " + j.Error}
 	case "needs_attention":
-		return &SwapError{SwapNeedsAttention, "the Controller could not be restored automatically; it was not forced off and needs an operator: " + j.Error}
+		return &SwapError{SwapNeedsAttention, "the Controller could not be restored automatically and needs an operator: " + j.Error}
 	case "failed":
-		return &SwapError{SwapShutdownFailed, j.Error}
+		// A journal written before the code was recorded failed in the shutdown or staging step.
+		code := SwapShutdownFailed
+		if j.Swap != nil && j.Swap.Code != "" {
+			code = j.Swap.Code
+		}
+		return &SwapError{code, j.Error}
 	}
 	return nil
 }
@@ -199,8 +209,12 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 	if deadline <= 0 {
 		deadline = defaultControllerDeadline
 	}
-	// fail moves a forward step's failure to the restore path.
+	// fail moves a forward step's failure to the restore path. A cancelled context interrupts the swap
+	// (the service is stopping) and is not the step's failure: the journal stays and a repeat resumes it.
 	fail := func(cause error) (journal, error) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return j, ctxErr
+		}
 		if s.Cause == "" {
 			s.Cause = cause.Error()
 		}
@@ -218,9 +232,11 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 			if err = os.Remove(s.Checkpoint); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return j.Operation, err
 			}
-			if err = e.swapStageImage(j, req); err != nil {
-				j.Status, j.Error = "failed", err.Error()
-				return j.Operation, e.finishSwap(j, err)
+			if err = e.swapStageImage(ctx, j, req); err != nil {
+				if ctx.Err() != nil {
+					return j.Operation, ctx.Err()
+				}
+				return e.finishSwap(j, SwapStageFailed, err)
 			}
 			j.Progress = 15
 			j, err = e.swapStep(j, swapShutdown)
@@ -229,13 +245,17 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 				if ctx.Err() != nil {
 					return j.Operation, ctx.Err()
 				}
-				// Nothing was changed and the guest was never forced: the Controller keeps running its image.
-				j.Status, j.Error = "failed", err.Error()
-				return j.Operation, e.finishSwap(j, err)
+				// The swap changed nothing and never forced the guest.
+				return e.finishSwap(j, SwapShutdownFailed, fmt.Errorf("%w; the swap changed nothing", err))
 			}
 			j.Progress = 30
 			j, err = e.swapStep(j, swapCheckpoint)
 		case swapCheckpoint:
+			// The old image may be running again (libvirt autostarts it after a power loss): stop it so the
+			// checkpoint is taken from a quiescent disk.
+			if _, err = e.stopRestartedOld(ctx, j); err != nil {
+				return e.refuseRestartedOld(ctx, j, err)
+			}
 			if err = e.requireOff(ctx, j.VMID); err == nil {
 				if err = e.exclusiveDisk(ctx, j); err == nil {
 					err = reflinkCopy(ctx, j.Disk, s.Checkpoint)
@@ -248,6 +268,16 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 			j.Progress = 45
 			j, err = e.swapStep(j, swapDefine)
 		case swapDefine:
+			// The old image running again has written to the disk since the checkpoint was taken, and a
+			// rollback would lose that: stop it and take the checkpoint again.
+			stopped, serr := e.stopRestartedOld(ctx, j)
+			if serr != nil {
+				return e.refuseRestartedOld(ctx, j, serr)
+			}
+			if stopped {
+				j, err = e.swapStep(j, swapCheckpoint)
+				break
+			}
 			if err = e.requireOff(ctx, j.VMID); err == nil {
 				err = e.redefineSystem(ctx, j, s.Old, s.New)
 			}
@@ -270,9 +300,6 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 			j, err = e.swapStep(j, swapProbe)
 		case swapProbe:
 			if err = e.swapProbe(ctx, &j, req, s.New, deadline); err != nil {
-				if ctx.Err() != nil {
-					return j.Operation, ctx.Err()
-				}
 				j, err = fail(fmt.Errorf("the new Controller image was not ready within %s: %w", deadline, err))
 				break
 			}
@@ -285,15 +312,23 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 			j.Status, j.Stage, j.Progress, j.Error = "completed", swapCommitted, 100, ""
 			return j.Operation, e.save(j)
 		case swapRestore:
-			// The failed image may still be running on the data disk: stop it gracefully first. A guest
-			// that will not stop is never forced; the swap then needs an operator.
-			if err = e.swapShutdown(ctx, j.VMID); err != nil {
-				if ctx.Err() != nil {
-					return j.Operation, ctx.Err()
-				}
+			// The failed image may still be running on the data disk: stop it gracefully first. A new image
+			// that will not stop (one that never booted far enough has no guest agent) is forced off, because
+			// the checkpoint replaces everything it wrote; any other guest is never forced and the swap then
+			// needs an operator.
+			if err = e.swapShutdown(ctx, j.VMID); err != nil && ctx.Err() == nil && e.runsNewImage(ctx, j) {
+				err = e.forceOff(ctx, j.VMID)
+			}
+			if err != nil {
 				return e.needsAttention(ctx, j, err)
 			}
-			// Only a started new image could have changed the data disk.
+			// The new image may have changed the data disk if it booted, including a start the journal never
+			// saw: libvirt autostarts a persistent definition that names it.
+			if !s.Started {
+				if s.Started, err = e.namesSystem(ctx, j.VMID, s.New); err != nil {
+					return e.needsAttention(ctx, j, err)
+				}
+			}
 			if s.Started {
 				if err = e.exclusiveDisk(ctx, j); err == nil {
 					err = restoreCopy(ctx, s.Checkpoint, j.Disk)
@@ -318,9 +353,6 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 			j, err = e.swapStep(j, swapReprobe)
 		case swapReprobe:
 			if err = e.swapProbe(ctx, &j, req, s.Old, deadline); err != nil {
-				if ctx.Err() != nil {
-					return j.Operation, ctx.Err()
-				}
 				return e.needsAttention(ctx, j, err)
 			}
 			j.Status, j.Stage = "rolled_back", swapRolledBack
@@ -338,20 +370,28 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 	}
 }
 
-// finishSwap records a terminal failure that changed nothing.
-func (e *Engine) finishSwap(j journal, cause error) error {
+// finishSwap records a terminal failure that changed nothing. The code stays in the journal so that a
+// replay answers as the first call did.
+func (e *Engine) finishSwap(j journal, code string, cause error) (Operation, error) {
+	var refusal *SwapError
+	if errors.As(cause, &refusal) {
+		code = refusal.Code
+	}
+	j.Status, j.Error, j.Swap.Code = "failed", cause.Error(), code
 	if err := e.save(j); err != nil {
-		return err
+		return j.Operation, err
 	}
-	if _, ok := cause.(*SwapError); ok {
-		return cause
-	}
-	return terminalError(j)
+	return j.Operation, terminalError(j)
 }
 
 // needsAttention is the last resort: the Controller could not be brought back, so it is left stopped
 // (asked to shut down gracefully, never forced) and the operator recovers it with host-recovery.
 func (e *Engine) needsAttention(ctx context.Context, j journal, cause error) (Operation, error) {
+	// A cancelled context interrupted the restore (the service is stopping). Every restore step is
+	// idempotent, so the journal stays and repeating the request continues it.
+	if err := ctx.Err(); err != nil {
+		return j.Operation, err
+	}
 	if state, err := e.virsh(ctx, "domstate", j.VMID); err == nil && strings.TrimSpace(string(state)) == "running" {
 		_, _ = e.virsh(ctx, "shutdown", j.VMID, "--mode", "agent")
 	}
@@ -364,11 +404,16 @@ func (e *Engine) needsAttention(ctx context.Context, j journal, cause error) (Op
 }
 
 // swapStageImage verifies the component against the manifest digest and places it beside the VM,
-// read-only. An image already in place with the right digest is kept.
-func (e *Engine) swapStageImage(j journal, req SwapRequest) error {
+// read-only. An image already in place with the right digest is kept. Placed now or by an earlier
+// run, it is made durable before the journal moves on: the data is synced before the rename can expose
+// it and the directory after, so a crash never leaves a complete-looking name over lost data.
+func (e *Engine) swapStageImage(ctx context.Context, j journal, req SwapRequest) (err error) {
 	s := j.Swap
-	if sum, _, err := fileSHA256(s.New); err == nil && sum == s.SHA256 {
-		return nil
+	if sum, _, serr := fileSHA256(s.New); serr == nil && sum == s.SHA256 {
+		if err = e.fsync(s.New); err != nil {
+			return err
+		}
+		return e.fsync(filepath.Dir(s.New))
 	}
 	sum, _, err := fileSHA256(req.Source)
 	if err != nil {
@@ -378,36 +423,53 @@ func (e *Engine) swapStageImage(j journal, req SwapRequest) error {
 		return &SwapError{SwapDigestMismatch, "the staged Controller image does not match the digest in the signed release manifest"}
 	}
 	tmp := s.New + ".part"
-	if err = reflinkCopyFile(req.Source, tmp); err != nil {
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if err = reflinkCopyFile(ctx, req.Source, tmp); err != nil {
 		return err
 	}
 	if sum, _, err = fileSHA256(tmp); err != nil || sum != s.SHA256 {
-		_ = os.Remove(tmp)
 		return &SwapError{SwapDigestMismatch, "the Controller image changed while it was copied"}
 	}
 	if err = os.Chmod(tmp, 0o444); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.New)
-}
-
-// swapShutdown asks the guest agent for a clean shutdown and waits; it never destroys the domain.
-func (e *Engine) swapShutdown(ctx context.Context, id string) error {
-	state, err := e.domState(ctx, id)
-	if err != nil || state == "shut off" {
+	if err = e.fsync(tmp); err != nil {
 		return err
 	}
-	if state != "running" {
-		return fmt.Errorf("the Controller VM is %s; it must be running or shut off", state)
+	if err = os.Rename(tmp, s.New); err != nil {
+		return err
 	}
-	if _, err = e.virsh(ctx, "shutdown", id, "--mode", "agent"); err != nil {
-		return errors.New("the Controller guest agent did not accept a graceful shutdown; nothing was changed: " + err.Error())
+	return e.fsync(filepath.Dir(s.New))
+}
+
+// swapShutdown asks the guest agent for a clean shutdown and waits; it never destroys the domain. A
+// shutdown already under way (a repeated request, or one the guest began itself) is waited for, not asked
+// for again.
+func (e *Engine) swapShutdown(ctx context.Context, id string) error {
+	state, err := e.domState(ctx, id)
+	if err != nil {
+		return err
+	}
+	switch state {
+	case "shut off":
+		return nil
+	case "running":
+		if _, err = e.virsh(ctx, "shutdown", id, "--mode", "agent"); err != nil {
+			return errors.New("the Controller guest agent did not accept a graceful shutdown: " + err.Error())
+		}
+	case "in shutdown":
+	default:
+		return fmt.Errorf("the Controller VM is %s; it must be running or shut off", state)
 	}
 	wait := e.shutdownWait
 	if wait <= 0 {
 		wait = defaultShutdownWait
 	}
-	timeout := time.After(wait)
+	deadline := time.Now().Add(wait)
 	for {
 		if state, err = e.domState(ctx, id); err != nil {
 			return err
@@ -415,11 +477,12 @@ func (e *Engine) swapShutdown(ctx context.Context, id string) error {
 		if state == "shut off" {
 			return nil
 		}
+		if !time.Now().Before(deadline) {
+			return errors.New("the Controller did not shut down gracefully in time")
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-timeout:
-			return errors.New("the Controller did not shut down gracefully in time; it was not forced off and nothing was changed")
 		case <-time.After(e.pollEvery()):
 		}
 	}
@@ -441,6 +504,33 @@ func (e *Engine) requireOff(ctx context.Context, id string) error {
 	return nil
 }
 
+// stopRestartedOld stops, gracefully and never forced, the old image when it is running again between the
+// swap's shutdown and its redefinition: libvirt autostarts it after a power loss. Only a guest the
+// persistent definition and the running domain both say is the old image qualifies; anything else is left
+// to the step's own guards. It reports whether it stopped a guest.
+func (e *Engine) stopRestartedOld(ctx context.Context, j journal) (bool, error) {
+	s := j.Swap
+	if state, err := e.domState(ctx, j.VMID); err != nil || state == "shut off" {
+		return false, nil
+	}
+	b, err := e.virsh(ctx, "dumpxml", j.VMID, "--inactive")
+	if err != nil || !strings.Contains(string(b), s.Old) || strings.Contains(string(b), s.New) || e.runningSystem(ctx, j, s.Old) != nil {
+		return false, nil
+	}
+	return true, e.swapShutdown(ctx, j.VMID)
+}
+
+// refuseRestartedOld ends a swap whose restarted old image would not stop. The definition still names
+// that image and nothing was written over its data, so the swap changes nothing; the checkpoint, now
+// stale, goes.
+func (e *Engine) refuseRestartedOld(ctx context.Context, j journal, cause error) (Operation, error) {
+	if ctx.Err() != nil {
+		return j.Operation, ctx.Err()
+	}
+	_ = os.Remove(j.Swap.Checkpoint)
+	return e.finishSwap(j, SwapShutdownFailed, fmt.Errorf("the previous Controller image was running again and did not shut down gracefully: %w; the swap changed nothing", cause))
+}
+
 func (e *Engine) startDomain(ctx context.Context, id string) error {
 	state, err := e.domState(ctx, id)
 	if err != nil || state == "running" {
@@ -448,6 +538,58 @@ func (e *Engine) startDomain(ctx context.Context, id string) error {
 	}
 	_, err = e.virsh(ctx, "start", id)
 	return err
+}
+
+// forceOff destroys the domain: only for the failed new image, whose writes the checkpoint replaces.
+func (e *Engine) forceOff(ctx context.Context, id string) error {
+	if _, err := e.virsh(ctx, "destroy", id); err != nil {
+		return err
+	}
+	return e.requireOff(ctx, id)
+}
+
+// runsNewImage reports whether the running domain boots the swap's new image and the checkpoint that
+// replaces its data disk exists: the one guest a rollback may force off.
+func (e *Engine) runsNewImage(ctx context.Context, j journal) bool {
+	if _, err := os.Stat(j.Swap.Checkpoint); err != nil {
+		return false
+	}
+	return e.runningSystem(ctx, j, j.Swap.New) == nil
+}
+
+// namesSystem reports whether the persistent definition references the image at path.
+func (e *Engine) namesSystem(ctx context.Context, id, path string) (bool, error) {
+	b, err := e.virsh(ctx, "dumpxml", id, "--inactive")
+	return strings.Contains(string(b), path), err
+}
+
+// checkpointRoom refuses, before the Controller is stopped, a data disk that cannot be checkpointed. On a
+// filesystem that clones extents the checkpoint and a restore cost almost nothing; without that (ext4)
+// each copies the disk's allocated bytes again, so room for both must be free.
+func (e *Engine) checkpointRoom(ctx context.Context, j journal) error {
+	probe := j.Disk + ".reflink-probe"
+	_ = os.Remove(probe)
+	_, err := run(ctx, "cp", "--reflink=always", "--sparse=always", "--", j.Disk, probe)
+	_ = os.Remove(probe)
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	info, err := os.Stat(j.Disk)
+	if err != nil {
+		return err
+	}
+	stat, err := e.statfsOf(filepath.Dir(j.Disk))
+	if err != nil {
+		return err
+	}
+	need := uint64(info.Sys().(*syscall.Stat_t).Blocks) * 512 * 2
+	if free := stat.Bavail * uint64(stat.Bsize); free < need {
+		return &SwapError{SwapNoRoom, fmt.Sprintf("this storage cannot share extents, so the data checkpoint and a restore each copy the Controller's data disk: %.1f GiB must be free and %.1f GiB is", float64(need)/(1<<30), float64(free)/(1<<30))}
+	}
+	return nil
 }
 
 // redefineSystem swaps the system disk's path in the persistent definition, keeping every other
@@ -544,7 +686,7 @@ func (e *Engine) commitSwap(j journal) error {
 	}
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry.Name())
-		old := (strings.HasPrefix(entry.Name(), "system-") && strings.HasSuffix(entry.Name(), ".img") && path != s.New && path != s.Old) ||
+		old := (strings.HasPrefix(entry.Name(), "system-") && ((strings.HasSuffix(entry.Name(), ".img") && path != s.New && path != s.Old) || strings.HasSuffix(entry.Name(), ".img.part"))) ||
 			(strings.HasPrefix(entry.Name(), filepath.Base(j.Disk)+".pre-") && path != s.Checkpoint) ||
 			(strings.HasPrefix(entry.Name(), "domain-system-") && entry.Name() != "domain-"+filepath.Base(s.New)+".xml" && entry.Name() != "domain-"+filepath.Base(s.Old)+".xml")
 		if old {
@@ -620,6 +762,14 @@ func syncFile(path string) error {
 	return f.Sync()
 }
 
+// fsync makes path durable, through the test seam when one is set.
+func (e *Engine) fsync(path string) error {
+	if e.syncPath != nil {
+		return e.syncPath(path)
+	}
+	return syncFile(path)
+}
+
 // sameContent reports an error unless both files exist and hold the same bytes.
 func sameContent(a, b string) error {
 	sumA, _, err := fileSHA256(a)
@@ -636,9 +786,9 @@ func sameContent(a, b string) error {
 	return nil
 }
 
-func reflinkCopyFile(src, dst string) error {
+func reflinkCopyFile(ctx context.Context, src, dst string) error {
 	_ = os.Remove(dst)
-	_, err := run(context.Background(), "cp", "--reflink=auto", "--", src, dst)
+	_, err := run(ctx, "cp", "--reflink=auto", "--", src, dst)
 	return err
 }
 

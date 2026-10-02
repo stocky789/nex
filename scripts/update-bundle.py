@@ -4,8 +4,9 @@
 
     update-bundle.py --base PUBLISHED --channel stable --out MEDIA --profile minimal|full
 
-The output (trust.json, <channel>/channel.json, releases/<sequence>/, blobs/, SHA256SUMS) goes on media
-labelled NEXUPDATE or into /var/lib/nex/image/inbox/ and is verified by the host through the same pipeline as
+The output (trust.json and its numbered versions, <channel>/channel.json, releases/<sequence>/, blobs/,
+SHA256SUMS) goes on media labelled NEXUPDATE or into /var/lib/nex/image/inbox/ and is verified by the host
+through the same pipeline as
 a download. The bundle's channel.json is signed again with its own `expires` (default 180 days), so a
 bundle outlives the online pointer; the release key is needed for that and the command fails closed without it.
 `minimal` carries the slot-image and the layers that every update stages (a layer is part of the base's
@@ -16,6 +17,7 @@ import datetime
 import hashlib
 import importlib.util
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -39,7 +41,10 @@ def bundle(args):
               if args.profile == "full" or c["kind"] == "slot-image" or (c["kind"] == "layer" and not c.get("on_demand"))]
 
     out.mkdir(parents=True, exist_ok=True)
-    for name in ("trust.json", "trust.sig"):
+    # The latest trust and every numbered version: a host that missed a rotation walks the chain from the
+    # bundle, link by link.
+    trust_files = ["trust.json", "trust.sig"] + sorted(p.name for p in base.glob("trust.[0-9]*.*") if re.fullmatch(r"trust\.\d+\.(json|sig)", p.name))
+    for name in trust_files:
         shutil.copyfile(base / name, out / name)
     release = out / "releases" / str(sequence)
     release.mkdir(parents=True, exist_ok=True)

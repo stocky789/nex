@@ -12,7 +12,8 @@
 #   NEX_LABEL, NEX_SEQUENCE   release label and monotonic sequence (default dev, 0)
 #   SOURCE_DATE_EPOCH         build timestamp (default: SourceDateEpoch in mkosi.conf)
 #   NEX_PACKAGE_DIRS          colon-separated directories of local .deb files (Nex libvirt, nex-core-local)
-#   NEX_UKI_KEY, NEX_UKI_CERT PEM paths; when both are set the UKI is signed and the shim chain is used
+#   NEX_UKI_KEY, NEX_UKI_CERT PEM paths on the host (both or neither); when both are set they are mounted read-only into
+#                             the container, the UKI is signed and the shim chain is used
 #   NEX_UPDATE_TRUST          trust.json (from scripts/update-publish.py) pinned into the verity root at
 #                             /usr/share/nex/update/trust.json. Without it the image cannot verify any update.
 #   NEX_STATE_FORMAT          state_format this image reads (default 3), checked by nex-state-guard.service
@@ -25,6 +26,7 @@
 #   NEX_IMAGE_OUT             output directory (default image/out)
 #   NEX_MKOSI_CACHE           package cache directory (default <out>/cache)
 #   NEX_DOCKER_CPUS, NEX_DOCKER_MEMORY   container caps (default 4 and 8g)
+#   NEX_DOCKER              docker command (default docker); scripts/ci-docker.sh on a runner whose job runs in a container
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,7 +39,8 @@ out=$(cd "$out" && pwd)
 cache=$(cd "$cache" && pwd)
 snapshot=$(cat "$here/snapshot")
 
-docker build -q -t nex-image-tools --build-arg "SNAPSHOT=$snapshot" "$here/tools" >/dev/null
+docker=${NEX_DOCKER:-docker}
+$docker build -q -t nex-image-tools --build-arg "SNAPSHOT=$snapshot" "$here/tools" >/dev/null
 
 # mkosi 25.3 always adds the live security archive; pin it to the same snapshot through a sandbox tree.
 sandbox=$out/sandbox
@@ -65,14 +68,27 @@ cp "$sandbox/etc/apt/sources.list.d/nex-security.sources" "$out/apt-sources.list
 
 pkgdirs=""
 dockerargs=""
+containerdirs=""
 IFS=:
 for d in ${NEX_PACKAGE_DIRS:-}; do
     [ -d "$d" ] || { echo "image/build.sh: package directory not found: $d" >&2; exit 1; }
     d=$(cd "$d" && pwd)
     dockerargs="$dockerargs -v $d:/pkgs$d:ro"
     pkgdirs="$pkgdirs --package-directory=/pkgs$d"
+    containerdirs="$containerdirs${containerdirs:+:}/pkgs$d"
 done
 unset IFS
+
+# Signing key and certificate: ukify runs in the container, so it gets them as mounts and reads the container paths.
+ukikey=""
+ukicert=""
+if [ -n "${NEX_UKI_KEY:-}" ] || [ -n "${NEX_UKI_CERT:-}" ]; then
+    [ -f "${NEX_UKI_KEY:-}" ] && [ -f "${NEX_UKI_CERT:-}" ] || { echo "image/build.sh: NEX_UKI_KEY and NEX_UKI_CERT must both name existing files" >&2; exit 1; }
+    dockerargs="$dockerargs -v $(cd "$(dirname "$NEX_UKI_KEY")" && pwd)/$(basename "$NEX_UKI_KEY"):/uki/key.pem:ro"
+    dockerargs="$dockerargs -v $(cd "$(dirname "$NEX_UKI_CERT")" && pwd)/$(basename "$NEX_UKI_CERT"):/uki/cert.pem:ro"
+    ukikey=/uki/key.pem
+    ukicert=/uki/cert.pem
+fi
 
 # The pinned update trust anchor lives in the verity root, so it can only change with a new image.
 trustarg=""
@@ -87,12 +103,12 @@ fi
 
 run() {
     # shellcheck disable=SC2086
-    docker run --rm --privileged --cpus "${NEX_DOCKER_CPUS:-4}" --memory "${NEX_DOCKER_MEMORY:-8g}" \
-        -v "$repo":/nex:ro -v "$out":/out -v "$cache":/cache $dockerargs \
+    $docker run --rm --privileged --cpus "${NEX_DOCKER_CPUS:-4}" --memory "${NEX_DOCKER_MEMORY:-8g}" \
+        -v "$repo":/nex:ro -v "$out":/out -v "$cache":/mkosi-cache $dockerargs \
         -e NEX_LABEL="${NEX_LABEL:-dev}" -e NEX_SEQUENCE="${NEX_SEQUENCE:-0}" -e NEX_STATE_FORMAT="${NEX_STATE_FORMAT:-3}" \
         -e NEX_MIN_STATE_FORMAT="${NEX_MIN_STATE_FORMAT:-0}" -e NEX_MD_GENERATION="${NEX_MD_GENERATION:-0}" -e NEX_MD_FALLBACK_SAFE="${NEX_MD_FALLBACK_SAFE:-0}" \
         -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-}" \
-        -e NEX_UKI_KEY="${NEX_UKI_KEY:-}" -e NEX_UKI_CERT="${NEX_UKI_CERT:-}" \
+        -e NEX_UKI_KEY="$ukikey" -e NEX_UKI_CERT="$ukicert" \
         -w /out nex-image-tools "$@"
 }
 
@@ -119,15 +135,26 @@ base() {
     for f in mkosi.conf mkosi.extra mkosi.skeleton mkosi.finalize mkosi.postinst.chroot; do
         ln -s "/nex/image/$f" "$conf/$f"
     done
-    run mkosi --directory /out/baseconf --output-dir /out --cache-dir /cache --workspace-dir /out/work \
+    run mkosi --directory /out/baseconf --output-dir /out --cache-dir /mkosi-cache --workspace-dir /out/work \
         --mirror "https://snapshot.debian.org/archive/debian/$snapshot/" \
         --sandbox-tree=/out/sandbox --extra-tree=/out/nex-hostimage:/usr/bin/nex-hostimage \
         --extra-tree=/out/nex-update:/usr/bin/nex-update $trustarg \
         --force $pkgdirs $args $extra build
     run /nex/image/release.py base
+    # The denylist, the requested set and every snapshot package against the pinned closure. The Nex-built packages
+    # (nex-core-local, the matched libvirt) are compared by the full check in the release step.
+    run python3 /nex/scripts/image-lock.py check --snapshot-only --debs "$containerdirs" /out/base.dpkg-list
 }
 
 release() {
+    # The step that produces the directory update-publish.py signs: with the release's debs (NEX_PACKAGE_DIRS) the full
+    # check also pins nex-core-local and the matched libvirt to the locked version and sha256. Without debs (the CI
+    # and lab builds) there is nothing to compare, and the lock's origin=nex rows would fail; say so instead.
+    if [ -n "$containerdirs" ]; then
+        run python3 /nex/scripts/image-lock.py check --debs "$containerdirs" /out/base.dpkg-list
+    else
+        echo "image/build.sh: NEX_PACKAGE_DIRS is not set: the Nex-built packages are not checked against image/packages.lock" >&2
+    fi
     run /nex/image/release.py release
 }
 
@@ -147,7 +174,7 @@ controller() {
         ln -s "/nex/image/controller/$f" "$conf/$f"
     done
     # shellcheck disable=SC2086
-    run mkosi --directory /out/controllerconf --output-dir /out --cache-dir /cache --workspace-dir /out/work \
+    run mkosi --directory /out/controllerconf --output-dir /out --cache-dir /mkosi-cache --workspace-dir /out/work \
         --mirror "https://snapshot.debian.org/archive/debian/$snapshot/" \
         --sandbox-tree=/out/sandbox --extra-tree=/payload:/ \
         --force $args build

@@ -437,7 +437,7 @@
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
   &quot;semantics&quot;: &quot;Addressed to the host whose mirror is rebuilt and performed entirely by it; nothing is pool-scoped and nothing is kept by the Controller. The durable record is the md superblocks and the installer&#x27;s /etc/mdadm/mdadm.conf, whose array UUID does not change when a member is added. Core journals the operation under its state directory, keyed on operation_id: a redelivered command replays its recorded outcome, an array that already has the replacement as a member is adopted without wiping it again, and an agent interrupted after the wipe resumes from the wipe-started stage, where the wiped disk can no longer match its fingerprint and the identity that survives a wipe (the same by_id, serial and size) is checked instead. A member whose disk the kernel no longer exposes is the failure being repaired and is passed over. Refusals are definite failed results carrying Core&#x27;s own sentence: \&quot;/dev/mdN is not degraded, so there is no member to replace\&quot;, \&quot;&lt;device&gt; is a &lt;level&gt; array; only a RAID1 mirror is rebuilt this way\&quot;, \&quot;&lt;device&gt; has no working member to copy from; restore this host instead\&quot;, \&quot;the replacement disk changed since it was selected, or is in use\&quot;, \&quot;the replacement disk holds old data and was not confirmed for erasure\&quot;, \&quot;Nex Core cannot read this host&#x27;s RAID arrays\&quot;, \&quot;this host has no array &lt;mdN&gt;\&quot;, \&quot;&lt;disk&gt; already holds a working member of &lt;array&gt;\&quot;, \&quot;the replacement disk cannot be safely observed\&quot;, \&quot;the replacement disk is smaller than the remaining system disk\&quot;.&quot;,
-  &quot;capability&quot;: &quot;host-system-disk-replace-v1&quot;
+  &quot;capability&quot;: &quot;host-system-disk-replace-v1, advertised by the classic edition only. An image-edition Core does not advertise it, and a command that reaches one fails with a refusal before anything is changed, because the replacement disk would not receive the root and verity slots.&quot;
 }</pre></section>
 <section><h2>snapshot-create</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/local/v1/pool/vms/{id}/snapshots&quot;,
@@ -8917,7 +8917,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The host is revoked, it is not freshly connected (\&quot;the host must be freshly connected before its system disk is replaced\&quot;), its Nex Core is too old (\&quot;replacing a system disk needs host-system-disk-replace-v1 on this host; upgrade Nex Core\&quot;), or the request_id was already used with another payload.&quot;,
+      &quot;description&quot;: &quot;The host is revoked, it is not freshly connected (\&quot;the host must be freshly connected before its system disk is replaced\&quot;), its Nex Core is too old (\&quot;replacing a system disk needs host-system-disk-replace-v1 on this host; upgrade Nex Core\&quot;), or the request_id was already used with another payload. An image-edition Core does not advertise host-system-disk-replace-v1, so it answers the same refusal; upgrading does not help there (replacement is classic edition only until the root and verity slots can be copied).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12512,6 +12512,16 @@
         }
       }
     },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Host is required.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
       &quot;content&quot;: {
@@ -12524,6 +12534,16 @@
     },
     &quot;404&quot;: {
       &quot;description&quot;: &quot;Unknown host.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Storage failed.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12697,7 +12717,7 @@
       &quot;AdminSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;parameters&quot;: [
     {
@@ -12722,7 +12742,17 @@
       }
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;description&quot;: &quot;Pool is required.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12732,17 +12762,7 @@
       }
     },
     &quot;404&quot;: {
-      &quot;description&quot;: &quot;Unknown pool.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;409&quot;: {
-      &quot;description&quot;: &quot;409 refusals: upgrade Nex Core (the master or a member lacks pool-update-rollout-v1), or the pool master is not fresh and active. Core refuses again with a stable code in the failed operation: rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict.&quot;,
+      &quot;description&quot;: &quot;Unknown pool or pool master.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12752,7 +12772,7 @@
       }
     },
     &quot;500&quot;: {
-      &quot;description&quot;: &quot;Storage failed.&quot;,
+      &quot;description&quot;: &quot;Storage or inventory failed.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12778,7 +12798,7 @@
       &quot;AdminSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;parameters&quot;: [
     {
@@ -12810,6 +12830,16 @@
     }
   },
   &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateAccepted&quot;
+          }
+        }
+      }
+    },
     &quot;202&quot;: {
       &quot;description&quot;: &quot;Accepted&quot;,
       &quot;content&quot;: {
@@ -12822,6 +12852,26 @@
     },
     &quot;400&quot;: {
       &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Missing or wrong X-CSRF-Token, or a cross-origin request.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12856,16 +12906,6 @@
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
             &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateAccepted&quot;
           }
         }
       }
@@ -12887,7 +12927,7 @@
       &quot;AdminSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;parameters&quot;: [
     {
@@ -12919,6 +12959,16 @@
     }
   },
   &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateAccepted&quot;
+          }
+        }
+      }
+    },
     &quot;202&quot;: {
       &quot;description&quot;: &quot;Accepted&quot;,
       &quot;content&quot;: {
@@ -12931,6 +12981,26 @@
     },
     &quot;400&quot;: {
       &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Missing or wrong X-CSRF-Token, or a cross-origin request.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12968,16 +13038,6 @@
           }
         }
       }
-    },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateAccepted&quot;
-          }
-        }
-      }
     }
   }
 }</pre></details></section>
@@ -12996,7 +13056,7 @@
       &quot;AdminSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;parameters&quot;: [
     {
@@ -13037,6 +13097,16 @@
     }
   },
   &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateAccepted&quot;
+          }
+        }
+      }
+    },
     &quot;202&quot;: {
       &quot;description&quot;: &quot;Accepted&quot;,
       &quot;content&quot;: {
@@ -13049,6 +13119,26 @@
     },
     &quot;400&quot;: {
       &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Missing or wrong X-CSRF-Token, or a cross-origin request.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -13083,16 +13173,6 @@
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
             &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateAccepted&quot;
           }
         }
       }
@@ -27862,7 +27942,7 @@
 <details id="PoolUpdateHost"><summary>PoolUpdateHost</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0.&quot;,
+  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0. retry_started_at is when the current run of guest shutdown or start failures began (omitted while unset).&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolUpdateHost&quot;,
   &quot;properties&quot;: {
     &quot;host_id&quot;: {
@@ -27898,6 +27978,11 @@
     &quot;attempt&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0
+    },
+    &quot;retry_started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When the current run of guest-step failures on this host began; omitted while unset. The failure window is judged from here, so step_started_at and the six-hour step timeout are not restarted by it.&quot;
     }
   },
   &quot;required&quot;: [
@@ -28135,6 +28220,10 @@
     },
     &quot;host_id&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;force&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Only with control abort: end a pending abort cleanup (abort_cleanup_pending) without confirming it. Refused abort_not_pending when no abort is pending.&quot;
     }
   },
   &quot;required&quot;: []
@@ -28142,7 +28231,7 @@
 <details id="PoolUpdatePause"><summary>PoolUpdatePause</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed.&quot;,
+  &quot;description&quot;: &quot;Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed, abort_cleanup_pending (an abort could not confirm that every started host was put back; resume and rollback_host are refused, abort retries or force ends it). needs_attention carries vm_inventory_unavailable, vm_shutdown_failed or vm_start_failed in its message after 5 minutes of failures.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolUpdatePause&quot;,
   &quot;properties&quot;: {
     &quot;code&quot;: {

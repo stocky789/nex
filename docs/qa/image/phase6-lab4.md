@@ -88,9 +88,9 @@ by hand, the engine's layer staging on an installed host, any physical hardware,
 python3 scripts/build-source.py --output .cache/lab4/nex-source.tar.gz
 python3 packaging/core-local/build.py --edition image --source .cache/lab4/nex-source.tar.gz --version 0.1.5~alpha1+img4 --output .cache/lab4/debs
 # per release N (label 2026.10.N, sequence N): image/build.sh base; image/mkosi.images/build-layer.sh nex-cluster; image/build.sh release
-go build -trimpath -o .cache/lab4/bin ./cmd/nex-controller ./cmd/nex-hostimage
+mkdir -p .cache/lab4/bin && go build -trimpath -o .cache/lab4/bin/ ./cmd/nex-controller ./cmd/nex-hostimage
 pool_rollout_lab.py up --rel1 R1/release --rel2 R2/release --keys K --trust T --hostimage H      # inside one capped scope
-pool_rollout_lab.py login; enroll; layer; fence        # images without the vmhost fix also need corosync-unconfigured written by hand (sha256 of /etc/corosync/corosync.conf, mode 0600)
-tests/integration/pool_lab_guest.sh guest.raw; pool_rollout_lab.py guest guest.raw
-pool_rollout_lab.py rollout --running-vms shutdown --seconds 900      # then: cut 1; promote 3; control resume; watch; control abort
+for c in login enroll layer fence; do pool_rollout_lab.py $c; done        # images without the vmhost fix also need corosync-unconfigured written by hand (sha256 of /etc/corosync/corosync.conf, mode 0600)
+tests/integration/pool_lab_guest.sh guest.raw && pool_rollout_lab.py guest guest.raw
+pool_rollout_lab.py rollout --running-vms shutdown --seconds 900 --expect any      # steered by hand; then, one per invocation: cut 1, promote 3, control resume, watch, control abort
 ```

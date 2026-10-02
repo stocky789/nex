@@ -206,6 +206,10 @@ func PoolUpdateHostStep(ctx context.Context, s *Store, step protocol.PoolUpdateS
 	running := poolUpdateSlotSequence(st, "booted")
 	switch step.Action {
 	case "check":
+		// The engine offers no release a host already runs, so there is nothing left to verify.
+		if running == step.Sequence {
+			return protocol.PoolUpdateStepResult{Done: true}
+		}
 		if st.Available == nil || uint64(st.Available.Sequence) != step.Sequence {
 			if _, err := engine.Check(ctx); err != nil {
 				return *poolUpdateRefusal(err)
@@ -254,7 +258,7 @@ func PoolUpdateHostStep(ctx context.Context, s *Store, step protocol.PoolUpdateS
 		switch {
 		case st.Phase == nexupdate.PhaseRolledBack:
 			return protocol.PoolUpdateStepResult{Code: "rolled_back", Message: "the host fell back to its previous release"}
-		case running == step.Sequence && st.Phase == nexupdate.PhaseCommitted:
+		case running == step.Sequence && !poolUpdateUnconfirmed(st.Phase):
 			return protocol.PoolUpdateStepResult{Done: true}
 		}
 		return protocol.PoolUpdateStepResult{}
@@ -315,8 +319,9 @@ func poolUpdateGuestStep(ctx context.Context, s *Store, step protocol.PoolUpdate
 	}
 	result := protocol.PoolUpdateStepResult{Done: done}
 	if last != nil {
-		// Not a failure code: a guest that cannot start yet (the master is rebooting, admission
-		// refuses) is retried by the coordinator until its step deadline.
+		// Not a refusal code: a guest that cannot start yet (the master is rebooting, admission
+		// refuses) is retried by the coordinator until its step deadline, under a new step
+		// identity because the engine journals a failed operation under its ID.
 		result.Message = last.Error()
 	}
 	return result

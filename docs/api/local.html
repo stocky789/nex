@@ -205,7 +205,7 @@
   &quot;semantics&quot;: &quot;Controller queues an immediate one-shot run of a backup policy for selected VMs. Core records occurrence IDs under pool-backup-runs/; Controller adopts outcomes.&quot;
 }</pre></section>
 <section><h2>nex-core-local layers</h2><pre>{
-  &quot;description&quot;: &quot;Root-only on-host management of optional feature layers (nex-zfs, nex-cluster): signed systemd-sysext images that Core verifies and merges over /usr. Not an HTTP operation and not reachable from the Controller or the report protocol. Subcommands: `activate` (what nex-layers.service runs at boot: re-hash every enabled layer against the signed release manifest and the running base build, link the good ones for systemd-sysext, remove links for the rest; always exits 0 so a bad layer never holds boot; writes the volatile report /run/nex/layers/status.json), `list` (JSON array of LayerInfo, one per layer the signed manifest offers or enabled.json records, sorted by name; the store file is size-checked, not re-hashed), `ensure NAME` (prove the store file, record it in enabled.json, link and merge it, run sysusers/tmpfiles/udev reload and enable the layer&#x27;s units; idempotent) and `disable NAME` (refused while a kernel module, busy unit or busy command of the layer is in use; otherwise disables the layer&#x27;s units and records it as not wanted; the merge ends at the next boot). Layer failures are reported as layer-unavailable with a reason: not_in_store, base_mismatch, digest_mismatch, signature_invalid, unknown_layer, merge_failed, reboot_required (enabled and verified, but a live merge was not possible), in_use (disable only). State owner: core; the record is /var/lib/nex/layers/enabled.json on the host and the store is /var/lib/nex/layers/store/sha256-&lt;hex&gt;.raw. A fresh Controller learns nothing from it and stores nothing. No HTTP route, command or Inventory field carries layers yet.&quot;,
+  &quot;description&quot;: &quot;Root-only on-host management of optional feature layers (nex-zfs, nex-cluster): signed systemd-sysext images that Core verifies and merges over /usr. Not an HTTP operation and not reachable from the Controller or the report protocol. Subcommands: `activate` (what nex-layers.service runs at boot: re-hash every enabled layer against the signed release manifest and the running base build, link the good ones for systemd-sysext, remove links for the rest; always exits 0 so a bad layer never holds boot; the boot unit then runs systemd-sysusers, systemd-tmpfiles --create and udevadm control --reload, each non-fatal; writes the volatile report /run/nex/layers/status.json), `list` (JSON array of LayerInfo, one per layer the signed manifest offers or enabled.json records, sorted by name; the store file is size-checked, not re-hashed), `ensure NAME` (prove the store file, record it in enabled.json, link and merge it, run sysusers/tmpfiles/udev reload and enable the layer&#x27;s units; idempotent) and `disable NAME` (refused while a kernel module, busy unit or busy command of the layer is in use, a busy command fails to run, or a merged layer&#x27;s metadata cannot be read; otherwise disables the layer&#x27;s units and records it as not wanted; the merge ends at the next boot). Layer failures are reported as layer-unavailable with a reason: not_in_store, base_mismatch, digest_mismatch, signature_invalid, unknown_layer, merge_failed, reboot_required (enabled and verified, but a live merge was not possible), in_use (disable only). State owner: core; the record is /var/lib/nex/layers/enabled.json on the host and the store is /var/lib/nex/layers/store/sha256-&lt;hex&gt;.raw. A fresh Controller learns nothing from it and stores nothing. No HTTP route, command or Inventory field carries layers yet.&quot;,
   &quot;usage&quot;: &quot;nex-core-local layers activate|list|ensure NAME|disable NAME&quot;,
   &quot;output&quot;: {
     &quot;schema&quot;: {
@@ -1797,7 +1797,7 @@
       }
     },
     &quot;500&quot;: {
-      &quot;description&quot;: &quot;Download, install or restart failed.&quot;,
+      &quot;description&quot;: &quot;Download, install or restart failed; also arm_incomplete when activate: reboot could not arm every disk and could not undo it (the record stays armed).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -1827,7 +1827,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused: update_in_progress, request_conflict, already_armed, scope_unavailable, running_vms (image edition); classic: UpdateApplyResult with status failed.&quot;,
+      &quot;description&quot;: &quot;Refused: update_in_progress, request_conflict, already_armed, scope_unavailable, running_vms (image edition); insufficient_space is raised as the failed operation&#x27;s error (before download when free space is below about twice the slot image plus layers and 64 MiB, or on ENOSPC); classic: UpdateApplyResult with status failed. scope controller also: controller_stage_failed, controller_insufficient_storage, controller_shutdown_failed (also when a restarted old image will not stop at the checkpoint or define step).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4688,7 +4688,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: false,
@@ -4733,7 +4733,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Classic edition (unsupported_edition) or a release this host cannot take: wrong_architecture, engine_too_old, bridge_required, unsupported_component, below_rollback_floor.&quot;,
+      &quot;description&quot;: &quot;Classic edition (unsupported_edition) or a release this host cannot take: wrong_architecture, engine_too_old, bridge_required, unsupported_component, below_rollback_floor, clock_behind, not_newer, unknown_sequence, layers_unavailable.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4771,22 +4771,32 @@
           }
         }
       }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;The update engine failed: trust_invalid, trust_unavailable or internal.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
     }
   }
 }</pre></details></section>
 <section id="localActivateUpdate"><h2>POST <code>/api/local/v1/updates/activate</code></h2>
-<p>Arm the staged release and reboot</p><p>Image edition only. Arms the staged release: writes its UKI as nex-core_&lt;label&gt;_&lt;sequence&gt;+3.efi on every boot partition (temp file, flush, rename) beside the running version&#x27;s UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required.</p>
+<p>Arm the staged release and reboot</p><p>Image edition only. Arms the staged release: writes its UKI as nex-core_&lt;label&gt;_&lt;sequence&gt;+3.efi on every boot partition (temp file, flush, rename) beside the running version&#x27;s UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required. On an armed release that has not booted it re-issues the reboot instead of refusing nothing_staged; after arm_incomplete it first takes the boot entry back from every disk and arms again. 500 arm_incomplete when arming failed on a later disk and could not be undone (the record stays armed, no reboot is scheduled) or when that disarm fails.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localActivateUpdate&quot;,
   &quot;summary&quot;: &quot;Arm the staged release and reboot&quot;,
-  &quot;description&quot;: &quot;Image edition only. Arms the staged release: writes its UKI as nex-core_&lt;label&gt;_&lt;sequence&gt;+3.efi on every boot partition (temp file, flush, rename) beside the running version&#x27;s UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required.&quot;,
+  &quot;description&quot;: &quot;Image edition only. Arms the staged release: writes its UKI as nex-core_&lt;label&gt;_&lt;sequence&gt;+3.efi on every boot partition (temp file, flush, rename) beside the running version&#x27;s UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required. On an armed release that has not booted it re-issues the reboot instead of refusing nothing_staged; after arm_incomplete it first takes the boot entry back from every disk and arms again. 500 arm_incomplete when arming failed on a later disk and could not be undone (the record stays armed, no reboot is scheduled) or when that disarm fails.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
@@ -4848,22 +4858,32 @@
           }
         }
       }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;arm_incomplete: arming failed on a later disk and could not be undone; the release is treated as armed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
     }
   }
 }</pre></details></section>
 <section id="localRollbackUpdate"><h2>POST <code>/api/local/v1/updates/rollback</code></h2>
-<p>Arm the retained previous version and reboot</p><p>Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required.</p>
+<p>Arm the retained previous version and reboot</p><p>Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required. A rollback that changed some disks and failed on another is 500 rollback_incomplete: the record is armed on the previous release with its layers, and repeating the call finishes the rest. A rollback that failed before any disk changed is previous_unavailable.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localRollbackUpdate&quot;,
   &quot;summary&quot;: &quot;Arm the retained previous version and reboot&quot;,
-  &quot;description&quot;: &quot;Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required.&quot;,
+  &quot;description&quot;: &quot;Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required. A rollback that changed some disks and failed on another is 500 rollback_incomplete: the record is armed on the previous release with its layers, and repeating the call finishes the rest. A rollback that failed before any disk changed is previous_unavailable.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
@@ -4925,22 +4945,32 @@
           }
         }
       }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;rollback_incomplete: some disks were switched before the failure; repeat the call.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
     }
   }
 }</pre></details></section>
 <section id="localCancelUpdate"><h2>POST <code>/api/local/v1/updates/cancel</code></h2>
-<p>Cancel a running apply or discard a staged release</p><p>Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required.</p>
+<p>Cancel a running apply or discard a staged release</p><p>Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required. In the arm_incomplete state it first tries to take the boot entry back from every disk and then discards the stage; 500 arm_incomplete if a disk cannot be cleaned, 409 already_armed if the release booted.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localCancelUpdate&quot;,
   &quot;summary&quot;: &quot;Cancel a running apply or discard a staged release&quot;,
-  &quot;description&quot;: &quot;Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required.&quot;,
+  &quot;description&quot;: &quot;Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required. In the arm_incomplete state it first tries to take the boot entry back from every disk and then discards the stage; 500 arm_incomplete if a disk cannot be cleaned, 409 already_armed if the release booted.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
@@ -4994,11 +5024,21 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused: already_armed, write_in_progress, nothing_to_cancel, request_conflict, unsupported_edition.&quot;,
+      &quot;description&quot;: &quot;Refused: already_armed, write_in_progress, update_in_progress (an activate or rollback is running), nothing_to_cancel, request_conflict, unsupported_edition.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
             &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;arm_incomplete: a boot entry could not be removed from a disk.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
           }
         }
       }
@@ -5017,7 +5057,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [
     {
@@ -5085,7 +5125,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [],
   &quot;responses&quot;: {
@@ -5095,16 +5135,6 @@
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
             &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutResult&quot;
-          }
-        }
-      }
-    },
-    &quot;400&quot;: {
-      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
           }
         }
       }
@@ -5119,8 +5149,8 @@
         }
       }
     },
-    &quot;404&quot;: {
-      &quot;description&quot;: &quot;Unknown rollout (rollout_not_found).&quot;,
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5129,12 +5159,12 @@
         }
       }
     },
-    &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.&quot;,
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The rollout record is unavailable.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
           }
         }
       }
@@ -5142,18 +5172,18 @@
   }
 }</pre></details></section>
 <section id="localStartPoolRollout"><h2>POST <code>/api/local/v1/pool/updates/rollouts</code></h2>
-<p>Start or dry-run a pool rollout</p><p>Runs the preflight, then records the rollout; the coordinator in this host&#x27;s Core stages everywhere, then updates one host at a time, members first and this master last. dry_run:true checks everything and returns the plan, recording nothing. request_id is the rollout ID. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).</p>
+<p>Start or dry-run a pool rollout</p><p>Runs the preflight, then records the rollout; the coordinator in this host&#x27;s Core stages everywhere, then updates one host at a time, members first and this master last. dry_run:true checks everything and returns the plan (order: hosts still to update; current: hosts that already run and committed the release, recorded with stage done and not touched), recording nothing. A host that runs the release without having committed it is refused as unconfirmed. request_id is the rollout ID. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localStartPoolRollout&quot;,
   &quot;summary&quot;: &quot;Start or dry-run a pool rollout&quot;,
-  &quot;description&quot;: &quot;Runs the preflight, then records the rollout; the coordinator in this host&#x27;s Core stages everywhere, then updates one host at a time, members first and this master last. dry_run:true checks everything and returns the plan, recording nothing. request_id is the rollout ID. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).&quot;,
+  &quot;description&quot;: &quot;Runs the preflight, then records the rollout; the coordinator in this host&#x27;s Core stages everywhere, then updates one host at a time, members first and this master last. dry_run:true checks everything and returns the plan (order: hosts still to update; current: hosts that already run and committed the release, recorded with stage done and not touched), recording nothing. A host that runs the release without having committed it is refused as unconfirmed. request_id is the rollout ID. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [],
   &quot;requestBody&quot;: {
@@ -5208,7 +5238,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.&quot;,
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5241,7 +5271,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [
     {
@@ -5296,7 +5326,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.&quot;,
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5308,18 +5338,18 @@
   }
 }</pre></details></section>
 <section id="localControlPoolRollout"><h2>POST <code>/api/local/v1/pool/updates/rollouts/{id}/control</code></h2>
-<p>Pause, resume, abort or roll a host back</p><p>Applies one control to the rollout; pause lands after the host being updated, resume re-checks membership, abort leaves committed hosts, rollback_host needs a paused rollout and an activated host. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).</p>
+<p>Pause, resume, abort or roll a host back</p><p>Applies one control to the rollout (request_id is required, 1 to 128 characters, else 400 invalid_request); pause lands after the host being updated, resume re-checks membership, abort leaves committed hosts, rollback_host needs a paused rollout and an activated host. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member). abort puts back every started host and stays paused abort_cleanup_pending until that is confirmed (the coordinator retries; repeating abort retries at once) or abort with force:true ends it. While pending, resume and rollback_host are 409 abort_cleanup_pending, and force without a pending abort is 409 abort_not_pending.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localControlPoolRollout&quot;,
   &quot;summary&quot;: &quot;Pause, resume, abort or roll a host back&quot;,
-  &quot;description&quot;: &quot;Applies one control to the rollout; pause lands after the host being updated, resume re-checks membership, abort leaves committed hosts, rollback_host needs a paused rollout and an activated host. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).&quot;,
+  &quot;description&quot;: &quot;Applies one control to the rollout (request_id is required, 1 to 128 characters, else 400 invalid_request); pause lands after the host being updated, resume re-checks membership, abort leaves committed hosts, rollback_host needs a paused rollout and an activated host. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member). abort puts back every started host and stays paused abort_cleanup_pending until that is confirmed (the coordinator retries; repeating abort retries at once) or abort with force:true ends it. While pending, resume and rollback_host are 409 abort_cleanup_pending, and force without a pending abort is 409 abort_not_pending.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [
     {
@@ -5354,7 +5384,7 @@
       }
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
+      &quot;description&quot;: &quot;Invalid request (invalid_request), including a missing or over-long request_id.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5384,7 +5414,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.&quot;,
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5417,7 +5447,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
@@ -5494,7 +5524,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;responses&quot;: {
     &quot;200&quot;: {
@@ -5552,7 +5582,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
@@ -5639,7 +5669,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [
     {
@@ -9695,7 +9725,8 @@
       &quot;required&quot;: [
         &quot;code&quot;,
         &quot;message&quot;
-      ]
+      ],
+      &quot;description&quot;: &quot;Latest failure. code: boot_failed (phase rolled_back); while the phase is armed also reboot_failed (the restart after arming failed; activate repeats it), arm_incomplete (arming failed on a later disk and could not be undone) or rollback_incomplete (a rollback changed some disks and failed on another; repeating rollback finishes it).&quot;
     },
     &quot;base_url&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -9722,7 +9753,7 @@
 <details id="PoolUpdateHost"><summary>PoolUpdateHost</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0.&quot;,
+  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0. retry_started_at is when the current run of guest shutdown or start failures began (omitted while unset).&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolUpdateHost&quot;,
   &quot;properties&quot;: {
     &quot;host_id&quot;: {
@@ -9758,6 +9789,11 @@
     &quot;attempt&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0
+    },
+    &quot;retry_started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When the current run of guest-step failures on this host began; omitted while unset. The failure window is judged from here, so step_started_at and the six-hour step timeout are not restarted by it.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9904,7 +9940,9 @@
   &quot;description&quot;: &quot;Body of POST /api/local/v1/pool/updates/rollouts/{id}/control.&quot;,
   &quot;properties&quot;: {
     &quot;request_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 128
     },
     &quot;action&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -9917,6 +9955,10 @@
     },
     &quot;host_id&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;force&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Only with action abort: end a pending abort cleanup (abort_cleanup_pending) without confirming that every host was put back; the guests and maintenance still owed stay recorded on the host. 409 abort_not_pending when no abort is pending; invalid_request with any other action.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9926,7 +9968,7 @@
 }</pre></details>
 <details id="PoolRolloutResult"><summary>PoolRolloutResult</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;A rollout record, or for a dry run the plan: the host order a rollout would use.&quot;,
+  &quot;description&quot;: &quot;A rollout record, or for a dry run the plan: the hosts a rollout would update, in order, and the hosts that already run and committed the release.&quot;,
   &quot;properties&quot;: {
     &quot;rollout&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRollout&quot;
@@ -9944,7 +9986,15 @@
           &quot;type&quot;: &quot;array&quot;,
           &quot;items&quot;: {
             &quot;type&quot;: &quot;string&quot;
-          }
+          },
+          &quot;description&quot;: &quot;Hosts still to update, members first and the master last.&quot;
+        },
+        &quot;current&quot;: {
+          &quot;type&quot;: &quot;array&quot;,
+          &quot;items&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          },
+          &quot;description&quot;: &quot;Hosts that already run and committed the release; the rollout records them with stage done and does not touch them.&quot;
         }
       }
     }
@@ -9968,7 +10018,7 @@
 <details id="PoolUpdatePause"><summary>PoolUpdatePause</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed.&quot;,
+  &quot;description&quot;: &quot;Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed, abort_cleanup_pending (an abort could not confirm that every started host was put back; resume and rollback_host are refused, abort retries or force ends it). needs_attention carries vm_inventory_unavailable, vm_shutdown_failed or vm_start_failed in its message after 5 minutes of failures.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolUpdatePause&quot;,
   &quot;properties&quot;: {
     &quot;code&quot;: {

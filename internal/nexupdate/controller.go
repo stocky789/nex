@@ -27,6 +27,13 @@ func sideJob(kind string) bool { return kind == "fetch" || kind == "controller" 
 // to the appliance swap under this operation's ID. Repeating the request_id after an interruption resumes
 // the same journaled swap.
 func (e *Engine) controllerPipeline(ctx context.Context, id string, req ApplyRequest) (string, error) {
+	// A resumed swap goes on with the release it started with: the channel may have moved since, and the
+	// vmhost journal of this request ID is keyed by that release's sequence and digest.
+	e.mu.Lock()
+	if req.Sequence == 0 {
+		req.Sequence = e.recorded(id).Sequence
+	}
+	e.mu.Unlock()
 	e.setPhase(id, PhaseChecking)
 	src, channel, done, err := e.sourceFor(ctx, req)
 	if err != nil {

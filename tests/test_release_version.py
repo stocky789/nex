@@ -143,6 +143,18 @@ class DevelopmentBuildTests(unittest.TestCase):
         self.assertEqual(release.unreleased_notes(CHANGELOG),
                          "No changes since the last stable release.\n")
 
+    def test_notes_of_a_heading_cut_on_dev_are_that_headings_entries(self):
+        cut = CHANGELOG.replace("## [0.1.6-alpha1]", "## [0.1.7] — 2026-09-11\n\n- Cut entry.\n\n## [0.1.6-alpha1]")
+        self.assertEqual(release.dev_notes(cut, CHANGELOG), "- Cut entry.\n")
+        # Entries added to [Unreleased] after the cut ship in the same builds.
+        staged = cut.replace(
+            "> **Maintainers / agents:** Put new entries here until a release is cut.",
+            "> **Maintainers / agents:** Put new entries here until a release is cut.\n\n- Staged work.")
+        self.assertEqual(release.dev_notes(staged, CHANGELOG), "- Cut entry.\n\n- Staged work.\n")
+        # Once main has published the heading, only [Unreleased] is new.
+        self.assertEqual(release.dev_notes(CHANGELOG, CHANGELOG),
+                         "No changes since the last stable release.\n")
+
     def test_cli_needs_the_build_number_and_the_stable_changelog(self):
         import io
         from contextlib import redirect_stderr

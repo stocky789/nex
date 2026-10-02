@@ -39,7 +39,7 @@ Nex Controller and in the Nex Core host settings; see [software updates](softwar
 | APT archive | `<site>/apt/` | `<site>/apt/dev/`: its own pool and indexes, newest three versions kept |
 | Downloads | `<site>/downloads/<version>/` and `latest` | `<site>/downloads/dev/<version>/` and its own `latest` |
 | Static website | deployed | never deployed |
-| Release notes | the version's changelog section | `[Unreleased]` |
+| Release notes | the version's changelog section | `[Unreleased]`; when the changelog already has a numbered heading ahead of what `main` published (a cut made on `dev`), the notes are that heading's section followed by any entries added under `[Unreleased]` since |
 
 A development build is numbered so it sorts above everything already released and below the
 release `main` publishes next. The suffix is the commit count of `dev`, so each merge is a newer

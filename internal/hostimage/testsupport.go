@@ -16,19 +16,13 @@ import (
 // This file is support for the tests of packages that drive the slot writer (internal/nexupdate).
 // Nothing in the product calls it.
 
-// SyntheticRelease writes a tiny but fully valid release directory (erofs-sized random blocks, a real
-// hash tree, a UKI and an ESP tree) into dir. The seed makes every release different, which gives it
-// a different root hash.
-func SyntheticRelease(dir, label string, sequence int, seed int64, blocks int) error {
-	data := make([]byte, blocks*verityBlock)
-	var key [32]byte
-	binary.LittleEndian.PutUint64(key[:], uint64(seed))
-	rand.NewChaCha8(key).Read(data)
-	salt := bytes.Repeat([]byte{byte(seed)}, 32)
-	p := verityParams{dataBlocks: uint64(blocks), salt: salt}
+// verityImage is a dm-verity hash-tree image (superblock + tree) for data and its root hash: the one writer of
+// the superblock layout, shared by SyntheticRelease and the package's own tests.
+func verityImage(data, salt []byte) ([]byte, string, error) {
+	p := verityParams{dataBlocks: uint64(len(data) / verityBlock), salt: salt}
 	tree, root, err := verityTree(bytes.NewReader(data), p)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	sb := make([]byte, verityBlock)
 	copy(sb, "verity\x00\x00")
@@ -40,10 +34,24 @@ func SyntheticRelease(dir, label string, sequence int, seed int64, blocks int) e
 	le.PutUint64(sb[72:], p.dataBlocks)
 	le.PutUint16(sb[80:], uint16(len(salt)))
 	copy(sb[88:], salt)
-	rootHash := hex.EncodeToString(root)
+	return append(sb, tree...), hex.EncodeToString(root), nil
+}
+
+// SyntheticRelease writes a tiny but fully valid release directory (erofs-sized random blocks, a real
+// hash tree, a UKI and an ESP tree) into dir. The seed makes every release different, which gives it
+// a different root hash.
+func SyntheticRelease(dir, label string, sequence int, seed int64, blocks int) error {
+	data := make([]byte, blocks*verityBlock)
+	var key [32]byte
+	binary.LittleEndian.PutUint64(key[:], uint64(seed))
+	rand.NewChaCha8(key).Read(data)
+	verity, rootHash, err := verityImage(data, bytes.Repeat([]byte{byte(seed)}, 32))
+	if err != nil {
+		return err
+	}
 	files := map[string][]byte{
 		"root.erofs":  data,
-		"root.verity": append(sb, tree...),
+		"root.verity": verity,
 		"roothash":    []byte(rootHash + "\n"),
 		fmt.Sprintf("nex-core_%s_%d.efi", label, sequence): []byte(fmt.Sprintf("uki-%s-%d-%d", label, sequence, seed)),
 		"esp/EFI/BOOT/BOOTX64.EFI":                         []byte("boot-loader"),

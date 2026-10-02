@@ -37,7 +37,7 @@ image set (`.cache/core-image/out/release`, core1 sequence 1), the static `nex-h
 | 2 | Root password from the wizard works | **Not established.** In an earlier boot of the same kind of host an SSH password login with the lab password was rejected and the serial `login` ended before the password prompt. The shadow entry was not inspected before the box ended; treat "root can log in with the password given to the installer" as **unverified and possibly broken** |
 | 3 | Legacy BIOS (SeaBIOS) boot of the installer refused before any disk write | **Pass.** The installer printed "The image edition installs on UEFI firmware only ... No disk has been changed."; SHA-256 of the first and last MiB, and of the whole 25 GiB disk (pre-filled with random data), identical before and after |
 | 4 | Repair on an installed 2-disk host | **Not run** |
-| 5 | Wrong-disk safety (unselected disk untouched) | **Not run** (script written: `image_install_lab.py wrongdisk`) |
+| 5 | Wrong-disk safety (unselected disk untouched) | **Not run** (script written: part of `image_install_lab.py raid1`) |
 | 5 | Interrupted install is re-runnable | **Not run** (script written: `interrupted`) |
 | 6 | Virtual Secure Boot (OVMF `secboot` code, Microsoft keys in db, Nex development certificate in MokList, per phase 0 S5): signed UKI boots, `bootctl` "Secure Boot: enabled (user)", kernel "locked down from EFI Secure Boot" | **Pass** (virtual) |
 | 6 | Unsigned UKI under Secure Boot | **Refused**: "Security Violation -- rejected probably by Secure Boot", no kernel started (virtual) |
@@ -101,8 +101,9 @@ behaviour. Scripts for the first four exist in `tests/integration/image_install_
 
 ```
 python3 tests/integration/image_iso_lab.py --release .cache/core-image/out/release --hostimage .cache/core-image/out/nex-hostimage --out .cache/phase6/iso/nex-image-lab.iso
-python3 tests/integration/image_install_lab.py --iso .cache/phase6/iso/nex-image-lab.iso --work .cache/phase6/lab --payload-sha <printed fixture sha256> single|bios|raid1|repair|wrongdisk|interrupted
-python3 tests/integration/image_sign_release.py --release REL --out SIGNED --key .cache/image-keys/nex-module.key --cert .cache/image-keys/nex-module.crt [--tamper]
+python3 tests/integration/image_install_lab.py --iso .cache/phase6/iso/nex-image-lab.iso --work .cache/phase6/lab --payload-sha <printed fixture sha256> SCENARIO   # one scenario per run: single, bios, raid1, repair (after raid1), interrupted
+python3 tests/integration/image_sign_release.py --release REL --out SIGNED --key .cache/image-keys/nex-module.key --cert .cache/image-keys/nex-module.crt [--tamper]   # --out must be a new directory (a sibling SIGNED.image_sign_release marker lets a rerun replace it)
+python3 tests/integration/image_sign_release.py --release REL1 --out $(dirname SIGNED1)/tampered --tamper --key ... --cert ...   # the tampered-UKI fixture image_sb_lab.py reads (unless --skip-negative)
 python3 tests/integration/image_sb_lab.py --rel1 ... (see its docstring)
 python3 tests/integration/installer-gui-repair.py
 ```

@@ -1559,7 +1559,7 @@
             }
           },
           "500": {
-            "description": "Download, install or restart failed.",
+            "description": "Download, install or restart failed; also arm_incomplete when activate: reboot could not arm every disk and could not undo it (the record stays armed).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1589,7 +1589,7 @@
             }
           },
           "409": {
-            "description": "Refused: update_in_progress, request_conflict, already_armed, scope_unavailable, running_vms (image edition); classic: UpdateApplyResult with status failed.",
+            "description": "Refused: update_in_progress, request_conflict, already_armed, scope_unavailable, running_vms (image edition); insufficient_space is raised as the failed operation's error (before download when free space is below about twice the slot image plus layers and 64 MiB, or on ENOSPC); classic: UpdateApplyResult with status failed. scope controller also: controller_stage_failed, controller_insufficient_storage, controller_shutdown_failed (also when a restarted old image will not stop at the checkpoint or define step).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4415,7 +4415,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "requestBody": {
           "required": false,
@@ -4460,7 +4460,7 @@
             }
           },
           "409": {
-            "description": "Classic edition (unsupported_edition) or a release this host cannot take: wrong_architecture, engine_too_old, bridge_required, unsupported_component, below_rollback_floor.",
+            "description": "Classic edition (unsupported_edition) or a release this host cannot take: wrong_architecture, engine_too_old, bridge_required, unsupported_component, below_rollback_floor, clock_behind, not_newer, unknown_sequence, layers_unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4498,6 +4498,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The update engine failed: trust_invalid, trust_unavailable or internal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -4506,13 +4516,13 @@
       "post": {
         "operationId": "localActivateUpdate",
         "summary": "Arm the staged release and reboot",
-        "description": "Image edition only. Arms the staged release: writes its UKI as nex-core_<label>_<sequence>+3.efi on every boot partition (temp file, flush, rename) beside the running version's UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required.",
+        "description": "Image edition only. Arms the staged release: writes its UKI as nex-core_<label>_<sequence>+3.efi on every boot partition (temp file, flush, rename) beside the running version's UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required. On an armed release that has not booted it re-issues the reboot instead of refusing nothing_staged; after arm_incomplete it first takes the boot entry back from every disk and arms again. 500 arm_incomplete when arming failed on a later disk and could not be undone (the record stays armed, no reboot is scheduled) or when that disarm fails.",
         "security": [
           {
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "requestBody": {
           "required": true,
@@ -4574,6 +4584,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "arm_incomplete: arming failed on a later disk and could not be undone; the release is treated as armed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -4582,13 +4602,13 @@
       "post": {
         "operationId": "localRollbackUpdate",
         "summary": "Arm the retained previous version and reboot",
-        "description": "Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required.",
+        "description": "Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required. A rollback that changed some disks and failed on another is 500 rollback_incomplete: the record is armed on the previous release with its layers, and repeating the call finishes the rest. A rollback that failed before any disk changed is previous_unavailable.",
         "security": [
           {
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "requestBody": {
           "required": true,
@@ -4650,6 +4670,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "rollback_incomplete: some disks were switched before the failure; repeat the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -4658,13 +4688,13 @@
       "post": {
         "operationId": "localCancelUpdate",
         "summary": "Cancel a running apply or discard a staged release",
-        "description": "Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required.",
+        "description": "Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required. In the arm_incomplete state it first tries to take the boot entry back from every disk and then discards the stage; 500 arm_incomplete if a disk cannot be cleaned, 409 already_armed if the release booted.",
         "security": [
           {
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "requestBody": {
           "required": true,
@@ -4718,11 +4748,21 @@
             }
           },
           "409": {
-            "description": "Refused: already_armed, write_in_progress, nothing_to_cancel, request_conflict, unsupported_edition.",
+            "description": "Refused: already_armed, write_in_progress, update_in_progress (an activate or rollback is running), nothing_to_cancel, request_conflict, unsupported_edition.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UpdateRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "arm_incomplete: a boot entry could not be removed from a disk.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4740,7 +4780,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [
           {
@@ -4807,7 +4847,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [],
         "responses": {
@@ -4817,16 +4857,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PoolRolloutResult"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request (invalid_request).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PoolRolloutRefusal"
                 }
               }
             }
@@ -4841,8 +4871,8 @@
               }
             }
           },
-          "404": {
-            "description": "Unknown rollout (rollout_not_found).",
+          "409": {
+            "description": "Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4851,12 +4881,12 @@
               }
             }
           },
-          "409": {
-            "description": "Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.",
+          "503": {
+            "description": "The rollout record is unavailable.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PoolRolloutRefusal"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4868,13 +4898,13 @@
       "post": {
         "operationId": "localStartPoolRollout",
         "summary": "Start or dry-run a pool rollout",
-        "description": "Runs the preflight, then records the rollout; the coordinator in this host's Core stages everywhere, then updates one host at a time, members first and this master last. dry_run:true checks everything and returns the plan, recording nothing. request_id is the rollout ID. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).",
+        "description": "Runs the preflight, then records the rollout; the coordinator in this host's Core stages everywhere, then updates one host at a time, members first and this master last. dry_run:true checks everything and returns the plan (order: hosts still to update; current: hosts that already run and committed the release, recorded with stage done and not touched), recording nothing. A host that runs the release without having committed it is refused as unconfirmed. request_id is the rollout ID. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).",
         "security": [
           {
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [],
         "requestBody": {
@@ -4929,7 +4959,7 @@
             }
           },
           "409": {
-            "description": "Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.",
+            "description": "Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4961,7 +4991,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [
           {
@@ -5016,7 +5046,7 @@
             }
           },
           "409": {
-            "description": "Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.",
+            "description": "Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5032,13 +5062,13 @@
       "post": {
         "operationId": "localControlPoolRollout",
         "summary": "Pause, resume, abort or roll a host back",
-        "description": "Applies one control to the rollout; pause lands after the host being updated, resume re-checks membership, abort leaves committed hosts, rollback_host needs a paused rollout and an activated host. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).",
+        "description": "Applies one control to the rollout (request_id is required, 1 to 128 characters, else 400 invalid_request); pause lands after the host being updated, resume re-checks membership, abort leaves committed hosts, rollback_host needs a paused rollout and an activated host. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member). abort puts back every started host and stays paused abort_cleanup_pending until that is confirmed (the coordinator retries; repeating abort retries at once) or abort with force:true ends it. While pending, resume and rollback_host are 409 abort_cleanup_pending, and force without a pending abort is 409 abort_not_pending.",
         "security": [
           {
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [
           {
@@ -5073,7 +5103,7 @@
             }
           },
           "400": {
-            "description": "Invalid request (invalid_request).",
+            "description": "Invalid request (invalid_request), including a missing or over-long request_id.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5103,7 +5133,7 @@
             }
           },
           "409": {
-            "description": "Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.",
+            "description": "Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5135,7 +5165,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "requestBody": {
           "required": true,
@@ -5211,7 +5241,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "responses": {
           "200": {
@@ -5268,7 +5298,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "requestBody": {
           "required": true,
@@ -5354,7 +5384,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [
           {
@@ -9409,7 +9439,8 @@
             "required": [
               "code",
               "message"
-            ]
+            ],
+            "description": "Latest failure. code: boot_failed (phase rolled_back); while the phase is armed also reboot_failed (the restart after arming failed; activate repeats it), arm_incomplete (arming failed on a later disk and could not be undone) or rollback_incomplete (a rollback changed some disks and failed on another; repeating rollback finishes it)."
           },
           "base_url": {
             "type": "string",
@@ -9436,7 +9467,7 @@
       "PoolUpdateHost": {
         "type": "object",
         "additionalProperties": false,
-        "description": "The master's record of one host's progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0.",
+        "description": "The master's record of one host's progress in a rollout. stage is the next unfinished step: pending, staged, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0. retry_started_at is when the current run of guest shutdown or start failures began (omitted while unset).",
         "x-go-type": "protocol.PoolUpdateHost",
         "properties": {
           "host_id": {
@@ -9472,6 +9503,11 @@
           "attempt": {
             "type": "integer",
             "minimum": 0
+          },
+          "retry_started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the current run of guest-step failures on this host began; omitted while unset. The failure window is judged from here, so step_started_at and the six-hour step timeout are not restarted by it."
           }
         },
         "required": [
@@ -9618,7 +9654,9 @@
         "description": "Body of POST /api/local/v1/pool/updates/rollouts/{id}/control.",
         "properties": {
           "request_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
           },
           "action": {
             "type": "string",
@@ -9631,6 +9669,10 @@
           },
           "host_id": {
             "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Only with action abort: end a pending abort cleanup (abort_cleanup_pending) without confirming that every host was put back; the guests and maintenance still owed stay recorded on the host. 409 abort_not_pending when no abort is pending; invalid_request with any other action."
           }
         },
         "required": [
@@ -9640,7 +9682,7 @@
       },
       "PoolRolloutResult": {
         "type": "object",
-        "description": "A rollout record, or for a dry run the plan: the host order a rollout would use.",
+        "description": "A rollout record, or for a dry run the plan: the hosts a rollout would update, in order, and the hosts that already run and committed the release.",
         "properties": {
           "rollout": {
             "$ref": "#/components/schemas/PoolUpdateRollout"
@@ -9658,7 +9700,15 @@
                 "type": "array",
                 "items": {
                   "type": "string"
-                }
+                },
+                "description": "Hosts still to update, members first and the master last."
+              },
+              "current": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Hosts that already run and committed the release; the rollout records them with stage done and does not touch them."
               }
             }
           }
@@ -9682,7 +9732,7 @@
       "PoolUpdatePause": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed.",
+        "description": "Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed, abort_cleanup_pending (an abort could not confirm that every started host was put back; resume and rollback_host are refused, abort retries or force ends it). needs_attention carries vm_inventory_unavailable, vm_shutdown_failed or vm_start_failed in its message after 5 minutes of failures.",
         "x-go-type": "protocol.PoolUpdatePause",
         "properties": {
           "code": {
@@ -10319,7 +10369,7 @@
       "semantics": "Controller queues an immediate one-shot run of a backup policy for selected VMs. Core records occurrence IDs under pool-backup-runs/; Controller adopts outcomes."
     },
     "nex-core-local layers": {
-      "description": "Root-only on-host management of optional feature layers (nex-zfs, nex-cluster): signed systemd-sysext images that Core verifies and merges over /usr. Not an HTTP operation and not reachable from the Controller or the report protocol. Subcommands: `activate` (what nex-layers.service runs at boot: re-hash every enabled layer against the signed release manifest and the running base build, link the good ones for systemd-sysext, remove links for the rest; always exits 0 so a bad layer never holds boot; writes the volatile report /run/nex/layers/status.json), `list` (JSON array of LayerInfo, one per layer the signed manifest offers or enabled.json records, sorted by name; the store file is size-checked, not re-hashed), `ensure NAME` (prove the store file, record it in enabled.json, link and merge it, run sysusers/tmpfiles/udev reload and enable the layer's units; idempotent) and `disable NAME` (refused while a kernel module, busy unit or busy command of the layer is in use; otherwise disables the layer's units and records it as not wanted; the merge ends at the next boot). Layer failures are reported as layer-unavailable with a reason: not_in_store, base_mismatch, digest_mismatch, signature_invalid, unknown_layer, merge_failed, reboot_required (enabled and verified, but a live merge was not possible), in_use (disable only). State owner: core; the record is /var/lib/nex/layers/enabled.json on the host and the store is /var/lib/nex/layers/store/sha256-<hex>.raw. A fresh Controller learns nothing from it and stores nothing. No HTTP route, command or Inventory field carries layers yet.",
+      "description": "Root-only on-host management of optional feature layers (nex-zfs, nex-cluster): signed systemd-sysext images that Core verifies and merges over /usr. Not an HTTP operation and not reachable from the Controller or the report protocol. Subcommands: `activate` (what nex-layers.service runs at boot: re-hash every enabled layer against the signed release manifest and the running base build, link the good ones for systemd-sysext, remove links for the rest; always exits 0 so a bad layer never holds boot; the boot unit then runs systemd-sysusers, systemd-tmpfiles --create and udevadm control --reload, each non-fatal; writes the volatile report /run/nex/layers/status.json), `list` (JSON array of LayerInfo, one per layer the signed manifest offers or enabled.json records, sorted by name; the store file is size-checked, not re-hashed), `ensure NAME` (prove the store file, record it in enabled.json, link and merge it, run sysusers/tmpfiles/udev reload and enable the layer's units; idempotent) and `disable NAME` (refused while a kernel module, busy unit or busy command of the layer is in use, a busy command fails to run, or a merged layer's metadata cannot be read; otherwise disables the layer's units and records it as not wanted; the merge ends at the next boot). Layer failures are reported as layer-unavailable with a reason: not_in_store, base_mismatch, digest_mismatch, signature_invalid, unknown_layer, merge_failed, reboot_required (enabled and verified, but a live merge was not possible), in_use (disable only). State owner: core; the record is /var/lib/nex/layers/enabled.json on the host and the store is /var/lib/nex/layers/store/sha256-<hex>.raw. A fresh Controller learns nothing from it and stores nothing. No HTTP route, command or Inventory field carries layers yet.",
       "usage": "nex-core-local layers activate|list|ensure NAME|disable NAME",
       "output": {
         "schema": {

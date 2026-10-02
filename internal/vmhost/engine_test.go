@@ -205,6 +205,29 @@ func TestSignedImageAndUnsafeMetadata(t *testing.T) {
 		t.Fatalf("invalid signature accepted: %v", err)
 	}
 }
+
+// The two-disk profile has no manifest to stat, so its image file is checked on its own: a missing
+// component blocks the deployment instead of ending it needs_attention after the journal was written.
+func TestPreflightBlocksAProfileWhoseSystemImageIsNotStaged(t *testing.T) {
+	e := testEngine(t)
+	e.config.SystemImage = filepath.Join(t.TempDir(), "controller-system.img")
+	e.config.SystemImageSHA256 = strings.Repeat("a", 64)
+	fakeCommand(t, "virsh", "exit 0")
+	missing, err := e.Preflight(context.Background(), DeploySpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(e.config.SystemImage, []byte("system image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := e.Preflight(context.Background(), DeploySpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(staged.Blockers) != len(missing.Blockers)-1 {
+		t.Fatalf("the missing image must be a blocker of its own: without it %q, with it %q", missing.Blockers, staged.Blockers)
+	}
+}
 func TestInterruptedRetryNeverRecreates(t *testing.T) {
 	e := testEngine(t)
 	s := validSpec(t)

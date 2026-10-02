@@ -104,6 +104,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   references, verifies and flushes its saved copy, and only counts the new Controller as ready once the virtual machine runs the
   expected image; a pool rollout no longer skips the Controller step when a host cannot read its Controller record; and the rollout
   panel ignores double clicks and out-of-date reads.
+- Second round of review fixes to the image edition (development only, simulated hosts; the changes to the early-boot recovery reboot have not been
+  booted). Updates: a release that is already staged is not staged again; an update that would not fit is refused with `insufficient_space` before
+  anything is downloaded; a half-finished arm is undone on every disk (or reported as `arm_incomplete` and taken back by cancel or activate), a failed
+  restart is recorded and repeated by activate, and a partly done rollback can be repeated; cancel no longer interrupts an activation; a host many trust
+  versions behind catches up through the published intermediate trust documents. Pool rollouts: hosts that already run the release no longer block a
+  new rollout, a rollout with an abort that cannot be confirmed stays open as `abort_cleanup_pending` until it is retried or forced, guest start and
+  shutdown failures pause with a clear reason after five minutes instead of retrying for six hours, and rolling back one host checks quorum first. A
+  Controller swap resumes cleanly when the old Controller restarted by itself. Replacing a system disk is refused on image-edition hosts, disabling a layer
+  whose metadata cannot be read is refused as in use, and a failed boot of a blessed release or Controller guest now reboots on a 60 second pace instead of
+  stopping at a shell. The release tooling refuses a trust version that is not the next one, an expired signer and a key removal that would orphan published
+  signatures, and development release notes include entries added after the version was cut.
 
 ### Bug Fixes
 
@@ -145,10 +156,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The host install no longer includes the guest-creation command-line tool, `sudo` or the
   cluster witness server, none of which the host uses; this trims about 46 MiB of installed
   packages. Guests are still created through Core, and the witness is still hosted by the Controller.
-- The `nex-core-local` package build can now leave the Controller appliance image out of the package and write it as a
-  separate, content-addressed download for image-edition hosts (`--appliance-packaging split`). The default build, and
-  every Classic-edition install, still carries the appliance inside the package. Core reads the separate copy from
-  `/var/lib/nex/payload/<digest>/` only when the package does not contain one.
+- The `nex-core-local` package always carries the Controller appliance image again (the short-lived option to leave it out and
+  write it as a separate, content-addressed download was removed). Image-edition hosts take the Controller image from the release;
+  the payload folder `/var/lib/nex/payload/<digest>/` is now used only for that image, not as a fallback for the package's own copy.
 - Image edition (development work, tried only in a disposable guest): a new release that fails its start-up check now gets its
   three tries before the host falls back to the previous release, instead of being given up after one boot; the boot partition is
   no longer mounted automatically on the host (Core mounts it only while it works); and when two update tools touch the update

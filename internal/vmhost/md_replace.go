@@ -51,17 +51,39 @@ var (
 	mdDiscoverDevice = DiscoverZFSDevices
 	mdReadArrays     = func() protocol.HardwareMDArrays { return ReadMDArrays("/") }
 	mdBootEFIRoot    = "/boot/efi"
+	mdOSReleasePath  = "/usr/lib/os-release"
 )
+
+// mdImageEdition reports a host running the immutable image (IMAGE_ID=nex-core in its static os-release).
+// Its disks carry A/B root and verity partitions next to the data mirror member; this flow replicates the
+// table and re-adds the mirror members only, so it must not run there until it also copies and verifies
+// the slots.
+func mdImageEdition() bool {
+	b, err := os.ReadFile(mdOSReleasePath)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if key, value, ok := strings.Cut(line, "="); ok && key == "IMAGE_ID" {
+			return strings.Trim(strings.TrimSpace(value), `"'`) == "nex-core"
+		}
+	}
+	return false
+}
 
 // espPartitionType is the GPT type GUID of an EFI System Partition, as lsblk reports it.
 const espPartitionType = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 
 // Replace rebuilds request.Array onto request.Device. A redelivered operation ID replays its
 // recorded outcome; an interrupted one resumes, and an array that already has the
-// replacement as a member is adopted rather than wiped again.
+// replacement as a member is adopted rather than wiped again. An image-edition host is refused
+// before anything is read or written (see mdImageEdition).
 func (r *SystemDiskReplacer) Replace(ctx context.Context, request protocol.SystemDiskReplaceRequest) error {
 	if err := request.Valid(); err != nil {
 		return err
+	}
+	if mdImageEdition() {
+		return errors.New("replacing a system disk is not available on the image edition yet: it rebuilds the data mirror but does not copy the root and verity slots to the replacement disk, so that disk could not boot the host; nothing was changed")
 	}
 	if err := os.MkdirAll(r.stateDir, 0700); err != nil {
 		return errors.New("Nex Core could not open its system disk replacement journal")

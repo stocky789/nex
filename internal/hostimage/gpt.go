@@ -114,6 +114,17 @@ func (t *Table) Find(label string) (Partition, bool) {
 }
 
 // Offset and Size are the partition's byte range.
+// ByIndex is the entry with the given 1-based entry number. Parts holds only the used entries, so the
+// number is not a position in it.
+func (t *Table) ByIndex(index int) (Partition, bool) {
+	for _, p := range t.Parts {
+		if p.Index == index {
+			return p, true
+		}
+	}
+	return Partition{}, false
+}
+
 func (t *Table) Offset(p Partition) int64 { return int64(p.FirstLBA) * int64(t.SectorSize) }
 func (t *Table) Size(p Partition) int64 {
 	return int64(p.LastLBA-p.FirstLBA+1) * int64(t.SectorSize)

@@ -84,6 +84,12 @@ type Shadowed struct {
 // hides later image changes, so the audit is what tells an operator which files no longer follow
 // updates. Files that only exist in the upper layer are local configuration and are not reported.
 func AuditEtc(lower, upper string) ([]Shadowed, error) {
+	// A lower that is missing would make every upper file look local-only and the audit report nothing.
+	if st, err := os.Stat(lower); err != nil {
+		return nil, fmt.Errorf("etc-audit: image /etc: %w", err)
+	} else if !st.IsDir() {
+		return nil, fmt.Errorf("etc-audit: image /etc %s is not a directory", lower)
+	}
 	var out []Shadowed
 	err := filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {

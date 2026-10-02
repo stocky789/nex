@@ -213,8 +213,8 @@ for marker, label in (("<<'TARGET'", 'TARGET'), ("<<'ESP'", 'ESP')):
 # Gate on the installed root being an md device, not on any leftover array in mdstat.
 assert 'mdadm' in packages
 assert "case $root in /dev/md*)" in late
-assert "mdadm --detail --scan \"$root\" \"$(findmnt -no SOURCE /var)\"" in late and 'update-initramfs -u' in late, \
-    'the initramfs must know both the root and the /var array'
+assert 'mdadm --detail --scan "$root" ${var:+"$var"}' in late and 'findmnt -no SOURCE /var' in late and 'update-initramfs -u' in late, \
+    'the initramfs must know both the root and (when it is its own md mount) the /var array'
 assert '/usr/local/sbin/nex-sync-esp' in late and 'DPkg::Post-Invoke' in late
 assert 'mkdir -p "$copy/EFI"' in late, 'a freshly formatted ESP has no EFI directory to copy into'
 assert 'sed -i' in late and 'UUID=' in late.split('nex-sync-esp', 1)[1], \

@@ -274,9 +274,10 @@ type fakePlatform struct {
 	mu                        sync.Mutex
 	booted                    Booted
 	entries                   []hostimage.UKIEntry
-	staged, armed             []int
+	staged, armed, disarmed   []int
 	rolled                    [][2]int
 	stageErr, armErr, rollErr error
+	disarmErr                 error
 	stageGate                 chan struct{}
 }
 
@@ -308,6 +309,22 @@ func (f *fakePlatform) Arm(_ context.Context, rel *hostimage.Release) error {
 	}
 	f.armed = append(f.armed, rel.Manifest.Sequence)
 	f.entries = append(f.entries, hostimage.UKIEntry{Sequence: rel.Manifest.Sequence, Counted: true, Tries: 3})
+	return nil
+}
+func (f *fakePlatform) Disarm(_ context.Context, rel ReleaseRecord) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.disarmErr != nil {
+		return f.disarmErr
+	}
+	f.disarmed = append(f.disarmed, rel.Sequence)
+	kept := f.entries[:0]
+	for _, u := range f.entries {
+		if u.Sequence != rel.Sequence {
+			kept = append(kept, u)
+		}
+	}
+	f.entries = kept
 	return nil
 }
 func (f *fakePlatform) Rollback(_ context.Context, from, to ReleaseRecord) error {
@@ -598,11 +615,11 @@ func TestChannelReplayAndRollbackFloor(t *testing.T) {
 	_, err = r.eng.Check(context.Background())
 	wantCode(t, err, "below_rollback_floor")
 	// Applying an older release by sequence is below the floor too.
-	_, _, err = r.apply("req-floor-0001", func(a *ApplyRequest) { a.Sequence = 2 })
-	if err == nil {
-		if op := r.wait(); op.Error == nil || op.Error.Code != "below_rollback_floor" {
-			t.Fatalf("%+v", op)
-		}
+	if _, _, err = r.apply("req-floor-0001", func(a *ApplyRequest) { a.Sequence = 2 }); err != nil {
+		t.Fatal(err)
+	}
+	if op := r.wait(); op.Error == nil || op.Error.Code != "below_rollback_floor" {
+		t.Fatalf("%+v", op)
 	}
 }
 
@@ -634,33 +651,107 @@ func TestTrustRotation(t *testing.T) {
 }
 
 func TestTrustRefusals(t *testing.T) {
-	for name, mutate := range map[string]func(r *rig){
-		"newer trust signed by a release key, not a root key": func(r *rig) {
+	for name, tc := range map[string]struct {
+		mutate func(r *rig)
+		code   string
+	}{
+		"newer trust signed by a release key, not a root key": {func(r *rig) {
 			r.pub.trust.Version = 2
 			raw, _ := json.Marshal(r.pub.trust)
 			r.pub.write("trust.json", raw)
 			r.pub.write("trust.sig", ed25519.Sign(r.pub.relKey, raw))
-		},
-		"newer trust that skips a version": func(r *rig) {
+		}, "bad_signature"},
+		"newer trust that skips a version the source does not carry": {func(r *rig) {
 			r.pub.trust.Version = 3
 			r.pub.publishTrust()
-		},
-		"newer trust without a release key": func(r *rig) {
+		}, "trust_gap"},
+		"newer trust without a release key": {func(r *rig) {
 			r.pub.trust = TrustDoc{Format: 1, Version: 2, Keys: r.pub.trust.Keys[:1]}
 			r.pub.publishTrust()
-		},
+		}, "metadata_invalid"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t)
 			r.pub.release(2, "v2", true)
-			mutate(r)
+			tc.mutate(r)
 			_, err := r.eng.Check(context.Background())
-			var re *Error
-			if !errors.As(err, &re) || (re.Code != "bad_signature" && re.Code != "trust_gap" && re.Code != "metadata_invalid") {
-				t.Fatalf("%v", err)
-			}
+			wantCode(t, err, tc.code)
 		})
 	}
+}
+
+// publishTrustLink publishes one version of the trust under its own name (trust.<n>.json and .sig) as the
+// publisher does, signed by key; the latest one is also published as trust.json.
+func (p *publisher) publishTrustLink(doc TrustDoc, key ed25519.PrivateKey, latest bool) {
+	p.t.Helper()
+	name := "trust." + itoa(doc.Version)
+	p.signedFile(name+".json", doc, key, name+".sig")
+	if latest {
+		p.signedFile("trust.json", doc, key, "trust.sig")
+	}
+}
+
+// A host that missed trust versions catches up link by link: every document in between is fetched and
+// must be signed by a root key of the one before it, so a root key that only the middle document names
+// is the one that vouches for the last.
+func TestTrustCatchesUpThroughTheIntermediateDocuments(t *testing.T) {
+	day := 24 * time.Hour
+	rootPub2, rootKey2 := keyPair(t)
+	build := func(r *rig) (v2, v3 TrustDoc) {
+		v2 = TrustDoc{Format: 1, Version: 2, Keys: []TrustKey{
+			NewTrustKey("root-1", "root", r.pub.rootPub, t0.Add(365*day)),
+			NewTrustKey("root-2", "root", rootPub2, t0.Add(900*day)),
+			NewTrustKey("rel-1", "release", r.pub.relPub, t0.Add(180*day)),
+		}}
+		// Version 3 drops the original root key: only root-2, named by version 2, can have signed it.
+		v3 = TrustDoc{Format: 1, Version: 3, Keys: []TrustKey{
+			NewTrustKey("root-2", "root", rootPub2, t0.Add(900*day)),
+			NewTrustKey("rel-1", "release", r.pub.relPub, t0.Add(180*day)),
+		}}
+		return v2, v3
+	}
+	t.Run("the chain is walked and persisted", func(t *testing.T) {
+		r := newRig(t)
+		r.pub.release(2, "v2", true)
+		v2, v3 := build(r)
+		r.pub.publishTrustLink(v2, r.pub.rootKey, false)
+		r.pub.publishTrustLink(v3, rootKey2, true)
+		if st, err := r.eng.Check(context.Background()); err != nil || st.Available == nil {
+			t.Fatalf("%+v %v", st, err)
+		}
+		if got := readUpdate(t, r.cfg.Dir).TrustVersion; got != 3 {
+			t.Fatalf("adopted trust version %d, want 3", got)
+		}
+		r.restart() // the persisted chain loads in order and still verifies
+		r.advance(2 * time.Minute)
+		if _, err := r.eng.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("an intermediate the old root did not sign is refused", func(t *testing.T) {
+		r := newRig(t)
+		r.pub.release(2, "v2", true)
+		v2, v3 := build(r)
+		_, strangerKey := keyPair(t)
+		r.pub.publishTrustLink(v2, strangerKey, false)
+		r.pub.publishTrustLink(v3, rootKey2, true)
+		_, err := r.eng.Check(context.Background())
+		wantCode(t, err, "bad_signature")
+		if got := readUpdate(t, r.cfg.Dir).TrustVersion; got != 0 {
+			t.Fatalf("a refused chain was adopted: version %d", got)
+		}
+		if _, err := os.Stat(filepath.Join(r.cfg.TrustDir, "trust.2.json")); err == nil {
+			t.Fatal("a refused chain was persisted")
+		}
+	})
+	t.Run("a missing intermediate is a gap", func(t *testing.T) {
+		r := newRig(t)
+		r.pub.release(2, "v2", true)
+		_, v3 := build(r)
+		r.pub.publishTrustLink(v3, rootKey2, true)
+		_, err := r.eng.Check(context.Background())
+		wantCode(t, err, "trust_gap")
+	})
 }
 
 // ---- apply, activate, boot, rollback ----

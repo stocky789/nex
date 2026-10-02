@@ -107,7 +107,12 @@ systemctl disable zfs-import-scan.service || true
 # grub-efi-amd64 only ever writes the one mounted ESP.
 root=$(findmnt -no SOURCE /)
 case $root in /dev/md*)
-    { /usr/share/mdadm/mkconf | grep -v '^ARRAY'; mdadm --detail --scan "$root" "$(findmnt -no SOURCE /var)"; } > /etc/mdadm/mdadm.conf
+    # /var is named only when it is its own md mount; an empty or non-md argument would fail mdadm.
+    var=$(findmnt -no SOURCE /var 2>/dev/null || true)
+    case $var in /dev/md*) ;; *) var= ;; esac
+    # Build the file aside so a failed scan never leaves a truncated mdadm.conf.
+    { /usr/share/mdadm/mkconf | grep -v '^ARRAY'; mdadm --detail --scan "$root" ${var:+"$var"}; } > /etc/mdadm/mdadm.conf.new
+    mv /etc/mdadm/mdadm.conf.new /etc/mdadm/mdadm.conf
     update-initramfs -u
     cat > /usr/local/sbin/nex-sync-esp <<'ESP'
 #!/bin/sh

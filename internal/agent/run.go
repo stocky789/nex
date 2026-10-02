@@ -648,8 +648,12 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	}
 	if s.State.StorageProtocolReady {
 		// System-disk replace opens storage/discover for the spare list, so it shares the
-		// storage handshake gate with discovery and ZFS provision/replace.
-		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.ZFSProvisionCapability, protocol.ZFSReplaceCapability, protocol.SystemDiskReplaceCapability)
+		// storage handshake gate with discovery and ZFS provision/replace. The image edition's
+		// slot layout is not rebuilt by it yet, so an image host never offers it.
+		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.ZFSProvisionCapability, protocol.ZFSReplaceCapability)
+		if !imageUpdateAvailable() {
+			capabilities = append(capabilities, protocol.SystemDiskReplaceCapability)
+		}
 		if inv.Managed != nil {
 			managed := inv.Managed
 			if !s.State.ZFSProvisionProtocolReady {

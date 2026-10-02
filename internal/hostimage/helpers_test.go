@@ -2,14 +2,9 @@
 package hostimage
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"io"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,58 +59,18 @@ func sandbox(t *testing.T) string {
 // makeVerityImage returns a hash-tree image (superblock + tree) for data and the root hash.
 func makeVerityImage(t *testing.T, data, salt []byte) ([]byte, string) {
 	t.Helper()
-	p := verityParams{dataBlocks: uint64(len(data) / verityBlock), salt: salt}
-	tree, root, err := verityTree(bytes.NewReader(data), p)
+	image, root, err := verityImage(data, salt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sb := make([]byte, verityBlock)
-	copy(sb, "verity\x00\x00")
-	le.PutUint32(sb[8:], 1)
-	le.PutUint32(sb[12:], 1)
-	copy(sb[32:], "sha256")
-	le.PutUint32(sb[64:], verityBlock)
-	le.PutUint32(sb[68:], verityBlock)
-	le.PutUint64(sb[72:], p.dataBlocks)
-	le.PutUint16(sb[80:], uint16(len(salt)))
-	copy(sb[88:], salt)
-	return append(sb, tree...), hex.EncodeToString(root)
-}
-
-func sum(b []byte) ManifestFile {
-	h := sha256.Sum256(b)
-	return ManifestFile{SHA256: hex.EncodeToString(h[:]), Size: int64(len(b))}
+	return image, root
 }
 
 // makeRelease writes a verified-format release directory. seed makes every release different.
 func makeRelease(t *testing.T, label string, sequence int, seed int64, blocks int) string {
 	t.Helper()
 	dir := t.TempDir()
-	data := make([]byte, blocks*verityBlock)
-	rand.New(rand.NewSource(seed)).Read(data)
-	verity, root := makeVerityImage(t, data, bytes.Repeat([]byte{byte(seed)}, 32))
-	uki := fmt.Sprintf("nex-core_%s_%d.efi", label, sequence)
-	files := map[string][]byte{
-		"root.erofs":               data,
-		"root.verity":              verity,
-		"roothash":                 []byte(root + "\n"),
-		uki:                        []byte("uki-" + label + fmt.Sprint(seed)),
-		"esp/EFI/BOOT/BOOTX64.EFI": []byte("boot-loader"),
-		"esp/loader/loader.conf":   []byte("timeout 0\n"),
-	}
-	m := Manifest{Label: label, Sequence: sequence, BuildID: label, RootHash: root, Files: map[string]ManifestFile{}}
-	for name, b := range files {
-		p := filepath.Join(dir, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, b, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		m.Files[name] = sum(b)
-	}
-	mb, _ := json.Marshal(m)
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), mb, 0o644); err != nil {
+	if err := SyntheticRelease(dir, label, sequence, seed, blocks); err != nil {
 		t.Fatal(err)
 	}
 	return dir

@@ -152,12 +152,25 @@ keeping the VM UUID and management MAC for life:
   (`var/lib/nex-controller` and `etc/nex-controller`; the latter is a bind mount from the data disk). No new Controller-owned data.
 
 Nex Core replaces the system image with a journaled, resumable swap under one operation ID
-(`POST /api/local/v1/updates/apply` with `scope:"controller"`, or the pool rollout's controller_first step): graceful guest-agent
-shutdown (never forced), a reflink checkpoint of `controller-data.qcow2`, the domain redefined with the new system disk, start, a
-readiness probe of the UI for 10 minutes, then commit, keeping the old image and the checkpoint until the next update. If the new
-image is not ready the checkpoint and the old image are restored and probed; if that also fails the VM stays stopped
-(`needs_attention`). `host-recovery export` and `restore` accept this layout: they check the read-only system disk and the data
-disk named in the deployment journal. `controller-recovery` inside the guest is unchanged, because it works on the same two paths.
+(`POST /api/local/v1/updates/apply` with `scope:"controller"`, or the pool rollout's controller_first step). Before it stops
+anything it runs the ownership checks every other Controller action uses (the deployment's recorded paths and bridge, a plain qcow2
+data disk on local ext4, XFS or Btrfs that no other libvirt domain references) and checks that the data checkpoint fits. The steps are
+then: graceful guest-agent shutdown (the Controller is not forced off here; a shutdown already under way is waited for), a checkpoint of
+`controller-data.qcow2`, the domain redefined with the new system disk, start, a readiness probe of the UI for 10 minutes, then commit,
+keeping the old image and the checkpoint until the next update. The checkpoint is `cp --reflink=auto`: it shares extents on Btrfs (and on
+XFS made with reflink), but on ext4 it is a full copy of the data disk's allocated bytes, and a restore copies it again, so twice that
+size must be free; the swap refuses with `controller_insufficient_storage` before it stops the Controller when it is not. If the new
+image is not ready, the failed guest is stopped gracefully and the checkpoint and the old image are restored and probed. A new image
+that never booted far enough to run the guest agent cannot be stopped gracefully; because the checkpoint replaces everything it wrote it is
+forced off (`virsh destroy`) once the graceful request was refused or timed out, and it is the only guest a swap ever forces. If the old
+image does not come back either, the VM stays stopped (`needs_attention`). A service restart during a step interrupts the swap and
+repeating the request resumes it. A guest that accepted the pre-swap shutdown request but had not stopped when the 10-minute wait ended
+fails the swap (`controller_shutdown_failed`, nothing changed); the request cannot be withdrawn, so the guest may still power off
+afterwards and is then started with Nex Core's local power control. If power is lost in the middle of a swap and libvirt autostarts the
+previous image again, repeating the request stops it gracefully (never forced), takes the data checkpoint again so nothing it wrote is lost,
+and carries on; if it will not stop the request ends with `controller_shutdown_failed` and it keeps running. `host-recovery export` and `restore` accept this layout: they check
+the read-only system disk and the data disk named in the deployment journal. `controller-recovery` inside the guest is unchanged, because
+it works on the same two paths.
 
 What the profile no longer receives: the cloud-init bootstrap of `apply-update`, `nex-controller-update.path`/`.service` and
 `/etc/nex/updates.conf` (`appendUpdateBootstrap` is skipped when the deployment has a system image; `TestProfileSeedCarriesNoUpdateHelper`).

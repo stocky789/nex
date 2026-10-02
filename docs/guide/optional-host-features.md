@@ -8,17 +8,18 @@ stays small and a host that never uses a feature does not carry it. The layer ma
 and exercised in a disposable QEMU/KVM guest; it has not run on a booted installed image, on Secure Boot, or on
 physical hardware. The Classic edition has no layers and ignores this page.
 
-Not available yet, so do not expect it: a Controller screen or API for layers, automatic enabling when you create a
-ZFS pool, and any installer or update step that places the layer files on the host. The `nex-zfs` layer is for internal
-lab use only until the project owner decides on redistributing prebuilt OpenZFS modules (see
-[Licensing](../LICENSING.md)). `nex-cluster` has been written but not built.
+Not available yet, so do not expect it: a Controller screen or API for layers and automatic enabling when you create a
+ZFS pool. The `nex-zfs` layer is for internal lab use only until the project owner decides on redistributing prebuilt
+OpenZFS modules (see [Licensing](../LICENSING.md)). `nex-cluster` has been built and merged in disposable lab guests (Corosync
+and Pacemaker started); the product's `dlm-controld` and libvirt builds were not part of it, so GFS2 volumes were not exercised.
 
 ## Prerequisites
 
 - An image-edition host you can log in to as root (console or SSH).
-- The layer file already in the host's layer store, `/var/lib/nex/layers/store/sha256-<digest>.raw`, next to the signed
-  release manifest for the running image under `/var/lib/nex/layers/releases/<build id>/`. Nothing places them
-  automatically yet; a lab operator copies them.
+- The layer file in the host's layer store, `/var/lib/nex/layers/store/sha256-<digest>.raw`, next to the signed
+  release manifest for the running image under `/var/lib/nex/layers/releases/<build id>/`. The update engine stages
+  both together with the system image when it applies a release that carries layers (covered by unit tests; it has not
+  staged a layered release on a booted installed image). The lab runs behind this page laid the files in by hand.
 - No virtual machine or storage pool depends on the feature you intend to switch off.
 
 ## Steps
@@ -59,7 +60,8 @@ nothing here.
 
 ## Troubleshooting
 
-- **`layer-unavailable: NAME: not_in_store`.** The layer file is not on this host. Place it, then run `ensure` again.
+- **`layer-unavailable: NAME: not_in_store`.** The layer file is not on this host. Apply a release that carries it (the
+  update engine stages it) or place it by hand, then run `ensure` again.
 - **`base_mismatch`.** The layer was built for a different system image build. A layer only works with the exact build
   it was made for; use the layer that belongs to the running image. After a rollback this is expected for the newer
   base's layer.
@@ -79,6 +81,9 @@ Exercised in a disposable guest only (direct kernel boot, no Secure Boot): `ensu
 the modules, `disable` was refused while a pool existed, a reboot re-verified and merged the layer, and a flipped byte in
 the stored file was refused as `digest_mismatch` by `layers activate`. In that test the layer, merged earlier in the same
 boot, stayed merged and `layers list` showed it as `merged` but not `verified`: the check protects the next merge, it does
-not remove a running layer. A unit test (not a VM) shows that, after a reboot, a tampered file is neither linked nor merged. Not exercised in a guest: a reboot with a tampered file, an installed image edition, Secure Boot module
-enforcement, the `nex-cluster` layer, double-build reproducibility, and the steps above on a real host. See the
+not remove a running layer. A unit test (not a VM) shows that, after a reboot, a tampered file is neither linked nor merged. `nex-cluster`
+was built with the stock Debian cluster packages and live-merged in a disposable three-host lab (Corosync formed a quorate
+cluster; see the [lab record](../qa/image/phase6-lab3.md)); the lab laid its store files in by hand. Not exercised in a guest:
+a reboot with a tampered file, an installed image edition, Secure Boot module enforcement, layer staging by the update engine
+on a booted host, double-build reproducibility of layers, and the steps above on a real host. See the
 [layers QA record](../qa/image/phase2-layers.md) and the [command contract](../API.md#optional-feature-layers-nex-core-local-layers).

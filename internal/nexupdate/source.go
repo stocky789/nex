@@ -218,7 +218,7 @@ func fetchBlob(ctx context.Context, src Source, name string, c Component, dir st
 				continue
 			}
 		}
-		return "", err
+		return "", diskFull(err)
 	}
 }
 

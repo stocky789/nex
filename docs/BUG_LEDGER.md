@@ -12136,3 +12136,21 @@ of real storage or hardware certification.
 - Fix: `releaseRetainedOriginals` checks pool and host and refuses while another change of the VM is pending or `needs_attention`; `poolVMDeleteMatchesOwner` restores the VM ID match.
 - Regression: `TestReleaseRetainedRefusesForeignRequestAndUnresolvedChange`: `go test ./internal/vmhost -run ReleaseRetained -count=1`.
 - Avoid: relying on the Controller's admission instead of the executing Core's own checks.
+
+
+## BUG-1867 — Recording a management controller stopped the agent at its next restart
+
+- Date: 2026-10-02.
+- Symptom: in the three-host pool lab, a master's embedded agent stopped at its first restart after a
+  fence profile was recorded, with "controller reused command ID with different input".
+- Root cause: `ExecutePoolFenceProfile` worked directly on the command's `PoolCommand`, which is the
+  same object the agent's journal holds for that operation. Pinning the management controller's
+  certificate rewrote the fence in place, so the Controller's replay of the same operation no
+  longer matched the journaled command byte for byte.
+- Fix: `ExecutePoolFenceProfile` works on a copy of the request; the journaled command is never
+  rewritten.
+- Regression: `TestRecordingAManagementControllerLeavesTheJournaledCommandUntouched`
+  (`internal/agent/pool_fence_replay_test.go`) marshals the command before and after execution and
+  requires the bytes to match; it passes after the fix. The failing-before run was not repeated
+  for this entry; the defect was observed in the lab (`docs/qa/image/phase6-lab3.md`).
+- Avoid: mutating a command's request in an executor; the agent journal compares replays against it.

@@ -3,7 +3,8 @@
 """Pin and check the package closure of the Nex Core base image.
 
   scripts/image-lock.py write [--debs DIRS] [image/out/base.dpkg-list]   record the resolved closure as image/packages.lock
-  scripts/image-lock.py check [--debs DIRS] [image/out/base.dpkg-list]   fail on drift, a missing requested package or a denylisted one
+  scripts/image-lock.py check [--debs DIRS] [--snapshot-only] [image/out/base.dpkg-list]
+                                                                         fail on drift, a missing requested package or a denylisted one
 
 image/packages.lock holds "name<TAB>version" for every package of the built tree (dpkg-query output saved by
 image/mkosi.finalize). With the pinned snapshot (image/snapshot) the same lock must come out of every build;
@@ -12,7 +13,10 @@ image/mkosi.finalize). With the pinned snapshot (image/snapshot) the same lock m
 Packages built by Nex (nex-core-local, the matched libvirt) come from local .deb files, not the snapshot. DIRS is a
 colon-separated list of directories with those files (default: $NEX_PACKAGE_DIRS, what image/build.sh installs). A
 built package that has a .deb there is locked as "name<TAB>version<TAB>origin=nex<TAB>sha256=<hex of the file>";
-with DIRS, `check` also requires the file to hash to the locked value.
+with DIRS, `check` also requires the file to hash to the locked value. `--snapshot-only` leaves the packages locked as
+origin=nex out of the drift comparison: a build without them, or with a freshly built deb, is still gated on the
+denylist, the requested set and every snapshot package, and a .deb that carries the name of a snapshot package fails
+(image/build.sh runs it that way after the base step; its release step runs the full check with the release's debs).
 """
 import hashlib
 import os
@@ -67,6 +71,9 @@ def main(argv):
     if not argv or argv[0] not in ("write", "check"):
         sys.exit(__doc__)
     argv, dirs = argv[:], os.environ.get("NEX_PACKAGE_DIRS", "")
+    snapshot_only = "--snapshot-only" in argv
+    if snapshot_only:
+        argv.remove("--snapshot-only")
     if "--debs" in argv:
         i = argv.index("--debs")
         dirs = argv[i + 1]
@@ -90,6 +97,12 @@ def main(argv):
         print(f"wrote {LOCK}: {len(wanted)} packages, {sum(bool(e) for _, e in wanted.values())} built by Nex")
         return
     locked = read_list(LOCK) if os.path.exists(LOCK) else {}
+    if snapshot_only:
+        # Only what the lock records as Nex-built is exempt: a .deb named like a snapshot package is compared
+        # (its file hash never matches a lock row without sha256), whatever version it carries.
+        nex = {name for name, (_, extra) in locked.items() if extra}
+        wanted = {name: w for name, w in wanted.items() if name not in nex}
+        locked = {name: w for name, w in locked.items() if name not in nex}
     for name in names(os.path.join(IMAGE, "base.packages")):
         if name not in built:
             problems.append(f"requested package {name} is not in the build")

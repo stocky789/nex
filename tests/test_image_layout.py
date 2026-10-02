@@ -1,7 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Consistency of the image sources: the places that must agree with internal/hostimage and with each other."""
+import importlib.util
 import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -10,6 +16,24 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def read(*parts):
     with open(os.path.join(ROOT, *parts)) as f:
         return f.read()
+
+
+def load_release(label="dev", sequence="0"):
+    """image/release.py imported fresh with the build's label and sequence in the environment."""
+    old = {k: os.environ.get(k) for k in ("NEX_LABEL", "NEX_SEQUENCE")}
+    os.environ.update(NEX_LABEL=label, NEX_SEQUENCE=sequence)
+    try:
+        spec = importlib.util.spec_from_file_location("nex_release_under_test", os.path.join(ROOT, "image", "release.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
+def go_const(text, name):
+    return re.search(rf"\b{name}\s*=\s*([^\s/]+)", text).group(1)
 
 
 def names(*parts):
@@ -69,10 +93,58 @@ class ImageLayoutTest(unittest.TestCase):
         self.assertIn("ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key", unit)
         self.assertIn("Before=ssh.service", unit)
 
-    def test_emergency_and_rescue_reboot_in_the_initrd(self):
+    def test_initrd_failure_ends_in_a_reboot_never_a_locked_shell(self):
+        # The initrd root account is locked and SYSTEMD_SULOGIN_FORCE is not set, so emergency/rescue would end at a
+        # console that refuses the login. A counted boot (sd-boot sets LoaderBootCountPath) reboots at once so the
+        # counter advances; a blessed one (and the Controller guest) reboots after a pause. Exactly one unit runs.
         d = os.path.join("image", "initrd", "usr", "lib", "systemd", "system")
-        for unit in ("emergency.service.d", "rescue.service.d"):
-            self.assertIn("systemctl --force reboot", read(d, unit, "10-nex-reboot.conf"))
+        var = "/sys/firmware/efi/efivars/LoaderBootCountPath-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
+        counted = read(d, "nex-initrd-reboot.service")
+        paced = read(d, "nex-initrd-reboot-paced.service")
+        self.assertIn("ConditionPathExists=" + var, counted)
+        self.assertIn("ConditionPathExists=!" + var, paced)
+        self.assertIn("ExecStart=/usr/bin/systemctl --force reboot", counted)
+        self.assertIn("ExecStart=/usr/bin/systemctl --force reboot", paced)
+        self.assertRegex(paced, r"(?m)^ExecStartPre=/usr/bin/sleep [1-9]\d*$")
+        self.assertNotIn("ExecStartPre", counted)
+        for target in ("emergency.service.d", "rescue.service.d"):
+            drop = read(d, target, "10-nex-reboot.conf")
+            for name in ("nex-initrd-reboot.service", "nex-initrd-reboot-paced.service"):
+                self.assertRegex(drop, r"(?m)^Wants=.*\b" + re.escape(name))
+                self.assertRegex(drop, r"(?m)^After=.*\b" + re.escape(name))
+            self.assertNotIn("ExecStart", drop)
+
+    def test_boot_check_ends_before_its_unit_timeout(self):
+        script = read("image", "mkosi.extra", "usr", "libexec", "nex", "nex-boot-check")
+        unit = read("image", "mkosi.extra", "usr", "lib", "systemd", "system", "nex-boot-check.service")
+        budget = int(re.search(r"NEX_BOOT_CHECK_BUDGET:-(\d+)", script).group(1))
+        limit = int(re.search(r"^TimeoutStartSec=(\d+)$", unit, re.M).group(1))
+        # budget + one command timeout (30 s) + the bad mark (60 s) must leave the script, not systemd, the last word.
+        self.assertGreaterEqual(limit, budget + 30 + 60 + 120)
+
+    def test_boot_check_gives_up_when_its_time_budget_is_used_up(self):
+        if os.geteuid() == 0:
+            self.skipTest("the script writes below /var and /etc; run it unprivileged")
+        script = os.path.join(ROOT, "image", "mkosi.extra", "usr", "libexec", "nex", "nex-boot-check")
+        with tempfile.TemporaryDirectory() as stubs:
+            for name, body in (("systemctl", "exit 1"), ("findmnt", "echo ext4")):
+                with open(os.path.join(stubs, name), "w") as f:
+                    f.write("#!/bin/sh\n" + body + "\n")
+                os.chmod(os.path.join(stubs, name), 0o755)
+            env = dict(os.environ, PATH=stubs + os.pathsep + os.environ["PATH"], NEX_BOOT_CHECK_TRIES="1000",
+                       NEX_BOOT_CHECK_WAIT="1", NEX_BOOT_CHECK_BUDGET="2")
+            started = time.monotonic()
+            run = subprocess.run(["sh", script], env=env, capture_output=True, text=True, timeout=60)
+        # 1000 tries of 1 s would take far longer: only the elapsed-time budget ends the loop.
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("nex-boot-check:", run.stderr)
+
+    def test_root_home_is_a_link_to_the_directory_tmpfiles_creates(self):
+        post = read("image", "mkosi.postinst.chroot")
+        target = re.search(r"^ln -s (\S+) /root$", post, re.M).group(1)
+        self.assertRegex(read("image", "mkosi.extra", "usr", "lib", "tmpfiles.d", "nex.conf"),
+                         rf"(?m)^d /{target} 0700 root root ")
 
     def test_initrd_assembles_any_nex_data_mirror(self):
         conf = read("image", "initrd", "etc", "mdadm", "mdadm.conf")
@@ -83,6 +155,53 @@ class ImageLayoutTest(unittest.TestCase):
         py, go = read("image", "release.py"), read("internal", "hostimage", "release.go")
         self.assertIn('uki = f"nex-core_{LABEL}_{SEQ}.efi"', py)
         self.assertIn("nex-core_[A-Za-z0-9.~_-]+_[0-9]+", go)
+        self.assertIn('"nex-core_%s_%d%s.efi"', read("internal", "hostimage", "update.go"))
+
+    def test_release_label_is_one_the_go_reader_accepts(self):
+        rel = load_release()
+        pattern = re.search(r"nex-core_(\[[^\]]+\]\+)_", read("internal", "hostimage", "release.go")).group(1)
+        self.assertEqual(rel.LABEL_RE, pattern)
+        for bad in ("a+b", "a b", "a/b", "", "é"):
+            with self.assertRaises(SystemExit, msg=bad):
+                load_release(bad)
+        with self.assertRaises(SystemExit):
+            load_release("dev", "-1")
+        load_release("2026.10.2-1~rc_1", "7")
+
+    def test_uki_sorts_by_sequence_whatever_the_label(self):
+        # sd-boot orders one IMAGE_ID by IMAGE_VERSION (VERSION when absent) as a version string, newest first. The
+        # sequence alone, zero padded, makes that the numeric order BootOrder models; a label in it would not.
+        entries = []
+        for seq, label in ((2, "2026.10.2"), (3, "2026.10.2-1"), (10, "2026.9"), (9, "2026.10.2.1")):
+            fields = dict(l.split("=", 1) for l in load_release(label, str(seq)).uki_os_release("Nex Core", "nex-core").splitlines())
+            self.assertEqual(fields["VERSION"], fields["IMAGE_VERSION"])
+            entries.append((fields["IMAGE_VERSION"].strip('"'), seq))
+        self.assertEqual([seq for _, seq in sorted(entries)], sorted(seq for _, seq in entries))
+
+    def test_data_partition_number_agrees_with_the_installer(self):
+        go = read("internal", "hostimage", "install.go")
+        index = go_const(go, "DataIndex")
+        installer = read("installer", "nex-image-install.sh")
+        self.assertEqual(set(re.findall(r'partition "\$disk" (\d+)', installer)), {index})
+        self.assertIn(f'Planned{{{index}, DataLabel,', read("internal", "hostimage", "layout.go"))
+
+    def test_installer_finds_the_data_volume_by_the_label_the_plan_writes(self):
+        label = go_const(read("internal", "hostimage", "layout.go"), "DataLabel").strip('"')
+        installer = read("installer", "nex-image-install.sh")
+        for probe in (f"E:ID_PART_ENTRY_NAME={label}", f"E:ID_FS_LABEL={label}", f"$DEV/md/{label}"):
+            self.assertIn(probe, installer)
+
+    def test_partition_names_in_the_installer_and_labs_exist_in_the_plan(self):
+        layout = read("internal", "hostimage", "layout.go")
+        planned = set(re.findall(r'\{"(nex-[a-z0-9-]+)", type', layout))
+        planned |= {go_const(layout, "ESPLabel").strip('"'), go_const(layout, "DataLabel").strip('"')}
+        self.assertEqual(len(planned), 6)
+        used = set()
+        for path in (("installer", "nex-image-install.sh"), ("tests", "integration", "image_install_lab.py"),
+                     ("tests", "integration", "image_sb_lab.py")):
+            used |= set(re.findall(r"\bnex-(?:esp|data|(?:root|verity)-[a-z0-9]+)\b", read(*path)))
+        self.assertTrue(used)
+        self.assertLessEqual(used, planned)
 
     def test_root_can_sign_in_at_the_console_and_over_ssh(self):
         # Found in the first installed-host boots of the lab ISO: login(1) is Priority required but not Essential, so

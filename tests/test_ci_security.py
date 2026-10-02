@@ -411,6 +411,41 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
                              'scripts/image-repro-check.sh'):
                     self.assertIn(step, text)
 
+    def test_image_jobs_set_up_go_the_qemu_host_and_the_docker_workspace_before_they_need_them(self):
+        # A clean runner has none of this: host-side `go build` in image/build.sh, the QEMU/OVMF/KVM boot labs and the
+        # workspace bind mounts of a runner whose job runs in a container each need a step that runs first.
+        needs_go = ('go test', 'image/build.sh', 'appliance/build.py', 'image-repro-check.sh')
+        needs_qemu = ('image_boot.py', 'image_update.py', 'controller_image_boot.py')
+        needs_docker_host = ('image/build.sh', 'appliance/build.py', 'image-repro-check.sh', 'tests/integration/')
+        for provider in PROVIDERS:
+            path = ROOT / provider / 'workflows/image.yml'
+            for name, block in self.jobs(path):
+                steps = re.split(r'(?m)^      - ', block.split('\n    steps:\n', 1)[1])[1:]
+                with self.subTest(provider=provider, job=name):
+                    def first(markers):
+                        return next((i for i, step in enumerate(steps) if any(m in step for m in markers)), None)
+                    go = first(('uses: https://github.com/actions/setup-go@',))
+                    if first(needs_go) is not None:
+                        self.assertIsNotNone(go, 'a job running go needs the pinned setup-go step')
+                        self.assertLess(go, first(needs_go))
+                        self.assertRegex(steps[go], r'setup-go@[0-9a-f]{40} ')
+                    if first(needs_qemu) is not None:
+                        kvm = first(('/dev/kvm',))
+                        self.assertIsNotNone(kvm, 'a QEMU lab job must check /dev/kvm')
+                        self.assertLess(kvm, first(needs_qemu))
+                        if 'controller_image_boot.py' in block:
+                            for tool in ('openssl', 'sfdisk', 'mcopy', 'mkfs.vfat'):
+                                self.assertIn(tool, steps[kvm], f'the QEMU prerequisite step must check {tool}')
+                    if first(needs_docker_host) is not None:
+                        host = first(('scripts/ci-host-workspace.sh',))
+                        self.assertIsNotNone(host, 'a Docker job must locate its workspace on the Docker host')
+                        # A failing substitution inside `echo "...$(cmd)"` does not trip errexit: assign it on its own line.
+                        self.assertRegex(steps[host], r'(?m)^\s+ws=\$\(scripts/ci-host-workspace\.sh\)\s*$')
+                        self.assertLess(host, first(needs_docker_host))
+                        for step in steps[first(needs_docker_host):]:
+                            if any(m in step for m in needs_docker_host):
+                                self.assertIn('NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}', step)
+
     def test_only_the_cheap_job_runs_on_github_com(self):
         workflows = sorted((ROOT / '.github/workflows').glob('*.yml'))
         self.assertGreater(len(workflows), 1)

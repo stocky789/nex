@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADING = re.compile(r"^## \[(?P<version>[^\]]+)\]")
+PLACEHOLDER = "No changes since the last stable release."
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$")
 PRERELEASE = re.compile(r"^(?P<release>\d+\.\d+\.\d+)-(?P<pre>[0-9A-Za-z.-]+)$")
 
@@ -152,11 +153,28 @@ def notes(text, version):
     return "\n".join(body).strip() + "\n"
 
 
+def dev_notes(text, stable_text):
+    """What a development build ships.
+
+    When dev's newest heading is ahead of main's published version the release was cut on dev: its
+    entries come first, then whatever was added to [Unreleased] since the cut. Otherwise the notes
+    are the [Unreleased] entries.
+    """
+    top = current(text)[0]
+    if sort_key(top) > sort_key(current(stable_text)[0]):
+        cut = notes(text, top).strip()
+        unreleased = unreleased_notes(text)
+        if unreleased.startswith(PLACEHOLDER):
+            return cut + "\n"
+        return f"{cut}\n\n{unreleased}"
+    return unreleased_notes(text)
+
+
 def unreleased_notes(text):
-    """What a development build ships: [Unreleased] without its maintainer instruction block."""
+    """[Unreleased] without its maintainer instruction block."""
     body = "\n".join(line for line in notes(text, "Unreleased").splitlines()
                      if not line.lstrip().startswith(">")).strip()
-    return (body or "No changes since the last stable release.") + "\n"
+    return (body or PLACEHOLDER) + "\n"
 
 
 def main(argv=None):
@@ -194,7 +212,7 @@ def main(argv=None):
         print(f"release-version: {error}", file=sys.stderr)
         return 1
     if args.notes:
-        print(unreleased_notes(text) if args.channel == "dev" else notes(text, tag_version), end="")
+        print(dev_notes(text, stable_text) if args.channel == "dev" else notes(text, tag_version), end="")
     elif args.format == "debian":
         print(deb)
     elif args.format == "tag":

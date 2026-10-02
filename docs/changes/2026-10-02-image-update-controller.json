@@ -44,7 +44,7 @@
   },
   "api": {
     "impact": "new contract",
-    "reason": "New Controller routes GET /api/v1/hosts/{id}/updates and POST /api/v1/hosts/{id}/updates/{action}, the managed command host-image-update (ImageUpdateRequest), ReportResponse.image_update (the image-update-v1 acknowledgement; Inventory.image is now withheld until it arrives) and host-local GET /api/local/v1/updates/operations/{id}. The Controller's GET /api/v1/updates and POST /api/v1/updates/apply are kept for classic Controllers; their removal belongs to the appliance-swap slice. Pool rollout routes, PUT …/updates/settings, media, import and component fetch are not implemented.",
+    "reason": "New Controller routes GET /api/v1/hosts/{id}/updates and POST /api/v1/hosts/{id}/updates/{action}, the managed command host-image-update (ImageUpdateRequest), ReportResponse.image_update (the image-update-v1 acknowledgement; Inventory.image is now withheld until it arrives) and host-local GET /api/local/v1/updates/operations/{id}. The Controller's GET /api/v1/updates and POST /api/v1/updates/apply are kept for classic Controllers; their removal belongs to the appliance-swap slice. Pool rollout routes, PUT …/updates/settings, media, import and component fetch were not part of this slice; they are recorded in 2026-10-02-image-update-layers-settings.json and 2026-10-02-pool-rollout-coordinator.json.",
     "pages": [
       "docs/API.md",
       "docs/api/index.html",

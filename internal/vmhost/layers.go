@@ -407,8 +407,8 @@ func (l *Layers) Ensure(ctx context.Context, name string) error {
 	if meta.RequiresBase != build {
 		return &LayerError{Layer: name, Reason: LayerBaseMismatch, Detail: "metadata requires " + meta.RequiresBase}
 	}
-	// A merge happens after systemd's own sysusers/tmpfiles/udev passes at boot; running them again is
-	// idempotent and gives a live first enable what boot gives for free.
+	// A merge is not ordered against systemd's own sysusers/tmpfiles/udev passes, so those run again here
+	// after a live merge and in nex-layers.service after the boot merge. Each is idempotent.
 	for _, step := range [][]string{{"systemd-sysusers"}, {"systemd-tmpfiles", "--create"}, {"udevadm", "control", "--reload"}} {
 		if out, runErr := layersRun(ctx, step[0], step[1:]...); runErr != nil {
 			return &LayerError{Layer: name, Reason: LayerMergeFailed, Detail: step[0] + ": " + strings.TrimSpace(string(out)+" "+runErr.Error())}
@@ -445,7 +445,12 @@ func (l *Layers) inUse(ctx context.Context, meta layerMeta) (bool, string) {
 		if len(cmd) == 0 {
 			continue
 		}
-		if out, err := nativeRun(ctx, cmd[0], cmd[1:]...); err == nil && strings.TrimSpace(string(out)) != "" {
+		out, err := nativeRun(ctx, cmd[0], cmd[1:]...)
+		if err != nil {
+			// A probe that cannot answer (zpool timing out, a missing tool) is not proof of an idle layer.
+			return true, cmd[0] + " could not be checked: " + strings.TrimSpace(err.Error())
+		}
+		if strings.TrimSpace(string(out)) != "" {
 			return true, cmd[0] + " reports " + strings.Join(strings.Fields(string(out)), " ")
 		}
 	}
@@ -473,7 +478,13 @@ func (l *Layers) Disable(ctx context.Context, name string) error {
 	if !ok || !e.Enabled {
 		return nil
 	}
-	if meta, metaErr := l.meta(name); metaErr == nil {
+	// What the layer serves is only known from its own metadata, so a merged layer whose metadata cannot be
+	// read is refused rather than assumed idle. A layer that is not merged serves nothing.
+	if l.merged(name) {
+		meta, metaErr := l.meta(name)
+		if metaErr != nil {
+			return &LayerError{Layer: name, Reason: LayerInUse, Detail: "cannot tell whether the layer is serving anything: " + metaErr.Error()}
+		}
 		if busy, why := l.inUse(ctx, meta); busy {
 			return &LayerError{Layer: name, Reason: LayerInUse, Detail: why}
 		}

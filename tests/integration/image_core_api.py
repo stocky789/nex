@@ -119,24 +119,14 @@ EOT
 """
 
 
-def install(work, release, timeout):
+def install(work, release, hostimage, timeout):
     script = SEED + """
 set -eu
 l=$(losetup -fP --show /w/d0.img)
 trap 'losetup -d $l' EXIT
 nex-hostimage install --layout single --disks $l --image-dir /rel --etc-seed /seed
 """
-    name = f"nex-image-core-api-{os.getpid()}"
-    cmd = ["docker", "run", "--rm", "--name", name, "--privileged", "--cpus", "2", "--memory", "4g", "-v", "/dev:/dev",
-           "-v", f"{work}:/w", "-v", f"{release}:/rel:ro",
-           "-v", f"{os.path.dirname(release)}/nex-hostimage:/usr/bin/nex-hostimage:ro", "nex-image-tools", "sh", "-c", script]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        subprocess.run(["docker", "kill", name], capture_output=True)
-        sys.exit(f"install exceeded {timeout}s; container killed")
-    if res.returncode:
-        sys.exit(f"install failed:\n{res.stdout[-1500:]}\n{res.stderr[-1500:]}")
+    lab.run_install(work, release, hostimage, script, timeout, "image-core-api")
 
 
 def api(ctl, password, mode=""):
@@ -160,13 +150,17 @@ def wait_api(ctl, password, timeout):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--release", default=os.path.join(REPO, "image/out/release"))
-    ap.add_argument("--workdir")
+    ap.add_argument("--workdir", help="directory for disk images and logs (default: a new one beside --release; only that one is removed)")
+    ap.add_argument("--hostimage", help="static nex-hostimage (default: <release>/../nex-hostimage)")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--label", default="dev", help="NEX_LABEL the release was built with")
     ap.add_argument("--budget", type=int, default=480, help="seconds for the install and for each boot")
     a = ap.parse_args()
+    lab.require_host_tools()
     release = os.path.realpath(a.release)
-    work = os.path.realpath(a.workdir) if a.workdir else tempfile.mkdtemp(prefix="nex-core-api-", dir=os.path.join(REPO, "image/out"))
+    hostimage = lab.hostimage_for(release, a.hostimage)
+    fresh = not a.workdir
+    work = os.path.realpath(a.workdir) if a.workdir else lab.scratch_dir(release, "nex-core-api-")
     os.makedirs(work, exist_ok=True)
     password = secrets.token_urlsafe(16)
     vm = upd.VM(work)
@@ -176,7 +170,7 @@ def main():
             f.truncate(lab.DISK_BYTES)
         shutil.copy(lab.OVMF_VARS, os.path.join(work, "vars.fd"))
         t0 = time.time()
-        install(work, release, a.budget)
+        install(work, release, hostimage, a.budget)
         upd.info(f"install: {time.time() - t0:.0f}s")
 
         vm.start()
@@ -246,7 +240,7 @@ def main():
               "the root login and GET /updates still work after the cold boot", got["updates"])
     finally:
         vm.stop()
-        if not a.keep:
+        if not a.keep and fresh:
             shutil.rmtree(work, ignore_errors=True)
     print(f"{upd.check.failed} failed")
     sys.exit(1 if upd.check.failed else 0)

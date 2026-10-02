@@ -13,6 +13,8 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/nex/nex-boot-check
+# The script bounds itself (NEX_BOOT_CHECK_BUDGET 600 s plus one command timeout plus the verdict, under 700 s); this
+# only has to stay above that so the script, not systemd, decides: a kill here would skip the bad mark and the reboot.
 TimeoutStartSec=900
 
 [Install]

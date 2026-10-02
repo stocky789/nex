@@ -31,7 +31,7 @@ behaviour. Peak CPU and memory were not sampled.
 | 3 | Quorum gate, all three up | **PASS**: `dry_run` returned the plan c, b, a; the real rollout's first gate (host c) passed with 3 votes, c went through its whole cycle |
 | 3 | Quorum gate, one host's corosync stopped | **PASS**: `corosync` stopped and runtime-masked on b (without the mask Core restarted it within seconds); `corosync-quorumtool -s` on the master: `Nodes: 2, Total votes: 2, Quorum: 2, Quorate: Yes` (a further stop would leave 1 < 2); the rollout paused `quorum_margin: host <b> is ready but not voting in this pool's quorate partition` at the gate of host c, before any host entered maintenance (`maint: []`). After unmask the cluster returned to 3 votes and `resume` continued |
 | 4 | Master power cut mid-rollout, member promoted, `paused master_changed`, resume/abort | **NOT RUN**. A lab Redfish endpoint (kills QEMU on ForceOff) and the fence profile route were set up and the master's own profile was recorded, but no promotion was attempted: the time box ended. The earlier lab's "master restart, not a change" result stands |
-| 5 | `running_vms: shutdown` with a managed guest, same-host restart, one owner epoch | **NOT RUN through the rollout.** Prepared and shown: a managed VM created through the Controller (`POST /api/v1/vms`, BIOS, 512 MiB, 1 GiB sata disk, default local storage) on b, a tiny guest (`tests/integration/pool_lab_guest.sh`: syslinux disk, Debian kernel 6.12.107, busybox initramfs that waits for the ACPI power-button input and powers off) copied into the VM's qcow2 (lab shortcut), started by the product's `vm-power start`, and it **powers off about 2 s after `virsh shutdown`**. The rollout that would stop and restart it needed release 3 (sequence 2 cannot be started again once one member runs it: `release_unavailable`), whose build was cut off |
+| 5 | `running_vms: shutdown` with a managed guest, same-host restart, one owner epoch | **NOT RUN through the rollout.** Prepared and shown: a managed VM created through the Controller (`POST /api/v1/vms`, BIOS, 512 MiB, 1 GiB sata disk, default local storage) on b, a tiny guest (`tests/integration/pool_lab_guest.sh`: syslinux disk, the Debian kernel `pool_lab_guest.sh` downloads (6.12.107 in this run), busybox initramfs that waits for the ACPI power-button input and powers off) copied into the VM's qcow2 (lab shortcut), started by the product's `vm-power start`, and it **powers off about 2 s after `virsh shutdown`**. The rollout that would stop and restart it needed release 3 (sequence 2 cannot be started again once one member runs it: `release_unavailable`), whose build was cut off |
 | 6 | Refuse-with-guest, rerun with a real cluster | **PASS**: with the managed guest running on b, c completed, then the rollout paused `running_vms: <b>: running guests block the update: <guest id>` after the shortened step timeout (100 s, `NEX_POOL_UPDATE_STEP_TIMEOUT` in a drop-in), b stayed in maintenance, the master was not touched; `abort` cleared b's maintenance and the guest kept running |
 
 ## Defects found and fixed
@@ -50,10 +50,12 @@ Master change and `master_changed` (item 4), the shutdown rollout (item 5), GFS2
 ## Reproduce
 
 ```
-python3 scripts/build-source.py --output .cache/lab3/nex-source.tar.gz
-python3 packaging/core-local/build.py --edition image --source .cache/lab3/nex-source.tar.gz --version 0.1.5~alpha1+img3 --output .cache/lab3/debs
+# pool_rollout_lab.py keeps its state in .cache/lab4 (LAB), so the source archive and the Controller binary go there too
+python3 scripts/build-source.py --output .cache/lab4/nex-source.tar.gz
+python3 packaging/core-local/build.py --edition image --source .cache/lab4/nex-source.tar.gz --version 0.1.5~alpha1+img3 --output .cache/lab4/debs
+mkdir -p .cache/lab4/bin && go build -trimpath -o .cache/lab4/bin/ ./cmd/nex-controller ./cmd/nex-hostimage
 # per release N (label 2026.10.N, sequence N): image/build.sh base; image/mkosi.images/build-layer.sh nex-cluster; image/build.sh release
 python3 tests/integration/pool_rollout_lab.py up --rel1 R1/release --rel2 R2/release --keys K --trust T --hostimage H   # R*/ hold nex-cluster.raw[.json], base.dpkg-list
-python3 tests/integration/pool_rollout_lab.py login; enroll; layer; fence
-tests/integration/pool_lab_guest.sh KERNEL MODDIR guest.raw
+for c in login enroll layer fence; do python3 tests/integration/pool_rollout_lab.py $c; done
+tests/integration/pool_lab_guest.sh guest.raw   # downloads the kernel itself; the argument is the output disk, never an existing file
 ```

@@ -24,7 +24,8 @@ func (idlePlatform) Verify(string) (*hostimage.Release, error) { return nil, nil
 func (idlePlatform) Stage(context.Context, *hostimage.Release, nexupdate.Booted) (string, error) {
 	return "", nil
 }
-func (idlePlatform) Arm(context.Context, *hostimage.Release) error { return nil }
+func (idlePlatform) Arm(context.Context, *hostimage.Release) error         { return nil }
+func (idlePlatform) Disarm(context.Context, nexupdate.ReleaseRecord) error { return nil }
 func (idlePlatform) Rollback(context.Context, nexupdate.ReleaseRecord, nexupdate.ReleaseRecord) error {
 	return nil
 }

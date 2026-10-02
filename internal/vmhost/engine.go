@@ -38,10 +38,13 @@ type Config struct {
 }
 type Engine struct {
 	config Config
-	// swapHook, swapPoll and shutdownWait are the Controller swap's test seams; zero values are the production behavior.
+	// swapHook, swapPoll, shutdownWait, statfs and syncPath are test seams (the Controller swap's stages, its polling and
+	// shutdown waits, the host's filesystem report and the staged image's fsync); zero values are the production behavior.
 	swapHook     func(stage string) error
 	swapPoll     time.Duration
 	shutdownWait time.Duration
+	statfs       func(string, *syscall.Statfs_t) error
+	syncPath     func(string) error
 }
 type DeploySpec struct {
 	RequestID      string   `json:"request_id"`
@@ -219,6 +222,9 @@ func validate(s DeploySpec) error {
 func (e *Engine) Preflight(ctx context.Context, s DeploySpec) (Preflight, error) {
 	s = defaults(s)
 	p := Preflight{ImageVerification: "Signed manifest checked; full image integrity and format verification runs during deployment", CPUs: s.CPUs, MemoryMiB: s.MemoryMiB, DiskGiB: s.DiskGiB, Bridge: e.config.Bridge, StorageDir: e.config.StorageDir, Blockers: []string{}}
+	if e.config.SystemImage != "" {
+		p.ImageVerification = "The Controller system image file is present; deployment checks its SHA-256 against the digest of the signed release manifest while it copies the file"
+	}
 	if s.RequestID != "" {
 		if err := validate(s); err != nil {
 			p.Blockers = append(p.Blockers, err.Error())
@@ -254,8 +260,8 @@ func (e *Engine) Preflight(ctx context.Context, s DeploySpec) (Preflight, error)
 	if available < uint64(s.MemoryMiB+2048)*1024 {
 		p.Blockers = append(p.Blockers, "insufficient available RAM including 2 GiB host reserve")
 	}
-	var stat syscall.Statfs_t
-	if err = syscall.Statfs(e.config.StorageDir, &stat); err != nil {
+	stat, err := e.statfsOf(e.config.StorageDir)
+	if err != nil {
 		return p, err
 	}
 	// Only known local filesystems: pool registration never establishes shared-disk ownership.
@@ -281,6 +287,8 @@ func (e *Engine) Preflight(ctx context.Context, s DeploySpec) (Preflight, error)
 		}
 	} else if !layerHex.MatchString(e.config.SystemImageSHA256) {
 		p.Blockers = append(p.Blockers, "Controller system image digest is not configured")
+	} else if st, err := os.Stat(e.config.SystemImage); err != nil || !st.Mode().IsRegular() {
+		p.Blockers = append(p.Blockers, "Controller system image is not staged; fetch the Controller image component first")
 	}
 	p.Ready = len(p.Blockers) == 0
 	return p, nil
@@ -1258,8 +1266,8 @@ func (e *Engine) ownedFiles(ctx context.Context, j journal) error {
 	if err = e.exclusiveDisk(ctx, j); err != nil {
 		return err
 	}
-	var stat syscall.Statfs_t
-	if err = syscall.Statfs(j.Disk, &stat); err != nil {
+	stat, err := e.statfsOf(j.Disk)
+	if err != nil {
 		return err
 	}
 	switch uint64(stat.Type) {
@@ -1268,6 +1276,15 @@ func (e *Engine) ownedFiles(ctx context.Context, j journal) error {
 		return errors.New("owned disk is no longer on supported local storage")
 	}
 	return nil
+}
+
+// statfsOf reports the filesystem holding path.
+func (e *Engine) statfsOf(path string) (syscall.Statfs_t, error) {
+	var stat syscall.Statfs_t
+	if e.statfs != nil {
+		return stat, e.statfs(path, &stat)
+	}
+	return stat, syscall.Statfs(path, &stat)
 }
 
 // ownedDomain checks the running and the persistent definition against the journal.

@@ -41,9 +41,13 @@ host described on this page and stay selectable.
 - **Layout.** Every selected disk gets the same partition table: a 1 GiB boot partition, two system slots
   with their integrity partitions, and `nex-data`. Two or more disks mirror only `nex-data` (md RAID1);
   each disk can boot alone.
-- **Erase confirmation** is unchanged: the wizard lists every disk and an explicit yes erases it. Nothing is erased
-  until the system image and the media payloads have passed their checksum checks; a damaged image or payload stops
-  the install with no disk changed. Only arrays on the selected disks are stopped; no other array is assembled.
+- **Erase confirmation** is unchanged: the wizard lists every disk and an explicit yes erases it. On the offline ISO
+  nothing is erased until the system image and the media payloads have passed their checksum checks; a damaged image
+  or payload stops the install with no disk changed. The network installer checks the downloaded system image the same
+  way, but can check its payloads only after the disks are written and `nex-data` exists; a payload that fails then
+  leaves an installed host without the Controller appliance or VirtIO payloads, and the installer says so. Only arrays
+  on the selected disks are stopped (for Repair as well, and an array that cannot be stopped stops the run before
+  any write); no other array is assembled.
 - **Payloads.** The Controller appliance and the VirtIO driver ISO are installed under
   `/var/lib/nex/payload/<sha256>/` on the data volume, not inside the system slot. The offline ISO carries
   them; the network installer downloads them, and the system image, by SHA-256 from the address set when the

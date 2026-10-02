@@ -9,8 +9,9 @@ LAYER-TREE is only what the layer adds on top of BASE-TREE (an overlay upper, or
 merges /usr and /opt only, so everything else Debian's maintainer scripts left behind is normalised or
 the build fails:
 
-* /etc payload      moves to usr/share/factory/etc plus a tmpfiles `C` rule (copied on first use, never over
-                    an operator's file); /etc/passwd, group, shadow and gshadow additions become sysusers.d
+* /etc payload      moves to usr/share/factory/etc plus a tmpfiles `C+` rule per top-level entry (merged in on use,
+                    never over an operator's file; plain `C` would skip a shared directory such as /etc/default
+                    that already holds files); /etc/passwd, group, shadow and gshadow additions become sysusers.d
                     entries with the exact UID/GID the install chose, then the databases are removed.
 * /var, /run, /srv  must be empty or be listed in the spec's `allow_var`; dpkg state is exported as
                     usr/share/nex/layers/<name>.packages (name, version, arch) and removed.
@@ -180,10 +181,11 @@ def unit_order_problems(layer):
                 bad = sorted(set(vals.get((sect, key), [])) & EARLY_TARGETS)
                 if bad:
                     problems.append(f"{rel(layer, unit)} {what} {', '.join(bad)}; reset it with a drop-in ({unit.name}.d/*.conf)")
-        # Preset-style enablement links created by the packages (wants/ directories) count as WantedBy.
-        for wants in sorted(root.glob("*.wants")) + sorted(root.glob("*.requires")):
-            if wants.name[:-6] in EARLY_TARGETS and any(wants.iterdir()):
-                problems.append(f"{rel(layer, wants)}: units hang off {wants.name[:-6]}")
+        # Preset-style enablement links created by the packages (wants/requires/upholds directories) count as WantedBy.
+        for wants in sorted(root.glob("*.wants")) + sorted(root.glob("*.requires")) + sorted(root.glob("*.upholds")):
+            target = wants.name.rsplit(".", 1)[0]
+            if target in EARLY_TARGETS and any(wants.iterdir()):
+                problems.append(f"{rel(layer, wants)}: units hang off {target}")
     return problems
 
 
@@ -217,7 +219,7 @@ def drop_enablement(layer):
 
 
 def move_etc(layer, name):
-    """etc/** -> usr/share/factory/etc/** plus a tmpfiles.d C rule per top-level payload entry."""
+    """etc/** -> usr/share/factory/etc/** plus a tmpfiles.d C+ rule per top-level payload entry."""
     etc = layer / "etc"
     if not etc.exists():
         return [], []
@@ -326,8 +328,8 @@ def finalize(layer, base, spec, build_id, epoch, report):
         d = layer / "usr/lib/tmpfiles.d"
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{name}-etc.conf").write_text(
-            "# Package defaults of this layer; copied only when the operator has no file of that name.\n"
-            + "".join(f"C {m} - - - -\n" for m in sorted(moved)))
+            "# Package defaults of this layer; merged in only where the operator has no file of that name.\n"
+            + "".join(f"C+ {m} - - - -\n" for m in sorted(moved)))
 
     # 4. Anything outside /usr and /opt.
     allow_var = spec.get("allow_var", [])

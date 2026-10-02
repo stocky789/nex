@@ -194,3 +194,30 @@ func TestImageSettingsMediaImportAndFetchAreRelayedToTheHostOnly(t *testing.T) {
 	// A classic host is never sent them.
 	l.a.call("POST", "/api/v1/hosts/"+l.master.id+"/updates/settings", map[string]any{"request_id": "req-classic-002", "channel": "dev"}, nil, 409)
 }
+
+// A host that has gone quiet or been revoked is refused before anything is queued, because the action
+// can reboot it. A retry of a request accepted earlier still returns the original operation: the
+// retry must not turn into a second action, and the caller still needs the answer.
+func TestImageUpdateRefusesStaleAndRevokedHostsButReplays(t *testing.T) {
+	l := newImageHostLab(t)
+	path := "/api/v1/hosts/" + l.member.id + "/updates/activate"
+	var first struct {
+		Operation protocol.Operation `json:"operation"`
+	}
+	read(t, l.a.call("POST", path, map[string]any{"request_id": "req-before-0001"}, nil, 202), &first)
+
+	l.forget(&l.member)
+	l.a.call("POST", path, map[string]any{"request_id": "req-stale-0001"}, nil, 409)
+	var replay struct {
+		Operation protocol.Operation `json:"operation"`
+	}
+	read(t, l.a.call("POST", path, map[string]any{"request_id": "req-before-0001"}, nil, 200), &replay)
+	if replay.Operation.ID != first.Operation.ID {
+		t.Fatalf("a retry after the host went stale was not replayed: %+v vs %+v", replay, first)
+	}
+
+	l.send(&l.member, nil)
+	l.a.call("POST", path, map[string]any{"request_id": "req-fresh-0001"}, nil, 202)
+	l.a.call("POST", "/api/v1/hosts/"+l.member.id+"/revoke", nil, nil, 200)
+	l.a.call("POST", path, map[string]any{"request_id": "req-revoked-001"}, nil, 409)
+}

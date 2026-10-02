@@ -22,9 +22,12 @@ their original proposal wording, and every `[INFERENCE]` marker there is an unve
 
 ## Implementation status (2026-10-02)
 
-Written from the QA records in `docs/qa/image/` and from what ran in this session. **Every result is simulation only**: unit tests,
-fake libvirt and fake peers, Docker builds, and single disposable QEMU/KVM guests on one workstation. No physical hardware, firmware,
-Secure Boot, TPM, md RAID mirror on real disks, three-host pool or browser walkthrough of the new screens was involved. "Done" below
+Written from the QA records in `docs/qa/image/` (phase0, phase2-build, phase2-installer, phase2-layers, phase2-packaging, phase2-repro,
+phase3-*, phase4-*, phase5-core-image and phase6-lab1 to lab4). **Every result is simulation only**: unit tests, fake libvirt and fake
+peers, Docker builds, and disposable QEMU/KVM guests on one workstation, including three nested guests with a real Corosync cluster
+([phase4-lab.md](../qa/image/phase4-lab.md), [phase6-lab3.md](../qa/image/phase6-lab3.md), [phase6-lab4.md](../qa/image/phase6-lab4.md)) and virtual
+Secure Boot and a virtual TPM ([phase6-lab1.md](../qa/image/phase6-lab1.md)). No physical hardware, firmware, Secure Boot, TPM, md RAID mirror
+on real disks or browser walkthrough of the new screens was involved. "Done" below
 means the gate's items were observed in that environment, not that the phase is accepted.
 
 | Phase | State | Evidence and what is missing |
@@ -33,14 +36,15 @@ means the gate's items were observed in that environment, not that the phase is 
 | **I-1** Read-only classic | **Partly done** | Separate `/var`, read-only root with `/etc` and `/root` kept on `/var` by an initramfs script, package installs in a remount window, the host package trim and the system-disk replacement changes: change record `docs/changes/2026-10-01-readonly-classic-root.json`. Verified by Go unit tests, `installer/check.sh` and a simulated QEMU host (`readonly_root.py`) only; **not run:** a real Debian Installer run, the installed `nex-core-local` package, GRUB and UEFI boot of it, a real mirror rebuild. The classic edition keeps its `apt` update path, the Controller `.deb` and the single-disk appliance until the plan retires them. |
 | **I-2** Image, layers, trim | **Partly done** | `image/` build, `internal/hostimage`, installer payload, layers and the double build: [phase2-build.md](../qa/image/phase2-build.md), [phase2-installer.md](../qa/image/phase2-installer.md), [phase2-layers.md](../qa/image/phase2-layers.md), [phase2-repro.md](../qa/image/phase2-repro.md) (base image byte-identical across two builds; layers and the Nex-built debs were not double-built). Not run: licence gate D5 inspection, physical install. |
 | **I-3** A/B, verity, update API | **Partly done** | Engine, boot wiring, rollback, Controller relay, layers and offline media: [phase3-engine.md](../qa/image/phase3-engine.md), [phase3-boot.md](../qa/image/phase3-boot.md), [phase3-reproof.md](../qa/image/phase3-reproof.md) (its own "Not run" lists apply), [phase3-controller.md](../qa/image/phase3-controller.md), [phase3-layers-update.md](../qa/image/phase3-layers-update.md). VM proof on a single disk only; md mirror, Secure Boot and hardware not run. |
-| **I-4** Appliance and pool rollout | **Partly done** | Coordinator ([phase4-rollout.md](../qa/image/phase4-rollout.md), fake peers) and the journaled appliance swap ([phase4-appliance.md](../qa/image/phase4-appliance.md), fake libvirt). **New:** the Controller guest image profile (`image/controller/`, `appliance/build.py --profile controller`), the deploy wiring (`core-local-setup configure --controller-image-sha256`, `nex-core-local --controller-system-image`) and a QEMU boot of the guest: [phase4-controller-image.md](../qa/image/phase4-controller-image.md). **Not run:** a Core deployment of that image, a swap or a restore on a real guest, the three-host pool, quorum and fencing behaviour, the Controller UI in a browser against any of it. |
-| **I-5** Secure Boot / TPM | **Not started** | The Controller guest image and its UKI are unsigned; its domain pins UEFI with Secure Boot off. |
+| **I-4** Appliance and pool rollout | **Partly done** | Coordinator ([phase4-rollout.md](../qa/image/phase4-rollout.md), fake peers) and the journaled appliance swap ([phase4-appliance.md](../qa/image/phase4-appliance.md), fake libvirt). **New:** the Controller guest image profile (`image/controller/`, `appliance/build.py --profile controller`), the deploy wiring (`core-local-setup configure --controller-image-sha256`, `nex-core-local --controller-system-image`) and a QEMU boot of the guest: [phase4-controller-image.md](../qa/image/phase4-controller-image.md). Three booted image hosts then ran a pool rollout, first without ([phase4-lab.md](../qa/image/phase4-lab.md)) and then with a real Corosync cluster, a master power cut and guest shutdown ([phase6-lab3.md](../qa/image/phase6-lab3.md), [phase6-lab4.md](../qa/image/phase6-lab4.md)), all virtual: no real watchdog or BMC (a lab Redfish endpoint stood in), and some scenarios are listed as not run in those records. **Not run:** a Core deployment of the Controller image, a swap or a restore on a real guest, fencing on physical hardware, the Controller UI in a browser against any of it. |
+| **I-5 / I-5a** Secure Boot / TPM, Core in the image | **Partly done** | I-5a ([phase5-core-image.md](../qa/image/phase5-core-image.md)): an image that contains `nex-core-local`, booted once in QEMU/KVM. Secure Boot and TPM posture were exercised only virtually (OVMF variables, `swtpm`) in [phase6-lab1.md](../qa/image/phase6-lab1.md). The Controller guest image and its UKI are unsigned; its domain pins UEFI with Secure Boot off. No physical Secure Boot or TPM result exists. |
+| **I-6** Local labs | **Partly done** | [phase6-lab1.md](../qa/image/phase6-lab1.md) and [phase6-lab2.md](../qa/image/phase6-lab2.md) (installer and boot scenarios), [phase6-lab3.md](../qa/image/phase6-lab3.md) and [phase6-lab4.md](../qa/image/phase6-lab4.md) (pool rollout). Simulation only; each record lists its own "Not run" items. |
 
 Cross-cutting items:
 
 - **CI:** `.github/workflows/image.yml` and `.gitea/workflows/image.yml` exist (forge-only jobs: layout tests, host image build and boot,
   tamper and A/B proof, Controller guest build and boot, double build). **They have not run on any forge**; `tests/test_ci_security.py`
-  pins their shape. `github.yml` is unchanged.
+  pins their shape. `.github/workflows/github.yml` now also triggers on pushes to `dev` (the release-channel change, [release channels plan](2026-10-02-release-channels.md)).
 - **Controller update helpers:** removed only where the swap replaces them: the profile's cloud-init seed no longer carries
   `apply-update` or the update units, and the guest image has no `apt` or helper. **Still present, for the classic edition and the
   single-disk appliance:** `packaging/controller/{apply-update,nex-controller-update.path,nex-controller-update.service,postinst,prerm}`,
@@ -131,6 +135,9 @@ service, not a silent change. State this plainly in the guide; do not claim atte
 **Plan-only change: API impact none, guide impact none.** This revision edits the plan and changes no contract.
 
 ## Decisions needed before Phase I-1 starts
+
+**Superseded.** The approvals are recorded in `AGENTS.md` and the owner decisions in the QA records; phases I-1 to I-4 are built (see the
+status table). Kept as the history of what was asked, not as open questions.
 
 The plan recommends the options below. These change documented project policy or legal posture, so the
 project owner decides; the plan does not assume them.
@@ -345,7 +352,7 @@ itself). New: the host-local, master, Controller and peer routes in [Update API]
 `components[]{id, kind: slot-image|layer|vm-image|iso|source|compliance, sha256, bytes, url, required, on_demand, requires_base, verity_root_hash}`.
 Layers (including the kernel-locked `nex-zfs`) activate with their base in one transaction. The publisher refuses to sign
 without `source` and `compliance` components whose hashes match the hosted files ([LICENSING.md](../LICENSING.md)).
-Channels: `dev` (every `main` push), `testing`, `stable`; promotion re-signs only `channel.json`.
+Channels: ~~`dev` (every `main` push), `testing`, `stable`~~ **superseded by the [release channels plan](2026-10-02-release-channels.md) and `AGENTS.md`: `main` is `stable`, `dev` is the development channel, and only `stable` and `dev` are accepted**; promotion re-signs only `channel.json`.
 
 Host checks, in order: root keys pinned in the verity root at `/usr/share/nex/update/trust.json` (newer chains persist in
 `/var/lib/nex/update/trust.json`); `channel.json` signature, `expires` (stable 14 days, re-signed by a scheduled workflow),

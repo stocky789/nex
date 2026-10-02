@@ -3,9 +3,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -44,8 +47,14 @@ type fakeUpdateHost struct {
 	controllerVM   bool
 	swapped        bool
 	controllerCode string
-	controllerIDs  []string // every step ID the controller step was asked under
-	partitioned    bool     // up and ready in the pool's records, but not voting in Corosync
+	controllerIDs  []string          // every step ID the controller step was asked under
+	partitioned    bool              // up and ready in the pool's records, but not voting in Corosync
+	stageFailed    map[string]string // stage request IDs that failed, with the code: the engine answers a replay the same way
+	failedOps      map[string]bool   // undrain step IDs whose guest start failed: the engine's journal replays the failure
+	startFailures  int               // how many distinct undrain step IDs still fail to start a guest
+	guestCode      string            // a definite refusal of every drain and undrain
+	statusFails    bool              // the status read fails while steps still work
+	drainPending   bool              // a drain that has not finished and has not failed either
 }
 
 type fakeUpdatePool struct {
@@ -124,7 +133,7 @@ func (p *fakeUpdatePool) quorum() vmhost.PoolQuorum {
 
 func (p *fakeUpdatePool) Status(_ context.Context, member protocol.PoolMember) (protocol.PoolUpdateHostStatus, error) {
 	h := p.hosts[member.HostID]
-	if h.downFor > 0 {
+	if h.downFor > 0 || h.statusFails {
 		return protocol.PoolUpdateHostStatus{}, errors.New("unreachable")
 	}
 	st := protocol.PoolUpdateHostStatus{HostID: h.id, Channel: h.channel, Phase: h.phase, RunningSequence: h.sequence,
@@ -136,8 +145,10 @@ func (p *fakeUpdatePool) Status(_ context.Context, member protocol.PoolMember) (
 	if h.staged {
 		st.StagedSequence = h.target.Sequence
 	}
-	target := h.target
-	st.Target = &target
+	// The engine offers no release the host already runs, so Target is nil once it does.
+	if target := h.target; h.sequence < target.Sequence {
+		st.Target = &target
+	}
 	for id, running := range h.guests {
 		if running {
 			st.RunningVMs = append(st.RunningVMs, id)
@@ -156,6 +167,10 @@ func (p *fakeUpdatePool) Step(_ context.Context, member protocol.PoolMember, ste
 	if !nexupdate.ValidRequestID(step.StepID) {
 		p.t.Fatalf("coordinator sent step id %q, which the engine would refuse", step.StepID)
 	}
+	// A member that predates the routes answers 404 to the step route; the live transport turns that into this error.
+	if !h.capability {
+		return protocol.PoolUpdateStepResult{}, errPoolUpdateUnsupported
+	}
 	if h.downFor > 0 {
 		return protocol.PoolUpdateStepResult{}, errors.New("unreachable")
 	}
@@ -168,7 +183,10 @@ func (p *fakeUpdatePool) Step(_ context.Context, member protocol.PoolMember, ste
 		}
 	case "stage":
 		switch {
+		case h.stageFailed[step.StepID] != "":
+			res = protocol.PoolUpdateStepResult{Code: h.stageFailed[step.StepID], Message: "refused by the host"}
 		case h.stageCode != "":
+			h.stageFailed[step.StepID] = h.stageCode
 			res = protocol.PoolUpdateStepResult{Code: h.stageCode, Message: "refused by the host"}
 		case !h.stageSeen[step.StepID]:
 			h.stageSeen[step.StepID] = true
@@ -176,10 +194,30 @@ func (p *fakeUpdatePool) Step(_ context.Context, member protocol.PoolMember, ste
 			h.staged = true
 		}
 	case "drain":
+		if h.guestCode != "" {
+			res = protocol.PoolUpdateStepResult{Code: h.guestCode, Message: "the host cannot do this"}
+			break
+		}
+		if h.drainPending {
+			res = protocol.PoolUpdateStepResult{}
+			break
+		}
 		for _, id := range step.VMIDs {
 			h.guests[id] = false
 		}
 	case "undrain":
+		if h.guestCode != "" {
+			res = protocol.PoolUpdateStepResult{Code: h.guestCode, Message: "the host cannot do this"}
+			break
+		}
+		if h.failedOps[step.StepID] || h.startFailures > 0 {
+			if !h.failedOps[step.StepID] {
+				h.startFailures--
+				h.failedOps[step.StepID] = true
+			}
+			res = protocol.PoolUpdateStepResult{Message: "the shared storage is not mounted yet"}
+			break
+		}
 		for _, id := range step.VMIDs {
 			if !h.guests[id] {
 				h.guests[id] = true
@@ -294,12 +332,13 @@ func newUpdateLab(t *testing.T, n int) *updateLab {
 		member.PeerOrigin = fmt.Sprintf("https://192.0.2.%d:8443", i)
 		members = append(members, member)
 		pool.hosts[id] = &fakeUpdateHost{id: id, sequence: 1, phase: "committed", guests: map[string]bool{}, starts: map[string]int{},
-			activations: map[string]int{}, stageSeen: map[string]bool{}, bootsTo: 2, state: 2, channel: "stable", free: 1 << 40, capability: true,
+			activations: map[string]int{}, stageSeen: map[string]bool{}, stageFailed: map[string]string{}, failedOps: map[string]bool{},
+			bootsTo: 2, state: 2, channel: "stable", free: 1 << 40, capability: true,
 			target: protocol.PoolUpdateTarget{Sequence: 2, StateFormat: 2, MixedPool: true, RequiredBytes: 1 << 20}}
 	}
 	maintenanceMembership(t, master, "master-1", members...)
 	lab := &updateLab{T: t, pool: pool, clock: time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)}
-	prevPeers, prevNow := poolUpdatePeerFactory, poolUpdateNow
+	prevPeers, prevNow, prevHA := poolUpdatePeerFactory, poolUpdateNow, poolUpdateHAEnabled
 	prevPush, prevMaintPush, prevQuorum := pushPoolAuthorityReplicasAfterUpdate, pushPoolAuthorityReplicasAfterMaintenance, localQuorum
 	prevTimeout, prevBoot, prevSoak := poolUpdateStepTimeout, poolUpdateBootDeadline, poolUpdateMinSoak
 	poolUpdatePeerFactory = func(*Store) poolUpdatePeers { return pool }
@@ -309,10 +348,9 @@ func newUpdateLab(t *testing.T, n int) *updateLab {
 	pushPoolAuthorityReplicasAfterUpdate, pushPoolAuthorityReplicasAfterMaintenance = noPush, noPush
 	poolUpdateStepTimeout, poolUpdateBootDeadline, poolUpdateMinSoak = 10*time.Minute, 5*time.Minute, 3*time.Second
 	t.Cleanup(func() {
-		poolUpdatePeerFactory, poolUpdateNow = prevPeers, prevNow
+		poolUpdatePeerFactory, poolUpdateNow, poolUpdateHAEnabled = prevPeers, prevNow, prevHA
 		pushPoolAuthorityReplicasAfterUpdate, pushPoolAuthorityReplicasAfterMaintenance, localQuorum = prevPush, prevMaintPush, prevQuorum
 		poolUpdateStepTimeout, poolUpdateBootDeadline, poolUpdateMinSoak = prevTimeout, prevBoot, prevSoak
-		poolUpdateHAEnabled = func(*Store) bool { return false }
 	})
 	lab.c = NewPoolUpdateCoordinator(master)
 	return lab
@@ -987,21 +1025,26 @@ func TestGatesAreRunAgainBeforeMaintenanceAndBeforeActivate(t *testing.T) {
 			t.Fatal("member-2 entered maintenance without a voting majority behind it")
 		}
 	})
-	t.Run("a record already at the maintenance stage", func(t *testing.T) {
+	t.Run("a crash after the maintenance flip is cleaned up by abort", func(t *testing.T) {
 		lab := newUpdateLab(t, 3)
 		if err := lab.start("gate-r", "refuse"); err != nil {
 			t.Fatal(err)
 		}
 		lab.run(20, func(r *protocol.PoolUpdateRollout) bool { return r.Phase == "hosts" })
-		r := lab.rollout()
-		r.Hosts[0].Stage = stageMaintenance
-		if err := savePoolUpdate(lab.pool.master, r); err != nil {
+		// The coordinator died after it flipped maintenance on and before it saved the next stage.
+		if err := poolUpdateSetMaintenance(lab.pool.master, "member-2", true); err != nil {
 			t.Fatal(err)
 		}
 		lab.pool.host("member-3").partitioned = true
-		r = lab.run(5, paused)
-		if m, _ := memberOf(lab.pool.master, "member-2"); r.Pause.Code != protocol.PoolUpdateQuorumMargin || m.Maintenance {
-			t.Fatalf("maintenance flipped without the gate: pause %+v maintenance %v", r.Pause, m.Maintenance)
+		r := lab.run(5, paused)
+		if r.Pause.Code != protocol.PoolUpdateQuorumMargin || r.Hosts[0].Stage != stageStaged {
+			t.Fatalf("pause = %+v hosts = %+v", r.Pause, r.Hosts)
+		}
+		if _, err := lab.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: "gate-r", Control: "abort"}); err != nil {
+			t.Fatal(err)
+		}
+		if m, _ := memberOf(lab.pool.master, "member-2"); m.Maintenance {
+			t.Fatal("abort left maintenance on a host the record still showed as staged")
 		}
 	})
 	t.Run("before activate", func(t *testing.T) {
@@ -1208,5 +1251,690 @@ func TestControllerFirstSkipsWhenThereIsNothingToSwap(t *testing.T) {
 	r := lab.run(400, ended)
 	if r.State != protocol.PoolUpdateFinalized || len(lab.pool.host("member-2").controllerIDs) != 0 {
 		t.Fatalf("final = %+v", r)
+	}
+}
+
+// editMembership changes the master's membership rows without changing its generation.
+func (l *updateLab) editMembership(change func(*protocol.PoolMembership)) {
+	l.Helper()
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(l.pool.master)
+	if err == nil {
+		change(&state.Membership)
+		err = savePoolPeer(l.pool.master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		l.Fatal(err)
+	}
+}
+
+func (l *updateLab) control(id, control, host string) (*protocol.PoolUpdateRollout, error) {
+	l.Helper()
+	return l.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: id, Control: control, HostID: host})
+}
+
+// A host that already runs and has committed the release (it joined on it, or an aborted rollout had
+// updated it) is not refused as "release unavailable": the engine offers no release it already runs.
+// The rollout updates the others and finalizes with that host counted as done.
+func TestRolloutStartsForHostsThatAlreadyRunTheRelease(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	current := lab.pool.host("member-2")
+	current.sequence = 2
+	_, plan, err := lab.c.Start(context.Background(), "dry-current", protocol.PoolUpdateRequest{Sequence: 2, DryRun: true})
+	if err != nil || strings.Join(plan.Order, ",") != "member-3,master-1" || strings.Join(plan.Current, ",") != "member-2" {
+		t.Fatalf("plan = %+v err = %v", plan, err)
+	}
+	if err = lab.start("partial", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	if r := lab.rollout(); r.Hosts[0].HostID != "member-2" || r.Hosts[0].Stage != stageDone {
+		t.Fatalf("the host already on the release is not recorded as done: %+v", r.Hosts)
+	}
+	if r := lab.run(400, ended); r.State != protocol.PoolUpdateFinalized || r.FinalizedSequence != 2 {
+		t.Fatalf("final = %+v", r)
+	}
+	if len(current.stageIDs) != 0 || len(current.activations) != 0 {
+		t.Fatalf("a host already on the release was staged or activated: %v %v", current.stageIDs, current.activations)
+	}
+	if lab.pool.host("member-3").sequence != 2 || lab.pool.host("master-1").sequence != 2 {
+		t.Fatal("the other hosts were not updated")
+	}
+	// Every host on the release: nothing to do, and the rollout still finalizes.
+	if err = lab.start("nothing-left", "refuse"); err != nil {
+		t.Fatalf("a rollout of a release every host runs: %v", err)
+	}
+	if r := lab.run(100, ended); r.State != protocol.PoolUpdateFinalized || r.FinalizedSequence != 2 {
+		t.Fatalf("final = %+v", r)
+	}
+	// A host that never updated reports idle, not committed: it runs the release, so it is done.
+	lab.pool.host("member-3").phase = "idle"
+	if err = lab.start("idle-current", "refuse"); err != nil {
+		t.Fatalf("a host that runs the release in phase idle was refused: %v", err)
+	}
+	if r := lab.run(100, ended); r.State != protocol.PoolUpdateFinalized || r.FinalizedSequence != 2 {
+		t.Fatalf("final = %+v pause %+v", r, r.Pause)
+	}
+	// A host that runs the release but has not committed it is not "done".
+	lab.pool.host("member-3").phase = "booted"
+	if refusalCode(lab.start("uncommitted", "refuse")) != protocol.PoolUpdateUnconfirmedHost {
+		t.Fatal("a host that runs the release uncommitted was treated as done")
+	}
+}
+
+// A resume after a refused or failed step is a new attempt: the engine answers a repeated request ID
+// with the failure it recorded, so a resume under the old IDs would pause again with the same code.
+func TestResumeAfterAFailedStageRetriesUnderANewAttempt(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	h := lab.pool.host("member-3")
+	h.stageCode = "insufficient_space"
+	if err := lab.start("stage-fail", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.run(100, paused)
+	if r.Pause.Code != protocol.PoolUpdateNeedsAttention || !strings.Contains(r.Pause.Message, "insufficient_space") {
+		t.Fatalf("pause = %+v", r.Pause)
+	}
+	h.stageCode = "" // the operator made room
+	if _, err := lab.control("stage-fail", "resume", ""); err != nil {
+		t.Fatal(err)
+	}
+	r = lab.run(600, ended)
+	if r.State != protocol.PoolUpdateFinalized || h.sequence != 2 {
+		t.Fatalf("final = %+v (member-3 runs %d)", r, h.sequence)
+	}
+	if got := poolUpdateHostRecord(r, "member-3").Attempt; got != 1 {
+		t.Fatalf("member-3 attempt = %d, want 1", got)
+	}
+}
+
+// A guest start the host reports as failed is journaled by the engine under its operation ID and
+// replayed unchanged; the coordinator retries it as a new step, so a mount that was not up yet at the
+// first start does not strand the guest until the step times out.
+func TestAFailedGuestStartIsRetriedAsANewOperation(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	h := lab.pool.host("member-2")
+	h.guests["vm-a"], h.startFailures = true, 1
+	if err := lab.start("start-fail", "shutdown"); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.run(400, ended)
+	if r.State != protocol.PoolUpdateFinalized || h.starts["vm-a"] != 1 || !h.guests["vm-a"] {
+		t.Fatalf("final = %+v starts %v", r, h.starts)
+	}
+	if len(h.failedOps) != 1 || poolUpdateHostRecord(r, "member-2").Attempt < 1 {
+		t.Fatalf("failed ops %v, attempt %d: the retry was not a new operation", h.failedOps, poolUpdateHostRecord(r, "member-2").Attempt)
+	}
+}
+
+// A host's definite refusal of drain or undrain stops the rollout at once with the host's own code
+// and message, instead of being waited out as "guests did not shut down in time". An inventory that
+// cannot be listed yet is the one code that is retried.
+func TestGuestStepRefusalsPauseWithTheHostsWords(t *testing.T) {
+	t.Run("drain", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		lab.pool.host("member-2").guests["vm-a"] = true
+		lab.pool.host("member-2").guestCode = "unsupported_edition"
+		began := lab.clock
+		if err := lab.start("drain-refused", "shutdown"); err != nil {
+			t.Fatal(err)
+		}
+		r := lab.run(100, paused)
+		if r.Pause.Code != protocol.PoolUpdateNeedsAttention || !strings.Contains(r.Pause.Message, "unsupported_edition") ||
+			!strings.Contains(r.Pause.Message, "the host cannot do this") || poolUpdateHostRecord(r, "member-2").Stage != stageDrain {
+			t.Fatalf("pause = %+v hosts = %+v", r.Pause, r.Hosts)
+		}
+		if lab.clock.Sub(began) >= poolUpdateStepTimeout {
+			t.Fatal("the refusal was only reported after the step timeout")
+		}
+	})
+	t.Run("undrain", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		lab.pool.host("member-2").guests["vm-a"] = true
+		if err := lab.start("undrain-refused", "shutdown"); err != nil {
+			t.Fatal(err)
+		}
+		lab.run(400, func(r *protocol.PoolUpdateRollout) bool {
+			return poolUpdateHostRecord(r, "member-2").Stage == stageRestart
+		})
+		lab.pool.host("member-2").guestCode = "unsupported_edition"
+		began := lab.clock
+		r := lab.run(100, paused)
+		if r.Pause.Code != protocol.PoolUpdateNeedsAttention || !strings.Contains(r.Pause.Message, "the host cannot do this") {
+			t.Fatalf("pause = %+v", r.Pause)
+		}
+		if lab.clock.Sub(began) >= poolUpdateStepTimeout {
+			t.Fatal("the refusal was only reported after the step timeout")
+		}
+	})
+	t.Run("an inventory that cannot be listed yet is retried", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		h := lab.pool.host("member-2")
+		h.guests["vm-a"] = true
+		if err := lab.start("inventory", "shutdown"); err != nil {
+			t.Fatal(err)
+		}
+		lab.run(400, func(r *protocol.PoolUpdateRollout) bool {
+			return poolUpdateHostRecord(r, "member-2").Stage == stageRestart
+		})
+		h.guestCode = "vm_inventory_unavailable"
+		for range 10 {
+			if err := lab.coordinator().Advance(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			lab.clock = lab.clock.Add(time.Second)
+		}
+		if r := lab.rollout(); r.State != protocol.PoolUpdateRunning {
+			t.Fatalf("a transient inventory failure stopped the rollout: %+v", r.Pause)
+		}
+		h.guestCode = ""
+		if r := lab.run(400, ended); r.State != protocol.PoolUpdateFinalized {
+			t.Fatalf("final = %+v", r)
+		}
+	})
+}
+
+// The activation gate is not skipped when the member's status cannot be read: nothing is sent until
+// the answer is there, and a pool that lost its majority meanwhile never has the host armed.
+func TestActivateWaitsWhenTheStatusCannotBeRead(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("status-gap", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(100, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageActivate })
+	h := lab.pool.host("member-2")
+	h.statusFails = true
+	lab.pool.host("member-3").partitioned = true // activating now would take a second voter away
+	r := lab.run(700, paused)
+	if r.Pause.Code != protocol.PoolUpdateStepTimeout || len(h.activations) != 0 {
+		t.Fatalf("pause = %+v activations %v", r.Pause, h.activations)
+	}
+}
+
+// The waits that had no deadline now pause the rollout with the documented step_timeout (or
+// unconfirmed for a host that cannot confirm), naming the host.
+func TestEveryWaitTimesOut(t *testing.T) {
+	t.Run("staging", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		if err := lab.start("wait-stage", "refuse"); err != nil {
+			t.Fatal(err)
+		}
+		lab.pool.host("member-3").downFor = 1 << 30
+		r := lab.run(700, paused)
+		if r.Pause.Code != protocol.PoolUpdateStepTimeout || r.Phase != "staging" || !strings.Contains(r.Pause.Message, "member-3") {
+			t.Fatalf("pause = %+v phase %s", r.Pause, r.Phase)
+		}
+	})
+	t.Run("a staged host that cannot be reached", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		if err := lab.start("wait-staged", "refuse"); err != nil {
+			t.Fatal(err)
+		}
+		lab.run(50, func(r *protocol.PoolUpdateRollout) bool { return r.Phase == "hosts" })
+		lab.pool.host("member-2").downFor = 1 << 30
+		r := lab.run(700, paused)
+		if r.Pause.Code != protocol.PoolUpdateStepTimeout || r.Hosts[0].Stage != stageStaged || !strings.Contains(r.Pause.Message, "member-2") {
+			t.Fatalf("pause = %+v hosts %+v", r.Pause, r.Hosts)
+		}
+	})
+	t.Run("a host that cannot confirm", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		if err := lab.start("wait-confirm", "refuse"); err != nil {
+			t.Fatal(err)
+		}
+		lab.run(100, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageConfirm })
+		lab.pool.host("member-2").downFor = 1 << 30
+		r := lab.run(700, paused)
+		if r.Pause.Code != protocol.PoolUpdateUnconfirmedHost || r.Hosts[0].Stage != stageConfirm {
+			t.Fatalf("pause = %+v hosts %+v", r.Pause, r.Hosts)
+		}
+	})
+}
+
+// settle drives the coordinator pass by pass for d of fake time, whatever the rollout does.
+func (l *updateLab) settle(d time.Duration) {
+	l.Helper()
+	for end := l.clock.Add(d); l.clock.Before(end); {
+		if err := l.coordinator().Advance(context.Background()); err != nil {
+			l.Fatalf("advance: %v", err)
+		}
+		l.clock = l.clock.Add(time.Second)
+		l.pool.tick()
+	}
+}
+
+func aborted(r *protocol.PoolUpdateRollout) bool { return r.State == protocol.PoolUpdateAborted }
+
+func (l *updateLab) forceAbort(id string) (*protocol.PoolUpdateRollout, error) {
+	l.Helper()
+	return l.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: id, Control: "abort", Force: true})
+}
+
+// An abort that cannot confirm its cleanup does not end: the rollout stays paused
+// abort_cleanup_pending, the coordinator keeps putting back what it owes, and only a confirmed
+// cleanup (guests running, maintenance cleared) makes it aborted.
+func TestAbortStaysOpenUntilEveryHostIsPutBack(t *testing.T) {
+	t.Run("a host that comes back after the abort", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		h := lab.pool.host("member-3")
+		h.bootFails, h.guests["vm-a"] = true, true
+		if err := lab.start("abort-boot", "shutdown"); err != nil {
+			t.Fatal(err)
+		}
+		lab.run(2000, paused)
+		r, err := lab.control("abort-boot", "abort", "")
+		if err != nil || r.State != protocol.PoolUpdatePaused || r.Pause.Code != protocol.PoolUpdateAbortCleanupPending || !strings.Contains(r.Pause.Message, "member-3") {
+			t.Fatalf("abort of a host that is down = %+v %v", r, err)
+		}
+		if m, _ := memberOf(lab.pool.master, "member-3"); m.Maintenance {
+			t.Fatal("abort left a booting host in maintenance mode")
+		}
+		host := poolUpdateHostRecord(r, "member-3")
+		if !strings.Contains(host.Error, "vm-a") || len(host.StoppedByUpdate) != 1 {
+			t.Fatalf("the guest the abort could not restart was not recorded: %+v", host)
+		}
+		lab.settle(time.Minute)
+		if r = lab.rollout(); aborted(r) || r.Pause == nil || r.Pause.Code != protocol.PoolUpdateAbortCleanupPending {
+			t.Fatalf("the abort ended while the host was still down: %+v", r)
+		}
+		h.downFor, h.bootFails = 0, false
+		r = lab.run(200, aborted)
+		host = poolUpdateHostRecord(r, "member-3")
+		if !h.guests["vm-a"] || len(host.StoppedByUpdate) != 0 || host.Error != "" || r.Pause != nil {
+			t.Fatalf("after the host came back: guest running %v, host %+v, pause %+v", h.guests["vm-a"], host, r.Pause)
+		}
+	})
+	t.Run("a guest that will not start", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		h := lab.pool.host("member-2")
+		h.guests["vm-a"], h.startFailures = true, 1<<30
+		if err := lab.start("abort-start", "shutdown"); err != nil {
+			t.Fatal(err)
+		}
+		began := lab.clock
+		r := lab.run(2000, paused)
+		if r.Pause.Code != protocol.PoolUpdateNeedsAttention || poolUpdateHostRecord(r, "member-2").Stage != stageRestart ||
+			!strings.Contains(r.Pause.Message, "vm_start_failed") || !strings.Contains(r.Pause.Message, "the shared storage is not mounted yet") {
+			t.Fatalf("pause = %+v hosts %+v", r.Pause, r.Hosts)
+		}
+		if lab.clock.Sub(began) >= poolUpdateStepTimeout {
+			t.Fatal("a failing guest start was retried until the step timeout")
+		}
+		r, err := lab.control("abort-start", "abort", "")
+		if err != nil || r.State != protocol.PoolUpdatePaused || r.Pause.Code != protocol.PoolUpdateAbortCleanupPending ||
+			!strings.Contains(poolUpdateHostRecord(r, "member-2").Error, "vm-a") || !strings.Contains(r.Pause.Message, "keeps retrying") {
+			t.Fatalf("abort = %+v %v", r, err)
+		}
+		// The coordinator retries under new operations, but only for poolUpdateAbortWindow.
+		lab.settle(poolUpdateAbortWindow + time.Minute)
+		r = lab.rollout()
+		if aborted(r) || !strings.Contains(r.Pause.Message, "automatic retries stopped") {
+			t.Fatalf("after the window: %+v pause %+v", r.State, r.Pause)
+		}
+		attempts := len(h.failedOps)
+		if attempts > int(poolUpdateAbortWindow/poolUpdateRetryPause)+int(poolUpdateRetryWindow/poolUpdateRetryPause)+4 {
+			t.Fatalf("%d failed start operations: the retries are not bounded", attempts)
+		}
+		lab.settle(10 * time.Minute)
+		if len(h.failedOps) != attempts {
+			t.Fatalf("the coordinator kept retrying after its window: %d then %d operations", attempts, len(h.failedOps))
+		}
+		// An operator's abort tries again at once, and ends once the guest runs.
+		if r, err = lab.control("abort-start", "abort", ""); err != nil || aborted(r) || len(h.failedOps) != attempts+1 {
+			t.Fatalf("operator retry = %+v %v (operations %d, was %d)", r.State, err, len(h.failedOps), attempts)
+		}
+		h.startFailures = 0
+		r, err = lab.control("abort-start", "abort", "")
+		if err != nil || !aborted(r) || !h.guests["vm-a"] || len(poolUpdateHostRecord(r, "member-2").StoppedByUpdate) != 0 {
+			t.Fatalf("abort once the guest can start = %+v %v", r, err)
+		}
+	})
+}
+
+// The operator can end an abort that cannot finish with force; what was left stays in the record.
+// Everything else about a pending abort is refused until then.
+func TestForcedAbortAndWhatAPendingAbortRefuses(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	h := lab.pool.host("member-2")
+	h.guests["vm-a"], h.startFailures = true, 1<<30
+	if err := lab.start("force-abort", "shutdown"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(2000, paused)
+	if _, err := lab.forceAbort("force-abort"); refusalCode(err) != "abort_not_pending" {
+		t.Fatalf("force on a rollout that is not being aborted: %v", err)
+	}
+	if _, err := lab.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: "force-abort", Control: "pause", Force: true}); refusalCode(err) != "invalid_request" {
+		t.Fatalf("force with another control: %v", err)
+	}
+	if r, err := lab.control("force-abort", "abort", ""); err != nil || r.Pause == nil || r.Pause.Code != protocol.PoolUpdateAbortCleanupPending {
+		t.Fatalf("abort = %+v %v", r, err)
+	}
+	if _, err := lab.control("force-abort", "resume", ""); refusalCode(err) != protocol.PoolUpdateAbortCleanupPending {
+		t.Fatalf("resume of a rollout being aborted: %v", err)
+	}
+	if _, err := lab.control("force-abort", "rollback_host", "member-2"); refusalCode(err) != protocol.PoolUpdateAbortCleanupPending {
+		t.Fatalf("rollback_host of a rollout being aborted: %v", err)
+	}
+	if err := lab.start("another", "refuse"); refusalCode(err) != "rollout_in_progress" {
+		t.Fatalf("a new rollout while the abort is pending: %v", err)
+	}
+	r, err := lab.forceAbort("force-abort")
+	host := poolUpdateHostRecord(r, "member-2")
+	if err != nil || !aborted(r) || r.Pause != nil || len(host.StoppedByUpdate) != 1 || !strings.Contains(host.Error, "vm-a") {
+		t.Fatalf("forced abort = %+v %v", r, err)
+	}
+	if _, err = lab.forceAbort("force-abort"); refusalCode(err) != "rollout_finished" {
+		t.Fatalf("a second forced abort: %v", err)
+	}
+}
+
+// A pending abort is what a promoted master inherits too: it carries on with it instead of turning
+// it into an ordinary master_changed pause that a resume could revive.
+func TestPromotedMasterKeepsAPendingAbort(t *testing.T) {
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	pending := &protocol.PoolUpdateRollout{ID: "abort-1", PoolID: "pool-1", Sequence: 2, RunningVMs: "shutdown", State: protocol.PoolUpdatePaused,
+		Pause: &protocol.PoolUpdatePause{Code: protocol.PoolUpdateAbortCleanupPending, Message: "member-1 is owed"},
+		Phase: "hosts", MembershipGeneration: 1, CreatedAt: now, UpdatedAt: now,
+		Hosts: []protocol.PoolUpdateHost{{HostID: "member-1", Stage: stageBoot, StoppedByUpdate: []string{"vm-a"}}}}
+	promoted := peerStore(t, "member-2", "pool-1")
+	if _, err := AdoptPoolUpdateOnPromotion(promoted, pending); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadPoolUpdate(promoted)
+	if err != nil || !poolUpdateAborting(got) || got.Hosts[0].StoppedByUpdate[0] != "vm-a" {
+		t.Fatalf("the promoted master's record = %+v %v", got, err)
+	}
+}
+
+// rollback_host reboots a host, so it takes the same quorum and readiness gates as any other
+// coordinator-initiated stop.
+func TestRollbackHostIsGated(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("rb-gate", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(400, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageDone })
+	if _, err := lab.control("rb-gate", "pause", ""); err != nil {
+		t.Fatal(err)
+	}
+	lab.pool.host("member-3").partitioned = true
+	if _, err := lab.control("rb-gate", "rollback_host", "member-2"); refusalCode(err) != protocol.PoolUpdateQuorumMargin {
+		t.Fatalf("rollback_host with another voter missing: %v", err)
+	}
+	if h := lab.pool.host("member-2"); h.sequence != 2 || h.phase == "rolled_back" {
+		t.Fatalf("the host was rolled back through a lost majority: %+v", h)
+	}
+	lab.pool.host("member-3").partitioned = false
+	if _, err := lab.control("rb-gate", "rollback_host", "member-2"); err != nil {
+		t.Fatalf("rollback_host with the pool whole: %v", err)
+	}
+}
+
+// The record on the members that could take over follows the rollout stage by stage, so a promoted
+// master resumes where the host stands and not at an earlier stage that would, for instance, shut its
+// restarted guests down again.
+func TestRolloutIsReplicatedAtEveryStageChange(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	seen := map[string]bool{}
+	pushPoolAuthorityReplicasAfterUpdate = func(context.Context, *Store, time.Duration) error {
+		if r, _ := LoadPoolUpdate(lab.pool.master); r != nil && len(r.Hosts) > 0 {
+			seen[r.Hosts[0].Stage] = true
+		}
+		return nil
+	}
+	if err := lab.start("replicate", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(400, ended)
+	for _, stage := range []string{stagePending, stageStaged, stageTeardown, stageDrain, stageActivate, stageBoot, stageConfirm, stageRelease, stageRestart, stageSoak, stageDone} {
+		if !seen[stage] {
+			t.Fatalf("the record was never replicated with the first host at %q (seen %v)", stage, seen)
+		}
+	}
+}
+
+// A record a former master kept is not revived when authority returns to it: what it inherits decides.
+func TestStaleLocalRolloutIsNotRevivedOnPromotion(t *testing.T) {
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	stale := &protocol.PoolUpdateRollout{ID: "old", PoolID: "pool-1", Sequence: 2, RunningVMs: "refuse", State: protocol.PoolUpdateRunning,
+		Phase: "hosts", MembershipGeneration: 1, CreatedAt: now, UpdatedAt: now,
+		Hosts: []protocol.PoolUpdateHost{{HostID: "member-2", Stage: stageDrain}}}
+	promoted := peerStore(t, "member-2", "pool-1")
+	if err := savePoolUpdate(promoted, stale); err != nil {
+		t.Fatal(err)
+	}
+	// The authority it inherits has no rollout: the one on disk was ended by another master.
+	undo, err := AdoptPoolUpdateOnPromotion(promoted, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := LoadPoolUpdate(promoted); poolUpdateActive(got) {
+		t.Fatalf("a stale running record owns the pool again: %+v", got)
+	}
+	undo()
+	if got, _ := LoadPoolUpdate(promoted); got == nil || got.State != protocol.PoolUpdateRunning {
+		t.Fatalf("undo did not put the earlier file back: %+v", got)
+	}
+	// The authority says the same rollout finished: that record, not the stale one.
+	finished := *stale
+	finished.State, finished.FinalizedSequence = protocol.PoolUpdateFinalized, 2
+	if _, err = AdoptPoolUpdateOnPromotion(promoted, &finished); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := LoadPoolUpdate(promoted); got == nil || got.State != protocol.PoolUpdateFinalized || got.FinalizedSequence != 2 {
+		t.Fatalf("the finished rollout was not adopted over the stale one: %+v", got)
+	}
+}
+
+// With armed watchdogs on a pool of four, only the host being drained leaves the cluster; the
+// others keep feeding for as long as the pool wants its cluster, and the rollout does not wait for
+// them. A pool that stops wanting a cluster tears it down everywhere and the rollout does wait.
+func TestTeardownWaitsOnlyForTheDrainedHostWhileThePoolKeepsItsCluster(t *testing.T) {
+	feeding := func(l *updateLab, ids ...string) {
+		l.editMembership(func(m *protocol.PoolMembership) {
+			for i := range m.Members {
+				if slices.Contains(ids, m.Members[i].HostID) {
+					m.Members[i].WatchdogArmed = &protocol.PoolWatchdogArmed{Feeding: true}
+				}
+			}
+		})
+	}
+	// The drained host stops feeding when the pool flips it into maintenance, as its own reconcile does.
+	disarmOnDrain := func(l *updateLab) {
+		original := poolUpdateMaintenance
+		poolUpdateMaintenance = func(s *Store, hostID string, on bool) error {
+			err := original(s, hostID, on)
+			if err == nil && on {
+				l.editMembership(func(m *protocol.PoolMembership) {
+					for i := range m.Members {
+						if m.Members[i].HostID == hostID {
+							m.Members[i].WatchdogArmed = nil
+						}
+					}
+				})
+			}
+			return err
+		}
+		l.Cleanup(func() { poolUpdateMaintenance = original })
+	}
+	t.Run("four hosts keep their cluster", func(t *testing.T) {
+		lab := newUpdateLab(t, 4)
+		feeding(lab, "master-1", "member-2", "member-3", "member-4")
+		disarmOnDrain(lab)
+		if err := lab.start("td-four", "refuse"); err != nil {
+			t.Fatal(err)
+		}
+		if r := lab.run(900, ended); r.State != protocol.PoolUpdateFinalized {
+			t.Fatalf("final = %+v pause %+v", r, r.Pause)
+		}
+	})
+	t.Run("three hosts tear their cluster down together", func(t *testing.T) {
+		lab := newUpdateLab(t, 3)
+		feeding(lab, "master-1", "member-2", "member-3")
+		disarmOnDrain(lab)
+		if err := lab.start("td-three", "refuse"); err != nil {
+			t.Fatal(err)
+		}
+		r := lab.run(900, ended)
+		if r.State != protocol.PoolUpdatePaused || r.Pause.Code != protocol.PoolUpdateStepTimeout || !strings.Contains(r.Pause.Message, "watchdogs") {
+			t.Fatalf("a pool-wide teardown did not wait for the other hosts' watchdogs: %+v %+v", r.State, r.Pause)
+		}
+	})
+}
+
+// A guest step whose inventory stays unavailable (libvirt not coming back after a reboot) is
+// retried for a few minutes, then pauses needs_attention with the code: it is not waited out until
+// the six-hour step timeout.
+func TestInventoryThatStaysUnavailablePausesAfterTheRetryWindow(t *testing.T) {
+	for _, stage := range []string{stageDrain, stageRestart} {
+		t.Run(stage, func(t *testing.T) {
+			lab := newUpdateLab(t, 3)
+			h := lab.pool.host("member-2")
+			h.guests["vm-a"] = true
+			if err := lab.start("inventory-gone-"+stage, "shutdown"); err != nil {
+				t.Fatal(err)
+			}
+			if stage == stageRestart {
+				lab.run(400, func(r *protocol.PoolUpdateRollout) bool {
+					return poolUpdateHostRecord(r, "member-2").Stage == stageRestart
+				})
+			}
+			h.guestCode = "vm_inventory_unavailable"
+			began := lab.clock
+			r := lab.run(2000, paused)
+			if r.Pause.Code != protocol.PoolUpdateNeedsAttention || !strings.Contains(r.Pause.Message, "vm_inventory_unavailable") || poolUpdateHostRecord(r, "member-2").Stage != stage {
+				t.Fatalf("pause = %+v hosts %+v", r.Pause, r.Hosts)
+			}
+			if waited := lab.clock.Sub(began); waited < poolUpdateRetryWindow || waited > poolUpdateRetryWindow+2*time.Minute {
+				t.Fatalf("paused after %s, want about %s (the step timeout is %s)", waited, poolUpdateRetryWindow, poolUpdateStepTimeout)
+			}
+			// The operator fixes libvirt and resumes: the retry starts a fresh window.
+			h.guestCode = ""
+			if _, err := lab.control("inventory-gone-"+stage, "resume", ""); err != nil {
+				t.Fatal(err)
+			}
+			if r = lab.run(600, ended); r.State != protocol.PoolUpdateFinalized {
+				t.Fatalf("final = %+v pause %+v", r, r.Pause)
+			}
+		})
+	}
+}
+
+// A step that alternates between failing and making progress opens a new retry window each time
+// it fails again, but the step as a whole still ends at the step timeout.
+func TestFailureEpisodesDoNotResetTheStepTimeout(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	h := lab.pool.host("member-2")
+	h.guests["vm-a"] = true
+	if err := lab.start("episodes", "shutdown"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(400, func(r *protocol.PoolUpdateRollout) bool {
+		return poolUpdateHostRecord(r, "member-2").Stage == stageDrain
+	})
+	began := lab.clock
+	r := lab.run(2000, func(r *protocol.PoolUpdateRollout) bool {
+		// Four minutes of failure (inside the retry window), then one answer that is no failure.
+		if (lab.clock.Sub(began)/time.Second)%241 == 240 {
+			h.guestCode, h.drainPending = "", true
+		} else {
+			h.guestCode, h.drainPending = "vm_inventory_unavailable", false
+		}
+		return paused(r)
+	})
+	if r.Pause.Code != protocol.PoolUpdateStepTimeout {
+		t.Fatalf("pause = %+v", r.Pause)
+	}
+	if waited := lab.clock.Sub(began); waited < poolUpdateStepTimeout || waited > poolUpdateStepTimeout+time.Minute {
+		t.Fatalf("paused after %s, want the step timeout %s", waited, poolUpdateStepTimeout)
+	}
+}
+
+// A rollout record written before RetryStartedAt existed still loads, and the field is not written
+// while it is unset.
+func TestHostRecordWithoutRetryStartLoads(t *testing.T) {
+	var host protocol.PoolUpdateHost
+	if err := json.Unmarshal([]byte(`{"host_id":"member-2","stage":"drain","step_started_at":"2026-01-01T00:00:00Z","deadline_at":"0001-01-01T00:00:00Z","soak_until":"0001-01-01T00:00:00Z","error":"x"}`), &host); err != nil {
+		t.Fatal(err)
+	}
+	if !host.RetryStartedAt.IsZero() || poolUpdateRetryStart(&host) != host.StepStartedAt {
+		t.Fatalf("an old record's retry window does not fall back to the step start: %+v", host)
+	}
+	out, err := json.Marshal(protocol.PoolUpdateHost{HostID: "member-2"})
+	if err != nil || strings.Contains(string(out), "retry_started_at") {
+		t.Fatalf("unset retry start was written: %s %v", out, err)
+	}
+}
+
+// peers that never answer until the caller gives up.
+type hangingUpdatePeers struct{}
+
+func (hangingUpdatePeers) Status(ctx context.Context, _ protocol.PoolMember) (protocol.PoolUpdateHostStatus, error) {
+	<-ctx.Done()
+	return protocol.PoolUpdateHostStatus{}, ctx.Err()
+}
+
+func (hangingUpdatePeers) Step(ctx context.Context, _ protocol.PoolMember, _ protocol.PoolUpdateStep) (protocol.PoolUpdateStepResult, error) {
+	<-ctx.Done()
+	return protocol.PoolUpdateStepResult{}, ctx.Err()
+}
+
+// A pass over unreachable hosts ends at its own deadline, so the lock a pause or an abort waits for
+// is not held while every host in turn times out.
+func TestAPassIsBoundedWhileHostsDoNotAnswer(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("hang", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.c.peers = hangingUpdatePeers{}
+	previous := poolUpdatePassTimeout
+	poolUpdatePassTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { poolUpdatePassTimeout = previous })
+	done := make(chan error, 1)
+	go func() { done <- lab.c.Advance(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a pass over hosts that never answer did not end at its deadline")
+	}
+	if r := lab.rollout(); r.State != protocol.PoolUpdateRunning || r.Phase != "staging" {
+		t.Fatalf("the rollout moved without an answer: %+v", r)
+	}
+}
+
+// A replica push that does not reach every member never stops the rollout, and is not silent; a
+// push that was only busy (the probe loop's push was running) is not a miss.
+func TestAReplicaPushThatFailsIsLoggedAndTheRolloutCarriesOn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		logged bool
+	}{
+		"unreachable member": {errors.New("member-2 is unreachable"), true},
+		"busy":               {errPoolAuthorityReplicaBusy, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lab := newUpdateLab(t, 3)
+			pushPoolAuthorityReplicasAfterUpdate = func(context.Context, *Store, time.Duration) error { return tc.err }
+			var logged strings.Builder
+			previousOutput := log.Writer()
+			log.SetOutput(&logged)
+			t.Cleanup(func() { log.SetOutput(previousOutput) })
+			if err := lab.start("push-fails", "refuse"); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(logged.String(), "not acknowledged by every member"); got != tc.logged {
+				t.Fatalf("logged = %q, want a trace: %v", logged.String(), tc.logged)
+			}
+			if strings.Contains(logged.String(), "member-2") {
+				t.Fatalf("the log carries the push error text: %q", logged.String())
+			}
+			if r := lab.run(400, ended); r.State != protocol.PoolUpdateFinalized {
+				t.Fatalf("final = %+v pause %+v", r, r.Pause)
+			}
+		})
 	}
 }

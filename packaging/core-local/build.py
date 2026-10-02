@@ -24,9 +24,6 @@ def main():
     parser.add_argument('--version', default='0.1.5~alpha1')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/core-local')
     parser.add_argument('--docker', default='docker', help='Docker executable or wrapper path')
-    parser.add_argument('--appliance-packaging', choices=['bundled', 'split'], default='bundled',
-                        help='bundled: appliance image inside the deb (classic edition); split: written to '
-                             '<output>/payload/<sha256>/ for /var/lib/nex/payload (image edition)')
     parser.add_argument('--edition', choices=['classic', 'image'], default='classic',
                         help='image: the package for the read-only image: no maintainer scripts, apt or initramfs '
                              'hooks, no appliance and no cluster/ZFS/SMB dependencies (layers carry those)')
@@ -88,12 +85,9 @@ def main():
         subprocess.run(run + ['-v', str(args.output.resolve()) + ':/output',
                               '-e', 'NEX_VERSION=' + args.version,
                               '-e', 'NEX_EDITION=' + args.edition,
-                              '-e', 'NEX_APPLIANCE_PACKAGING=' + args.appliance_packaging,
                               '-e', 'SOURCE_DATE_EPOCH=' + epoch,
                               'nex-core-local-builder'], check=True)
     print(args.output / ('nex-core-local_' + args.version + '_amd64.deb'))
-    if not image_edition and args.appliance_packaging == 'split':
-        print(args.output / 'payload' / manifest['image_sha256'])
 
 
 if __name__ == '__main__':

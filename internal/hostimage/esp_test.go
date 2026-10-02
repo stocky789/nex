@@ -171,9 +171,8 @@ func TestESPNodesFindsByPartitionName(t *testing.T) {
 
 func TestESPSyncPropagatesBlessedEntry(t *testing.T) {
 	sandbox(t)
-	booted, other, fresh := t.TempDir(), t.TempDir(), t.TempDir()
+	booted, other := t.TempDir(), t.TempDir()
 	fakeSystem(t, "vda1", map[string]string{"vda1": booted, "vdb1": other})
-	_ = fresh
 	writeFiles(t, booted, map[string]string{"EFI/BOOT/BOOTX64.EFI": "loader", "EFI/Linux/nex-core_r2_2.efi": "uki 2"})
 	writeFiles(t, other, map[string]string{"EFI/Linux/nex-core_r1_1.efi": "uki 1"})
 	if err := (&Writer{Runner: &recorder{}}).ESPSync(context.Background()); err != nil {
@@ -199,7 +198,7 @@ func TestESPSyncWaitsForBless(t *testing.T) {
 }
 
 func TestESPSyncMountsUnmountedESP(t *testing.T) {
-	root := sandbox(t)
+	sandbox(t)
 	booted := t.TempDir()
 	fakeSystem(t, "vda1", map[string]string{"vda1": booted})
 	// vdb1 exists but is not mounted anywhere (no line in /proc/mounts): it is mounted transiently.
@@ -214,7 +213,6 @@ func TestESPSyncMountsUnmountedESP(t *testing.T) {
 	if rec.index("mount -t vfat -o umask=0077,iocharset=ascii "+filepath.Join(devDir, "vdb1")+" "+mp) < 0 || rec.index("umount "+mp) < 0 {
 		t.Errorf("transient mount not used: %v", rec.calls)
 	}
-	_ = root
 }
 
 func TestSeedEtcAndAudit(t *testing.T) {
@@ -243,5 +241,12 @@ func TestSeedEtcAndAudit(t *testing.T) {
 	got, err := AuditEtc(lower, upper)
 	if err != nil || !reflect.DeepEqual(got, []Shadowed{{Path: "passwd"}}) {
 		t.Errorf("audit: %v %v", got, err)
+	}
+	// A lower layer that is missing or not a directory is an error, not "nothing shadowed".
+	if got, err := AuditEtc(filepath.Join(lower, "no-such-dir"), upper); err == nil {
+		t.Errorf("missing lower accepted: %v", got)
+	}
+	if got, err := AuditEtc(filepath.Join(lower, "passwd"), upper); err == nil {
+		t.Errorf("file as lower accepted: %v", got)
 	}
 }

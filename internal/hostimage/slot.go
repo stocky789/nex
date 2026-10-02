@@ -84,12 +84,6 @@ func (p *partIO) Close() error {
 	return nil
 }
 
-// zeroHead wipes the first MiB so no old filesystem or hash tree signature survives.
-func (p *partIO) zeroHead() error {
-	_, err := p.WriteAt(make([]byte, min(p.size, MiB)), 0)
-	return err
-}
-
 func slotLabels(slot string) (root, verity string) {
 	return "nex-root-" + slot, "nex-verity-" + slot
 }
@@ -188,7 +182,9 @@ func (w *Writer) WriteSlot(ctx context.Context, disks []*Disk, slot string, rel 
 		if err != nil {
 			return err
 		}
-		if r, v := t.Parts[tg.root.Index-1], t.Parts[tg.verity.Index-1]; r.ID != rootID || v.ID != verityID {
+		r, rok := t.ByIndex(tg.root.Index)
+		v, vok := t.ByIndex(tg.verity.Index)
+		if !rok || !vok || r.ID != rootID || v.ID != verityID {
 			return fmt.Errorf("%s: slot %s GUIDs did not change", tg.d.Path, slot)
 		}
 	}

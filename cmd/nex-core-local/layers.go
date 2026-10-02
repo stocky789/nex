@@ -12,6 +12,9 @@ import (
 	"nex.local/nex/internal/nexupdate"
 )
 
+// hostLayers builds the layer manager of this host; tests replace it with one over a fixture tree.
+var hostLayers = nexupdate.HostLayers
+
 // runLayers is the on-host entry for optional feature layers (nex-layers.service and the operator).
 // activate re-verifies every enabled layer and links the good ones for systemd-sysext; it exits 0 even
 // when a layer is refused, because a bad layer must never hold boot (the refusal is in the report).
@@ -21,7 +24,7 @@ func runLayers(args []string, out io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	l := nexupdate.HostLayers()
+	l := hostLayers()
 	switch args[0] {
 	case "activate":
 		report := l.Activate(ctx)

@@ -83,6 +83,11 @@ type Platform interface {
 	// Stage writes the release into the inactive slot of every disk and returns the slot letter.
 	Stage(ctx context.Context, rel *hostimage.Release, booted Booted) (string, error)
 	Arm(ctx context.Context, rel *hostimage.Release) error
+	// Disarm takes the boot entry of an armed release back from every disk (the way out of an Arm that
+	// wrapped hostimage.ErrArmNotUndone).
+	Disarm(ctx context.Context, rel ReleaseRecord) error
+	// Rollback arms the retained previous release. Its error wraps hostimage.ErrRollbackPartial when a disk
+	// had been changed before it failed.
 	Rollback(ctx context.Context, from, to ReleaseRecord) error
 	Entries(ctx context.Context) ([]hostimage.UKIEntry, error)
 }
@@ -324,6 +329,7 @@ func (e *Engine) load() error {
 	if e.loaded && e.cacheValid() {
 		return nil
 	}
+	e.loaded = false // a failed read below must not leave a zeroed record that the next caller takes for loaded
 	e.st = updateState{}
 	e.raw = map[string]json.RawMessage{}
 	b, err := os.ReadFile(e.statePath())
@@ -505,8 +511,15 @@ func (e *Engine) loadTrust() (TrustDoc, error) {
 	return cur, nil
 }
 
-// refreshTrust fetches trust.json and adopts a newer one signed by the trust in force. An equal or
-// older document is ignored (a stale mirror); a newer one that does not verify is a refusal.
+// maxTrustLinks bounds how many trust documents one refresh walks: the version in an unverified trust.json
+// must not make the host fetch without end.
+const maxTrustLinks = 32
+
+// refreshTrust fetches trust.json and adopts it when it is newer than the trust in force. A newer document
+// that is more than one version ahead is reached link by link: trust.<n>.json and trust.<n>.sig for every
+// version in between, each signed by a root key of the document before it, so a host that missed a rotation
+// (or reads an old bundle) catches up without ever trusting an unsigned step. An equal or older document is
+// ignored (a stale mirror); a link that is missing is trust_gap and one that does not verify is a refusal.
 func (e *Engine) refreshTrust(ctx context.Context, src Source, cur TrustDoc) (TrustDoc, error) {
 	raw, err := src.Fetch(ctx, "trust.json", maxTrustFile)
 	if err != nil {
@@ -519,27 +532,59 @@ func (e *Engine) refreshTrust(ctx context.Context, src Source, cur TrustDoc) (Tr
 	if d.Version <= cur.Version {
 		return cur, nil
 	}
+	if d.Version-cur.Version > maxTrustLinks {
+		return cur, refuse(502, "trust_gap", "trust.json is too many versions ahead of the trust in force")
+	}
 	sig, err := src.Fetch(ctx, "trust.sig", 128)
 	if err != nil {
 		return cur, err
 	}
-	next, err := VerifyTrust(cur, raw, sig, e.cfg.Now())
-	if err != nil {
+	type link struct{ raw, sig []byte }
+	var links []link
+	for v := cur.Version + 1; v < d.Version; v++ {
+		name := fmt.Sprintf("trust.%d", v)
+		lraw, err := src.Fetch(ctx, name+".json", maxTrustFile)
+		if err == nil {
+			var lsig []byte
+			if lsig, err = src.Fetch(ctx, name+".sig", 128); err == nil {
+				links = append(links, link{lraw, lsig})
+				continue
+			}
+		}
+		var re *Error
+		if errors.As(err, &re) && re.Code == "metadata_missing" {
+			return cur, refuse(502, "trust_gap", "the source lacks an intermediate trust document between the one in force and trust.json")
+		}
 		return cur, err
+	}
+	links = append(links, link{raw, sig})
+	// Verify the whole chain before anything is persisted; each link must be signed by the one before it
+	// and be exactly the next version. Expiry is judged now for every link: an attacker holding a lapsed
+	// root key must not be able to forge a catch-up chain.
+	next := cur
+	var docs []TrustDoc
+	for _, l := range links {
+		doc, err := VerifyTrust(next, l.raw, l.sig, e.cfg.Now())
+		if err != nil {
+			return cur, err
+		}
+		if doc.Version != next.Version+1 {
+			return cur, refuse(502, "trust_gap", "a trust document does not follow the one before it")
+		}
+		docs = append(docs, doc)
+		next = doc
 	}
 	if err = os.MkdirAll(e.cfg.TrustDir, 0o700); err != nil {
 		return cur, err
 	}
-	base := filepath.Join(e.cfg.TrustDir, fmt.Sprintf("trust.%d", next.Version))
-	// A skipped version is stored under every number in between so the chain loads in order.
-	if next.Version != cur.Version+1 {
-		return cur, refuse(502, "trust_gap", "trust.json skips a version; fetch the intermediate trust documents first")
-	}
-	if err = writeFileAtomic(base+".sig", sig, 0o600); err != nil {
-		return cur, err
-	}
-	if err = writeFileAtomic(base+".json", raw, 0o600); err != nil {
-		return cur, err
+	for i, l := range links {
+		base := filepath.Join(e.cfg.TrustDir, fmt.Sprintf("trust.%d", docs[i].Version))
+		if err = writeFileAtomic(base+".sig", l.sig, 0o600); err != nil {
+			return cur, err
+		}
+		if err = writeFileAtomic(base+".json", l.raw, 0o600); err != nil {
+			return cur, err
+		}
 	}
 	return next, nil
 }
@@ -848,6 +893,9 @@ func (e *Engine) reconcile(ctx context.Context) error {
 			if st.Phase != PhaseBooted {
 				st.Phase, changed = PhaseBooted, true
 			}
+			if st.Failure != nil {
+				st.Failure, changed = nil, true // the release started after all (reboot_failed, arm_incomplete, rollback_incomplete)
+			}
 		case total > 0 && bad == total:
 			st.Phase = PhaseRolledBack
 			st.Failure = refuse(0, "boot_failed", "the new version did not pass its boot assessment and the previous version is running")
@@ -855,9 +903,15 @@ func (e *Engine) reconcile(ctx context.Context) error {
 			e.removeStaging()
 			changed = true
 		case total == 0:
-			// The armed entry is gone from every ESP: the record is stale.
-			st.Armed = nil
-			st.Phase = PhaseIdle
+			// The armed entry is gone from every ESP: the record is stale, and what boots is the running
+			// release, whose layers the arm (or rollback) switched away from.
+			st.Armed, st.Failure = nil, nil
+			if st.Staged != nil {
+				st.Phase = PhaseStaged
+			} else {
+				st.Phase = PhaseIdle
+			}
+			e.restoreLayers(ctx, st.Current)
 			changed = true
 		}
 	} else if st.Current.RootHash != b.RootHash {
@@ -896,6 +950,18 @@ func (e *Engine) commit(ctx context.Context) {
 }
 
 func (e *Engine) removeStaging() { _ = os.RemoveAll(filepath.Join(e.cfg.Dir, "staging")) }
+
+// removeStagingExcept drops the staging directories of every release but the one with the sequence: a
+// stage that is replaced leaves its files behind otherwise until the next boot commit.
+func (e *Engine) removeStagingExcept(sequence int) {
+	root := filepath.Join(e.cfg.Dir, "staging")
+	entries, _ := os.ReadDir(root)
+	for _, d := range entries {
+		if d.Name() != fmt.Sprint(sequence) {
+			_ = os.RemoveAll(filepath.Join(root, d.Name()))
+		}
+	}
+}
 
 // ---- status ----
 
@@ -1133,6 +1199,8 @@ func (e *Engine) finish(id string, phase string, opErr error) {
 	})
 	if opErr != nil && !fetch {
 		switch {
+		case e.st.Armed != nil:
+			// Arming failed after it reached a disk (arm_incomplete): the record stays armed.
 		case e.st.Staged != nil:
 			e.st.Phase = PhaseStaged
 		case e.rest != "" && e.rest != PhaseStaged:
@@ -1319,6 +1387,16 @@ func (e *Engine) runApply(ctx context.Context, id string, req ApplyRequest) {
 }
 
 func (e *Engine) pipeline(ctx context.Context, id string, req ApplyRequest) (string, error) {
+	// What the record said before this run touched its phase: a release staged by an earlier run is
+	// finished, not redone.
+	e.mu.Lock()
+	var resting *ReleaseRecord
+	if e.st.Staged != nil {
+		c := *e.st.Staged
+		resting = &c
+	}
+	restingPhase := e.st.Phase
+	e.mu.Unlock()
 	e.setPhase(id, PhaseChecking)
 	src, channel, done, err := e.sourceFor(ctx, req)
 	if err != nil {
@@ -1346,19 +1424,32 @@ func (e *Engine) pipeline(ctx context.Context, id string, req ApplyRequest) (str
 	}
 	e.mu.Lock()
 	e.updateOp(id, func(o *Operation) { o.Sequence = m.Sequence })
-	staged, phase := e.st.Staged, e.st.Phase
 	e.mu.Unlock()
-	if staged != nil && staged.Sequence == m.Sequence && staged.RootHash == target.RootHash && phase == PhaseStaged {
-		// Already staged by an earlier run of this request.
-		return e.afterStage(ctx, id, req, m)
+	dir := e.stagingDir(m.Sequence)
+	if resting != nil && resting.Sequence == m.Sequence && resting.RootHash == target.RootHash && restingPhase == PhaseStaged {
+		if _, serr := os.Stat(filepath.Join(dir, "release")); serr == nil {
+			// Already staged by an earlier run of this request, or by a stage_only apply that this one
+			// completes: nothing is downloaded or written again, the release goes on to arming.
+			e.mu.Lock()
+			e.st.Phase = PhaseStaged
+			err = e.save()
+			e.mu.Unlock()
+			if err != nil {
+				return "", err
+			}
+			return e.afterStage(ctx, id, req, m)
+		}
 	}
 
+	if err = e.checkSpace(ctx, m, comp, dir); err != nil {
+		return "", err
+	}
 	// Staging starts: anything of an older stage is stale, and the retained previous version is
 	// about to lose its slot.
 	e.mu.Lock()
 	e.st.Staged, e.st.Failure = nil, nil
 	e.mu.Unlock()
-	dir := e.stagingDir(m.Sequence)
+	e.removeStagingExcept(m.Sequence)
 	e.setPhase(id, PhaseDownloading)
 	blob, err := fetchBlob(ctx, v.src, blobName(comp), comp, dir, func(done, total int64) {
 		e.setProgress(id, OpProgress{Component: comp.ID, BytesDone: done, BytesTotal: total})
@@ -1403,7 +1494,7 @@ func (e *Engine) pipeline(ctx context.Context, id string, req ApplyRequest) (str
 	}
 	slot, err := e.cfg.Platform.Stage(ctx, rel, b)
 	if err != nil {
-		return "", err
+		return "", diskFull(err)
 	}
 	e.mu.Lock()
 	target.Slot = slot
@@ -1429,6 +1520,63 @@ func otherSlot(s string) string {
 		return "b"
 	}
 	return "a"
+}
+
+// spaceReserve is what a stage leaves free beyond the files it writes (state.json, the layer store's
+// bookkeeping, logs).
+const spaceReserve = 64 << 20
+
+// freeBytes is the space an unprivileged writer can still use on the filesystem holding dir (a variable
+// so tests can pretend the volume is full).
+var freeBytes = func(dir string) (uint64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	return st.Bavail * uint64(st.Bsize), nil
+}
+
+// checkSpace refuses a stage the data volume cannot hold before anything is downloaded: the compressed
+// blob and the tree extracted from it exist side by side for a moment (the image inside is already
+// compressed, so the tree is about as large as the blob), and every layer that is staged (layersToStage)
+// is kept in staging and in the layer store. What a resumed download already holds is not counted again.
+// The numbers are an estimate; a write that still runs out of space is reported as insufficient_space too
+// (diskFull).
+func (e *Engine) checkSpace(ctx context.Context, m Manifest, comp Component, dir string) error {
+	need := uint64(2*comp.Bytes) + spaceReserve
+	layers, _, err := e.layersToStage(ctx, m)
+	if err != nil {
+		return err
+	}
+	for _, c := range layers {
+		if c.Bytes > 0 {
+			need += uint64(2 * c.Bytes)
+		}
+	}
+	for _, p := range []string{filepath.Join(dir, comp.SHA256), filepath.Join(dir, comp.SHA256+".part")} {
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			need -= min(need, uint64(st.Size()))
+		}
+	}
+	if err := os.MkdirAll(e.cfg.Dir, 0o700); err != nil {
+		return err
+	}
+	free, err := freeBytes(e.cfg.Dir)
+	if err != nil {
+		return err
+	}
+	if free < need {
+		return refuse(409, "insufficient_space", "the data volume does not have enough free space to stage this release")
+	}
+	return nil
+}
+
+// diskFull reports a write that ran out of space as insufficient_space; any other error is returned as it is.
+func diskFull(err error) error {
+	if errors.Is(err, syscall.ENOSPC) {
+		return refuse(409, "insufficient_space", "the data volume ran out of free space while staging the release")
+	}
+	return err
 }
 
 func blobName(c Component) string {
@@ -1477,10 +1625,23 @@ func (e *Engine) armLocked(ctx context.Context) error {
 	if rel.Manifest.RootHash != staged.RootHash {
 		return refuse(409, "roothash_mismatch", "the staged image does not match the record; stage it again")
 	}
+	// What the running base's layers are is written down before they are switched away from: a rollback
+	// (or a failed arm) switches them back from this record.
+	e.recordRunningLayers(ctx)
 	if err = e.switchLayers(ctx, staged); err != nil {
 		return err
 	}
 	if err = e.cfg.Platform.Arm(ctx, rel); err != nil {
+		if errors.Is(err, hostimage.ErrArmNotUndone) {
+			// A disk may boot the release although the arm failed: the record must say armed, so that the
+			// boot assessment is followed, and carries the failure, so that Cancel and Activate know to take
+			// the entry back first.
+			failure := refuse(500, "arm_incomplete", "arming failed on a boot disk and could not be undone; the release may start on the next restart")
+			st.Armed, st.Phase, st.Failure = &staged, PhaseArmed, failure
+			_ = e.save()
+			return failure
+		}
+		e.restoreLayers(ctx, st.Current)
 		return err
 	}
 	st.Armed = &staged
@@ -1488,6 +1649,35 @@ func (e *Engine) armLocked(ctx context.Context) error {
 	return e.save()
 }
 
+// incompleteArm reports a release that is armed because its arm failed on a disk and could not be taken back
+// (arm_incomplete), not because it was armed whole. e.mu is held.
+func (e *Engine) incompleteArm() bool {
+	st := &e.st
+	return e.cfg.Platform != nil && st.Phase == PhaseArmed && st.Armed != nil && st.Failure != nil && st.Failure.Code == "arm_incomplete"
+}
+
+// incompleteRollback is incompleteArm for a rollback that reached some disks only (rollback_incomplete).
+func (e *Engine) incompleteRollback() bool {
+	st := &e.st
+	return st.Phase == PhaseArmed && st.Armed != nil && st.Failure != nil && st.Failure.Code == "rollback_incomplete"
+}
+
+// disarmIncomplete takes the entry of an arm_incomplete release off every disk and puts the record back to
+// staged with the running release's layers. While a disk cannot be cleaned the release stays armed and the
+// refusal is arm_incomplete again. The caller has folded the boot state in (reconcile): a release that did
+// start is no longer armed here.
+func (e *Engine) disarmIncomplete(ctx context.Context) error {
+	st := &e.st
+	if err := e.cfg.Platform.Disarm(ctx, *st.Armed); err != nil {
+		return refuse(500, "arm_incomplete", "the armed release could not be taken back from every boot disk; it may start on the next restart")
+	}
+	st.Armed, st.Failure, st.Phase = nil, nil, PhaseStaged
+	e.restoreLayers(ctx, st.Current)
+	return e.save()
+}
+
+// scheduleReboot restarts the host after RebootDelay. A restart that fails is recorded as the failure of
+// the record (reboot_failed) while the release is still armed; Activate repeats it.
 func (e *Engine) scheduleReboot() {
 	if e.cfg.Reboot == nil {
 		return
@@ -1497,16 +1687,55 @@ func (e *Engine) scheduleReboot() {
 		defer e.wg.Done()
 		select {
 		case <-time.After(e.cfg.RebootDelay):
-			_ = e.cfg.Reboot(e.ctx)
+			if err := e.cfg.Reboot(e.ctx); err != nil && e.ctx.Err() == nil {
+				e.rebootFailed()
+			}
 		case <-e.ctx.Done():
 		}
 	}()
 }
 
+// rebootFailed records that the restart of an armed release did not happen. It takes the update lock like
+// any other writer of the record.
+func (e *Engine) rebootFailed() {
+	if e.enter(lockWait) != nil {
+		return
+	}
+	defer e.leave()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.load() != nil || e.st.Phase != PhaseArmed {
+		return
+	}
+	e.st.Failure = refuse(0, "reboot_failed", "the host could not be restarted to start the armed release; repeat activate or restart it")
+	_ = e.save()
+}
+
+// retryReboot clears a recorded reboot_failed of a still armed release and reports whether the restart is to
+// be scheduled again. e.mu is held.
+func (e *Engine) retryReboot() bool {
+	if e.st.Phase != PhaseArmed || e.st.Failure == nil || e.st.Failure.Code != "reboot_failed" {
+		return false
+	}
+	e.st.Failure = nil
+	return e.save() == nil
+}
+
 // Activate is POST /updates/activate: arm the staged release and reboot. Stage never changes the
-// next boot; this is the only arming point.
+// next boot; this is the only arming point. While a release is armed and not yet running, Activate only
+// restarts the host again (the earlier restart failed, or the service restarted before it happened); after
+// an arm that could not be undone (arm_incomplete) it first takes the entry back and arms again.
 func (e *Engine) Activate(ctx context.Context, req ActionRequest) (Operation, bool, error) {
 	return e.action(ctx, req, "activate", func(ctx context.Context) (string, error) {
+		if e.incompleteArm() {
+			if err := e.disarmIncomplete(ctx); err != nil {
+				return "", err
+			}
+		}
+		if e.st.Phase == PhaseArmed && e.st.Armed != nil {
+			e.retryReboot()
+			return PhaseArmed, nil
+		}
 		if err := e.armLocked(ctx); err != nil {
 			return "", err
 		}
@@ -1516,12 +1745,14 @@ func (e *Engine) Activate(ctx context.Context, req ActionRequest) (Operation, bo
 
 // Rollback is POST /updates/rollback: arm the retained previous version and reboot. During the trial boot of an
 // update (phase booted) the running release is not yet committed; the release it replaced is the one to return to,
-// as the Controller offers it and the guide describes.
+// as the Controller offers it and the guide describes. After a rollback that failed on a later disk
+// (rollback_incomplete) it is repeated for the disks that are left.
 func (e *Engine) Rollback(ctx context.Context, req ActionRequest) (Operation, bool, error) {
 	return e.action(ctx, req, "rollback", func(ctx context.Context) (string, error) {
 		st := &e.st
 		current, previous := st.Current, st.Previous
-		if st.Armed != nil {
+		retry := e.incompleteRollback()
+		if st.Armed != nil && !retry {
 			if st.Phase != PhaseBooted {
 				return "", refuse(409, "already_armed", "a release is armed; reboot or wait for the boot assessment")
 			}
@@ -1542,16 +1773,29 @@ func (e *Engine) Rollback(ctx context.Context, req ActionRequest) (Operation, bo
 		if err := e.switchLayers(ctx, prev); err != nil {
 			return "", err
 		}
+		// The record names the previous release as armed from here on, whatever the disks end up doing.
+		record := func(failure *Error) error {
+			st.Current, st.Previous = current, previous
+			prev.Rollback = true
+			st.Armed = &prev
+			st.Staged = nil
+			st.Phase = PhaseArmed
+			st.Available = nil
+			st.Failure = failure
+			return e.save()
+		}
 		if err := e.cfg.Platform.Rollback(ctx, *current, prev); err != nil {
+			if retry || errors.Is(err, hostimage.ErrRollbackPartial) {
+				// A disk already boots the previous release, or may: the layers stay switched to it and the
+				// record says armed, as what boots is not known until the boot assessment says it.
+				failure := refuse(500, "rollback_incomplete", "the rollback reached some boot disks and not all; repeat rollback")
+				_ = record(failure)
+				return "", failure
+			}
+			e.restoreLayers(ctx, current)
 			return "", refuse(409, "previous_unavailable", "the previous version's slot or boot entry is not intact on every disk")
 		}
-		st.Current, st.Previous = current, previous
-		prev.Rollback = true
-		st.Armed = &prev
-		st.Staged = nil
-		st.Phase = PhaseArmed
-		st.Available = nil
-		return PhaseArmed, e.save()
+		return PhaseArmed, record(nil)
 	})
 }
 
@@ -1584,6 +1828,15 @@ func (e *Engine) action(ctx context.Context, req ActionRequest, kind string, fn 
 		return Operation{}, false, err
 	}
 	if replay && !resume {
+		if op.Error == nil && e.retryReboot() {
+			// The restart this request led to failed: repeating the request restarts again.
+			e.scheduleReboot()
+		}
+		if op.Error != nil {
+			// A failure that was kept on record (not a refusal) is still a failure when the request is
+			// repeated: the caller must not be told the release was armed.
+			return Operation{}, false, refuse(500, op.Error.Code, op.Error.Message)
+		}
 		return op, true, nil
 	}
 	e.reserve(op.ID, func() {})
@@ -1671,6 +1924,17 @@ func (e *Engine) Cancel(ctx context.Context, req ActionRequest) (Operation, bool
 		e.mu.Unlock()
 		return Operation{}, false, refuse(400, "invalid_request", "request_id must be 8 to 64 letters, digits, - or _")
 	}
+	if e.incompleteArm() {
+		// The arm failed on a disk and could not be undone: the release may still start. Cancel takes its
+		// entry back; while that fails, or once the release started, the release stays armed.
+		if err = e.reconcile(ctx); err == nil && e.incompleteArm() {
+			err = e.disarmIncomplete(ctx)
+		}
+		if err != nil {
+			e.mu.Unlock()
+			return Operation{}, false, err
+		}
+	}
 	if e.st.Phase == PhaseArmed || e.st.Phase == PhaseBooted {
 		e.mu.Unlock()
 		return Operation{}, false, refuse(409, "already_armed", "a release is armed and can no longer be cancelled; use rollback")
@@ -1694,17 +1958,41 @@ func (e *Engine) Cancel(ctx context.Context, req ActionRequest) (Operation, bool
 			return Operation{}, false, refuse(409, "write_in_progress", "the image is being written to the slots and cannot be cancelled")
 		}
 		id, done := a.id, a.done
+		if k := e.opKind(id); k == "activate" || k == "rollback" {
+			// Arming is not a download: it is not interrupted, and a Cancel must not rewrite the record
+			// that arming is about to produce.
+			e.mu.Unlock()
+			return Operation{}, false, refuse(409, "update_in_progress", "an activation or rollback is arming a release and cannot be cancelled")
+		}
 		a.cancel()
 		e.mu.Unlock()
 		<-done
 		e.mu.Lock()
-		defer e.mu.Unlock()
 		now := e.cfg.Now()
-		e.updateOp(id, func(o *Operation) { o.Phase = "cancelled"; o.FinishedAt = &now; o.Progress = nil })
-		if !sideJob(e.opKind(id)) {
-			e.st.Phase = PhaseIdle
+		switch {
+		case e.st.Phase == PhaseArmed || e.st.Phase == PhaseBooted:
+			// The apply armed its release before the cancel took effect: it is armed, not cancelled.
+			defer e.mu.Unlock()
+			e.updateOp(id, func(o *Operation) {
+				if o.FinishedAt == nil {
+					o.Phase, o.FinishedAt, o.Progress = PhaseArmed, &now, nil
+				}
+			})
+			_ = e.save()
+			return Operation{}, false, refuse(409, "already_armed", "a release is armed and can no longer be cancelled; use rollback")
+		case e.recorded(id).FinishedAt == nil:
+			defer e.mu.Unlock()
+			e.updateOp(id, func(o *Operation) { o.Phase = "cancelled"; o.FinishedAt = &now; o.Progress = nil })
+			if !sideJob(e.opKind(id)) {
+				if e.st.Staged != nil {
+					e.st.Phase = PhaseStaged
+				} else {
+					e.st.Phase = PhaseIdle
+				}
+			}
+			return record()
 		}
-		return record()
+		// The operation ended by itself first; what is left is judged as the record now stands.
 	}
 	defer e.mu.Unlock()
 	if e.st.Phase == PhaseStaged {

@@ -1,0 +1,14 @@
+[Unit]
+Description=Reboot a blessed boot that failed in the initrd, after a pause
+DefaultDependencies=no
+# The counterpart of nex-initrd-reboot.service for an entry without a "+tries" counter (the blessed image and the
+# Controller guest). The initrd root account is locked, so a shell here would only refuse the login. A reboot is
+# the one recovery that needs no input: a transient fault (a slow disk, a late array) clears, and an operator can pick
+# another entry in the boot menu. Nothing counts these reboots, so the pause keeps the loop slow and the console readable.
+ConditionPathExists=!/sys/firmware/efi/efivars/LoaderBootCountPath-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+
+[Service]
+Type=oneshot
+StandardOutput=journal+console
+ExecStartPre=/usr/bin/sleep 60
+ExecStart=/usr/bin/systemctl --force reboot

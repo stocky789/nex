@@ -152,13 +152,16 @@ func (p hostPlatform) Booted(context.Context) (Booted, error) {
 	if b.RootHash == "" {
 		return Booted{}, errors.New("the running system has no roothash= on its command line")
 	}
-	// BUILD_ID is <label>-<sequence>; the label may itself contain dashes.
-	if id := OSReleaseValue("BUILD_ID"); id != "" {
-		if i := strings.LastIndex(id, "-"); i > 0 {
-			b.Label = id[:i]
-			b.Sequence, _ = strconv.Atoi(id[i+1:])
-		}
+	// BUILD_ID is <label>-<sequence>; the label may itself contain dashes. Without a sequence of at
+	// least 1 the host cannot say which release it runs, and staging would prune the boot entry it
+	// runs from, so the engine refuses to work on it.
+	id := OSReleaseValue("BUILD_ID")
+	i := strings.LastIndex(id, "-")
+	seq, err := strconv.Atoi(id[i+1:])
+	if i <= 0 || err != nil || seq < 1 {
+		return Booted{}, errors.New("the running image's BUILD_ID is not <label>-<sequence>")
 	}
+	b.Label, b.Sequence = id[:i], seq
 	return b, nil
 }
 
@@ -177,6 +180,10 @@ func (p hostPlatform) Stage(ctx context.Context, rel *hostimage.Release, b Boote
 
 func (p hostPlatform) Arm(ctx context.Context, rel *hostimage.Release) error {
 	return p.host.Arm(ctx, rel)
+}
+
+func (p hostPlatform) Disarm(ctx context.Context, rel ReleaseRecord) error {
+	return p.host.Disarm(ctx, rel.Sequence)
 }
 
 func (p hostPlatform) Rollback(ctx context.Context, from, to ReleaseRecord) error {
@@ -253,10 +260,15 @@ func extractRelease(blob, dir string) error {
 		}
 		dst := filepath.Join(tmp, filepath.FromSlash(name))
 		if err = os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			return err
+			_ = os.RemoveAll(tmp)
+			return diskFull(err)
 		}
 		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
+			if full := diskFull(err); full != err {
+				_ = os.RemoveAll(tmp)
+				return full
+			}
 			return bad()
 		}
 		n, err := io.Copy(out, tr)
@@ -265,6 +277,11 @@ func extractRelease(blob, dir string) error {
 		}
 		if cerr := out.Close(); err == nil {
 			err = cerr
+		}
+		if full := diskFull(err); full != err {
+			// The volume filled up: the archive may be fine, so the release is not called malformed.
+			_ = os.RemoveAll(tmp)
+			return full
 		}
 		if err != nil || n != h.Size {
 			return bad()

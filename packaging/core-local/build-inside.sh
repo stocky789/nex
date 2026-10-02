@@ -84,6 +84,8 @@ fi
 cp -a docs/api "$pkg/usr/share/nex/core-local/"
 cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$pkg/usr/share/doc/nex-core-local/"
 install -m644 /usr/local/go/LICENSE "$pkg/usr/share/doc/nex-core-local/go-LICENSE"
+install -m644 vendor/github.com/klauspost/compress/LICENSE "$pkg/usr/share/doc/nex-core-local/klauspost-compress-LICENSE"
+install -m644 vendor/github.com/mattn/go-sqlite3/LICENSE "$pkg/usr/share/doc/nex-core-local/go-sqlite3-LICENSE"
 install -m644 /usr/share/doc/libpam0g/copyright "$pkg/usr/share/doc/nex-core-local/pam-copyright"
 for file in \
     vendor/github.com/aws/aws-sdk-go-v2/LICENSE.txt \
@@ -109,34 +111,11 @@ for file in \
 done
 go version /build/nex-core-local > "$pkg/usr/share/doc/nex-core-local/go-version.txt"
 if [ "$edition" = classic ]; then
-    # NEX_APPLIANCE_PACKAGING=bundled (default, classic edition): the signed appliance image and manifest are
-    # inside the package under /usr/share/nex/appliance, as before. =split (image edition): they are written
-    # next to the package as payload/<sha256>/{controller.qcow2,manifest.json,manifest.sig}, the layout the image
-    # installer places in /var/lib/nex/payload/<sha256>/. Either way the package carries the source offer, the
-    # notices, the update helpers, the trust key and controller.sha256 (the payload directory this build expects).
-    packaging=${NEX_APPLIANCE_PACKAGING:-bundled}
-    appliance_sha=$(sha256sum /input/bundle/controller.qcow2 | awk '{print $1}')
-    printf '%s\n' "$appliance_sha" > "$pkg/usr/share/nex/appliance/controller.sha256"
-    for artifact in nex-source.tar.gz components.tsv LICENSE NOTICE ARTWORK-LICENSE.md build-inputs.json; do
+    # The signed appliance image and manifest are inside the package under /usr/share/nex/appliance, with the
+    # source offer, the notices, the update helpers and the trust key.
+    for artifact in controller.qcow2 manifest.json manifest.sig nex-source.tar.gz components.tsv LICENSE NOTICE ARTWORK-LICENSE.md build-inputs.json; do
         cp "/input/bundle/$artifact" "$pkg/usr/share/nex/appliance/"
     done
-    case "$packaging" in
-    bundled)
-        for artifact in controller.qcow2 manifest.json manifest.sig; do
-            cp "/input/bundle/$artifact" "$pkg/usr/share/nex/appliance/"
-        done
-        ;;
-    split)
-        install -d "/output/payload/$appliance_sha"
-        for artifact in controller.qcow2 manifest.json manifest.sig; do
-            cp --reflink=auto "/input/bundle/$artifact" "/output/payload/$appliance_sha/"
-        done
-        ;;
-    *)
-        echo "NEX_APPLIANCE_PACKAGING must be bundled or split, not $packaging" >&2
-        exit 1
-        ;;
-    esac
     install -d "$pkg/usr/share/nex/appliance/update"
     install -m755 packaging/controller/apply-update "$pkg/usr/share/nex/appliance/update/"
     install -m755 appliance/firstboot.py "$pkg/usr/share/nex/appliance/update/appliance-firstboot"

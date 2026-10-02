@@ -25,12 +25,13 @@ firmware, Secure Boot, TPM or multi-disk hardware was used. Two time-boxed sessi
   every disk -> flip GUIDs to the roothash; refuses the running slot), `esp.go` (ESP converger: temp-then-rename, UKI last,
   prune, SHA-256 verify; ESP sync after bless), `etc.go` (seed into the overlay upper, shadow audit), `install.go`
   (`Install`, `Repair`: Repair rewrites partitions 1-5 and keeps the nex-data entry and bytes).
-- `cmd/nex-hostimage`: `install`, `repair`, `esp-sync`, `etc-audit`, `verify`. Static binary, built by `image/build.sh`.
+- `cmd/nex-hostimage`: `install`, `repair`, `esp-sync`, `etc-audit --lower DIR`, `verify`. Static binary, built by `image/build.sh`.
+  `etc-audit` needs the image's `/etc` named by `--lower` (the overlay hides it; `mount --bind / /mnt` shows it at `/mnt/etc`).
 - `image/`: `build.sh`, `release.py` (erofs lz4hc + verity with fixed UUID/salt/timestamps, UKI via ukify, ESP tree, manifest),
   `mkosi.conf`, `mkosi.postinst.chroot` (static os-release with BUILD_ID/SYSEXT_LEVEL, empty machine-id, no host keys, preset
   list of package-enabled units), `mkosi.finalize` (dpkg db tar and package list for layer builds), `mkosi.extra` (fstab,
   mdadm.conf, nex-firstboot / nex-boot-check / nex-esp-sync units, masks, presets), `initrd/` (overlay unit, emergency/rescue
-  reboot drop-ins, generic mdadm.conf, md re-probe udev rule and unit), `tools/Dockerfile` (pinned container), `base.packages`, `denylist.txt`, `snapshot`,
+  drop-ins that wait for `nex-initrd-reboot.service` (a boot with a boot counter) or `nex-initrd-reboot-paced.service` (one without), generic mdadm.conf, md re-probe udev rule and unit), `tools/Dockerfile` (pinned container), `base.packages`, `denylist.txt`, `snapshot`,
   `packages.lock` (317 packages), `scripts/image-lock.py`.
 - Tests: `internal/hostimage/*_test.go`, `tests/test_image_layout.py`, `tests/integration/image_boot.py`.
 
@@ -137,3 +138,47 @@ covered and need to be added after hardware inventory. All boots above passed wi
 - Disk replacement, a second slot, and an in-guest `reboot` (as opposed to power-off and cold boot) were not exercised.
 - The "smb" package group (`cifs-utils`, `smbclient`) is outside the base per the assignment and no layer ships it yet.
 - The unit-test `TestWriteSlot...` oversize-release case was dropped (it needs a 4 GiB fixture).
+
+## Review follow-up (2026-10-02): what changed after the 16-lane review
+
+Changes to the sources below were checked with unit tests and a stubbed script run only; **none was booted in a VM**, so
+the initrd and boot-check behaviour is unverified on a real boot.
+
+- **Initrd emergency/rescue no longer reboots forever, and never ends at a locked shell.** The drop-ins used to replace
+  `ExecStart` with `systemctl --force reboot`; on a blessed entry (no `+tries` counter) a failed verity check or a missing
+  `nex-data` then looped without limit. Leaving the shipped shell instead is no fix: the initrd's `/etc/shadow` has
+  `root:*` and `SYSTEMD_SULOGIN_FORCE` is not set, so `sulogin` refuses the login and the host would sit at a console
+  message. Forcing it would hand a passwordless root shell to anyone at the console of a machine that holds the data
+  volume, so that option was rejected. Now emergency/rescue want two mutually exclusive units, ordered before them:
+  `nex-initrd-reboot.service` runs when the EFI variable `LoaderBootCountPath` exists (sd-boot sets it only while the
+  booted entry still carries a counter): one try is spent and the previous image is tried after the last. Otherwise
+  `nex-initrd-reboot-paced.service` waits 60 s and reboots. Nothing counts those reboots (a tmpfs counter dies with the
+  reboot, and writing an EFI variable from the initrd was judged not worth the risk), so the loop is unbounded but slow:
+  a transient fault (late disk or array) recovers by itself, the console message stays readable, and an operator can pick
+  another entry or the installer's Repair in the firmware boot menu. The Controller guest's initrd overlay carries both units
+  and the drop-ins: its UKI has no counter, so it always takes the paced path, and the host sees a guest that never becomes
+  ready. Whether `efivarfs` and that variable are visible in this initrd is **not observed**; if not, every failure takes
+  the paced path, which is still a reboot. Not booted in a VM.
+- **`nex-boot-check` is bounded by time.** `NEX_BOOT_CHECK_BUDGET` (default 600 s) ends the retry loop, no layer check
+  starts after it, the writability probes and each `boot-check.d` script run under `timeout`, and `nex-bless-boot bad`
+  is limited to 60 s, so the script reaches its bad mark and reboot well inside `TimeoutStartSec=900`. Smoke run with
+  stubbed `systemctl`/`findmnt` and a 4 s budget: exit 1 after 4.1 s with the problem list (tries set to 100).
+- **`/root` is a link to `/var/roothome`** (`mkosi.postinst.chroot`; tmpfiles creates the 0700 directory), so root's
+  `authorized_keys`, history and `known_hosts` persist on `nex-data`. Not observed on a booted host.
+- **UKI version sort.** sd-boot orders entries by `IMAGE_VERSION` (VERSION when absent) as a version string. The UKI's
+  os-release now carries the zero-padded sequence in both and nothing else (the label stays in `PRETTY_NAME`,
+  `VERSION_ID` and `BUILD_ID`), so the order is the sequence order `BootOrder` models whatever the label looks like.
+  `release.py` rejects a `NEX_LABEL` outside `[A-Za-z0-9.~_-]+` and a negative `NEX_SEQUENCE`, the set the release reader accepts.
+  The sd-boot comparison itself is from the systemd source, not run here.
+  One-time caveat: a UKI built before this change carried `IMAGE_VERSION=<label>.<sequence>`, which sorts above the new
+  bare zero-padded sequence. No released host has that format (the feature is unreleased); a development ESP built earlier must be
+  reinstalled, not updated.
+- **`etc-audit`** without `--lower` is an error (the old default path existed nowhere and the audit silently printed nothing),
+  and a `--lower` that is missing or not a directory fails.
+- **`WriteSlot`'s final GUID check** finds its partitions by entry number (it used the compacted list position, which is wrong
+  or panics when an earlier entry is empty); `zeroHead` (unused) was deleted; the two copies of the verity fixture writer are
+  one; `TestRepairKeepsData` asserts the `nex-data` entry and disk GUID on every disk.
+- `tests/test_image_layout.py` now also pins the data partition number and label, and the partition names used by the installer
+  script and the image labs, against `internal/hostimage/layout.go`. The sizes in `image/spike/mkosi/mkosi.repart` (512 MiB ESP, 2 GiB
+  roots, 1 GiB data) are **not** the product layout (1 GiB / 4 GiB / rest): that directory is the Phase 0 spike record referenced by
+  `phase0.md` and is not used by the product, so it is left as it is and not tested.

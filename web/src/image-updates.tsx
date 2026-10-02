@@ -122,6 +122,13 @@ function ImageHost({ host, api, busy }: { host: Host; api: API; busy: boolean })
   const [shutdown, setShutdown] = useState(false);
   const held = useRef({ id: "", signature: "" });
   const stamp = useRef("");
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    if (!element) return;
+    if (confirming && !element.open) element.showModal();
+    else if (!confirming && element.open) element.close();
+  }, [confirming]);
   stamp.current = reportStamp(host);
   const { image, connection } = imageSnapshot(host, fetched);
   const actions = imageActions(image, connection);
@@ -180,7 +187,7 @@ function ImageHost({ host, api, busy }: { host: Host; api: API; busy: boolean })
       {image.secure_boot !== undefined && <><dt>Secure Boot</dt><dd>{image.secure_boot ? "Enforcing" : "Off"}</dd></>}
       {image.operation && <><dt>Last operation</dt><dd>{image.operation.kind} · {image.operation.phase}{" "}<time dateTime={image.operation.started_at} title={date(image.operation.started_at)}>{relativeTime(image.operation.started_at)}</time></dd></>}
     </dl>}
-    {image && <ChannelPicker current={image.channel} disabled={busy || connection !== "fresh" || active} apply={changeChannel} />}
+    {image && <ChannelPicker current={image.channel} disabled={busy || connection !== "fresh" || active || following} apply={changeChannel} />}
     {image?.failure && <Banner tone="bad" role="status">{image.failure.code === "boot_failed" ? "The new release failed its health check and the host returned to the previous release. " : ""}{fault(image.failure)}</Banner>}
     {image?.operation?.error && <Banner tone="warn" role="status">{fault(image.operation.error)}</Banner>}
     {error && <Banner tone="bad" role="alert">{error}</Banner>}
@@ -189,12 +196,16 @@ function ImageHost({ host, api, busy }: { host: Host; api: API; busy: boolean })
     <div className="actions">
       {button("check")}{button("apply", true)}{button("activate", true)}{button("rollback")}{button("cancel")}
     </div>
-    {confirming && <div className="confirm" role="alertdialog" aria-label={`Confirm ${verb[confirming]}`}>
-      <p>{confirming === "activate"
-        ? `Reboot ${host.hostname} into the staged release? The host restarts now. It gets three tries; if the new release does not pass its health check it returns to the previous release by itself.`
-        : `Reboot ${host.hostname} into the previous release? The host restarts now.`}</p>
-      <label><input type="checkbox" checked={shutdown} onChange={e => setShutdown(e.target.checked)} /> Shut down running guests gracefully first (otherwise the host refuses while any guest runs)</label>
-      <div className="actions"><button type="button" className="sm primary" onClick={() => void run(confirming)}>{verb[confirming]}</button><button type="button" className="sm" onClick={() => setConfirming("")}>Keep as is</button></div>
-    </div>}
+    <dialog ref={dialog} className="confirm-dialog" aria-labelledby={`image-confirm-${host.id}`} onClose={() => setConfirming("")}>
+      {confirming && <form aria-label={`Confirm ${verb[confirming]}`} onSubmit={e => { e.preventDefault(); void run(confirming); }}>
+        <h2 id={`image-confirm-${host.id}`}>{verb[confirming]} {host.hostname}?</h2>
+        <p>{confirming === "activate"
+          ? `Reboot ${host.hostname} into the staged release? The host restarts now. It gets three tries; if the new release does not pass its health check it returns to the previous release by itself.`
+          : `Reboot ${host.hostname} into the previous release? The host restarts now.`}</p>
+        <label><input type="checkbox" checked={shutdown} onChange={e => setShutdown(e.target.checked)} /> Shut down running guests gracefully first (otherwise the host refuses while any guest runs)</label>
+        {!actions[confirming].enabled && <p className="task-error" role="alert">{actions[confirming].why || "This action is no longer available."}</p>}
+        <div className="actions"><button type="button" onClick={() => setConfirming("")}>Keep as is</button><button className="primary" disabled={busy || !actions[confirming].enabled}>{verb[confirming]}</button></div>
+      </form>}
+    </dialog>
   </div>;
 }

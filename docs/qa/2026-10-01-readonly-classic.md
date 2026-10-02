@@ -83,5 +83,7 @@ probe calls `sync` before powering off. Whether stock hosts lose data this way w
   static trace of the Go code and packaging scripts, not a run. The DKMS boot-time autoinstall
   (`dkms.service`) was not examined.
 - The real replacement of a failed mirror disk with two arrays (unit tests only).
-- Hosts upgraded in place from a classic install: they have no `/var` entry, are not converted, and were
-  exercised only as the classic control above.
+- Hosts upgraded in place from a classic install. The only condition the initramfs script tests is a `/var` entry
+  in fstab: a host with one (a separate `/var`, whoever installed it) is converted at its next boot, `/etc` and
+  `/root` moving onto `/var`; only a host without one is left unchanged. That in-place conversion of an existing
+  host was not exercised; only the classic control above (fstab without `/var`) was.

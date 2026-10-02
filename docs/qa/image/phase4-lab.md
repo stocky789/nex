@@ -14,6 +14,10 @@ Controller data directory and the build trees were deleted (the passwords were r
 - API impact: **none** (no route, request or response changed). Guide impact: **none**; the walk-through below is not an operator
   procedure (it uses a hand-run workstation Controller and lab shells), so `update-a-pool.md` stays **unverified**. State owner: unchanged
   (`pool-update.json` on the master).
+- **Later changes are not covered by this run.** A branch review afterwards changed the coordinator (hosts already on the release are
+  skipped instead of refused, abort and resume handling, guest-step refusals, step deadlines, replication on every stage change; see
+  [phase4-rollout.md](phase4-rollout.md)) and added a `current` list to the dry-run plan. None of that was re-run in this lab; the
+  observations below describe the build that ran then, and the later behaviour is fake-peer test evidence only.
 
 ## What was built and run
 

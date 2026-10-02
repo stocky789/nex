@@ -73,12 +73,14 @@ func mdTestLab(t *testing.T, arrays protocol.HardwareMDArrays, candidate ZFSDevi
 	noESP = false
 	t.Cleanup(func() {
 		mdSysBlockRoot, mdFirmwareEFI, mdBootEFIRoot, noESP = "/sys/class/block", "/sys/firmware/efi", "/boot/efi", false
+		mdOSReleasePath = "/usr/lib/os-release"
 		mdSyncESPHelper = "/usr/local/sbin/nex-sync-esp"
 		mdDiscoverDevice, mdReadArrays = DiscoverZFSDevices, func() protocol.HardwareMDArrays { return ReadMDArrays("/") }
 		systemDiskRun = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return zfsProvisionRun(ctx, name, args...)
 		}
 	})
+	mdOSReleasePath = filepath.Join(t.TempDir(), "no-os-release") // a classic host unless a test writes one
 	mdTestRootOptions(t, "rw,relatime")
 	mdSysBlockRoot = mdTestSysfs(t, map[string][]string{"sda": {"sda1", "sda2"}, "sdb": {"sdb1", "sdb2"}, "scsi-newdisk": {"scsi-newdisk-part1", "scsi-newdisk-part2"}})
 	mdFirmwareEFI = filepath.Join(t.TempDir(), "no-efi") // BIOS firmware
@@ -157,6 +159,46 @@ func TestReplaceSystemDiskRebuildsDegradedMirror(t *testing.T) {
 	}
 	if len(*commands) != before {
 		t.Fatalf("a replayed operation ran %v", (*commands)[before:])
+	}
+}
+
+// The replacement copies the table and re-adds the mirror members; it does not lay down the image
+// edition's root and verity slots. On an image host it must refuse before touching the journal or any disk,
+// and only a host whose os-release says IMAGE_ID=nex-core is refused.
+func TestReplaceSystemDiskRefusesOnTheImageEdition(t *testing.T) {
+	for name, tc := range map[string]struct {
+		osRelease string
+		refused   bool
+	}{
+		"image edition":        {"ID=nex-core\nIMAGE_ID=\"nex-core\"\nBUILD_ID=20261001.1\n", true},
+		"unquoted":             {"IMAGE_ID=nex-core\n", true},
+		"classic debian":       {"ID=debian\nVERSION_ID=\"13\"\n", false},
+		"other image":          {"ID=debian\nIMAGE_ID=other\n", false},
+		"id only, no image id": {"ID=nex-core\n", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			commands := mdTestLab(t, mdTestArray(1, mdSurvivingMember), mdTestCandidate())
+			if err := os.WriteFile(mdOSReleasePath, []byte(tc.osRelease), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			state := filepath.Join(t.TempDir(), "system-disk-replace")
+			err := NewSystemDiskReplacer(state).Replace(context.Background(), mdTestRequest())
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("a host that is not the image edition was refused: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "not available on the image edition") {
+				t.Fatalf("expected an image-edition refusal, got %v", err)
+			}
+			if len(*commands) != 0 {
+				t.Fatalf("a refused replacement ran %v", *commands)
+			}
+			if _, statErr := os.Stat(state); !os.IsNotExist(statErr) {
+				t.Fatalf("a refused replacement left state behind: %v", statErr)
+			}
+		})
 	}
 }
 

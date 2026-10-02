@@ -24,6 +24,13 @@ RemainAfterExit=yes
 ExecStart=/usr/lib/nex/nex-core-local layers activate
 # refresh merges when nothing is merged yet and replaces the stock merge when one exists.
 ExecStartPost=-/usr/bin/systemd-sysext refresh
+# The merge is unordered against this boot's sysusers, tmpfiles and udev passes (ordering after tmpfiles-setup
+# is the cycle above), so a layer's sysusers.d, tmpfiles.d and udev rules are applied here, as a live ensure
+# does. Each step is idempotent and its failure must not hold boot. udevd may not be running yet, in which case
+# it reads the rules when it starts.
+ExecStartPost=-/usr/bin/systemd-sysusers
+ExecStartPost=-/usr/bin/systemd-tmpfiles --create
+ExecStartPost=-/usr/bin/udevadm control --reload
 TimeoutStartSec=5min
 UMask=0077
 # No sandboxing options: they put the service in a private mount namespace, and a sysext merge made there

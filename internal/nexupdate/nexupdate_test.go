@@ -435,7 +435,6 @@ func TestApplyLocalInstallsMissingRecommendedPackages(t *testing.T) {
 	}
 }
 
-// A Controller apply must not drag a host's ZFS packages onto the appliance.
 // A read-only-root host: dpkg only ever runs between a remount rw and a remount ro,
 // and the root is made read-only again whether or not the install worked.
 func TestApplyLocalOpensRootWindowOnReadOnlyRoot(t *testing.T) {
@@ -568,6 +567,7 @@ func TestApplyLocalLeavesWritableRootAlone(t *testing.T) {
 	}
 }
 
+// A Controller apply must not drag a host's ZFS packages onto the appliance.
 func TestApplyLocalControllerSkipsCoreRecommendations(t *testing.T) {
 	isolatePaths(t)
 	installed := "0.1.0"

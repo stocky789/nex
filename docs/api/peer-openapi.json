@@ -2671,7 +2671,7 @@
             "PoolPeerCertificate": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "Core peer: pool master \u2192 member",
         "parameters": [],
         "requestBody": {
@@ -2695,11 +2695,11 @@
               }
             }
           },
+          "400": {
+            "description": "The step body could not be decoded."
+          },
           "401": {
             "description": "Not an authorized pool peer."
-          },
-          "409": {
-            "description": "Refused: the host cannot answer (not the master for a blob, or no image engine)."
           }
         }
       }
@@ -2714,7 +2714,7 @@
             "PoolPeerCertificate": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "Core peer: pool master \u2192 member",
         "parameters": [],
         "responses": {
@@ -2732,7 +2732,7 @@
             "description": "Not an authorized pool peer."
           },
           "409": {
-            "description": "Refused: the host cannot answer (not the master for a blob, or no image engine)."
+            "description": "Refused: this host cannot report (it does not run the image edition)."
           }
         }
       }
@@ -2747,7 +2747,7 @@
             "PoolPeerCertificate": []
           }
         ],
-        "x-introduced-version": "0.1.0",
+        "x-introduced-version": "0.4.19",
         "x-audience": "Core peer: member \u2192 pool master",
         "parameters": [
           {
@@ -2765,11 +2765,20 @@
           "200": {
             "description": "The blob bytes; Range is honoured."
           },
+          "206": {
+            "description": "A range of the blob bytes."
+          },
           "401": {
             "description": "Not an authorized pool peer."
           },
+          "404": {
+            "description": "No such blob, or it is not verified; the member treats this as the master lacking the blob."
+          },
+          "405": {
+            "description": "Only GET and HEAD are served."
+          },
           "409": {
-            "description": "Refused: the host cannot answer (not the master for a blob, or no image engine)."
+            "description": "Refused: this host is not the pool master."
           }
         }
       }
@@ -10213,7 +10222,7 @@
       "PoolUpdateHost": {
         "type": "object",
         "additionalProperties": false,
-        "description": "The master's record of one host's progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0.",
+        "description": "The master's record of one host's progress in a rollout. stage is the next unfinished step: pending, staged, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0. retry_started_at is when the current run of guest shutdown or start failures began (omitted while unset).",
         "x-go-type": "protocol.PoolUpdateHost",
         "properties": {
           "host_id": {
@@ -10249,6 +10258,11 @@
           "attempt": {
             "type": "integer",
             "minimum": 0
+          },
+          "retry_started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the current run of guest-step failures on this host began; omitted while unset. The failure window is judged from here, so step_started_at and the six-hour step timeout are not restarted by it."
           }
         },
         "required": [
@@ -10262,7 +10276,7 @@
       "PoolUpdatePause": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed.",
+        "description": "Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed, abort_cleanup_pending (an abort could not confirm that every started host was put back; resume and rollback_host are refused, abort retries or force ends it). needs_attention carries vm_inventory_unavailable, vm_shutdown_failed or vm_start_failed in its message after 5 minutes of failures.",
         "x-go-type": "protocol.PoolUpdatePause",
         "properties": {
           "code": {
@@ -10348,6 +10362,10 @@
           },
           "host_id": {
             "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Only with control abort: end a pending abort cleanup (abort_cleanup_pending) without confirming it. Refused abort_not_pending when no abort is pending."
           }
         },
         "required": []

@@ -91,10 +91,32 @@ def refused_boot(vm, seconds):
     return started, clues[:4]
 
 
+def check_tampered(vm, work, rel1, uki1):
+    """The tampered signed UKI must be refused; a missing fixture is a FAIL, not a silent skip."""
+    tampered = os.path.join(os.path.dirname(rel1), "tampered", uki1)
+    if not os.path.exists(tampered):
+        check(False, "the tampered signed UKI fixture exists (create it with: image_sign_release.py --release REL1 --tamper --out <dirname of --rel1>/tampered ...)", tampered)
+        return
+    put_uki(work, uki1, tampered)
+    started, clues = refused_boot(vm, 75)
+    check(not started and bool(clues), "virtual Secure Boot: a tampered signed UKI is refused by the firmware/shim (no kernel, refusal text seen)", f"started={started} {clues}")
+    info(f"tampered UKI under SB: kernel started={started}; text: {clues}")
+
+
 def secure_state(ctl):
     rc, out = ctl.sh("bootctl status 2>&1 | grep -i 'secure boot'; cat /sys/kernel/security/lockdown 2>&1; "
                      "dmesg | grep -i -m3 'secure boot\\|lockdown' | cut -c1-100")
     return out.replace("\n", " | ")
+
+
+def sb_enforcing(st):
+    """bootctl's own 'Secure Boot: enabled' line; empty output, 'disabled' and a bare lockdown/dmesg mention do not count."""
+    return re.search(r"secure boot:\s*enabled", st, re.I) is not None
+
+
+def sb_off(st):
+    """Non-empty output that reports Secure Boot as not enabled (an empty or failed query proves nothing)."""
+    return bool(st.strip()) and not sb_enforcing(st)
 
 
 def pcrs(ctl, label, log):
@@ -134,8 +156,12 @@ def main():
     ap.add_argument("--skip-negative", action="store_true", help="skip step 2 (unsigned/tampered UKI, Secure Boot off); lab 1 ran it")
     a = ap.parse_args()
     work = os.path.abspath(a.workdir)
+    marker = os.path.join(work, ".image_sb_lab")
+    if os.path.isdir(work) and os.listdir(work) and not os.path.exists(marker):
+        sys.exit(f"{work} exists and was not created by this script; pass an empty or new --workdir")
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
+    open(marker, "w").close()
     rel1, rel2, unsigned = (os.path.abspath(p) for p in (a.rel1, a.rel2, a.unsigned_rel1))
     vm, server, swtpm = SBVM(work), None, None
     log = {}
@@ -166,7 +192,7 @@ def main():
         ctl = vm.ctl
         st = secure_state(ctl)
         info(f"SB boot ready after {t:.0f}s; {st}")
-        check("enabled" in st.lower() or "lockdown" in st.lower(), "virtual Secure Boot: signed UKI booted with Secure Boot enforcing", st)
+        check(sb_enforcing(st), "virtual Secure Boot: signed UKI booted with Secure Boot enforcing", st)
         facts = up.facts(ctl)
         check(facts["build_id"] == "2026.10.1-1", "SB: release 1 runs", facts["build_id"])
         p1 = pcrs(ctl, "release 1 boot 1", log)
@@ -180,21 +206,16 @@ def main():
         if not a.skip_negative:
             put_uki(work, uki1, unsigned_uki)
             started, clues = refused_boot(vm, 75)
-            check(not started, "virtual Secure Boot: an unsigned UKI is refused (no kernel started)", f"{clues}")
+            check(not started and bool(clues), "virtual Secure Boot: an unsigned UKI is refused by the firmware/shim (no kernel, refusal text seen)", f"started={started} {clues}")
             info(f"unsigned UKI under SB: kernel started={started}; firmware/shim text: {clues}")
-            tampered = os.path.join(os.path.dirname(rel1), "tampered", uki1)
-            if os.path.exists(tampered):
-                put_uki(work, uki1, tampered)
-                started, clues = refused_boot(vm, 75)
-                check(not started, "virtual Secure Boot: a tampered signed UKI is refused (no kernel started)", f"{clues}")
-                info(f"tampered UKI under SB: kernel started={started}; text: {clues}")
+            check_tampered(vm, work, rel1, uki1)
             put_uki(work, uki1, unsigned_uki)
             vm.secure = False
             shutil.copy(a.vars_off, vm.vars_file)
             vm.tpm_sock = None
             vm.start(); vm.wait_ready(a.budget)
             off = secure_state(vm.ctl)
-            check("disabled" in off.lower() or "enabled" not in off.lower(), "Secure Boot off: the unsigned UKI boots", off)
+            check(sb_off(off), "Secure Boot off: the unsigned UKI boots", off)
             info(f"SB off: {off}")
             vm.stop()
 
@@ -212,7 +233,8 @@ def main():
         vm.wait_ready(min(a.budget, 420))
         f2 = up.facts(vm.ctl)
         check(f2["build_id"] == "2026.10.2-2", "SB: update applied; release 2 (signed UKI) boots under Secure Boot", f2["build_id"])
-        check("enabled" in secure_state(vm.ctl).lower() or "lockdown" in secure_state(vm.ctl).lower(), "SB: still enforcing on release 2")
+        st2 = secure_state(vm.ctl)
+        check(sb_enforcing(st2), "SB: still enforcing on release 2", st2)
         p2 = pcrs(vm.ctl, "release 2 after update", log)
         check(f2["persist"] == "persisted,persisted,", "SB update: /etc and /var data survived", f2["persist"])
         info(f"update phase={f2['status']['phase']} esp={f2['uki']}")

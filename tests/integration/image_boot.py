@@ -12,6 +12,7 @@ and (two disks) the md RAID1 nex-data assembled by the initrd.
 Needs docker (privileged, /dev), qemu-system-x86_64 with KVM, OVMF, and `image/build.sh all` output.
 """
 import argparse
+import glob
 import os
 import queue
 import re
@@ -137,32 +138,89 @@ class Console:
         raise TimeoutError(f"{cmd!r}: no result in {timeout}s; tail {self.buf[-600:]!r}")
 
 
-def docker(work, release, script, timeout):
-    name = f"nex-image-boot-{os.getpid()}"
-    cmd = ["docker", "run", "--rm", "--name", name, "--privileged", "--cpus", "4", "--memory", "8g", "-v", "/dev:/dev",
-           "-v", f"{work}:/w", "-v", f"{release}:/rel:ro",
-           "-v", f"{REPO}/image/out/nex-hostimage:/usr/bin/nex-hostimage:ro", "nex-image-tools", "sh", "-c", script]
+def docker_caps():
+    """The lab caps for every container (2 CPUs, 4g; NEX_DOCKER_CPUS and NEX_DOCKER_MEMORY override)."""
+    return ["--cpus", os.environ.get("NEX_DOCKER_CPUS", "2"), "--memory", os.environ.get("NEX_DOCKER_MEMORY", "4g")]
+
+
+def host_mount(path):
+    """The path the Docker daemon sees for a bind mount source. On a runner whose job runs in a container the
+    workspace is a Docker volume: NEX_HOST_WORKSPACE names it on the Docker host, as for scripts/ci-docker.sh."""
+    path = os.path.abspath(path)
+    host = os.environ.get("NEX_HOST_WORKSPACE")
+    if not host:
+        return path
+    workspace = os.environ.get("GITHUB_WORKSPACE") or os.getcwd()
+    if path == workspace or path.startswith(workspace + "/"):
+        return host + path[len(workspace):]
+    sys.exit(f"cannot mount {path}: only paths under {workspace} exist on the Docker host")
+
+
+def hostimage_for(release, override=None):
+    """The static nex-hostimage built beside the release (image/build.sh writes <out>/nex-hostimage and <out>/release).
+    A missing file would be created by Docker as a root-owned directory, so refuse it here."""
+    path = os.path.abspath(override or os.path.join(os.path.dirname(os.path.abspath(release)), "nex-hostimage"))
+    if not os.path.isfile(path):
+        sys.exit(f"no nex-hostimage at {path}; build the release with image/build.sh or pass --hostimage")
+    return path
+
+
+def scratch_dir(release, prefix):
+    """A new work directory beside the release (its build output directory, which exists)."""
+    return tempfile.mkdtemp(prefix=prefix, dir=os.path.dirname(os.path.abspath(release)))
+
+
+def detach_loops(work):
+    """`docker kill` gives the install's EXIT trap no chance to run, so the loop devices on the disk images in work
+    stay attached to the host: detach them by backing file from a fresh privileged container."""
+    images = sorted(glob.glob(os.path.join(work, "*.img")))
+    if not images:
+        return
+    script = 'for f in "$@"; do for l in $(losetup -j "$f" -O NAME -n); do losetup -d "$l"; done; done'
+    subprocess.run(["docker", "run", "--rm", "--privileged", *docker_caps(), "-v", "/dev:/dev",
+                    "-v", f"{host_mount(work)}:{work}", "nex-image-tools", "sh", "-c", script, "sh", *images],
+                   capture_output=True, timeout=120)
+
+
+def run_install(work, release, hostimage, script, timeout, what):
+    """Run an install script in the tools container, privileged for loop devices, with the work directory at /w, the
+    release at /rel and the host tool at /usr/bin/nex-hostimage. Returns stdout; exits on failure or timeout."""
+    name = f"nex-{what}-{os.getpid()}"
+    cmd = ["docker", "run", "--rm", "--name", name, "--privileged", *docker_caps(), "-v", "/dev:/dev",
+           "-v", f"{host_mount(work)}:/w", "-v", f"{host_mount(release)}:/rel:ro",
+           "-v", f"{host_mount(hostimage)}:/usr/bin/nex-hostimage:ro", "nex-image-tools", "sh", "-c", script]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         subprocess.run(["docker", "kill", name], capture_output=True)
-        sys.exit(f"install step exceeded its {timeout}s budget; container killed")
+        detach_loops(work)
+        sys.exit(f"{what}: install step exceeded its {timeout}s budget; container killed and its loop devices detached")
     if res.returncode:
-        sys.exit(f"docker step failed (rc {res.returncode}):\n{res.stdout[-1500:]}\n{res.stderr[-1500:]}")
+        sys.exit(f"{what}: docker step failed (rc {res.returncode}):\n{res.stdout[-1500:]}\n{res.stderr[-1500:]}")
     return res.stdout
 
 
-def install(work, release, layout, disks, timeout):
+def require_host_tools():
+    """Everything a boot lab needs on the host, named up front instead of failing deep inside a step."""
+    for need, hint in ((OVMF_CODE, "OVMF firmware (OVMF_CODE)"), (OVMF_VARS, "OVMF firmware (OVMF_VARS)"),
+                       (shutil.which("docker"), "docker"), (shutil.which("qemu-system-x86_64"), "qemu-system-x86_64")):
+        if not need:
+            sys.exit(f"missing {hint}")
+    if not os.access("/dev/kvm", os.R_OK | os.W_OK):
+        sys.exit("no usable /dev/kvm (the QEMU labs need KVM: the runner must expose it and the user must be in the kvm group)")
+
+
+def install(work, release, hostimage, layout, disks, timeout):
     """Step 1: write the release onto the disk images. Has its own budget; the boot budget starts afterwards."""
     script = SEED + """
 set -eu
 loops=""
+trap 'for l in $(echo $loops | tr , " "); do losetup -d $l; done' EXIT
 for d in %s; do l=$(losetup -fP --show /w/$d); loops="$loops,$l"; done
 loops=${loops#,}
-trap 'for l in $(echo $loops | tr , " "); do losetup -d $l; done' EXIT
 nex-hostimage install --layout %s --disks $loops --image-dir /rel --etc-seed /seed
 """ % (" ".join(disks), layout)
-    print(docker(work, release, script, timeout))
+    print(run_install(work, release, hostimage, script, timeout, "image-boot"))
     if layout == "raid1":
         for d in disks:
             if clear_newer_md_fields(os.path.join(work, d)):
@@ -259,18 +317,17 @@ def main():
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--step", choices=("all", "install", "boot"), default="all",
                     help="install: write the disks only; boot: boot existing disks in --workdir (needs a prior install)")
-    ap.add_argument("--workdir", help="directory for disk images and logs (default: a new one under image/out)")
+    ap.add_argument("--workdir", help="directory for disk images and logs (default: a new one beside --release)")
+    ap.add_argument("--hostimage", help="static nex-hostimage (default: <release>/../nex-hostimage)")
     ap.add_argument("--install-timeout", type=int, default=300, help="seconds for the install step")
     ap.add_argument("--boot-timeout", type=int, default=240, help="seconds for each boot to reach the probe")
     a = ap.parse_args()
-    for need, hint in ((OVMF_CODE, "OVMF firmware"), (shutil.which("docker"), "docker"), (shutil.which("qemu-system-x86_64"), "qemu-system-x86_64")):
-        if not need:
-            sys.exit(f"missing {hint}")
+    require_host_tools()
     if a.step != "boot" and not os.path.exists(os.path.join(a.release, "manifest.json")):
         sys.exit(f"no release in {a.release}; run image/build.sh all first")
     disks = ["d0.img"] if a.layout == "single" else ["d0.img", "d1.img"]
     fresh = not a.workdir
-    work = os.path.abspath(a.workdir) if a.workdir else tempfile.mkdtemp(prefix="nex-image-boot-", dir=os.path.join(REPO, "image/out"))
+    work = os.path.abspath(a.workdir) if a.workdir else scratch_dir(a.release, "nex-image-boot-")
     os.makedirs(work, exist_ok=True)
     proc = None
     try:
@@ -281,7 +338,7 @@ def main():
                     f.truncate(DISK_BYTES)
             shutil.copy(OVMF_VARS, vars_file)
             t0 = time.time()
-            install(work, os.path.abspath(a.release), a.layout, disks, a.install_timeout)
+            install(work, os.path.abspath(a.release), hostimage_for(a.release, a.hostimage), a.layout, disks, a.install_timeout)
             print(f"INFO  install step: {time.time() - t0:.0f}s of {a.install_timeout}s", flush=True)
         if a.step in ("all", "boot"):
             results = []

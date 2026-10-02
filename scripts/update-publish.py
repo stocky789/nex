@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Sign and lay out Nex Core image releases in the online update layout.
 
-    <base>/trust.json + trust.sig               root-key-signed keys in force
+    <base>/trust.json + trust.sig               root-key-signed keys in force (the latest version)
+    <base>/trust.<n>.json + trust.<n>.sig       every version, so a host that missed some walks them in order
     <base>/<channel>/channel.json + channel.sig release-key-signed pointer
     <base>/releases/<sequence>/manifest.json + manifest.sig
     <base>/blobs/sha256-<hex>                   content-addressed; the host fetches with HTTP Range
@@ -14,9 +15,17 @@ environment) and refuses to run without one.
 
     update-publish.py keygen --out DIR                          throwaway development keys (refuses to overwrite)
     update-publish.py trust --base B --root-key K --release-key K [--version N]
+                           [--sign-with OLD_ROOT_KEY] [--revoke ID]... [--drop-key ID]...
     update-publish.py publish --base B --release-dir D --source F --compliance F --channel dev
                               [--layer F]... [--on-demand-layer F]... [--payload vm-image:ID=F]...
+                              [--no-mixed-pool] [--controller-first] [--min-controller-api-epoch N]
     update-publish.py promote --base B --channel stable --sequence N --release-key K
+
+Trust rotation: run `trust` again in the same base. The previous document's keys are carried over (an old
+release key therefore overlaps the new one), --drop-key ends an overlap, --revoke keeps a key listed as
+revoked, and --sign-with names the root key the hosts already trust when the root key itself changes. The
+new document is refused here when no host could accept it. A channel's min_sequence only goes up: a pointer
+keeps the highest floor ever signed for it.
 
 A release's order is its integer `sequence`. The label is display text, but the publisher asserts that the
 label order equals `dpkg --compare-versions` order against every release already in the tree, so the two can
@@ -33,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 
 FORMAT = 1
@@ -126,16 +136,97 @@ def keygen(args):
     print(f"development keys written to {out} (never commit them)")
 
 
+def key_id_of(doc):
+    return {key["id"] for key in doc["keys"]}
+
+
+def signed_by(base, keys):
+    """Names of the published channel pointers and manifests whose signature verifies under one of the keys."""
+    found = []
+    pairs = [(p, p.with_name("channel.sig")) for p in sorted(base.glob("*/channel.json"))]
+    pairs += [(p, p.with_name("manifest.sig")) for p in sorted(base.glob("releases/*/manifest.json"))]
+    with tempfile.TemporaryDirectory() as scratch:
+        for key in keys:
+            pub = Path(scratch) / "key.der"
+            pub.write_bytes(bytes.fromhex("302a300506032b6570032100") + base64.b64decode(key["public_key"]))
+            for document, signature in pairs:
+                if signature.is_file() and subprocess.run(
+                        ["openssl", "pkeyutl", "-verify", "-pubin", "-keyform", "DER", "-inkey", str(pub), "-rawin",
+                         "-in", str(document), "-sigfile", str(signature)], capture_output=True).returncode == 0:
+                    found.append(f"{document.relative_to(base)} ({key['id']})")
+    return found
+
+
+
 def trust(args):
+    """Write the next trust document. With no trust.json in --base this is version 1 (root-1 and release-1).
+    Otherwise the previous document's keys are carried forward (so an old release key overlaps the new one
+    until it is dropped or revoked), the new keys are added, and the document is signed by a root key hosts
+    already trust. Every version is also published as trust.<n>.json and trust.<n>.sig: a host that missed
+    versions walks them in order."""
+    base = Path(args.base)
     root = key_path(args.root_key, "NEX_UPDATE_ROOT_KEY", "root")
     release = key_path(args.release_key, "NEX_UPDATE_RELEASE_KEY", "release")
+    signer = key_path(args.sign_with, "NEX_UPDATE_ROOT_KEY", "root") if args.sign_with else root
+    latest = base / "trust.json"
+    previous = json.loads(latest.read_text()) if latest.is_file() else None
+    expected = previous["version"] + 1 if previous else 1
+    version = args.version if args.version is not None else expected
+    if version != expected:
+        # Hosts walk every version from the one they hold (trust.<n>.json): a gap is trust_gap for all of them.
+        raise PublishError(f"trust version {version} must be {expected}: hosts refuse a replay and cannot walk past a gap")
+    keys = [dict(key) for key in previous["keys"]] if previous else []
+    removed = [key for key in keys if key["id"] in args.drop_key + args.revoke and key["role"] == "release"]
+    if removed and not args.allow_orphaned_signatures:
+        orphaned = signed_by(base, removed)
+        if orphaned:
+            raise PublishError(f"the release key being removed still signs published metadata ({', '.join(orphaned[:5])}"
+                               f"{', ...' if len(orphaned) > 5 else ''}): hosts would refuse it once they adopt this trust. "
+                               "Publish and promote releases under the replacement key first, or pass --allow-orphaned-signatures")
+    for key_id in args.drop_key + args.revoke:
+        if key_id not in key_id_of({"keys": keys}):
+            raise PublishError(f"the previous trust.json has no key {key_id}")
+    keys = [key for key in keys if key["id"] not in args.drop_key]
+    for key in keys:
+        if key["id"] in args.revoke:
+            key["revoked"] = True
     not_after = stamp(now() + datetime.timedelta(days=args.days))
-    doc = {"format": FORMAT, "version": args.version, "keys": [
-        {"id": "root-1", "role": "root", "public_key": base64.b64encode(public_raw(root)).decode(), "not_after": not_after},
-        {"id": "release-1", "role": "release", "public_key": base64.b64encode(public_raw(release)).decode(), "not_after": not_after},
-    ]}
-    write_signed(root, Path(args.base), "trust.json", doc, "trust.sig")
-    print(f"trust.json version {args.version} written to {args.base}")
+    for role, path in (("root", root), ("release", release)):
+        public = base64.b64encode(public_raw(path)).decode()
+        known = [key for key in keys if key["role"] == role and key["public_key"] == public]
+        if known:
+            if known[0].get("revoked"):
+                raise PublishError(f"the {role} key {known[0]['id']} is revoked; it cannot be named again")
+            continue
+        key_id = f"{role}-{version}"
+        if key_id in key_id_of({"keys": keys}):
+            raise PublishError(f"key id {key_id} is already used by another key")
+        keys.append({"id": key_id, "role": role, "public_key": public, "not_after": not_after})
+    doc = {"format": FORMAT, "version": version, "keys": keys}
+    # Hosts accept a document only when a usable root key of the one they hold signed it, and only when it
+    # still names a usable root and release key; refuse here what every host would refuse.
+    stamp_now = stamp(now())
+    signer_public = base64.b64encode(public_raw(signer)).decode()
+    holders = (previous or doc)["keys"]
+    if not any(key["role"] == "root" and not key.get("revoked") and key["not_after"] > stamp_now and key["public_key"] == signer_public
+               for key in holders):
+        raise PublishError("--sign-with is not a usable root key of the trust document hosts already hold" if previous
+                           else "the signing key is not the root key of the new trust document")
+    for role in ("root", "release"):
+        if not any(key["role"] == role and not key.get("revoked") and key["not_after"] > stamp_now for key in keys):
+            raise PublishError(f"the new trust document would name no usable {role} key")
+    if previous and not (base / f"trust.{previous['version']}.json").is_file():
+        # A tree published before versioned documents existed: keep the document hosts hold as its own version.
+        shutil.copyfile(latest, base / f"trust.{previous['version']}.json")
+        shutil.copyfile(base / "trust.sig", base / f"trust.{previous['version']}.sig")
+    # The numbered document goes first: whatever trust.json a host reads, the link it names is already there.
+    body = write_signed(signer, base, f"trust.{version}.json", doc, f"trust.{version}.sig")
+    sig = (base / f"trust.{version}.sig").read_bytes()
+    for name, data in (("trust.json", body), ("trust.sig", sig)):
+        tmp = base / (name + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, base / name)
+    print(f"trust.json version {version} written to {args.base}")
 
 
 def dpkg_gt(left, right):
@@ -165,6 +256,51 @@ def check_order(base, label, sequence):
         if newer_by_sequence != dpkg_gt(label, other["label"]):
             raise PublishError(f"sequence order disagrees with dpkg label order: {label} (sequence {sequence}) "
                                f"versus {other['label']} (sequence {other['sequence']})")
+
+
+UKI_RE = re.compile(r"^nex-core_[A-Za-z0-9.~_-]+_[0-9]+\.efi$")
+
+
+def check_release_dir(release_dir, built):
+    """Refuse a release directory that the host would refuse at stage: the sequence is signed and immutable
+    once published, so the only remedy for a broken one would be burning a new sequence. Mirrors
+    hostimage.ReadRelease: every file the manifest lists must exist with its size and SHA-256, the three
+    image files and exactly one UKI named for the label and sequence must be listed, the roothash file must
+    agree with the manifest, and nothing unlisted may ride along in the archive."""
+    label, sequence, roothash = built["label"], int(built["sequence"]), built["roothash"]
+    if not isinstance(roothash, str) or not HEX64_RE.match(roothash):
+        raise PublishError("the release manifest's roothash is not 64 lowercase hex characters")
+    files = built.get("files")
+    if not isinstance(files, dict) or not files:
+        raise PublishError("the release manifest lists no files (rebuild with image/release.py)")
+    for need in ("root.erofs", "root.verity", "roothash"):
+        if need not in files:
+            raise PublishError(f"the release manifest lists no {need}")
+    ukis = [name for name in files if UKI_RE.match(name)]
+    if ukis != [f"nex-core_{label}_{sequence}.efi"]:
+        raise PublishError(f"the release needs exactly one UKI named nex-core_{label}_{sequence}.efi, the manifest lists {ukis or 'none'}")
+    for name, entry in files.items():
+        parts = name.split("/")
+        if name == "manifest.json" or name.startswith("/") or any(part in ("", ".", "..") for part in parts):
+            raise PublishError(f"the release manifest names an invalid file {name!r}")
+        # make_slot_image tars what rglob finds and rglob does not descend into a linked directory: a listed
+        # file behind a link would hash fine here and be missing from the signed archive.
+        walked = release_dir
+        for part in parts:
+            walked = walked / part
+            if walked.is_symlink():
+                raise PublishError(f"the release manifest lists {name}, which goes through the link {walked}")
+        path = release_dir / name
+        if not path.is_file():
+            raise PublishError(f"the release manifest lists {name}, which is not a file in {release_dir}")
+        if not isinstance(entry, dict) or path.stat().st_size != entry.get("size") or sha256_file(path) != entry.get("sha256"):
+            raise PublishError(f"{name} does not match its size and sha256 in the release manifest; rebuild the release")
+    if (release_dir / "roothash").read_text().strip() != roothash:
+        raise PublishError("the roothash file does not match the release manifest")
+    unlisted = sorted(rel for rel in (str(p.relative_to(release_dir)) for p in release_dir.rglob("*") if p.is_file() or p.is_symlink())
+                      if rel not in files and rel != "manifest.json")
+    if unlisted:
+        raise PublishError(f"files not listed in the release manifest would ship unauthenticated: {', '.join(unlisted)}")
 
 
 def make_slot_image(release_dir, out_path):
@@ -263,15 +399,26 @@ def without_created(manifest):
     return {key: value for key, value in manifest.items() if key != "created"}
 
 
+def channel_state(args, sequence):
+    """The channel's current serial and the floor its next pointer carries; refuses a floor above the sequence."""
+    serial, min_sequence = 0, args.min_sequence
+    previous = Path(args.base) / args.channel / "channel.json"
+    if previous.is_file():
+        before = json.loads(previous.read_text())
+        serial = before["channel_serial"]
+        # The floor only goes up: a host that has not yet seen the higher one learns it from this pointer.
+        min_sequence = max(min_sequence, before.get("min_sequence", 0))
+    if min_sequence > sequence:
+        raise PublishError(f"sequence {sequence} is below the channel's min_sequence {min_sequence}; hosts refuse such a pointer")
+    return serial, min_sequence
+
+
 def write_channel(args, key, sequence, manifest_body):
     channel_dir = Path(args.base) / args.channel
-    serial = 0
-    previous = channel_dir / "channel.json"
-    if previous.is_file():
-        serial = json.loads(previous.read_text())["channel_serial"]
+    serial, min_sequence = channel_state(args, sequence)
     doc = {"format": FORMAT, "channel": args.channel, "channel_serial": serial + 1, "sequence": sequence,
            "manifest_sha256": hashlib.sha256(manifest_body).hexdigest(),
-           "expires": stamp(now() + datetime.timedelta(days=args.expires_days)), "min_sequence": args.min_sequence}
+           "expires": stamp(now() + datetime.timedelta(days=args.expires_days)), "min_sequence": min_sequence}
     write_signed(key, channel_dir, "channel.json", doc, "channel.sig")
     print(f"{args.channel}/channel.json serial {serial + 1} -> sequence {sequence}")
 
@@ -286,11 +433,16 @@ def publish(args):
         if not path or not Path(path).is_file():
             raise PublishError(f"refusing to sign without {option}: the release must ship its source and compliance manifest")
     release_dir = Path(args.release_dir)
-    built = json.loads((release_dir / "manifest.json").read_text())
-    label, sequence, roothash = built["label"], int(built["sequence"]), built["roothash"]
+    try:
+        built = json.loads((release_dir / "manifest.json").read_text())
+        label, sequence, roothash = built["label"], int(built["sequence"]), built["roothash"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise PublishError(f"{release_dir} has no readable release manifest.json with label, sequence and roothash") from error
     if sequence < 1:
         raise PublishError("a published release needs sequence >= 1 (build with NEX_SEQUENCE)")
+    check_release_dir(release_dir, built)
     check_order(args.base, label, sequence)
+    channel_state(args, sequence)
 
     work = Path(args.base) / ".work"
     work.mkdir(parents=True, exist_ok=True)
@@ -309,11 +461,15 @@ def publish(args):
         ids = [component["id"] for _, component in sources]
         if len(ids) != len(set(ids)):
             raise PublishError("component ids must be unique across the slot image, layers and payloads")
+        if args.min_controller_api_epoch < 0:
+            raise PublishError("--min-controller-api-epoch cannot be negative")
+        if args.controller_first and not any(component["kind"] == "vm-image" for _, component in sources):
+            raise PublishError("--controller-first needs the Controller image: add --payload vm-image:ID=FILE")
         manifest = {"format": FORMAT, "sequence": sequence, "label": label, "architecture": ARCHITECTURE,
                     "created": stamp(now()), "min_from_sequence": args.min_from_sequence,
                     "compat": {"update_engine": 1, "state_format": args.state_format, "min_state_format": args.min_state_format,
-                               "api_epoch": args.api_epoch, "min_controller_api_epoch": 0, "mixed_pool": True,
-                               "controller_first": False},
+                               "api_epoch": args.api_epoch, "min_controller_api_epoch": args.min_controller_api_epoch,
+                               "mixed_pool": args.mixed_pool, "controller_first": args.controller_first},
                     "components": [component for _, component in sources]}
         if args.md_generation:
             manifest["compat"]["md_generation"] = args.md_generation
@@ -340,7 +496,8 @@ def publish(args):
     pointer = Path(args.base) / args.channel / "channel.json"
     if pointer.is_file():
         current = json.loads(pointer.read_text())
-        if current["sequence"] == sequence and current["manifest_sha256"] == hashlib.sha256(body).hexdigest():
+        if (current["sequence"] == sequence and current["manifest_sha256"] == hashlib.sha256(body).hexdigest()
+                and current.get("min_sequence", 0) == channel_state(args, sequence)[1]):
             print(f"{args.channel}/channel.json already points at sequence {sequence}")
             return
     write_channel(args, key, sequence, body)
@@ -362,12 +519,18 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     p.set_defaults(run=keygen)
 
-    p = sub.add_parser("trust", help="sign trust.json with the root key")
+    p = sub.add_parser("trust", help="sign trust.json with a root key (publishes trust.<version>.json/.sig beside it)")
     p.add_argument("--base", required=True)
-    p.add_argument("--root-key")
-    p.add_argument("--release-key")
-    p.add_argument("--version", type=int, default=1)
-    p.add_argument("--days", type=int, default=DEFAULT_TRUST_DAYS)
+    p.add_argument("--root-key", help="the root key this document names (and signs with unless --sign-with is given)")
+    p.add_argument("--release-key", help="the release key this document names")
+    p.add_argument("--sign-with", help="root key that signs the document: a root key of the trust.json hosts already hold "
+                   "(root rotation: sign with the old root key, name the new one with --root-key)")
+    p.add_argument("--revoke", action="append", default=[], metavar="KEY_ID", help="mark a key of the previous document revoked (kept in the list)")
+    p.add_argument("--drop-key", action="append", default=[], metavar="KEY_ID", help="leave a key of the previous document out (end of its overlap)")
+    p.add_argument("--version", type=int, help="must equal one more than the trust.json in --base, else 1 (the default)")
+    p.add_argument("--allow-orphaned-signatures", action="store_true",
+                   help="revoke or drop a release key although published channel.json/manifest.json signatures still verify under it")
+    p.add_argument("--days", type=int, default=DEFAULT_TRUST_DAYS, help="validity of the keys this run adds")
     p.set_defaults(run=trust)
 
     def release_options(p):
@@ -388,6 +551,12 @@ def main(argv=None):
     p.add_argument("--state-format", type=int, default=3)
     p.add_argument("--min-state-format", type=int, default=0)
     p.add_argument("--api-epoch", type=int, default=1)
+    p.add_argument("--min-controller-api-epoch", type=int, default=0,
+                   help="the oldest Controller api_epoch this release runs with (0: no minimum)")
+    p.add_argument("--mixed-pool", action=argparse.BooleanOptionalAction, default=True,
+                   help="the release may run beside the previous one in a pool; --no-mixed-pool makes a rollout need running_vms shutdown")
+    p.add_argument("--controller-first", action="store_true",
+                   help="a pool rollout replaces the Controller image first (needs a --payload vm-image:...)")
     p.add_argument("--min-from-sequence", type=int, default=0)
     p.add_argument("--md-generation", type=int, default=0)
     p.add_argument("--md-fallback-safe", action="store_true")

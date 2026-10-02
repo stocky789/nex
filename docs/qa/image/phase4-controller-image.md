@@ -20,7 +20,7 @@ data and seed disks were a 2 GiB sparse qcow2 and an 8 MiB FAT image in `/tmp`, 
 
 | Where | What |
 |---|---|
-| `image/controller/` | the controller profile of the image tooling: `mkosi.conf` (same Debian trixie snapshot, mkosi, `Seed`, trimmed initrd module list incl. the SATA seed path), `controller.packages` (the packages `appliance/build-inside.sh` installs, plus systemd-boot, `netplan.io`), `mkosi.extra` (fstab `/dev/vdb /var ext4 x-initrd.mount,x-systemd.makefs`, sshd drop-in, ssh host-key generation, cloud-init `users: [root]`, `systemd-boot-random-seed` masked), `mkosi.postinst.chroot` |
+| `image/controller/` | the controller profile of the image tooling: `mkosi.conf` (same Debian trixie snapshot, mkosi, `Seed`, trimmed initrd module list incl. the SATA seed path), `controller.packages` (the packages `appliance/build-inside.sh` installs, plus systemd-boot, `netplan.io`, and after the boot run below `systemd-resolved` and `systemd-timesyncd`), `mkosi.extra` (fstab `/dev/vdb /var ext4 x-initrd.mount,x-systemd.makefs`, sshd drop-in, ssh host-key generation, cloud-init `users: [root]`, `systemd-boot-random-seed` masked, the `nex-controller` sysusers.d entry), `mkosi.postinst.chroot` |
 | `image/build.sh controller`, `image/release.py controller` | tree via mkosi, then erofs + dm-verity (same fixed UUIDs and salt as the host), UKI with `roothash=`, systemd-boot, and a raw GPT disk `system.img` (ESP, erofs root and verity partitions typed and identified from the root hash so `systemd-gpt-auto` finds them). The host image's initrd `/etc` overlay unit is reused as is |
 | `appliance/build.py --profile controller`, `appliance/build-controller-payload.sh` | compiles the Controller and UI in the pinned builder container, lays out the payload tree, runs `image/build.sh controller`, copies `controller-system.img` and writes `vm-image.json` (digest, root hash, the `--payload vm-image:controller=FILE` argument for `scripts/update-publish.py`); no `manifest.sig` |
 | `appliance/firstboot.py` | writes the readiness marker through a link into `/var/lib/nex-controller` (the root is read-only) |
@@ -63,6 +63,27 @@ tightened test.
 8. The renderer override to `networkd` wrote `Name=nex0` without a rename rule, so the first reboot had no network: `netplan.io` is installed and
    regenerates the rename every boot.
 
+## Review fixes after the boot run (not rebuilt, not booted)
+
+Found by the 2026-10-02 review of the branch; the image was **not rebuilt and not booted after them**, so the boot record above does not show them.
+
+9. **The `nex-controller` uid was whatever `useradd --system` found free at build time.** `appliance-firstboot` gives `/etc/nex-controller` and
+   `/var/lib/nex-controller` (the data disk, which outlives every system image) to that numeric id once; an image built with a different package set could
+   have taken another id, and the Controller could then not read its own TLS key after a swap. The account is now declared in
+   `image/controller/mkosi.extra/usr/lib/sysusers.d/nex-controller.conf` with fixed uid and gid 280 and created by `systemd-sysusers` in `mkosi.postinst.chroot`, which fails
+   the build if the account does not end up as `280:280` (sysusers only *suggests* an id and silently takes another when it is held; shown with systemd 261 on a scratch tree).
+   `firstboot` and `controller-recovery` look the account up by name, so they are unchanged. Checked by `tests/test_image_composition.py::ControllerImageTest`
+   through the real `systemd-sysusers --root` on a scratch tree; the postinst check and a build with it were **not run**. A data disk written by an earlier build of this image
+   keeps the old numeric owner; no such disk is shipped.
+10. **No resolver and no time daemon.** Neither `systemd-resolved` nor `systemd-timesyncd` was installed (separate packages in trixie, and mkosi installs no
+    recommends). netplan renders `DNS=` for networkd, which only systemd-resolved reads, and no package of the list and no mkosi step puts an `/etc/resolv.conf` into
+    the image (read from the mkosi 25.3 source; the host image tree has none either; the guest itself was not inspected), so the guest would have had no
+    working DNS from its netplan configuration and no NTP, and the Controller's TLS validity and the corosync-qnetd witness depended on the hypervisor clock alone.
+    Both packages are in `controller.packages`, enabled in the postinst, and `/etc/resolv.conf` is a link to `../run/systemd/resolve/stub-resolv.conf` in the image (the
+    package's `L!` tmpfiles rule would create it only at boot and only when nothing is there). The package contents, dependencies and maintainer scripts were read from
+    the pinned snapshot's `Packages` index and `.deb` files; no image was built, so name resolution, the stub listener and time synchronisation are **not shown** in a guest
+    (with only user-mode networking in the earlier boot test, the DNS and NTP servers a deployment would hand out were not exercised either). The added packages grow the image by about 1.1 MiB installed.
+
 ## Not run / not done
 
 - **No Core deployment:** the profile was never created by `Deploy` through libvirt; no swap, reflink checkpoint, redefinition, readiness probe or
@@ -77,6 +98,7 @@ tightened test.
   package inventory (`components.tsv`) but not the image tooling.
 - **CI:** the workflows were never run on a forge; only their structure is tested. Secure Boot, TPM, physical hardware, the Controller UI against this guest and
   the `core-local-setup` option on a real host were not exercised. Guest `corosync-qnetd` was enabled; its quorum role was not tested.
+  The build-time check of the `nex-controller` ids, the resolver and time-sync packages (fixes 9 and 10 above) were never built or booted.
 
 ## Commands that ran
 

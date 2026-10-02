@@ -140,9 +140,12 @@ the ESP, slot and data volume at each cut) was not inspected.
 
 ```
 python3 tests/integration/image_iso_lab.py --release REL --hostimage nex-hostimage --out nex-image-lab.iso
-python3 tests/integration/image_install_lab.py --iso nex-image-lab.iso --work WORK --payload-sha SHA raid1 raid1-alone held-array repair repair-boot interrupted single bios
+python3 tests/integration/image_install_lab.py --iso nex-image-lab.iso --work WORK --payload-sha SHA SCENARIO
+# one scenario per invocation, in this order: raid1, raid1-alone, held-array, repair, repair-boot, interrupted, single, bios
+# (raid1 first: raid1-alone, held-array and repair read its disks; repair-boot needs repair)
 python3 tests/integration/image_sign_release.py --release REL --out SIGNED --key KEY --cert CRT
 python3 tests/integration/image_sb_lab.py --rel1 SIGNED1 --rel2 SIGNED2 --unsigned-rel1 REL1 --keys DIR --trust T --vars-sb V --vars-off V0 --hostimage BIN --workdir DIR --skip-negative
+# without --skip-negative the lab also needs the tampered fixture: image_sign_release.py --release REL1 --out $(dirname SIGNED1)/tampered --tamper --key KEY --cert CRT
 ```
 
 Disk images, the ISO, the lab releases and logs stay in the gitignored `.cache/phase6/`; the disk images and ISO were deleted at the end. No
