@@ -6,12 +6,47 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.18` →
-> Debian `0.4.18`).
+> development software. Builds use the newest numbered changelog heading (`0.4.19` →
+> Debian `0.4.19`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.19] — 2026-10-02
+
+### Bug Fixes
+
+- Backup and restore deadlines no longer let recovery remove staging files or release
+  reservations while the original worker is still running. Missing member outcomes
+  and vanished Core tasks remain uncertain until Core supplies a real outcome.
+- SFTP retries now sync reused artifacts, preserve protection during marker refresh,
+  reject symlinked delete targets and release failed owner claims. S3 releases ambiguous
+  failed claims without reclaiming missing owners for existing repositories.
+- Failed SMB3 credential replacements restore previous access when rollback is confirmed
+  and keep both credentials when uncertain; failed member preparation remains retryable.
+- Repository forgetting resumes interrupted work, refuses unresolved runs and removes
+  only an exact stale member registration. Registration probes and peer delivery no
+  longer block the Core service loop.
+- Core restarts preserve saved registration outcomes without preparing the destination
+  again. Interrupted replacement rollback retains its pending or uncertain outcome and
+  credentials, including when the final receipt cannot be written.
+- Returning members with large stale repository inventories can be cleaned in bounded
+  pages without dropping current registrations or treating incomplete reads as absence.
+- Console tickets now accept only one host tunnel, including simultaneous handshakes
+  and the interval before the browser upgrade finishes.
+- Large orphan-cleanup results replicate in bounded frames, page collection preserves
+  acknowledged and live uploads, and catalog rebuilds preserve concurrent protection,
+  verification and newly published points. Shared storage excludes nonready members.
+- Interrupted retained-vTPM releases resume their exact validated deletion intent;
+  retained-release retries cannot silently target another VM.
+- Repository replacement retries preserve confirmation and credentials across failed
+  polls; pool changes clear old drafts. Backup history loads independently of inventory,
+  deleted-VM overrides are removed on repository changes, and flat VM lists avoid
+  constructing hidden tag-group rows.
+- Demo stacked CPU charts now show per-core and per-vCPU samples. Interrupted archive
+  uploads time out without holding the deployment lock indefinitely. A generated test
+  executable containing private build paths was removed and privacy checks now scan binaries.
 
 ## [0.4.18] — 2026-09-28
 
@@ -45,36 +80,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pool master no longer holds.
 - Backup panels now show refusal and repository-read errors inside the form.
   Unavailable repository inventory is no longer presented as an empty destination list.
-- Backup and restore deadlines no longer let recovery remove staging files or release
-  reservations while the original worker is still running. Missing member outcomes
-  and vanished Core tasks remain uncertain until Core supplies a real outcome.
-- SFTP retries now sync reused artifacts, preserve protection during marker refresh,
-  reject symlinked delete targets and release failed owner claims. S3 releases ambiguous
-  failed claims without reclaiming missing owners for existing repositories.
-- Failed SMB3 credential replacements restore previous access when rollback is confirmed
-  and keep both credentials when uncertain; failed member preparation remains retryable.
-- Repository forgetting resumes interrupted work, refuses unresolved runs and removes
-  only an exact stale member registration. Registration probes and peer delivery no
-  longer block the Core service loop.
-- Core restarts preserve saved registration outcomes without preparing the destination
-  again. Interrupted replacement rollback retains its pending or uncertain outcome and
-  credentials, including when the final receipt cannot be written.
-- Returning members with large stale repository inventories can be cleaned in bounded
-  pages without dropping current registrations or treating incomplete reads as absence.
-- Console tickets now accept only one host tunnel, including simultaneous handshakes
-  and the interval before the browser upgrade finishes.
-- Large orphan-cleanup results replicate in bounded frames, page collection preserves
-  acknowledged and live uploads, and catalog rebuilds preserve concurrent protection,
-  verification and newly published points. Shared storage excludes nonready members.
-- Interrupted retained-vTPM releases resume their exact validated deletion intent;
-  retained-release retries cannot silently target another VM.
-- Repository replacement retries preserve confirmation and credentials across failed
-  polls; pool changes clear old drafts. Backup history loads independently of inventory,
-  deleted-VM overrides are removed on repository changes, and flat VM lists avoid
-  constructing hidden tag-group rows.
-- Demo stacked CPU charts now show per-core and per-vCPU samples. Interrupted archive
-  uploads time out without holding the deployment lock indefinitely. A generated test
-  executable containing private build paths was removed and privacy checks now scan binaries.
 
 ## [0.4.17] — 2026-09-28
 
