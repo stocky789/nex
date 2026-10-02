@@ -3,6 +3,22 @@
 These commands build and check development builds; they do not install or enable services.
 Operator setup is described in the [user guide](guide/README.md).
 
+## Branches and release channels
+
+Open pull requests against `dev`, the integration branch; `main` is promoted from it by the project
+owner. A merge to `dev` publishes a development pre-release (tag `vX.Y.Z-dev.N`, APT archive at `/apt/dev`,
+downloads at `/downloads/dev`) and a merge to `main` publishes the stable release. Preview the version a
+development build would get:
+
+```sh
+git show origin/main:CHANGELOG.md > /tmp/main-changelog.md
+python3 scripts/release-version.py --current --channel dev --build "$(git rev-list --count HEAD)" \
+  --stable-changelog /tmp/main-changelog.md --format both
+```
+
+See [Publish a Nex Core release](guide/publish-a-release.md#release-channels) and the
+[release channels plan](plans/2026-10-02-release-channels.md).
+
 ## Build and check
 
 Use the checksum-pinned Go 1.27.1 security-build toolchain with CGO enabled, a C compiler

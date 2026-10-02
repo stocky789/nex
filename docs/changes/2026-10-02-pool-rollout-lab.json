@@ -1,0 +1,33 @@
+{
+  "summary": "Phase I-4c of the immutable Nex Core plan: the pool rollout coordinator run once on three booted image hosts in a nested QEMU lab (tests/integration/pool_rollout_lab.py, docs/qa/image/phase4-lab.md). The lab found one defect, fixed at its cause: the quorum-margin gate refused every pool on a host with no cluster software (an image without the nex-cluster layer has no corosync-quorumtool, the gate read the missing tool as an unreadable quorum, and a three-host pool could never leave quorum_margin); a missing corosync-quorumtool with no clustered storage now means there is no quorum to lose, and an installed but unreadable Corosync and clustered storage still refuse. The coordinator also reads NEX_POOL_UPDATE_STEP_TIMEOUT (a Go duration of at least one second) from the Core service environment when it starts, so a lab can watch the six-hour refuse pause; unset, nothing changes. No route, request or response changed.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/qa/image/phase4-lab.md",
+    "internal/agent/pool_update.go",
+    "internal/agent/pool_update_test.go",
+    "tests/integration/pool_rollout_lab.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator procedure changed or was walked through: the lab drives the rollout with a workstation Controller process, lab shells and loopback forwards, and the one behaviour change (a pool without cluster software no longer refuses a rollout for an unreadable quorum) removes a refusal rather than adding a step. update-a-pool.md stays unverified; docs/qa/image/phase4-lab.md records what ran and what did not."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No route, request field, response field, status code or error code changed. The quorum_margin pause code is unchanged and is now returned in fewer cases; NEX_POOL_UPDATE_STEP_TIMEOUT is a service environment variable, not an API setting."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-4 of a proposed, not yet authorized plan; the lab ran the rollout on three booted image hosts but not the shutdown policy, a managed guest, Corosync or a master change, so no published milestone changes."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Unchanged: the pool master's Core owns the rollout record (pool-update.json); the gate fix only changes when the master refuses to start the next host, and the lab's Controller process kept nothing the master did not.",
+    "record": "The pool master's pool-update.json, as in docs/changes/2026-10-02-pool-rollout-coordinator.json."
+  },
+  "verification": {
+    "method": "Three booted image hosts (two releases, pinned dev trust) in one pool, enrolled by a workstation nex-controller process; dry run, refuse pause, members then master, Controller kill and master power cut observed through the master's API; plus the agent regression test for the quorum gate (fails with the fix disabled). Lab binary was a workstation build bound over the image binary; see the QA record.",
+    "evidence": [
+      "docs/qa/image/phase4-lab.md"
+    ]
+  }
+}

@@ -1450,10 +1450,18 @@ func corosyncUnconfiguredMarkerPath(stateDir string) string {
 	return filepath.Join(stateDir, "storage-cluster", "corosync-unconfigured")
 }
 
-// corosyncUnconfiguredMarker authorizes one vendor-file replacement only when
-// packaging's root-owned marker exactly binds to the bytes currently on disk.
-// An administrator edit after package installation therefore fails closed.
+// corosyncFactoryConfigPath is the image edition's copy of Debian's conffile: the nex-cluster layer ships it read-only
+// under /usr/share/factory and the merge copies it into /etc. No packaging script runs on an image host, so nothing
+// writes the marker below; the verified copy is what attests the file.
+var corosyncFactoryConfigPath = "/usr/share/factory/etc/corosync/corosync.conf"
+
+// corosyncUnconfiguredMarker authorizes one vendor-file replacement only when the file is Debian's unmodified one:
+// packaging's root-owned marker exactly binds to the bytes currently on disk (the apt edition), or the bytes equal the
+// layer's read-only factory copy (the image edition). An administrator edit therefore fails closed in both.
 func corosyncUnconfiguredMarker(stateDir string, config []byte) bool {
+	if factory, err := os.ReadFile(corosyncFactoryConfigPath); err == nil && bytes.Equal(factory, config) {
+		return true
+	}
 	info, err := os.Lstat(corosyncUnconfiguredMarkerPath(stateDir))
 	if err != nil || !info.Mode().IsRegular() || info.Size() != sha256.Size*2+1 {
 		return false

@@ -84,6 +84,57 @@ class ImageLayoutTest(unittest.TestCase):
         self.assertIn('uki = f"nex-core_{LABEL}_{SEQ}.efi"', py)
         self.assertIn("nex-core_[A-Za-z0-9.~_-]+_[0-9]+", go)
 
+    def test_root_can_sign_in_at_the_console_and_over_ssh(self):
+        # Found in the first installed-host boots of the lab ISO: login(1) is Priority required but not Essential, so
+        # the base tree had no /usr/bin/login and agetty ended the serial login before the password prompt; and sshd's
+        # default PermitRootLogin refuses a password, so the root password the installer was given worked nowhere.
+        self.assertIn("login", names("image", "base.packages"))
+        self.assertIn("login", names("image", "controller", "controller.packages"))
+        self.assertIn("login", {l.split("\t")[0] for l in read("image", "packages.lock").splitlines()})
+        conf = {l.split()[0]: l.split()[1] for l in read("image", "mkosi.extra", "etc", "ssh", "sshd_config.d", "00-nex-core.conf").splitlines()
+                if l.strip() and not l.startswith("#")}
+        self.assertEqual(conf, {"PermitRootLogin": "yes", "PasswordAuthentication": "yes"})
+
+
+class ControllerProfileTest(unittest.TestCase):
+    """The Controller guest image (image/controller) against the two-disk contract of internal/vmhost and the single-disk build."""
+
+    def test_data_disk_is_the_second_virtio_disk_the_domain_defines(self):
+        go = read("internal", "vmhost", "engine.go")
+        self.assertIn('Source: sourceXML{File: j.Disk}, Target: targetXML{Dev: "vdb", Bus: "virtio"}', go)
+        fstab = read("image", "controller", "mkosi.extra", "etc", "fstab")
+        # Made on a blank disk only (x-systemd.makefs) and mounted in the initrd, where the /etc overlay needs it.
+        self.assertRegex(fstab, r"(?m)^/dev/vdb /var ext4 [^ ]*x-initrd\.mount[^ ]*x-systemd\.makefs ")
+
+    def test_guest_has_every_package_the_single_disk_appliance_installs(self):
+        script = read("appliance", "build-inside.sh")
+        installed = set(re.search(r"package-service-policy install ([^']+)'", script).group(1).split())
+        self.assertLessEqual(installed, names("image", "controller", "controller.packages"))
+
+    def test_guest_has_no_apt_update_helper(self):
+        payload = read("appliance", "build-controller-payload.sh") + read("image", "controller", "mkosi.postinst.chroot")
+        packages = names("image", "controller", "controller.packages")
+        for forbidden in ("apply-update", "nex-controller-update", "updates.conf", "nex.sources"):
+            self.assertNotIn(forbidden, payload)
+        self.assertEqual({p for p in packages if p in ("apt", "dpkg", "unattended-upgrades")}, set())
+
+    def test_initrd_overlay_parts_exist_and_the_wants_entry_stays_a_link(self):
+        release = read("image", "release.py")
+        parts = re.findall(r'"(usr/lib/systemd/system/[^"]+)"', release[release.index("def controller"):])
+        self.assertTrue(parts)
+        for part in parts:
+            self.assertTrue(os.path.lexists(os.path.join(ROOT, "image", "initrd", part)), part)
+        # systemd ignores a wants entry that is a copy, which left /etc read-only in the first boot of the guest.
+        link = os.path.join(ROOT, "image", "initrd", "usr", "lib", "systemd", "system", "initrd-fs.target.wants", "nex-etc-overlay.service")
+        self.assertTrue(os.path.islink(link))
+        self.assertIn("follow_symlinks=False", release)
+
+    def test_readiness_marker_path_is_writable_on_the_data_disk(self):
+        # The root is read-only: the marker the host probes is a link into /var/lib/nex-controller, written through by firstboot.
+        post = read("image", "controller", "mkosi.postinst.chroot")
+        self.assertIn("ln -s /var/lib/nex-controller/appliance-ready.json /usr/local/share/nex/dist/appliance-ready.json", post)
+        self.assertIn(".resolve()", read("appliance", "firstboot.py"))
+
 
 if __name__ == "__main__":
     unittest.main()

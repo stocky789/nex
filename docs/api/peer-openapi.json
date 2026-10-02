@@ -9429,6 +9429,7 @@
             "enum": [
               "check",
               "stage",
+              "controller",
               "drain",
               "activate",
               "confirm",
@@ -9547,6 +9548,10 @@
           "observed_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "controller_vm": {
+            "type": "boolean",
+            "description": "This host runs a Controller appliance in the two-disk profile that it can swap."
           }
         },
         "required": [
@@ -9592,7 +9597,8 @@
               "staging",
               "hosts",
               "finalize"
-            ]
+            ],
+            "description": "staging, controller, hosts, finalize"
           },
           "pause": {
             "anyOf": [
@@ -9619,6 +9625,16 @@
             "items": {
               "$ref": "#/components/schemas/PoolUpdateHost"
             }
+          },
+          "controller": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolUpdateController"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "finalized_sequence": {
             "type": "integer",
@@ -9649,7 +9665,7 @@
       "PoolUpdateHost": {
         "type": "object",
         "additionalProperties": false,
-        "description": "The master's record of one host's progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart.",
+        "description": "The master's record of one host's progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0.",
         "x-go-type": "protocol.PoolUpdateHost",
         "properties": {
           "host_id": {
@@ -9681,6 +9697,10 @@
           },
           "error": {
             "type": "string"
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
@@ -9731,6 +9751,10 @@
           "required_bytes": {
             "type": "integer",
             "minimum": 0
+          },
+          "controller_image": {
+            "type": "boolean",
+            "description": "The release is controller_first and carries a Controller image."
           }
         },
         "required": [
@@ -9779,6 +9803,34 @@
           }
         },
         "required": []
+      },
+      "PoolUpdateController": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The controller_first step of a rollout. stage scan looks for the host that runs the Controller VM, swap waits for that host's journaled appliance swap, done means no Controller is left to update first. attempt is part of the swap's step identity (a resume after a failed swap is a new swap) and is omitted while 0; error is the code: message of the last failed swap.",
+        "x-go-type": "protocol.PoolUpdateController",
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "started_at"
+        ]
       }
     }
   }

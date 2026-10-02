@@ -166,8 +166,15 @@ func PoolUpdateHostStatusFor(ctx context.Context, s *Store) (protocol.PoolUpdate
 			if c.Required && !c.OnDemand && c.Bytes > 0 {
 				target.RequiredBytes += uint64(c.Bytes)
 			}
+			if c.Kind == "vm-image" && a.Compat.ControllerFirst {
+				target.ControllerImage = true
+			}
 		}
 		out.Target = target
+	}
+	var err error
+	if out.ControllerVM, err = vmhost.HasControllerProfile(ApplianceJournalDir); err != nil {
+		return out, errors.New("controller_scan_unavailable: this host's Controller appliance record cannot be read")
 	}
 	running, err := poolUpdateGuestOps(s).Running(ctx)
 	if err != nil {
@@ -219,6 +226,20 @@ func PoolUpdateHostStep(ctx context.Context, s *Store, step protocol.PoolUpdateS
 			return *poolUpdateRefusal(err)
 		}
 		return poolUpdateOperationResult(ctx, step, false)
+	case "controller":
+		// controller_first: this host owns the Controller VM and replaces its system image, under the
+		// step ID as the swap's operation ID. A repeat resumes or replays the same journaled swap.
+		op, _, err := engine.Apply(ctx, nexupdate.ApplyRequest{RequestID: step.StepID, Sequence: int(step.Sequence), Scope: "controller", Activate: "stage_only"})
+		if err != nil {
+			return *poolUpdateRefusal(err)
+		}
+		switch {
+		case op.Error != nil:
+			return protocol.PoolUpdateStepResult{Code: op.Error.Code, Message: op.Error.Message}
+		case op.FinishedAt != nil:
+			return protocol.PoolUpdateStepResult{Done: true}
+		}
+		return protocol.PoolUpdateStepResult{}
 	case "activate":
 		if running == step.Sequence || st.Phase == nexupdate.PhaseArmed {
 			return protocol.PoolUpdateStepResult{Done: true}

@@ -50,7 +50,13 @@ also pass under `-race`. `scripts/generate_api.py --check`, `tests/test_api_cont
 | `refuse` waits `step_timeout` then pauses naming the guest; the blocked host and the master are not touched; resume completes | `TestRefusePolicyWaitsThenPausesNamingTheGuest` | pass |
 | A host that does not return: `needs_attention` at `boot_deadline`, nothing restarted elsewhere, maintenance kept, the stopped guest remembered | `TestHostThatDoesNotReturnPausesNeedsAttention` | pass |
 | A host that fell back to the old release pauses and blocks finalize | `TestRolledBackHostPausesAndBlocksFinalize` | pass |
-| Quorum-margin gate counts Corosync votes (three hosts; two hosts and a witness; clustered storage needs three voters; no cluster means no quorum); another host not ready refuses before maintenance | `TestQuorumGateCountsVotes`, `TestGateRefusesWhenAnotherHostIsNotReady` | pass |
+| Quorum-margin gate reads the master's live Corosync, not membership rows: votes present against the majority needed, a voting witness only when it really votes, every other nodelist host in the quorate partition (a ready host that is partitioned or down is refused although its row says ready), clustered storage needs three voters, an unreadable quorum on a clustered pool is refused; another host not ready refuses before maintenance | `TestQuorumGateReadsLiveVotes`, `TestQuorumGateVoteArithmetic`, `TestGateRefusesWhenAnotherHostIsNotReady` | pass |
+| Engine request IDs: every step ID is `ru-` and 40 hex digits of a SHA-256 over (rollout, host, stage, attempt), so it is valid for any rollout and host ID, bounded, identical on a repeat and different per attempt; the fake engine and fake peers refuse an ID the real engine would (`nexupdate.ValidRequestID`) | `TestStepIDsAreValidBoundedAndDifferPerAttempt` and every rollout test | pass |
+| The master reads a member's status and step answers over the real pinned-mTLS peer transport and decodes them before returning (no zero value from a copy taken before the decode) | `TestLivePeersReadTheMembersAnswerOverTheRealTransport` | pass |
+| The gates run again, under the coordinator lock, immediately before maintenance is entered and before an unarmed host is activated, and on resume for the host that is next | `TestGatesAreRunAgainBeforeMaintenanceAndBeforeActivate`, `TestResumeRunsTheGatesAgain` | pass |
+| The rollout record naming the guests a host's update will stop is acknowledged by every ready member that could take the pool over before the first guest is asked to shut down; with a member unacknowledged nothing is stopped | `TestGuestsAreNotStoppedBeforeTheRecordIsAcknowledged` | pass |
+| A promotion writes the inherited rollout (paused `master_changed`) before the write that makes the host master, and removes it again if the promotion fails | `TestPromotionRecordsTheInheritedRolloutBeforeItPublishesTheMaster` | pass |
+| Resume of a rolled-back host stages it again under a new attempt (new step IDs), so the engine's remembered operations of the failed attempt are not replayed | `TestResumeAfterRollbackStagesAgainUnderANewAttempt` | pass |
 | Controls: pause lands after the host being updated, resume, `rollback_host` (paused rollout, activated host only), abort puts maintenance back and keeps committed hosts, a new rollout is possible after an abort | `TestControlsPauseResumeAbortRollback` | pass |
 | Master change: a promoted master adopts an active rollout paused `master_changed` without rewriting host progress; a finished rollout is not resurrected; a former master advances nothing | `TestPromotedMasterFindsRolloutPausedMasterChanged` | pass |
 | Membership generation change pauses | `TestMembershipChangePausesTheRollout` | pass |
@@ -62,7 +68,8 @@ also pass under `-race`. `scripts/generate_api.py --check`, `tests/test_api_cont
 | Controller relay: command goes to the master only with no composed membership; replay `200`, changed body `409`; dry run and controls carry the right fields; refusals (`400`, `404`, `409` "upgrade Nex Core" when a member lacks the capability, stale master); a fresh Controller reads the master's record | `TestPoolUpdateRelaysToTheMasterOnly`, `TestPoolUpdateRefusals`, `TestPoolUpdateProjectsTheMastersRecord` | pass |
 
 Mutation checks (made, observed to fail, reverted): disabling the margin and clustered-storage conditions in the quorum gate failed
-`TestQuorumGateCountsVotes`; removing the maintenance release after confirm failed `TestRolloutUpdatesOneHostAtATimeMasterLast`.
+`TestQuorumGateReadsLiveVotes`; removing the maintenance release after confirm failed `TestRolloutUpdatesOneHostAtATimeMasterLast`.
+Review-fix mutation checks (each made, observed to fail the named test, reverted): a slash-joined step ID (every rollout test), a step ID without the attempt (`TestStepIDsAreValidBoundedAndDifferPerAttempt`, `TestResumeAfterRollbackStagesAgainUnderANewAttempt`), a reply copied before it is decoded (`TestLivePeersReadTheMembersAnswerOverTheRealTransport`; the gc compiler happens to evaluate the call first, so the plain `return out, f(&out)` form passed only by evaluation order), the nodelist-partition condition (`TestQuorumGateVoteArithmetic`, new case with votes to spare) and the votes-remaining condition, the gate removed before maintenance, before activate and on resume, the pre-shutdown replication, the promotion writing the rollout after the master record, and the attempt increment on resume.
 
 ### Found by the tests
 
@@ -86,6 +93,10 @@ Mutation checks (made, observed to fail, reverted): disabling the margin and clu
 - **Controller `api_epoch`** is always unknown (no `ReportResponse.controller`), so `controller_unknown` is the answer for any release
   that sets `min_controller_api_epoch`; HA has no setting, so its check is a seam that is always false.
 - Transient gate refusals (`quorum_margin`, `host_busy`, `ha_enabled`) pause the rollout for the operator instead of waiting silently.
+- **Review fix (second review).** The host status now fails with `controller_scan_unavailable` when its Controller appliance record cannot
+  be read, instead of reporting no Controller, so the `controller_first` scan retries and pauses `step_timeout` rather than skipping the step
+  (`TestHostStatusFailsWhenTheControllerRecordCannotBeRead`, failed before the fix). The rollout panel refuses concurrent submissions and
+  shows an unreadable master as unreachable (`pool-rollout.test.mjs`).
 
 ## Not run / not implemented (open)
 
@@ -101,5 +112,5 @@ Mutation checks (made, observed to fail, reverted): disabling the margin and clu
   operator can still arm a pooled host by hand through the I-3 routes.
 - `controller_first` and `scope:"controller"` (the appliance swap), air-gapped metadata distribution (the peer cache serves blobs only),
   the Controller UI, the guide page `update-a-pool.md`, and the Phase 8 roadmap row are later work.
-- The three-host nested lab of the plan's acceptance check 3 and 4 (kill the master mid-step) did not run; the same properties are
-  asserted only against the fake.
+- The three-host nested lab of the plan's acceptance check 3 and 4 did not run **in this slice**; it ran afterwards, with its own limits and
+  one defect found: see [phase4-lab.md](phase4-lab.md). Everything above is still fake-peer evidence.

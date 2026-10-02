@@ -20,6 +20,11 @@ type fakeUpdater struct {
 	apply nexupdate.ApplyRequest
 	acts  nexupdate.ActionRequest
 	err   error
+
+	settings  nexupdate.Settings
+	imported  nexupdate.ImportRequest
+	fetched   nexupdate.FetchRequest
+	component string
 }
 
 func (f *fakeUpdater) Status(context.Context) (nexupdate.ImageStatus, error) {
@@ -40,6 +45,22 @@ func (f *fakeUpdater) act(name string, r nexupdate.ActionRequest) (nexupdate.Ope
 }
 func (f *fakeUpdater) Activate(_ context.Context, r nexupdate.ActionRequest) (nexupdate.Operation, bool, error) {
 	return f.act("activate", r)
+}
+func (f *fakeUpdater) UpdateSettings(_ context.Context, s nexupdate.Settings) (nexupdate.Settings, error) {
+	f.calls, f.settings = append(f.calls, "settings"), s
+	return s, f.err
+}
+func (f *fakeUpdater) Media(context.Context) ([]nexupdate.Media, error) {
+	f.calls = append(f.calls, "media")
+	return nil, f.err
+}
+func (f *fakeUpdater) Import(_ context.Context, r nexupdate.ImportRequest) (nexupdate.Operation, bool, error) {
+	f.calls, f.imported = append(f.calls, "import"), r
+	return nexupdate.Operation{}, false, f.err
+}
+func (f *fakeUpdater) FetchComponent(_ context.Context, id string, r nexupdate.FetchRequest) (nexupdate.Operation, bool, error) {
+	f.calls, f.fetched, f.component = append(f.calls, "fetch"), r, id
+	return nexupdate.Operation{}, false, f.err
 }
 func (f *fakeUpdater) Rollback(_ context.Context, r nexupdate.ActionRequest) (nexupdate.Operation, bool, error) {
 	return f.act("rollback", r)
@@ -171,5 +192,62 @@ func TestInventoryImageRequiresControllerAcknowledgement(t *testing.T) {
 	SetImageUpdater(nil)
 	if imageUpdateAvailable() {
 		t.Fatal("capability offered without an engine")
+	}
+}
+
+func TestRelayedSettingsMediaImportAndFetchRunOnTheHostsEngine(t *testing.T) {
+	engine := &fakeUpdater{}
+	SetImageUpdater(engine)
+	t.Cleanup(func() { SetImageUpdater(nil) })
+	run := func(action string, mutate func(*protocol.ImageUpdateRequest)) protocol.Result {
+		return ExecuteImageUpdate(context.Background(), imageCommand(action, mutate))
+	}
+	for action, mutate := range map[string]func(*protocol.ImageUpdateRequest){
+		"settings": func(r *protocol.ImageUpdateRequest) { r.Channel, r.BaseURL = "dev", "https://updates.example.test" },
+		"media":    nil,
+		"import": func(r *protocol.ImageUpdateRequest) {
+			r.Media, r.Channel, r.Sequence, r.Activate = "inbox/spring", "stable", 4, "reboot"
+		},
+		"fetch": func(r *protocol.ImageUpdateRequest) { r.Component, r.Media = "controller", "label" },
+	} {
+		if result := run(action, mutate); result.Status != "succeeded" {
+			t.Fatalf("%s: %+v", action, result)
+		}
+	}
+	if engine.settings != (nexupdate.Settings{Channel: "dev", BaseURL: "https://updates.example.test"}) ||
+		engine.imported != (nexupdate.ImportRequest{RequestID: "req-import-0001", Media: "inbox/spring", Channel: "stable", Sequence: 4, Activate: "reboot"}) ||
+		engine.fetched != (nexupdate.FetchRequest{RequestID: "req-fetch-0001", Media: "label"}) || engine.component != "controller" {
+		t.Fatalf("request not carried: %+v %+v %+v %q", engine.settings, engine.imported, engine.fetched, engine.component)
+	}
+	engine.err = &nexupdate.Error{Status: 400, Code: "invalid_base_url", Message: "base_url must be an http or https URL without credentials, query or fragment"}
+	if result := run("settings", func(r *protocol.ImageUpdateRequest) { r.Channel = "dev" }); result.Status != "failed" || !strings.HasPrefix(result.Error, "invalid_base_url: ") {
+		t.Fatalf("%+v", result)
+	}
+	engine.err = nil
+	before := len(engine.calls)
+	for name, mutate := range map[string]func(*protocol.ImageUpdateRequest){
+		"settings without a channel": func(r *protocol.ImageUpdateRequest) { r.Action = "settings"; r.Channel = "" },
+		"import without media":       func(r *protocol.ImageUpdateRequest) { r.Action = "import"; r.Media = "" },
+		"fetch without a component":  func(r *protocol.ImageUpdateRequest) { r.Action = "fetch"; r.Component = "" },
+		"base_url on apply":          func(r *protocol.ImageUpdateRequest) { r.Action = "apply"; r.BaseURL = "https://updates.example.test" },
+		"sequence on settings":       func(r *protocol.ImageUpdateRequest) { r.Action = "settings"; r.Channel = "dev"; r.Sequence = 2 },
+		"running_vms on fetch":       func(r *protocol.ImageUpdateRequest) { r.Action = "fetch"; r.Component = "c"; r.RunningVMs = "shutdown" },
+	} {
+		if result := run("check", mutate); result.Status != "failed" {
+			t.Fatalf("%s was executed: %+v", name, result)
+		}
+	}
+	if len(engine.calls) != before {
+		t.Fatalf("a malformed request reached the engine: %v", engine.calls[before:])
+	}
+}
+
+func TestInventoryImageReportsTheSourceAndMedia(t *testing.T) {
+	st := nexupdate.ImageStatus{BaseURL: "https://updates.example.test", Channel: "dev", Phase: "idle", Media: []nexupdate.Media{
+		{ID: "inbox/spring", Source: "inbox", Mounted: true, Checksums: true, Channels: []nexupdate.MediaChannel{{Name: "stable", Sequence: 4}}}}}
+	got := imageInventory(st, nexupdate.Booted{Label: "x", Sequence: 1}, nil)
+	if got.BaseURL != "https://updates.example.test" || len(got.Media) != 1 || got.Media[0].ID != "inbox/spring" ||
+		got.Media[0].Channels[0].Sequence != 4 || !got.Media[0].Checksums {
+		t.Fatalf("%+v", got)
 	}
 }

@@ -13,7 +13,6 @@ package vmhost
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -38,8 +37,10 @@ type LayerConfig struct {
 	LayerInfoDir  string // /usr/lib/nex/layers: <name>.json, present while the layer is merged
 	ExtensionsDir string // /run/extensions: stock systemd-sysext merges what is linked here
 	ReportPath    string // /run/nex/layers/status.json: the last boot verification, volatile
-	TrustedKey    string // raw 32-byte Ed25519 release key (same wire form as the appliance manifest)
-	SysModule     string // /sys/module: module reference counts
+	// Verify authenticates a release manifest (the bytes and their detached signature). The host wires in the
+	// update engine's own trust check, so layers and updates have one trust anchor; nil refuses every manifest.
+	Verify    func(manifest, sig []byte) error
+	SysModule string // /sys/module: module reference counts
 }
 
 // DefaultLayerConfig is the production layout.
@@ -47,7 +48,7 @@ func DefaultLayerConfig() LayerConfig {
 	return LayerConfig{
 		Dir: "/var/lib/nex/layers", OSRelease: "/usr/lib/os-release", LayerInfoDir: "/usr/lib/nex/layers",
 		ExtensionsDir: "/run/extensions", ReportPath: "/run/nex/layers/status.json",
-		TrustedKey: "/usr/share/nex/update/release.pub", SysModule: "/sys/module",
+		SysModule: "/sys/module",
 	}
 }
 
@@ -147,6 +148,9 @@ var layersRun = func(ctx context.Context, name string, args ...string) ([]byte, 
 
 var layerName = regexp.MustCompile(`^nex-[a-z0-9]+(-[a-z0-9]+)*$`)
 var layerHex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// layerBuild is a base BUILD_ID, <label>-<sequence>; it names a directory, so nothing else is accepted.
+var layerBuild = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+~-]{0,127}$`)
 
 // Layers is the per-host layer manager.
 type Layers struct {
@@ -251,9 +255,11 @@ func (l *Layers) manifest(build string) (map[string]layerComponent, error) {
 	if err != nil {
 		return nil, errors.New("release manifest signature unavailable")
 	}
-	key, err := readSmall(l.cfg.TrustedKey, 32)
-	if err != nil || len(key) != ed25519.PublicKeySize || len(sig) != ed25519.SignatureSize || !ed25519.Verify(key, body, sig) {
-		return nil, errors.New("release manifest signature verification failed")
+	if l.cfg.Verify == nil {
+		return nil, errors.New("no release trust is configured")
+	}
+	if err := l.cfg.Verify(body, sig); err != nil {
+		return nil, fmt.Errorf("release manifest signature verification failed: %w", err)
 	}
 	var m layerManifest
 	if json.Unmarshal(body, &m) != nil {
@@ -574,4 +580,207 @@ func (l *Layers) Inventory(ctx context.Context) ([]LayerInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// StagedLayer is one layer file the update engine has downloaded and authenticated against the signed
+// release manifest, waiting in the engine's staging directory.
+type StagedLayer struct {
+	Name, SHA256, RequiresBase string
+	Bytes                      int64
+	Path                       string
+}
+
+// EnabledNames lists the layers the operator wants merged: the ones an update has to carry along.
+func (l *Layers) EnabledNames(ctx context.Context) ([]string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	lf, err := l.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock(lf)
+	state, err := l.readState()
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for n, e := range state.Layers {
+		if e.Enabled {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// StageRelease puts the layers of a release, built for base build, into the store and keeps the signed
+// manifest under releases/<build> so that base can verify them when it boots. It never touches
+// enabled.json (SwitchRelease does, at activation) and never removes anything: the running base's layers
+// stay until PruneReleases. A layer built for another base is refused before any byte is written.
+func (l *Layers) StageRelease(ctx context.Context, build string, manifest, sig []byte, layers []StagedLayer) error {
+	if !layerBuild.MatchString(build) {
+		return &LayerError{Layer: build, Reason: LayerBaseMismatch, Detail: "not a base build id"}
+	}
+	for _, s := range layers {
+		if !layerName.MatchString(s.Name) {
+			return &LayerError{Layer: s.Name, Reason: LayerUnknown}
+		}
+		if s.RequiresBase != build {
+			return &LayerError{Layer: s.Name, Reason: LayerBaseMismatch, Detail: "built for " + s.RequiresBase + ", release is " + build}
+		}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	lf, err := l.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lf)
+	for _, s := range layers {
+		if err = l.place(s); err != nil {
+			return err
+		}
+	}
+	dir := filepath.Join(l.cfg.Dir, "releases", build)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err = AtomicWrite(filepath.Join(dir, "manifest.json"), manifest, 0600); err != nil {
+		return err
+	}
+	return AtomicWrite(filepath.Join(dir, "manifest.sig"), sig, 0600)
+}
+
+// place copies one staged file into the store under its digest, hashing as it goes: a file that is not the
+// signed bytes never gets the digest's name. A store file that is already right is left alone.
+func (l *Layers) place(s StagedLayer) error {
+	dst := l.storePath(s.SHA256)
+	if sum, err := fileDigest(dst); err == nil && sum == s.SHA256 {
+		return nil
+	}
+	src, err := os.Open(s.Path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	if err = os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".stage-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, h), src)
+	if err == nil && (n != s.Bytes || hex.EncodeToString(h.Sum(nil)) != s.SHA256) {
+		err = &LayerError{Layer: s.Name, Reason: LayerDigestMismatch, Detail: "staged bytes differ from the signed manifest"}
+	}
+	if err == nil {
+		err = tmp.Chmod(0600)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(tmp.Name(), dst); err != nil {
+		return err
+	}
+	if d, derr := os.Open(filepath.Dir(dst)); derr == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
+}
+
+func fileDigest(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err = io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// SwitchRelease is the activation step: every layer the operator has enabled that the release carries is
+// recorded in enabled.json as the release's version, built for the release's base. It runs when the
+// release is armed, never at stage, so a staged release changes nothing about the running host.
+func (l *Layers) SwitchRelease(ctx context.Context, build string, layers []StagedLayer) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	lf, err := l.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lf)
+	state, err := l.readState()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, s := range layers {
+		if e, ok := state.Layers[s.Name]; ok && e.Enabled && (e.SHA256 != s.SHA256 || e.Base != build) {
+			state.Layers[s.Name] = layerEntry{Enabled: true, SHA256: s.SHA256, Base: build, Changed: time.Now().UTC().Format(time.RFC3339)}
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return l.writeState(state)
+}
+
+// PruneReleases removes every release record and store file that no base in keep still uses, which is how
+// old layer versions leave once their base can no longer be booted again. Nothing is removed when a kept
+// manifest cannot be read: a store file is only dropped on proof that nothing needs it.
+func (l *Layers) PruneReleases(ctx context.Context, keep []string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	lf, err := l.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lf)
+	needed := map[string]bool{}
+	kept := map[string]bool{}
+	for _, build := range keep {
+		kept[build] = true
+		body, rerr := readSmall(filepath.Join(l.cfg.Dir, "releases", build, "manifest.json"), 1<<20)
+		if errors.Is(rerr, os.ErrNotExist) {
+			continue // this base was installed without layers
+		}
+		var m layerManifest
+		if rerr != nil || json.Unmarshal(body, &m) != nil {
+			return errors.New("a retained release manifest is unreadable; no layer was removed")
+		}
+		for _, c := range m.Components {
+			if c.Kind == "layer" {
+				needed[c.SHA256] = true
+			}
+		}
+	}
+	releases, _ := os.ReadDir(filepath.Join(l.cfg.Dir, "releases"))
+	for _, r := range releases {
+		if !kept[r.Name()] {
+			_ = os.RemoveAll(filepath.Join(l.cfg.Dir, "releases", r.Name()))
+		}
+	}
+	files, _ := os.ReadDir(filepath.Join(l.cfg.Dir, "store"))
+	for _, f := range files {
+		name := f.Name()
+		sum := strings.TrimSuffix(strings.TrimPrefix(name, "sha256-"), ".raw")
+		if !strings.HasPrefix(name, "sha256-") || !layerHex.MatchString(sum) || !needed[sum] {
+			_ = os.Remove(filepath.Join(l.cfg.Dir, "store", name))
+		}
+	}
+	return nil
 }

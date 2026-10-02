@@ -1684,8 +1684,17 @@ func releaseRefusedFenceCredential(s *Store, fence *protocol.StorageClusterFence
 // invalidate every in-flight placement and published inventory in the pool.
 func ExecutePoolFenceProfile(s *Store, cmd protocol.Command) protocol.Result {
 	result := protocol.Result{OperationID: cmd.OperationID, Status: "failed", ObservedAt: time.Now().UTC()}
-	v := cmd.Pool
-	if v == nil || v.Action != "fence-profile" {
+	if cmd.Pool == nil {
+		result.Error = "fence profile command carries no fence profile request"
+		return result
+	}
+	// The command's PoolCommand is shared with the agent's journal entry for this operation, which a
+	// Controller replay is compared against byte for byte. Pinning the certificate below rewrites the
+	// fence, so work on a copy: mutating the shared request made the next replay of the same command
+	// "reuse the ID with different input" and stopped the whole agent (pool lab 3).
+	request := *cmd.Pool
+	v := &request
+	if v.Action != "fence-profile" {
 		result.Error = "fence profile command carries no fence profile request"
 		return result
 	}

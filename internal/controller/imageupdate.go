@@ -20,6 +20,10 @@ type imageUpdateAPIRequest struct {
 	Sequence   int    `json:"sequence,omitempty"`
 	Activate   string `json:"activate,omitempty"`
 	RunningVMs string `json:"running_vms,omitempty"`
+	Channel    string `json:"channel,omitempty"`   // settings (required), import, fetch
+	BaseURL    string `json:"base_url,omitempty"`  // settings
+	Media      string `json:"media,omitempty"`     // import (required), fetch
+	Component  string `json:"component,omitempty"` // fetch (required)
 }
 
 type imageUpdatePayload struct {
@@ -64,7 +68,7 @@ func (c *Controller) hostImageUpdates(w http.ResponseWriter, r *http.Request, us
 }
 
 // relayImageUpdate implements POST /api/v1/hosts/{id}/updates/{action} for check, apply, activate,
-// rollback and cancel. It queues one command to the host and returns the task; the host's engine
+// rollback, cancel and the host-scoped settings, media, import and fetch. It queues one command to the host and returns the task; the host's engine
 // refuses with its own stable code, which arrives as the failed task's error.
 func (c *Controller) relayImageUpdate(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	host, action := r.PathValue("id"), r.PathValue("action")
@@ -77,7 +81,8 @@ func (c *Controller) relayImageUpdate(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 	opID := random()
-	request := protocol.ImageUpdateRequest{HostID: host, Action: action, RequestID: body.RequestID, Sequence: body.Sequence, Activate: body.Activate, RunningVMs: body.RunningVMs}
+	request := protocol.ImageUpdateRequest{HostID: host, Action: action, RequestID: body.RequestID, Sequence: body.Sequence, Activate: body.Activate, RunningVMs: body.RunningVMs,
+		Channel: body.Channel, BaseURL: body.BaseURL, Media: body.Media, Component: body.Component}
 	if err := request.Valid(); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return

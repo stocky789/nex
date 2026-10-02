@@ -8,6 +8,7 @@ import { Icon, type IconKind } from "./icons";
 import { Badge, Section, date } from "./ui";
 import { Gated, gatedButtons } from "./gated";
 import { ImageUpdates } from "./image-updates";
+import { PoolRollout } from "./pool-rollout";
 import { BackupRepositories } from "./backup-repositories";
 import "./settings.css";
 
@@ -69,7 +70,7 @@ export function Settings({ section, pool, hosts = [], api, busy, unavailable, up
   if (!current) return <section className="panel empty"><h2>Object not found</h2><p>This link does not match a settings section.</p><a href="#/settings">Return to settings</a></section>;
   if (current.pool && !pool) return <><h1>{current.label}</h1><p className="empty">Choose a pool in the scope menu to see its {current.label.toLowerCase()}.</p></>;
   const members = <PoolMembers key={pool?.id} poolID={pool?.id || ""} api={api} unavailable={unavailable} hosts={hosts} coreAvailable={updates.update?.core_available_version} onEnrollHost={onEnrollHost} />;
-  const updatesPanel = <><UpdatesPanel {...updates} busy={busy} /><ImageUpdates hosts={hosts} api={api} busy={busy} /></>;
+  const updatesPanel = <><UpdatesPanel {...updates} busy={busy} /><ImageUpdates hosts={hosts} api={api} busy={busy} />{pool ? <PoolRollout key={pool.id} pool={pool} hosts={hosts} api={api} busy={busy} /> : null}</>;
   switch (section) {
     case "overview": return <>{members}<HighAvailability />{pool ? <BackupRepositories api={api} poolID={pool.id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null}{updatesPanel}</>;
     case "backups": return pool ? <BackupRepositories api={api} poolID={pool.id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null;

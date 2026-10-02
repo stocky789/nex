@@ -102,6 +102,34 @@ class AptPublishTests(unittest.TestCase):
             self.assertEqual(published, payload)
             self.assertFalse((repo / "dists/nex/InRelease").exists())
 
+    def test_development_channel_is_a_separate_repository_with_its_own_retention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            gpg = base / "gnupg"
+            gpg.mkdir(mode=0o700)
+            stable, development = base / "repo", base / "repo" / "dev"
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                apt.publish(stable, "nex", "main", "amd64",
+                            [build_minimal_deb(base, "nex-core-local", "0.4.18")], gpg)
+                # Builds 999 and 1000 compare as numbers; the oldest of three is dropped.
+                for build in ("0.4.19~dev.999", "0.4.19~dev.1000", "0.4.19~dev.1001"):
+                    (base / build).mkdir()
+                    apt.publish(development, "nex", "main", "amd64",
+                                [build_minimal_deb(base / build, "nex-core-local", build)], gpg, keep=2)
+            pool = development / "pool/main/n/nex-core-local"
+            self.assertEqual(sorted(path.name for path in pool.iterdir()),
+                             ["nex-core-local_0.4.19~dev.1000_amd64.deb", "nex-core-local_0.4.19~dev.1001_amd64.deb"])
+            development_index = (development / "dists/nex/main/binary-amd64/Packages").read_text()
+            self.assertIn("Version: 0.4.19~dev.1001", development_index)
+            self.assertNotIn("Version: 0.4.18", development_index)
+            # The stable index never lists a development build, and keeps every version without --keep.
+            stable_index = (stable / "dists/nex/main/binary-amd64/Packages").read_text()
+            self.assertIn("Version: 0.4.18", stable_index)
+            self.assertNotIn("dev", stable_index)
+            self.assertEqual(json.loads((stable / "updates.json").read_text())["packages"]["nex-core-local"]["version"],
+                             "0.4.18")
+
     def test_rejects_invalid_deb_name(self):
         with self.assertRaises(apt.AptPublishError):
             apt.validate_deb_name("../evil_1.0_amd64.deb")

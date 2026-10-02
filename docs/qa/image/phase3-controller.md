@@ -44,7 +44,7 @@ persistent write of `/etc/nex/updates.conf`) and is not implemented.
 | `Inventory.image` and the capability are withheld until acknowledged; acknowledgement cleared on reset; capability absent without an engine | `TestInventoryImageRequiresControllerAcknowledgement` (`internal/agent`); mutation check: disabling the withholding makes it fail (`report 0 carried image = true`), then reverted | pass |
 | The Controller acknowledges only a Core that offered the capability; projection equals the host report; a classic host is `supported:false` | `TestImageUpdateAckAndHostReportedProjection` (`internal/controller`) | pass |
 | Command goes to its host only, with the right fields; replay is `200` with the original operation; a changed payload is `409`; refusals, strict body, CSRF | `TestImageUpdateRelaysToItsHostOnly`, `TestImageUpdateRefusals`, `TestImageUpdateNeedsCSRF` | pass |
-| Action hints, request identity held across a retry, panel rendering from the host report | `web/src/image-updates.test.mjs` (also `settings`, `updates`, `ui`, `pool-members` web tests, `tsc --noEmit`) | pass |
+| Action hints, request identity held across a retry, panel rendering from the host report; a new host report replaces a view the panel fetched earlier (the view is used only while the report it was read against is unchanged); a host that is no longer freshly connected gets every action disabled; the panel keeps reading while a submitted task is unfinished, not only while the host reports a running operation (mutation checks: ignoring the report identity and ignoring the task each fail the test, then reverted) | `web/src/image-updates.test.mjs` (also `settings`, `updates`, `ui`, `pool-members` web tests, `tsc --noEmit`) | pass |
 | Contract | `scripts/generate_api.py --check`, `tests/test_api_contract.py` (74 tests) | pass |
 | Packages | `go test ./internal/protocol ./internal/nexupdate/... ./internal/localcore ./internal/agent ./internal/controller`; `go test -race` of the update tests in nexupdate, localcore, agent and controller | pass |
 | Docs | `scripts/check_docs.py --worktree`, `tests/test_repository_privacy.py` | pass |
@@ -57,6 +57,7 @@ persistent write of `/etc/nex/updates.conf`) and is not implemented.
   image host driven through the Controller, an interrupted-request or Controller-replacement drill against a real host, a pool.
 - The `web/node_modules` of this worktree was absent; the web tests used a temporary symlink to another checkout's installed modules,
   removed afterwards.
+- The panel's timers and effects (task polling, the final read after a task ends) were not run in a browser; only the pure decisions they use (`imageSnapshot`, `stillFollowing`) and the server-rendered markup are tested.
 - Compatibility with a strict older Controller was argued from the withholding code and tested at the agent boundary (the field is
   absent from the report until acknowledged), not against an old Controller binary.
 - The guide pages (`software-updates.md`, `roll-back-a-host-update.md`) describe steps that have **not** been walked through and say so.

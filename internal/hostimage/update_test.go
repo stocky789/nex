@@ -238,11 +238,11 @@ func TestArmRefusesWhenTheSlotIsNotStaged(t *testing.T) {
 func TestStageRefusesUnknownRunningSlot(t *testing.T) {
 	r := newRig(t, LayoutSingle, 1)
 	rel2 := r.release(2)
-	before, _ := os.ReadFile(r.disks[0])
+	before := diskDigest(t, r.disks[0])
 	if _, err := r.host.StageSlot(context.Background(), rel2, strings.Repeat("ab", 32), 1); err == nil {
 		t.Fatal("staged without knowing which slot runs")
 	}
-	if after, _ := os.ReadFile(r.disks[0]); !bytes.Equal(before, after) {
+	if diskDigest(t, r.disks[0]) != before {
 		t.Fatal("disk changed by a refused stage")
 	}
 }

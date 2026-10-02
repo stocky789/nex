@@ -27,7 +27,7 @@ verifies the downloaded bytes against checksums pinned in the ISO.
 A Nex-hosted Debian mirror is not needed. Installation uses prebuilt packages; the
 existing ZFS DKMS package still builds its kernel module locally.
 
-## Image edition (development, not yet verified on a booted host)
+## Image edition (development, simulated install only)
 
 Media built with an image set carries two editions. The default boot entries install the **image edition**:
 a read-only, integrity-checked system image written to two slots on each selected disk, with `/etc` and `/var`
@@ -51,9 +51,16 @@ host described on this page and stay selectable.
 - **Repair image** keeps the data volume: see [Reinstall the system image and keep the data](reinstall-keeping-state.md).
 
 Secure Boot is supported but not required: with it off the host works, and its image checks are not
-tamper-proof against someone with disk access. Known limits: no ISO has been built from this tree and no image
-install has been booted yet; `docs/qa/image/phase2-installer.md` lists what has and has not run. The graphical
-wizard does not yet offer Repair image; use the text frontend.
+tamper-proof against someone with disk access. Verification status: small lab ISOs of this layout were installed
+and booted **in virtual machines only** (virtual UEFI, on 2026-10-02): one disk and a two-disk mirror (the host
+boots with both disks and with either one alone), root's password opened a root shell on the serial console, over
+SSH and through the host's local web API, a third disk that was not selected was left byte-identical, an install onto
+a disk of a mounted array was refused before any disk byte changed, an install cut off at two points ran again to
+completion (twice), and a legacy-BIOS boot was refused before any disk byte changed; a virtual Secure Boot,
+virtual TPM and update run is recorded too. See [Phase I-6 lab 1](../qa/image/phase6-lab1.md) and
+[lab 2](../qa/image/phase6-lab2.md) for exactly what ran, what did not (a full ISO build, the net installer, the real
+interactive wizards) and what is not established (any physical hardware, firmware, Secure Boot or TPM). The graphical
+wizard now draws the Repair image choice (checked under a virtual display only).
 
 ## Prerequisites
 

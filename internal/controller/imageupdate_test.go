@@ -136,3 +136,61 @@ func TestImageUpdateNeedsCSRF(t *testing.T) {
 	l.a.call("POST", "/api/v1/hosts/"+l.member.id+"/updates/apply", map[string]any{"request_id": "req-csrf-0001"}, nil, 403)
 	l.a.csrf = csrf
 }
+
+// settings, media, import and fetch are host-scoped: the Controller relays the request to that one host
+// and keeps nothing; the host records the source and the media it found.
+func TestImageSettingsMediaImportAndFetchAreRelayedToTheHostOnly(t *testing.T) {
+	l := newImageHostLab(t)
+	path := func(action string) string { return "/api/v1/hosts/" + l.member.id + "/updates/" + action }
+	cases := []struct {
+		action string
+		body   map[string]any
+		want   protocol.ImageUpdateRequest
+	}{
+		{"settings", map[string]any{"request_id": "req-settings-01", "channel": "dev", "base_url": "https://updates.example.test"},
+			protocol.ImageUpdateRequest{Channel: "dev", BaseURL: "https://updates.example.test"}},
+		{"media", map[string]any{"request_id": "req-media-00001"}, protocol.ImageUpdateRequest{}},
+		{"import", map[string]any{"request_id": "req-import-0001", "media": "inbox/spring", "channel": "stable", "sequence": 4, "activate": "stage_only"},
+			protocol.ImageUpdateRequest{Media: "inbox/spring", Channel: "stable", Sequence: 4, Activate: "stage_only"}},
+		{"fetch", map[string]any{"request_id": "req-fetch-0001", "component": "controller", "media": "label"},
+			protocol.ImageUpdateRequest{Component: "controller", Media: "label"}},
+	}
+	for _, c := range cases {
+		l.a.call("POST", path(c.action), c.body, nil, 202)
+		if commands := l.send(&l.master, nil).Commands; len(commands) != 0 {
+			t.Fatalf("%s: another host was sent the command: %+v", c.action, commands)
+		}
+		// Commands stay queued until their result is acknowledged, so the earlier ones come again: find this one.
+		var delivered *protocol.ImageUpdateRequest
+		for _, cmd := range l.send(&l.member, nil).Commands {
+			if cmd.ImageUpdate != nil && cmd.ImageUpdate.RequestID == c.body["request_id"] {
+				delivered = cmd.ImageUpdate
+			}
+		}
+		if delivered == nil {
+			t.Fatalf("%s: the host did not receive the command", c.action)
+		}
+		got, want := *delivered, c.want
+		want.HostID, want.Action, want.RequestID = l.member.id, c.action, c.body["request_id"].(string)
+		if got != want || got.Valid() != nil {
+			t.Fatalf("%s: delivered %+v, want %+v", c.action, got, want)
+		}
+	}
+	// Requests the host could misread are refused before they are queued.
+	for name, c := range map[string]struct {
+		action string
+		body   map[string]any
+	}{
+		"settings needs a channel":     {"settings", map[string]any{"request_id": "req-bad-10001", "base_url": "https://updates.example.test"}},
+		"import needs media":           {"import", map[string]any{"request_id": "req-bad-10002"}},
+		"fetch needs a component":      {"fetch", map[string]any{"request_id": "req-bad-10003"}},
+		"base_url belongs to settings": {"apply", map[string]any{"request_id": "req-bad-10004", "base_url": "https://updates.example.test"}},
+		"media takes no sequence":      {"media", map[string]any{"request_id": "req-bad-10005", "sequence": 1}},
+	} {
+		if code := l.a.call("POST", path(c.action), c.body, nil, 400).Code; code != 400 {
+			t.Fatalf("%s was accepted with %d", name, code)
+		}
+	}
+	// A classic host is never sent them.
+	l.a.call("POST", "/api/v1/hosts/"+l.master.id+"/updates/settings", map[string]any{"request_id": "req-classic-002", "channel": "dev"}, nil, 409)
+}

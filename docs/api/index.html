@@ -11933,12 +11933,12 @@
   }
 }</pre></details></section>
 <section id="relayHostImageUpdate"><h2>POST <code>/api/v1/hosts/{id}/updates/{action}</code></h2>
-<p>Ask an image-edition host to check, apply, activate, roll back or cancel an update</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-image-update command to the single host, whose own update engine does the work (fetch and verify signed metadata, download with resume, write the unused slot, arm the next boot only on activate, return to the previous release when a boot fails) and keeps the record. The Controller holds no operation open and stores only the task it keeps for every host operation; progress, the staged and previous releases and the outcome come back in the host&#x27;s inventory.image, and a refusal arrives as the failed task&#x27;s error in the form &quot;&lt;code&gt;: &lt;message&gt;&quot; with the engine&#x27;s stable code. request_id is also the host engine&#x27;s idempotency key. Pool rollout is not part of this route.</p>
+<p>Ask an image-edition host to check, apply, activate, roll back, cancel, change its update source, scan media, import a bundle or fetch a payload</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-image-update command to the single host, whose own update engine does the work (fetch and verify signed metadata, download with resume, write the unused slot, arm the next boot only on activate, return to the previous release when a boot fails) and keeps the record. The Controller holds no operation open and stores only the task it keeps for every host operation; progress, the staged and previous releases and the outcome come back in the host&#x27;s inventory.image, and a refusal arrives as the failed task&#x27;s error in the form &quot;&lt;code&gt;: &lt;message&gt;&quot; with the engine&#x27;s stable code. request_id is also the host engine&#x27;s idempotency key. The host-scoped settings, media, import and fetch actions are relayed the same way and are only asks: settings sets the host&#x27;s channel and base URL (the host stores them in /etc/nex/updates.conf and reports them as inventory.image.base_url), media makes the host rescan its offline bundles (reported as inventory.image.media), import stages a release from a bundle on that host through the host&#x27;s one verification pipeline, and fetch places an on_demand payload under /var/lib/nex/payload on that host. The Controller stores none of it. Pool rollout is not part of this route.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;relayHostImageUpdate&quot;,
-  &quot;summary&quot;: &quot;Ask an image-edition host to check, apply, activate, roll back or cancel an update&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-image-update command to the single host, whose own update engine does the work (fetch and verify signed metadata, download with resume, write the unused slot, arm the next boot only on activate, return to the previous release when a boot fails) and keeps the record. The Controller holds no operation open and stores only the task it keeps for every host operation; progress, the staged and previous releases and the outcome come back in the host&#x27;s inventory.image, and a refusal arrives as the failed task&#x27;s error in the form \&quot;&lt;code&gt;: &lt;message&gt;\&quot; with the engine&#x27;s stable code. request_id is also the host engine&#x27;s idempotency key. Pool rollout is not part of this route.&quot;,
+  &quot;summary&quot;: &quot;Ask an image-edition host to check, apply, activate, roll back, cancel, change its update source, scan media, import a bundle or fetch a payload&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-image-update command to the single host, whose own update engine does the work (fetch and verify signed metadata, download with resume, write the unused slot, arm the next boot only on activate, return to the previous release when a boot fails) and keeps the record. The Controller holds no operation open and stores only the task it keeps for every host operation; progress, the staged and previous releases and the outcome come back in the host&#x27;s inventory.image, and a refusal arrives as the failed task&#x27;s error in the form \&quot;&lt;code&gt;: &lt;message&gt;\&quot; with the engine&#x27;s stable code. request_id is also the host engine&#x27;s idempotency key. The host-scoped settings, media, import and fetch actions are relayed the same way and are only asks: settings sets the host&#x27;s channel and base URL (the host stores them in /etc/nex/updates.conf and reports them as inventory.image.base_url), media makes the host rescan its offline bundles (reported as inventory.image.media), import stages a release from a bundle on that host through the host&#x27;s one verification pipeline, and fetch places an on_demand payload under /var/lib/nex/payload on that host. The Controller stores none of it. Pool rollout is not part of this route.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -11970,7 +11970,11 @@
           &quot;apply&quot;,
           &quot;activate&quot;,
           &quot;rollback&quot;,
-          &quot;cancel&quot;
+          &quot;cancel&quot;,
+          &quot;settings&quot;,
+          &quot;media&quot;,
+          &quot;import&quot;,
+          &quot;fetch&quot;
         ]
       }
     },
@@ -12015,7 +12019,7 @@
       }
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Malformed JSON, unknown field, \&quot;host and a stable request_id are required\&quot;, or the request bounds: \&quot;image update action must be check, apply, activate, rollback or cancel\&quot;, \&quot;only apply takes a sequence or an activation mode\&quot;, \&quot;check takes no running_vms policy\&quot;, \&quot;sequence must not be negative\&quot;, \&quot;activate must be stage_only or reboot\&quot;, \&quot;running_vms must be refuse or shutdown\&quot;.&quot;,
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, \&quot;host and a stable request_id are required\&quot;, or the request bounds: \&quot;image update action must be check, apply, activate, rollback, cancel, settings, media, import or fetch\&quot;, \&quot;only apply and import take a sequence or an activation mode\&quot;, \&quot;check, settings, media and fetch take no running_vms policy\&quot;, \&quot;channel is for settings, import and fetch only; settings requires it\&quot;, \&quot;base_url is for settings, media for import and fetch, component for fetch\&quot;, \&quot;import needs a media id and fetch needs a component\&quot;, \&quot;sequence must not be negative\&quot;, \&quot;activate must be stage_only or reboot\&quot;, \&quot;running_vms must be refuse or shutdown\&quot;.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -26354,6 +26358,20 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ]
+    },
+    &quot;base_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The update server this host reads (host setting); absent when none is configured.&quot;
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ImageMedia&quot;
+      },
+      &quot;description&quot;: &quot;The host&#x27;s last scan of offline bundles.&quot;
     }
   },
   &quot;required&quot;: [
@@ -26367,7 +26385,7 @@
 }</pre></details>
 <details id="HostImageUpdateRequest"><summary>HostImageUpdateRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Body of POST /api/v1/hosts/{id}/updates/{action}. sequence and activate are accepted for apply only; running_vms for apply, activate and rollback.&quot;,
+  &quot;description&quot;: &quot;Body of POST /api/v1/hosts/{id}/updates/{action}. sequence and activate are accepted for apply and import; running_vms for apply, import, activate, rollback and cancel; channel for settings (required), import and fetch; base_url for settings; media for import (required) and fetch; component for fetch (required).&quot;,
   &quot;properties&quot;: {
     &quot;request_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -26393,6 +26411,22 @@
         &quot;shutdown&quot;
       ],
       &quot;description&quot;: &quot;refuse (default) refuses to reboot while guests run; shutdown accepts their graceful shutdown.&quot;
+    },
+    &quot;channel&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;settings (required): the channel to follow; import and fetch: the channel inside the bundle.&quot;
+    },
+    &quot;base_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;settings: the update server URL; empty clears it.&quot;
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;import (required) and fetch: a media id the host reported (inbox, inbox/&lt;name&gt; or label).&quot;
+    },
+    &quot;component&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;fetch (required): the on_demand component id.&quot;
     }
   },
   &quot;required&quot;: [
@@ -26473,7 +26507,11 @@
         &quot;apply&quot;,
         &quot;activate&quot;,
         &quot;rollback&quot;,
-        &quot;cancel&quot;
+        &quot;cancel&quot;,
+        &quot;settings&quot;,
+        &quot;media&quot;,
+        &quot;import&quot;,
+        &quot;fetch&quot;
       ]
     },
     &quot;request_id&quot;: {
@@ -26497,6 +26535,22 @@
         &quot;refuse&quot;,
         &quot;shutdown&quot;
       ]
+    },
+    &quot;channel&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;settings (required): the channel to follow; import and fetch: the channel inside the bundle.&quot;
+    },
+    &quot;base_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;settings: the update server URL; empty clears it.&quot;
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;import (required) and fetch: a media id the host reported.&quot;
+    },
+    &quot;component&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;fetch (required): the on_demand component id.&quot;
     }
   },
   &quot;required&quot;: [
@@ -26509,7 +26563,7 @@
 <details id="PoolUpdateHost"><summary>PoolUpdateHost</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart.&quot;,
+  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolUpdateHost&quot;,
   &quot;properties&quot;: {
     &quot;host_id&quot;: {
@@ -26541,6 +26595,10 @@
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;attempt&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
     }
   },
   &quot;required&quot;: [
@@ -26585,7 +26643,8 @@
         &quot;staging&quot;,
         &quot;hosts&quot;,
         &quot;finalize&quot;
-      ]
+      ],
+      &quot;description&quot;: &quot;staging, controller, hosts, finalize&quot;
     },
     &quot;pause&quot;: {
       &quot;anyOf&quot;: [
@@ -26612,6 +26671,16 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateHost&quot;
       }
+    },
+    &quot;controller&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateController&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     },
     &quot;finalized_sequence&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -26806,6 +26875,7 @@
       &quot;enum&quot;: [
         &quot;check&quot;,
         &quot;stage&quot;,
+        &quot;controller&quot;,
         &quot;drain&quot;,
         &quot;activate&quot;,
         &quot;confirm&quot;,
@@ -26879,6 +26949,10 @@
     &quot;required_bytes&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0
+    },
+    &quot;controller_image&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The release is controller_first and carries a Controller image.&quot;
     }
   },
   &quot;required&quot;: [
@@ -26956,6 +27030,10 @@
     &quot;observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;controller_vm&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;This host runs a Controller appliance in the two-disk profile that it can swap.&quot;
     }
   },
   &quot;required&quot;: [
@@ -26965,6 +27043,89 @@
     &quot;state_format&quot;,
     &quot;free_bytes&quot;,
     &quot;observed_at&quot;
+  ]
+}</pre></details>
+<details id="ImageMediaChannel"><summary>ImageMediaChannel</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;sequence&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ImageMediaChannel&quot;
+}</pre></details>
+<details id="ImageMedia"><summary>ImageMedia</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One offline update bundle the host found. Channels are read from the unverified channel.json for display; the host verifies everything on import.&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;inbox, inbox/&lt;name&gt; or label.&quot;
+    },
+    &quot;source&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;inbox&quot;,
+        &quot;label&quot;
+      ]
+    },
+    &quot;mounted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;channels&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ImageMediaChannel&quot;
+      }
+    },
+    &quot;has_sha256sums&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;source&quot;,
+    &quot;mounted&quot;,
+    &quot;has_sha256sums&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ImageMedia&quot;
+}</pre></details>
+<details id="PoolUpdateController"><summary>PoolUpdateController</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;The controller_first step of a rollout. stage scan looks for the host that runs the Controller VM, swap waits for that host&#x27;s journaled appliance swap, done means no Controller is left to update first. attempt is part of the swap&#x27;s step identity (a resume after a failed swap is a new swap) and is omitted while 0; error is the code: message of the last failed swap.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateController&quot;,
+  &quot;properties&quot;: {
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;attempt&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;stage&quot;,
+    &quot;started_at&quot;
   ]
 }</pre></details>
 </section></main></html>

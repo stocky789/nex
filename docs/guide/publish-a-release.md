@@ -25,6 +25,37 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
 [operate the website](operate-website.md).
 [Return to the guide](README.md).
 
+## Release channels
+
+Nex publishes on two channels. **Stable** follows `main`. **Development** follows `dev`, the
+branch every feature branch opens its pull request against: it is the staging area, promoted to
+`main` by a reviewed pull request. Hosts choose their channel under **Settings → Updates** in
+Nex Controller and in the Nex Core host settings; see [software updates](software-updates.md#update-channels).
+
+| | Stable (`main`) | Development (`dev`) |
+| --- | --- | --- |
+| Version | the newest `CHANGELOG.md` heading, `0.4.18` | a pre-release of the next release, `0.4.19-dev.231` (Debian `0.4.19~dev.231`) |
+| Forge release | `v0.4.18`, a release | `v0.4.19-dev.231`, a **pre-release**; the newest three stay |
+| APT archive | `<site>/apt/` | `<site>/apt/dev/`: its own pool and indexes, newest three versions kept |
+| Downloads | `<site>/downloads/<version>/` and `latest` | `<site>/downloads/dev/<version>/` and its own `latest` |
+| Static website | deployed | never deployed |
+| Release notes | the version's changelog section | `[Unreleased]` |
+
+A development build is numbered so it sorts above everything already released and below the
+release `main` publishes next. The suffix is the commit count of `dev`, so each merge is a newer
+build, and a rebuild of one commit replaces its own release. When the changelog heading for the
+next release was cut on `dev` and `main` has not published it yet, builds work toward that
+heading; once `main` publishes it they number the next patch release. A `main` that is ahead of
+`dev` stops the run with "merge main into dev first", because such a build would sort below a
+stable release.
+
+The development archive and downloads sit under the stable ones on the same host, behind the same
+signing key and web server, so the web server needs no change and the first development release
+creates `/srv/nex-apt/dev` and `/srv/nex-downloads/dev`. The root-run `nex-apt-publish` is the copy
+that `packaging/apt/bootstrap.sh` installed, and development publishing needs its `--keep` option:
+re-run the bootstrap on the website host once before the first push to `dev` (stable publishing keeps
+working with the old copy). A netinst ISO fetches its payloads from its own channel's tree.
+
 ## Prerequisites
 
 - The exact release has completed every external-distribution requirement in
@@ -89,7 +120,9 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
    This prints the tag version and Debian version. A final release prints the same value twice
    (`0.2.9 0.2.9`); a prerelease converts the tag suffix to Debian ordering
    (`0.1.6-alpha1 0.1.6~alpha1`).
-3. After the exact-artifact evidence is complete, push to `main`. Watch the **Release** workflow: it resolves the version, builds the
+3. After the exact-artifact evidence is complete, push to `main` (stable) or merge into `dev`
+   (development; promote it to stable with a pull request from `dev` to `main` that also cuts the
+   changelog heading). Watch the **Release** workflow: it resolves the channel and version, builds the
    appliance, both packages and both ISOs, checks artifact versions and source/payload bindings,
    builds the static website, publishes packages to APT and both ISOs, source, manifests
    and netinst payloads to the download tree, verifies those downloads, then creates the
@@ -136,6 +169,11 @@ then fetches the published APT indexes,
 ISO checksums, source bundle, manifests and netinst payload availability over HTTPS and fails if any are missing or
 the package index does not list the released version.
 
+Development releases are the same files at their own locations: `https://<site>/apt/dev/` is the
+APT repository (suite `nex`, component `main`, the same signing key), and
+`https://<site>/downloads/dev/latest/` is the newest build. Each keeps the newest three builds,
+and the final check verifies the development URLs, not the stable ones.
+
 ## Troubleshooting
 
 - **Publication succeeds but the final check returns 401** — the configured public
@@ -150,6 +188,15 @@ the package index does not list the released version.
 - **The final check reports "/ returned 503"** — the site was still settling from the publish
   a moment earlier. The check retries each request for about thirty seconds before failing; a
   503 that outlasts that is a real outage on the website host.
+- **"main already published X, newer than dev's Y; merge main into dev first"** — a release
+  went to `main` that `dev` does not contain, typically a hotfix. Merge `main` into `dev` and
+  push; the next development build numbers above that release.
+- **"nex-apt-publish: error: unrecognized arguments: --keep 3"** on a development run — the helper
+  installed on the website host predates channels. Re-run `packaging/apt/bootstrap.sh` there (see
+  [Release channels](#release-channels)); nothing was published, so re-run the workflow afterwards.
+- **A development merge cancelled a stable release still building** — both channels share one
+  concurrency group on the single runner, and a newer run cancels the one in progress. Re-run
+  the Release workflow on `main`.
 - **"CHANGELOG.md has no version headings"** — the changelog lost its `## [X.Y.Z]` headings;
   restore the newest version's section.
 - **"declares <version>, expected <version>"** — a package was built at a different version
@@ -191,9 +238,11 @@ the package index does not list the released version.
   after the exact-artifact distribution review is complete.
 - **Nothing published and no error** — check the runner can reach the website host; the host
   is on a private address and the runner must be on a network with a route to it.
-- **Disk pressure on the website host** — the APT archive keeps every package version and each
-  `nex-core-local` embeds the Controller appliance image; the packaging check records its actual size. Only
-  download release directories (including their netinst payloads) are pruned. Check `du -sh /srv/nex-apt /srv/nex-downloads` before large release runs.
+- **Disk pressure on the website host** — the stable APT archive keeps every package version and
+  each `nex-core-local` embeds the Controller appliance image; the packaging check records its
+  actual size. The development archive keeps the newest three versions, and each channel's
+  download tree prunes to the newest three releases (including their netinst payloads). Check
+  `du -sh /srv/nex-apt /srv/nex-downloads` before large release runs.
 
 ## Verification
 

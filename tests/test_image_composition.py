@@ -165,6 +165,26 @@ class BootChainTest(unittest.TestCase):
                     image_release.boot_files(str(tree), str(esp))
 
 
+class OsReleaseStampTest(unittest.TestCase):
+    """nex-update reads the compatibility record of the running image from os-release; the build must stamp all of it."""
+
+    def stamped(self, **env):
+        script = (IMAGE / "mkosi.postinst.chroot").read_text()
+        start = script.index("label=")
+        end = script.index("\nEOT\n", start)
+        # Only the variable assignments and the os-release heredoc: the rest of the script edits the tree it runs in.
+        body = script[start:end].replace("cat > /usr/lib/os-release <<EOT", "cat <<EOT") + "\nEOT\n"
+        out = subprocess.run(["sh", "-c", body], env={"PATH": os.environ["PATH"], **env}, capture_output=True, text=True, check=True).stdout
+        return dict(line.split("=", 1) for line in out.splitlines() if line.startswith("NEX_"))
+
+    def test_every_compatibility_key_the_update_engine_reads_is_stamped(self):
+        self.assertEqual(self.stamped(), {"NEX_STATE_FORMAT": "3", "NEX_MIN_STATE_FORMAT": "0", "NEX_MD_GENERATION": "0",
+                                          "NEX_MD_FALLBACK_SAFE": "0"})
+        got = self.stamped(NEX_STATE_FORMAT="4", NEX_MIN_STATE_FORMAT="2", NEX_MD_GENERATION="5", NEX_MD_FALLBACK_SAFE="1")
+        self.assertEqual(got, {"NEX_STATE_FORMAT": "4", "NEX_MIN_STATE_FORMAT": "2", "NEX_MD_GENERATION": "5",
+                               "NEX_MD_FALLBACK_SAFE": "1"})
+
+
 class InstallationStampTest(unittest.TestCase):
     """nex-core-local's preinst refuses a fresh install on a tree without the system stamp; mkosi installs the package
     into a fresh tree built from image/mkosi.skeleton, so the skeleton must carry the stamp."""
@@ -336,6 +356,21 @@ class ReproducibilityTest(unittest.TestCase):
         self.assertEqual(self.entries(first), self.entries(second))
         self.assertEqual(report1, report2)
         self.assertEqual({v[4] for v in self.entries(first).values()}, {1790000000})
+
+
+    def test_cluster_layer_declares_the_state_folders_and_accounts_the_packages_made_in_their_scripts(self):
+        # An overlay build keeps neither the folders nor the accounts that the Debian maintainer scripts create, and a
+        # layer may not ship /var: corosync stopped at start without /var/lib/corosync and pacemaker without hacluster
+        # (pool lab 3). Core runs systemd-sysusers and systemd-tmpfiles after the merge, so the layer declares both.
+        extra = IMAGE / "mkosi.images/nex-cluster/mkosi.extra/usr/lib"
+        tmpfiles = (extra / "tmpfiles.d/nex-cluster-state.conf").read_text()
+        for folder in ("/var/lib/corosync", "/var/lib/pacemaker/cib", "/var/log/pacemaker", "/var/lib/sanlock"):
+            self.assertRegex(tmpfiles, r"(?m)^d " + re.escape(folder) + r" ")
+        sysusers = (extra / "sysusers.d/nex-cluster-accounts.conf").read_text()
+        for line in (r"^u hacluster 189:haclient ", r"^u sanlock 179:sanlock "):
+            self.assertRegex(sysusers, "(?m)" + line)
+        spec = json.loads((IMAGE / "mkosi.images/nex-cluster/layer.json").read_text())
+        self.assertEqual(spec["allow_var"], [])
 
 
 if __name__ == "__main__":

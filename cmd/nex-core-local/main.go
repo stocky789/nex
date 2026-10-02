@@ -75,6 +75,8 @@ func main() {
 	flag.StringVar(&cfg.Engine.ManifestPath, "manifest", "", "appliance manifest")
 	flag.StringVar(&cfg.Engine.SignaturePath, "signature", "", "manifest detached signature")
 	flag.StringVar(&cfg.Engine.PublicKeyPath, "trusted-key", "", "independently trusted appliance signing key")
+	flag.StringVar(&cfg.Engine.SystemImage, "controller-system-image", "", "Controller system image (a vm-image release component staged under /var/lib/nex/payload): deploys the two-disk read-only profile instead of the single-disk appliance")
+	flag.StringVar(&cfg.Engine.SystemImageSHA256, "controller-system-image-sha256", "", "SHA-256 of the Controller system image from the signed release manifest")
 	flag.StringVar(&cfg.Engine.VirshURI, "libvirt-uri", "qemu:///system", "local libvirt connection")
 	flag.StringVar(&recoveryFile, "prepare-recovery-file", "", "root-only private JSON request: prepare empty replacement without enrollment")
 	flag.Parse()

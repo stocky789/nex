@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"time"
 )
@@ -168,6 +169,8 @@ type Component struct {
 	// Encoding of the slot-image blob: SlotEncoding, a tar compressed with zstd. The SHA-256 and size
 	// are those of the compressed bytes that are downloaded.
 	Encoding string `json:"encoding,omitempty"`
+	// Name is the file name of an on_demand payload under /var/lib/nex/payload/<sha256>/.
+	Name string `json:"name,omitempty"`
 }
 
 // Manifest is releases/<sequence>/manifest.json.
@@ -233,6 +236,57 @@ func VerifyManifest(trust TrustDoc, raw, sig []byte, channelHash string, now tim
 			return Manifest{}, refuse(502, "metadata_invalid", "manifest.json has an invalid component")
 		}
 		seen[c.ID] = true
+		if err := checkComponent(m, c); err != nil {
+			return Manifest{}, err
+		}
 	}
 	return m, nil
+}
+
+// VerifyReleaseManifest authenticates a stored release manifest the way the engine does: under the trust in
+// force (the pinned anchor plus every adopted rotation, never going back) with VerifyManifest, so a revoked
+// or expired release key no longer vouches for anything. The layer manager calls it at every boot and
+// ensure, which makes trust.json the one trust anchor of updates and layers. cfg is the engine Config
+// (zero fields take the host defaults).
+func VerifyReleaseManifest(cfg Config, raw, sig []byte) error {
+	e := NewEngine(cfg)
+	defer e.Close()
+	e.mu.Lock()
+	err := e.load()
+	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	trust, err := e.loadTrust()
+	if err != nil {
+		return err
+	}
+	_, err = VerifyManifest(trust, raw, sig, "", e.cfg.Now())
+	return err
+}
+
+var layerIDRE = regexp.MustCompile(`^nex-[a-z0-9]+(-[a-z0-9]+)*$`)
+var payloadNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// BuildID is the BUILD_ID the image of this release states about itself; a layer is built for exactly one.
+func (m Manifest) BuildID() string { return fmt.Sprintf("%s-%d", m.Label, m.Sequence) }
+
+// checkComponent holds the per-kind rules that need no stored state. A layer must name the base it was
+// built for and that base must be this release (a layer of another build is refused, so a release can
+// never carry a layer that systemd-sysext would reject); an on_demand payload needs a safe file name.
+func checkComponent(m Manifest, c Component) error {
+	switch {
+	case c.Kind == "layer":
+		if !layerIDRE.MatchString(c.ID) || c.Bytes <= 0 || c.URL == "" || (c.VerityRootHash != "" && !isHex64(c.VerityRootHash)) {
+			return refuse(502, "metadata_invalid", "manifest.json has an invalid layer component")
+		}
+		if c.RequiresBase != m.BuildID() {
+			return refuse(502, "layer_base_mismatch", "a layer in the release was built for another base")
+		}
+	case c.OnDemand && c.Kind != "source" && c.Kind != "compliance":
+		if !payloadNameRE.MatchString(c.Name) || c.Bytes <= 0 {
+			return refuse(502, "metadata_invalid", "manifest.json has an on_demand payload without a valid file name")
+		}
+	}
+	return nil
 }

@@ -380,7 +380,7 @@ func TestInstallRefusesBeforeWriting(t *testing.T) {
 	if len(rec.calls) != 0 {
 		t.Errorf("tools ran before validation: %v", rec.calls)
 	}
-	if b, _ := os.ReadFile(big); !bytes.Equal(b[:4096], make([]byte, 4096)) {
+	if b := diskHead(t, big, 4096); !bytes.Equal(b, make([]byte, 4096)) {
 		t.Error("disk written by a refused install")
 	}
 }
@@ -452,13 +452,13 @@ func TestWriteSlotRefusesRunningSlot(t *testing.T) {
 	r1, _ := ReadRelease(rel)
 	r2dir := makeRelease(t, "r2", 2, 2, 16)
 	r2, _ := ReadRelease(r2dir)
-	before, _ := os.ReadFile(d1)
+	before := diskDigest(t, d1)
 	w := &Writer{Runner: &recorder{}}
 	err := w.WriteSlot(context.Background(), openDisks(t, d1), "a", r2, r1.Manifest.RootHash)
 	if err == nil || !strings.Contains(err.Error(), "running system") {
 		t.Fatalf("running slot rewritten: %v", err)
 	}
-	if after, _ := os.ReadFile(d1); !bytes.Equal(before, after) {
+	if diskDigest(t, d1) != before {
 		t.Error("disk changed by a refused slot write")
 	}
 }
@@ -519,12 +519,12 @@ func TestRepairRefusesWithoutData(t *testing.T) {
 	sandbox(t)
 	d1 := sparseDisk(t, testDisk) // never installed
 	rel := makeRelease(t, "r1", 1, 1, 4)
-	before, _ := os.ReadFile(d1)
+	before := diskDigest(t, d1)
 	rec := &recorder{}
 	if err := (&Writer{Runner: rec}).Repair(context.Background(), Options{Layout: LayoutSingle, Disks: []string{d1}, ImageDir: rel}); err == nil {
 		t.Fatal("repair of a blank disk accepted")
 	}
-	if after, _ := os.ReadFile(d1); !bytes.Equal(before, after) || len(rec.calls) != 0 {
+	if diskDigest(t, d1) != before || len(rec.calls) != 0 {
 		t.Error("a refused repair wrote to the disk or ran tools")
 	}
 	d2 := sparseDisk(t, testDisk)
@@ -534,5 +534,94 @@ func TestRepairRefusesWithoutData(t *testing.T) {
 	}
 	if err := (&Writer{Runner: rec}).Repair(context.Background(), Options{Layout: LayoutSingle, Disks: []string{d2}, ImageDir: rel, EtcSeed: "/x"}); err == nil {
 		t.Fatal("repair accepted an /etc seed")
+	}
+}
+
+// memFile is a disk held as an ordered list of writes over zeros; it never allocates the disk's size.
+type memFile struct{ writes []memWrite }
+
+type memWrite struct {
+	off int64
+	b   []byte
+}
+
+func (m *memFile) ReadAt(p []byte, off int64) (int, error) {
+	clear(p)
+	for _, w := range m.writes {
+		lo, hi := max(off, w.off), min(off+int64(len(p)), w.off+int64(len(w.b)))
+		if lo < hi {
+			copy(p[lo-off:hi-off], w.b[lo-w.off:hi-w.off])
+		}
+	}
+	return len(p), nil
+}
+
+func (m *memFile) WriteAt(p []byte, off int64) (int, error) {
+	m.writes = append(m.writes, memWrite{off, append([]byte(nil), p...)})
+	return len(p), nil
+}
+
+func (m *memFile) Sync() error  { return nil }
+func (m *memFile) Close() error { return nil }
+
+// logFile records every write and sync a WriteTable issues, in order.
+type logFile struct {
+	memFile
+	ops []memWrite // a nil b is a Sync
+}
+
+func (l *logFile) WriteAt(p []byte, off int64) (int, error) {
+	l.ops = append(l.ops, memWrite{off, append([]byte(nil), p...)})
+	return l.memFile.WriteAt(p, off)
+}
+
+func (l *logFile) Sync() error {
+	l.ops = append(l.ops, memWrite{})
+	return nil
+}
+
+// A power cut at any point of WriteTable, with any subset of the writes since the last sync reaching the
+// medium, must leave a readable table that is either the old one or the new one.
+func TestWriteTableSurvivesPowerCutAtEveryWrite(t *testing.T) {
+	disk := func(f File) *Disk { return &Disk{Path: "mem", File: f, SectorSize: 512, Size: testDisk} }
+	table := func(label string, id GUID) *Table {
+		return &Table{SectorSize: 512, DiskID: mustGUID("11111111-2222-3333-4444-555555555555"), Parts: []Partition{
+			{Index: 1, Type: mustGUID("c12a7328-f81f-11d2-ba4b-00a0c93ec93b"), ID: id, FirstLBA: 2048, LastLBA: 4095, Label: label}}}
+	}
+	oldT, newT := table("old", NewGUID()), table("new", NewGUID())
+	base := &memFile{}
+	if err := disk(base).WriteTable(oldT); err != nil {
+		t.Fatal(err)
+	}
+	rec := &logFile{memFile: memFile{writes: append([]memWrite(nil), base.writes...)}}
+	if err := disk(rec).WriteTable(newT); err != nil {
+		t.Fatal(err)
+	}
+	same := func(a, b *Table) bool { return a.DiskID == b.DiskID && len(a.Parts) == 1 && a.Parts[0] == b.Parts[0] }
+	for cut := 0; cut <= len(rec.ops); cut++ {
+		durable := append([]memWrite(nil), base.writes...)
+		var pending []memWrite
+		for _, op := range rec.ops[:cut] {
+			if op.b == nil {
+				durable, pending = append(durable, pending...), nil
+			} else {
+				pending = append(pending, op)
+			}
+		}
+		for subset := 0; subset < 1<<len(pending); subset++ {
+			img := &memFile{writes: append([]memWrite(nil), durable...)}
+			for i, w := range pending {
+				if subset>>i&1 == 1 {
+					img.writes = append(img.writes, w)
+				}
+			}
+			got, err := disk(img).ReadTable()
+			if err != nil {
+				t.Fatalf("cut after op %d, writes %b of %d pending reached the medium: %v", cut, subset, len(pending), err)
+			}
+			if !same(got, oldT) && !same(got, newT) {
+				t.Fatalf("cut after op %d, writes %b: table is neither old nor new: %+v", cut, subset, got.Parts)
+			}
+		}
 	}
 }

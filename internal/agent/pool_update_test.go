@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -38,7 +39,13 @@ type fakeUpdateHost struct {
 	capability  bool
 	stageSeen   map[string]bool // engine request IDs already used to stage: a replay changes nothing
 	stageIDs    []string        // request IDs of the stage operations that really ran, in order
-	partitioned bool            // up and ready in the pool's records, but not voting in Corosync
+	// controllerVM is a Controller appliance this host owns; the controller step swaps it once per
+	// distinct step ID and fails once with controllerCode when that is set.
+	controllerVM   bool
+	swapped        bool
+	controllerCode string
+	controllerIDs  []string // every step ID the controller step was asked under
+	partitioned    bool     // up and ready in the pool's records, but not voting in Corosync
 }
 
 type fakeUpdatePool struct {
@@ -125,6 +132,7 @@ func (p *fakeUpdatePool) Status(_ context.Context, member protocol.PoolMember) (
 	if h.capability {
 		st.Capabilities = []string{protocol.PoolUpdateRolloutCapability}
 	}
+	st.ControllerVM = h.controllerVM
 	if h.staged {
 		st.StagedSequence = h.target.Sequence
 	}
@@ -178,7 +186,24 @@ func (p *fakeUpdatePool) Step(_ context.Context, member protocol.PoolMember, ste
 				h.starts[id]++
 			}
 		}
+	case "controller":
+		if !h.controllerVM {
+			p.t.Fatalf("controller step on %s, which owns no Controller", h.id)
+		}
+		h.controllerIDs = append(h.controllerIDs, step.StepID)
+		if h.controllerCode != "" {
+			res = protocol.PoolUpdateStepResult{Code: h.controllerCode, Message: "the previous image and its data were restored"}
+			h.controllerCode = ""
+			break
+		}
+		h.swapped = true
 	case "activate":
+		// controller_first: no host may go down before the Controller runs its new image.
+		for _, other := range p.hosts {
+			if other.controllerVM && other.target.ControllerImage && !other.swapped {
+				p.t.Fatalf("activate on %s before the Controller on %s was swapped", h.id, other.id)
+			}
+		}
 		// The engine's last guard: never reboot a host that still runs guests, and the host
 		// must already be the one host in maintenance.
 		for id, running := range h.guests {
@@ -679,6 +704,8 @@ func TestQuorumGateVoteArithmetic(t *testing.T) {
 		{"not quorate", vmhost.PoolQuorum{Observed: true, Quorate: false, Hosts: all[:1], ExpectedVotes: 3, TotalVotes: 1, Quorum: 2}, protocol.PoolUpdateQuorumMargin},
 		{"votes not reported", vmhost.PoolQuorum{Observed: true, Quorate: true, Hosts: all}, protocol.PoolUpdateQuorumMargin},
 		{"a nodelist host absent", vmhost.PoolQuorum{Observed: true, Quorate: true, Hosts: []string{"master-1", "member-2"}, ExpectedVotes: 3, TotalVotes: 2, Quorum: 2}, protocol.PoolUpdateQuorumMargin},
+		// Votes alone would pass (3 left of 3 needed), but a ready host of the nodelist is not in the partition.
+		{"a nodelist host absent with votes to spare", vmhost.PoolQuorum{Observed: true, Quorate: true, Hosts: []string{"master-1", "member-2"}, ExpectedVotes: 5, TotalVotes: 4, Quorum: 3}, protocol.PoolUpdateQuorumMargin},
 		{"five expected, three present", vmhost.PoolQuorum{Observed: true, Quorate: true, Hosts: all, ExpectedVotes: 5, TotalVotes: 3, Quorum: 3}, protocol.PoolUpdateQuorumMargin},
 		{"five expected, four present", vmhost.PoolQuorum{Observed: true, Quorate: true, Hosts: all, ExpectedVotes: 5, TotalVotes: 4, Quorum: 3}, ""},
 	}
@@ -688,9 +715,19 @@ func TestQuorumGateVoteArithmetic(t *testing.T) {
 			t.Fatalf("%s: code %q, want %q", tc.name, got, tc.code)
 		}
 	}
-	localQuorum = func(context.Context) (vmhost.PoolQuorum, error) { return vmhost.PoolQuorum{}, errors.New("corosync is not running") }
+	localQuorum = func(context.Context) (vmhost.PoolQuorum, error) {
+		return vmhost.PoolQuorum{}, errors.New("corosync is not running")
+	}
 	if got := refusalCode(poolUpdateQuorumGate(context.Background(), lab.pool.master, membership, "member-2")); got != protocol.PoolUpdateQuorumMargin {
 		t.Fatalf("an unreadable quorum on a clustered pool: %q", got)
+	}
+	// A host without Corosync at all (an image without the cluster layer) forms no cluster, so there is
+	// no quorum to lose; a Corosync that is installed but unreadable still refuses (above).
+	localQuorum = func(context.Context) (vmhost.PoolQuorum, error) {
+		return vmhost.PoolQuorum{}, fmt.Errorf("corosync-quorumtool failed: %w", exec.ErrNotFound)
+	}
+	if got := refusalCode(poolUpdateQuorumGate(context.Background(), lab.pool.master, membership, "member-2")); got != "" {
+		t.Fatalf("a host with no Corosync installed: %q", got)
 	}
 }
 
@@ -1040,7 +1077,9 @@ func TestGuestsAreNotStoppedBeforeTheRecordIsAcknowledged(t *testing.T) {
 	if err := lab.start("repl-1", "shutdown"); err != nil {
 		t.Fatal(err)
 	}
-	lab.run(120, func(r *protocol.PoolUpdateRollout) bool { return len(poolUpdateHostRecord(r, "member-2").StoppedByUpdate) > 0 })
+	lab.run(120, func(r *protocol.PoolUpdateRollout) bool {
+		return len(poolUpdateHostRecord(r, "member-2").StoppedByUpdate) > 0
+	})
 	for range 20 {
 		if err := lab.coordinator().Advance(context.Background()); err != nil {
 			t.Fatal(err)
@@ -1094,5 +1133,80 @@ func TestResumeAfterRollbackStagesAgainUnderANewAttempt(t *testing.T) {
 	}
 	if len(h.stageIDs) != 2 || h.stageIDs[0] == h.stageIDs[1] || len(h.activations) != 2 {
 		t.Fatalf("member-2 staged under %v and was activated under %v; want two attempts of each", h.stageIDs, h.activations)
+	}
+}
+
+// controller_first: the host that owns the Controller VM swaps its appliance before any host
+// activates (the fake fails the test if one does), under one step ID however often the coordinator
+// is restarted, and the rollout then completes as usual.
+func TestControllerFirstSwapsBeforeAnyHostActivates(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	lab.restartCoordinator = true
+	owner := lab.pool.host("member-3")
+	owner.controllerVM = true
+	for _, h := range lab.pool.hosts {
+		h.target.ControllerImage = true
+	}
+	if err := lab.start("ctl-first-1", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.run(400, ended)
+	if r.State != protocol.PoolUpdateFinalized || !owner.swapped {
+		t.Fatalf("final = %+v swapped=%v", r, owner.swapped)
+	}
+	if c := r.Controller; c == nil || c.Stage != protocol.PoolUpdateControllerDone || c.HostID != "member-3" {
+		t.Fatalf("controller record = %+v", c)
+	}
+	for _, id := range owner.controllerIDs[1:] {
+		if id != owner.controllerIDs[0] {
+			t.Fatalf("the swap was asked under several step IDs: %v", owner.controllerIDs)
+		}
+	}
+	if lab.pool.host("master-1").swapped || lab.pool.host("member-2").swapped {
+		t.Fatal("a host without the Controller was asked to swap it")
+	}
+}
+
+func TestControllerFirstFailurePausesBeforeAnyHostAndResumeAsksAgain(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	owner := lab.pool.host("master-1")
+	owner.controllerVM, owner.controllerCode = true, "controller_rolled_back"
+	for _, h := range lab.pool.hosts {
+		h.target.ControllerImage = true
+	}
+	if err := lab.start("ctl-first-2", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.run(100, paused)
+	if r.Pause == nil || r.Pause.Code != protocol.PoolUpdateNeedsAttention || !strings.Contains(r.Pause.Message, "controller_rolled_back") || r.Phase != "controller" {
+		t.Fatalf("pause = %+v phase %s", r.Pause, r.Phase)
+	}
+	for id, h := range lab.pool.hosts {
+		if h.sequence != 1 || len(h.activations) != 0 {
+			t.Fatalf("%s went on with the release although the Controller swap failed", id)
+		}
+	}
+	if _, err := lab.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: "ctl-first-2", Control: "resume"}); err != nil {
+		t.Fatal(err)
+	}
+	r = lab.run(600, ended)
+	if r.State != protocol.PoolUpdateFinalized || !owner.swapped {
+		t.Fatalf("final = %+v swapped=%v", r, owner.swapped)
+	}
+	if len(owner.controllerIDs) != 2 || owner.controllerIDs[0] == owner.controllerIDs[1] {
+		t.Fatalf("a resumed swap must be a new swap, not a replay of the failed one: %v", owner.controllerIDs)
+	}
+}
+
+func TestControllerFirstSkipsWhenThereIsNothingToSwap(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	// A Controller is here, but the release carries no Controller image.
+	lab.pool.host("member-2").controllerVM = true
+	if err := lab.start("ctl-first-3", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.run(400, ended)
+	if r.State != protocol.PoolUpdateFinalized || len(lab.pool.host("member-2").controllerIDs) != 0 {
+		t.Fatalf("final = %+v", r)
 	}
 }

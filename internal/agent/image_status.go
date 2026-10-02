@@ -46,6 +46,14 @@ func imageInventory(st nexupdate.ImageStatus, booted nexupdate.Booted, secureBoo
 		RollbackFloor: st.RollbackFloor,
 		StateFormat:   st.StateFormat,
 		SecureBoot:    secureBoot,
+		BaseURL:       st.BaseURL,
+	}
+	for _, m := range st.Media {
+		media := protocol.ImageMedia{ID: m.ID, Source: m.Source, Mounted: m.Mounted, Checksums: m.Checksums}
+		for _, c := range m.Channels {
+			media.Channels = append(media.Channels, protocol.ImageMediaChannel{Name: c.Name, Sequence: c.Sequence})
+		}
+		out.Media = append(out.Media, media)
 	}
 	for _, s := range st.Slots {
 		rel := protocol.ImageRelease{Label: s.Label, Sequence: s.Sequence, RootHash: s.RootHash, Slot: s.Slot}

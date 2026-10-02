@@ -249,8 +249,21 @@ int main(int argc,char **argv)
     if (repair_mode(config)) {
         gsize count=0;
         char **chosen=disk_list(config,"disk",&count);
-        /* Nothing else is staged: the data volume keeps the host's identity, account and network. */
-        protected_write("/run/nex-installer/answers.cfg","d-i debian-installer/locale string en_US.UTF-8\n");
+        /* Nothing is staged for the host: the data volume keeps its identity, account and network. Debian Installer
+         * still runs its keyboard, root account, clock and network-name steps before the hook that starts Repair, so
+         * they get neutral answers (a locked placeholder account that nothing installs) instead of stopping to ask. */
+        protected_write("/run/nex-installer/answers.cfg",
+            "d-i debian-installer/locale string en_US.UTF-8\n"
+            "d-i keyboard-configuration/xkb-keymap select us\n"
+            "d-i time/zone string UTC\n"
+            "d-i clock-setup/utc boolean true\n"
+            "d-i clock-setup/ntp boolean false\n"
+            "d-i netcfg/enable boolean false\n"
+            "d-i netcfg/get_hostname string nex-repair\n"
+            "d-i netcfg/get_domain string\n"
+            "d-i passwd/root-login boolean true\n"
+            "d-i passwd/make-user boolean false\n"
+            "d-i passwd/root-password-crypted password *\n");
         write_image_env("repair",chosen,count);
         g_strfreev(chosen);
         return 0;
@@ -311,8 +324,12 @@ int main(int argc,char **argv)
         "d-i netcfg/get_domain string %s\n"
         "d-i passwd/root-login boolean true\n"
         "d-i passwd/make-user boolean false\n"
-        "d-i passwd/root-password-crypted password %s\n"
-        "d-i partman-auto/disk string %s\n",keymap,zone,shortname,domain,hash,targets->str);
+        "d-i passwd/root-password-crypted password %s\n",keymap,zone,shortname,domain,hash);
+    /* Debian Installer runs its language, keyboard, user and clock steps before partman's init hook, where the
+     * image edition takes over. Those answers are the same in both editions, or the installer stops to ask the
+     * operator again what the wizard just asked. The image edition keeps them and drops what follows. */
+    char *common=g_strdup(seed->str);
+    g_string_append_printf(seed,"d-i partman-auto/disk string %s\n",targets->str);
     if (disks > 1)
         g_string_append_printf(seed,
             "d-i partman-auto/method string raid\n"
@@ -361,11 +378,14 @@ int main(int argc,char **argv)
         "d-i finish-install/reboot_in_progress seen false\n");
     /* The image edition has no partman, base-installer or GRUB step: the disk work is
      * nex-hostimage, driven by layout=single|raid1 and the disk list in image.env. Keep
-     * no partman answer and no password hash in answers.cfg. */
+     * no partman or GRUB answer in answers.cfg; the steps that run before the hook
+     * (language, keyboard, root account, clock, network name) keep theirs. */
     if (image_edition()) {
         explicit_bzero(seed->str,seed->len);
-        g_string_assign(seed,"d-i debian-installer/locale string en_US.UTF-8\n");
+        g_string_assign(seed,common);
     }
+    explicit_bzero(common,strlen(common));
+    g_free(common);
     protected_write("/run/nex-installer/answers.cfg",seed->str);
     /* Retain only non-secret selections for last-moment disk identity checking. */
     g_key_file_remove_key(config,"Host","password",NULL);

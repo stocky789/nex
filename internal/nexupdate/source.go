@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // Source is where release metadata and blobs come from: the update server, a mounted bundle or the
@@ -119,25 +120,44 @@ func (s HTTPSource) Blob(ctx context.Context, name string, offset int64, validat
 // DirSource serves a directory in the online layout: a mounted NEXUPDATE bundle, an inbox or a test.
 type DirSource struct{ Root string }
 
-func (s DirSource) file(name string) (string, error) {
-	clean := path.Clean("/" + name)
-	if strings.Contains(name, "://") {
-		return "", refuse(502, "metadata_invalid", "an update URL is not relative to the bundle")
-	}
-	return filepath.Join(s.Root, filepath.FromSlash(clean)), nil
-}
-
-func (s DirSource) Fetch(_ context.Context, name string, limit int64) ([]byte, error) {
-	p, err := s.file(name)
+// openRegular opens name inside root for reading. It never follows a link out of root and never blocks:
+// a FIFO on the media would otherwise hold the update lock until someone wrote to it. Anything that is
+// not a regular file is refused.
+func openRegular(root *os.Root, name string) (*os.File, error) {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(p)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, refuse(502, "metadata_missing", "the update source does not have the requested metadata")
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		f.Close()
+		return nil, errors.New("not a regular file")
 	}
+	return f, nil
+}
+
+func (s DirSource) open(name string) (*os.File, error) {
+	if strings.Contains(name, "://") {
+		return nil, refuse(502, "metadata_invalid", "an update URL is not relative to the bundle")
+	}
+	root, err := os.OpenRoot(s.Root)
 	if err != nil {
 		return nil, unreachable(err)
+	}
+	defer root.Close()
+	f, err := openRegular(root, strings.TrimPrefix(path.Clean("/"+name), "/"))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, refuse(502, "metadata_missing", "the update source does not have the requested file")
+	case err != nil:
+		return nil, refuse(502, "metadata_invalid", "the update source file is not a regular file inside the bundle")
+	}
+	return f, nil
+}
+
+func (s DirSource) Fetch(_ context.Context, name string, limit int64) ([]byte, error) {
+	f, err := s.open(name)
+	if err != nil {
+		return nil, err
 	}
 	defer f.Close()
 	b, err := io.ReadAll(io.LimitReader(f, limit+1))
@@ -148,16 +168,9 @@ func (s DirSource) Fetch(_ context.Context, name string, limit int64) ([]byte, e
 }
 
 func (s DirSource) Blob(_ context.Context, name string, offset int64, _ string) (io.ReadCloser, bool, string, error) {
-	p, err := s.file(name)
+	f, err := s.open(name)
 	if err != nil {
 		return nil, false, "", err
-	}
-	f, err := os.Open(p)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, false, "", refuse(502, "metadata_missing", "the update source does not have the requested blob")
-	}
-	if err != nil {
-		return nil, false, "", unreachable(err)
 	}
 	if offset > 0 {
 		if _, err = f.Seek(offset, io.SeekStart); err != nil {

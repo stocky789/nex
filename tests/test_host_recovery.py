@@ -82,6 +82,31 @@ class RecoveryTransport(unittest.TestCase):
                 recovery.owned('qemu:///system', '11111111-1111-4111-8111-111111111111', Path(directory), Path('/storage'))
             virsh.assert_not_called()
 
+    def profile(self, directory, system_readonly=True, data='controller-data.qcow2'):
+        vm = '11111111-1111-4111-8111-111111111111'
+        storage = Path('/storage')
+        journal = {'vm_id': vm, 'kind': 'deploy', 'name': 'nex-controller', 'disk': str(storage / vm / 'controller-data.qcow2'),
+                   'system': str(storage / vm / ('system-' + 'a' * 64 + '.img'))}
+        (Path(directory) / 'deploy.json').write_text(__import__('json').dumps(journal))
+        readonly = '<readonly/>' if system_readonly else ''
+        xml = (f"<domain><name>nex-controller</name><uuid>{vm}</uuid><devices>"
+               f"<disk type='file' device='disk'><source file='{journal['system']}'/>{readonly}</disk>"
+               f"<disk type='file' device='disk'><source file='{storage / vm / data}'/></disk></devices></domain>")
+        return vm, storage, xml
+
+    def test_two_disk_profile_is_owned_when_system_is_read_only_and_data_is_the_journal_disk(self):
+        with TemporaryDirectory() as directory:
+            vm, storage, xml = self.profile(directory)
+            with patch.object(recovery, 'virsh', return_value=xml):
+                recovery.owned('qemu:///system', vm, Path(directory), storage)
+
+    def test_two_disk_profile_rejects_a_writable_system_disk_or_a_foreign_data_disk(self):
+        for kwargs in ({'system_readonly': False}, {'data': 'other.qcow2'}):
+            with TemporaryDirectory() as directory:
+                vm, storage, xml = self.profile(directory, **kwargs)
+                with patch.object(recovery, 'virsh', return_value=xml), self.assertRaisesRegex(ValueError, 'differs'):
+                    recovery.owned('qemu:///system', vm, Path(directory), storage)
+
 
 if __name__ == '__main__':
     unittest.main()

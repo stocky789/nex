@@ -205,5 +205,62 @@ class PublishTests(unittest.TestCase):
             self.repo.request("PATCH", "/nowhere")
 
 
+class FakeReleases(BaseHTTPRequestHandler):
+    releases = []
+    deleted = []
+
+    def do_GET(self):
+        page = int(self.path.rsplit("page=", 1)[1])
+        body = json.dumps(self.releases[(page - 1) * 50:page * 50]).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_DELETE(self):
+        self.deleted.append(self.path)
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+class PruneTests(unittest.TestCase):
+    """Development builds keep only their newest releases; stable releases are never touched."""
+
+    def setUp(self):
+        FakeReleases.deleted = []
+        # Newest first, as the forge lists them: the build just published, 54 older development
+        # builds (more than one page of 50), and stable releases interleaved by date.
+        builds = [{"id": 1000 - n, "tag_name": f"v0.4.19-dev.{300 - n}", "created_at": f"2026-10-{30 - n // 3:02d}T00:{n % 60:02d}:00Z"}
+                  for n in range(55)]
+        stable = [{"id": 5, "tag_name": "v0.4.18", "created_at": "2026-09-28T00:00:00Z"}]
+        FakeReleases.releases = builds[:3] + stable + builds[3:]
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeReleases)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.repo = gitea.Repo(f"http://127.0.0.1:{self.server.server_port}/api/v1", "o/r", "t")
+        self.pattern = gitea.re.compile(r"-dev\.[0-9]+$")
+
+    def test_keeps_the_newest_builds_across_pages_and_never_stable_releases(self):
+        removed = gitea.prune(self.repo, "v0.4.19-dev.300", self.pattern, 5)
+        # The published build plus the four newest others stay; the other 50 go, release and tag.
+        self.assertEqual(len(removed), 50)
+        self.assertEqual(len(FakeReleases.deleted), 100)
+        self.assertNotIn("v0.4.18", " ".join(FakeReleases.deleted))
+        self.assertNotIn("/releases/1000", FakeReleases.deleted)
+        kept = {r["tag_name"] for r in FakeReleases.releases} - set(removed)
+        self.assertEqual(len(kept), 5 + 1)  # five development builds and the stable release
+        self.assertIn("v0.4.18", kept)
+        self.assertIn("v0.4.19-dev.300", kept)
+
+    def test_nothing_is_removed_while_within_the_limit(self):
+        self.assertEqual(gitea.prune(self.repo, "v0.4.19-dev.300", self.pattern, 60), [])
+        self.assertEqual(FakeReleases.deleted, [])
+
+
 if __name__ == "__main__":
     unittest.main()

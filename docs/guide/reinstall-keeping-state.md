@@ -3,9 +3,9 @@
 ## Status
 
 Development build, **image edition only**. The image-edition installer and its **Repair image** mode are
-implemented in the installer scripts and covered by script-level tests; no ISO has been built and no real
-install or repair has been booted yet, so treat this page as a procedure under validation. It does not apply
-to hosts installed with the Classic edition. Use a disposable host.
+implemented in the installer scripts, covered by script-level tests and run once in a virtual-machine lab from a
+lab ISO (not a release ISO; see Verification), so treat this page as a procedure under validation. No real host
+has been repaired. It does not apply to hosts installed with the Classic edition. Use a disposable host.
 
 **Repair image** re-lays the partition table, system slots and boot partitions of the disks that hold a
 complete Nex Core data volume, writes the image on the installation media, and keeps the data volume
@@ -45,6 +45,10 @@ image written by the media. Anything you added to the system image outside `/etc
 
 ## Verification
 
-Not verified on a real or virtual host. Script-level tests (`tests/test_image_installer.py`) cover the UEFI
-refusal, the complete-data check and the exact-disk rule. A QEMU repair run is outstanding; see
-[installer phase 2 QA](../qa/image/phase2-installer.md).
+Not verified on a real host. **Repair image** was run in a QEMU lab on a two-disk mirror (virtual UEFI, 2026-10-02): the data
+partition's bytes were identical on both disks afterwards, files written to it before read back unchanged, both boot
+partitions and the system image were rewritten (they had been zeroed first), the host booted from both disks together and
+from each alone, and Repair was refused, changing nothing, when one mirror member was missing. Script-level tests
+(`tests/test_image_installer.py`) cover the UEFI refusal, the complete-data check and the exact-disk rule; the graphical
+wizard's Repair image choice and review page were drawn and inspected under a virtual display only. See
+[Phase I-6 lab 2](../qa/image/phase6-lab2.md) for what ran and what did not.

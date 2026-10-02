@@ -2,8 +2,9 @@
 # Boot assessment: fails only for image-caused problems (state or config not writable, libvirt or Core
 # not running, the state format guard refusing, a layer check failing). Never looks at links, quorum,
 # peers, the clock or the Controller.
-# On failure of a counted boot (boot counter active) the entry is marked bad and the host reboots into
-# the previous image, unless /run/nex/maintenance-hold exists.
+# On failure of a counted boot (boot counter active) the host reboots: the entry is tried again while the
+# boot counter has tries left and marked bad on the last one, so the loader falls back to the previous image.
+# Nothing happens while /run/nex/maintenance-hold exists.
 #
 # NEX_BOOT_CHECK_TRIES (default 20) and NEX_BOOT_CHECK_WAIT seconds (default 10) bound how long a slow
 # start is given before the image is judged; a lab shortens them in a unit drop-in.
@@ -47,8 +48,18 @@ echo "nex-boot-check:$problems" >&2
 if [ -e /run/nex/maintenance-hold ]; then
     exit 1
 fi
-if ls /sys/firmware/efi/efivars/LoaderBootCountPath-* > /dev/null 2>&1; then
-    /usr/lib/systemd/systemd-bless-boot bad
+# A counted boot: sd-boot already decremented the entry's counter for this boot (LoaderBootCountPath names the
+# renamed file, "...+<left>-<done>.efi"). While tries are left the failure only costs this boot: reboot and let the
+# loader try again. On the last try mark the entry bad (systemd-bless-boot bad) so the next boot is the previous
+# image even if the loader would otherwise keep the entry; either way sd-boot then falls back by itself.
+var=$(ls /sys/firmware/efi/efivars/LoaderBootCountPath-* 2> /dev/null | head -n 1)
+if [ -n "$var" ]; then
+    left=$(cat "$var" | tail -c +5 | tr -d '\000' | sed -n 's/.*+\([0-9][0-9]*\)\(-[0-9][0-9]*\)\{0,1\}\.efi.*/\1/p')
+    if [ -n "$left" ] && [ "$left" -gt 0 ]; then
+        echo "nex-boot-check: $left boot tries left, rebooting to try again" >&2
+    else
+        /usr/libexec/nex/nex-bless-boot bad
+    fi
     systemctl --no-block reboot
 fi
 exit 1

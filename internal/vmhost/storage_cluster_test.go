@@ -1310,6 +1310,30 @@ func TestCorosyncUnconfiguredMarkerIsExplicitAndEmpty(t *testing.T) {
 	}
 }
 
+// The image edition has no packaging script to write the marker: Debian's file arrives from the layer's read-only
+// factory copy, which is the only thing that vouches for it. An edited file is still an administrator's.
+func TestCorosyncUnconfiguredMarkerAcceptsOnlyTheLayersFactoryCopy(t *testing.T) {
+	state := t.TempDir()
+	factory := filepath.Join(t.TempDir(), "corosync.conf")
+	stock := []byte("totem { cluster_name: debian }\n")
+	if err := os.WriteFile(factory, stock, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous := corosyncFactoryConfigPath
+	corosyncFactoryConfigPath = factory
+	t.Cleanup(func() { corosyncFactoryConfigPath = previous })
+	if !corosyncUnconfiguredMarker(state, stock) {
+		t.Fatal("a file identical to the layer's factory copy was refused as administrator configuration")
+	}
+	if corosyncUnconfiguredMarker(state, []byte("totem { cluster_name: edited }\n")) {
+		t.Fatal("an edited file was accepted against the factory copy")
+	}
+	corosyncFactoryConfigPath = filepath.Join(t.TempDir(), "absent")
+	if corosyncUnconfiguredMarker(state, stock) {
+		t.Fatal("a host without a factory copy and without a marker accepted the file")
+	}
+}
+
 func resetGFS2MetadataFlights(t *testing.T) {
 	t.Helper()
 	gfs2MetadataFlights.Lock()

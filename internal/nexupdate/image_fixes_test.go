@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+
+	"nex.local/nex/internal/hostimage"
 )
 
 func readUpdate(t *testing.T, dir string) updateState {
@@ -177,8 +179,9 @@ func TestMetadataIsRevalidatedUnderTheFinalLock(t *testing.T) {
 	}
 	_, err := r.eng.Check(context.Background())
 	wantCode(t, err, "channel_replayed")
-	if st := readUpdate(t, r.cfg.Dir); st.ChannelSerial != 7 || st.RollbackFloor != 4 {
-		t.Fatalf("an older pointer lowered the record: serial %d floor %d", st.ChannelSerial, st.RollbackFloor)
+	base, channel := r.cfg.Settings()
+	if st := readUpdate(t, r.cfg.Dir); st.Replay[replayKey(base, channel)].Serial != 7 || st.RollbackFloor != 4 {
+		t.Fatalf("an older pointer lowered the record: %+v floor %d", st.Replay, st.RollbackFloor)
 	}
 }
 
@@ -201,21 +204,6 @@ func TestRecoveredCurrentCarriesTheRunningImagesFacts(t *testing.T) {
 		r.apply("req-apply-0001", nil)
 		if op := r.wait(); op.Error == nil || op.Error.Code != "md_generation_downgrade" {
 			t.Fatalf("%+v", op)
-		}
-	})
-	t.Run("a record kept without the facts is completed from the image", func(t *testing.T) {
-		r := newRig(t)
-		newBooted(r)
-		r.status()
-		p := filepath.Join(r.cfg.Dir, "state.json")
-		b, _ := os.ReadFile(p)
-		os.WriteFile(p, bytes.Replace(b, []byte(`"state_format": 3`), []byte(`"state_format": 0`), 1), 0o600)
-		if got := readUpdate(t, r.cfg.Dir).Current.StateFormat; got != 0 {
-			t.Fatalf("setup: %d", got)
-		}
-		r.status()
-		if got := readUpdate(t, r.cfg.Dir).Current.StateFormat; got != 3 {
-			t.Fatalf("state_format %d", got)
 		}
 	})
 }
@@ -260,6 +248,101 @@ func TestTwoProcessesNeverWriteTheRecordTogether(t *testing.T) {
 	}
 	_, _, err = r.eng.Cancel(ctx, ActionRequest{RequestID: "req-cancel-0001"})
 	wantCode(t, err, "already_armed")
+}
+
+// A process waiting for the update lock must find the finished record when it gets the lock: the
+// operation that ends saves its last state first and only then gives the lock back. Giving it back
+// first let a `nex-update cancel` from a second process read the half-way record, cancel the apply
+// that had just finished and remove its staging; the late save then raced the second process' write.
+func TestTheFinishedRecordIsSavedBeforeTheLockIsGivenBack(t *testing.T) {
+	prev := lockWait
+	lockWait = 10 * time.Second
+	t.Cleanup(func() { lockWait = prev })
+	ctx := context.Background()
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.src.gate = make(chan struct{})
+	r.apply("req-apply-0001", nil)
+	r.waitPhase(PhaseDownloading)
+
+	// Saving the record takes a while (a large foreign subtree of state.json, which every writer keeps), so a
+	// process that gets the lock before the save is done reads the record as it was before the operation ended.
+	r.eng.mu.Lock()
+	r.eng.raw["ballast"] = json.RawMessage(`"` + strings.Repeat("x", 48<<20) + `"`)
+	r.eng.mu.Unlock()
+
+	other := NewEngine(r.cfg)
+	t.Cleanup(other.Close)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := other.Cancel(ctx, ActionRequest{RequestID: "req-cancel-0001"})
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // the second process is now polling the lock the apply holds
+	close(r.src.gate)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cancel after the apply ended: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the second process never got the lock")
+	}
+	st := readUpdate(t, r.cfg.Dir)
+	for _, rec := range st.Operations {
+		if rec.Op.ID == "req-apply-0001" && (rec.Op.FinishedAt == nil || rec.Op.Phase != PhaseStaged) {
+			t.Fatalf("the finished apply was rewritten by the second process: %+v", rec.Op)
+		}
+	}
+	if st.Staged != nil || st.Phase != PhaseIdle {
+		t.Fatalf("the staged release was not discarded by the cancel that saw it: phase %s staged %v", st.Phase, st.Staged)
+	}
+}
+
+// The same ordering holds for an apply refused before any work starts (running guests): its record is
+// dropped while the lock is still held, so a second process never finds it and "cancels" an apply that
+// the caller was told never started.
+func TestARefusedApplyLeavesNoRecordForTheNextProcess(t *testing.T) {
+	prev := lockWait
+	lockWait = 10 * time.Second
+	t.Cleanup(func() { lockWait = prev })
+	ctx := context.Background()
+	r := newRig(t)
+	inventory, entered := make(chan struct{}), make(chan struct{})
+	r.cfg.RunningVMs = func(context.Context) ([]string, error) {
+		entered <- struct{}{}
+		<-inventory
+		return []string{"web-1"}, nil
+	}
+	r.restart()
+	r.pub.release(2, "v2", true)
+
+	applied := make(chan error, 1)
+	go func() {
+		_, _, err := r.apply("req-apply-0001", func(a *ApplyRequest) { a.Activate = "reboot" })
+		applied <- err
+	}()
+	<-entered // the apply holds the lock and is reading the guest inventory
+	r.eng.mu.Lock()
+	r.eng.raw["ballast"] = json.RawMessage(`"` + strings.Repeat("x", 48<<20) + `"`)
+	r.eng.mu.Unlock()
+
+	other := NewEngine(r.cfg)
+	t.Cleanup(other.Close)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := other.Cancel(ctx, ActionRequest{RequestID: "req-cancel-0001"})
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // the second process is polling the lock the apply holds
+	close(inventory)
+	wantCode(t, <-applied, "running_vms")
+	select {
+	case err := <-done:
+		wantCode(t, err, "nothing_to_cancel")
+	case <-time.After(30 * time.Second):
+		t.Fatal("the second process never got the lock")
+	}
 }
 
 func TestApplyChecksGuestsAgainBeforeArming(t *testing.T) {
@@ -348,4 +431,60 @@ func writeBlob(t *testing.T, b []byte) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// The panel and the guide offer Roll back in the phase booted, the trial boot of an update. The first QEMU run of the
+// Secure Boot lab issued it there and the host never rebooted: the engine refused with already_armed. The release to
+// return to is the one the running update replaced, and once it is blessed the abandoned update is the retained previous.
+func TestRollbackDuringTheTrialBootReturnsToTheReleaseItReplaced(t *testing.T) {
+	r := newRig(t)
+	b2 := r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", func(a *ApplyRequest) { a.Activate = "reboot" })
+	select {
+	case <-r.reboot:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reboot after the update was armed")
+	}
+	r.plat.boot(Booted{RootHash: b2.rootHash, Label: "v2", Sequence: 2}, false)
+	if st := r.status(); st.Phase != PhaseBooted {
+		t.Fatalf("not in the trial boot: %+v", st)
+	}
+	if _, _, err := r.eng.Rollback(context.Background(), ActionRequest{RequestID: "req-rollback-01"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.plat.rolled) != 1 || r.plat.rolled[0] != [2]int{2, 1} {
+		t.Fatalf("rolled from the running update to the release it replaced, got %v", r.plat.rolled)
+	}
+	select {
+	case <-r.reboot:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reboot after the rollback")
+	}
+	// What rollbackESP does on the ESPs: the replaced release's entry gets a fresh boot counter.
+	r.plat.mu.Lock()
+	r.plat.entries = append(r.plat.entries, hostimage.UKIEntry{Sequence: 1, Counted: true, Tries: 3})
+	r.plat.mu.Unlock()
+	if st := r.status(); st.Phase != PhaseArmed {
+		t.Fatalf("%+v", st)
+	}
+	r.plat.boot(Booted{RootHash: strings.Repeat("0", 64), Label: "base", Sequence: 1}, true)
+	roles := map[string]int{}
+	st := r.status()
+	for _, s := range st.Slots {
+		roles[s.Role] = s.Sequence
+	}
+	if st.Phase != PhaseCommitted || roles["booted"] != 1 || roles["previous"] != 2 {
+		t.Fatalf("%+v", st)
+	}
+}
+
+func TestRollbackIsRefusedWhileAnUpdateIsArmedButNotBooted(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", func(a *ApplyRequest) { a.Activate = "reboot" })
+	_, _, err := r.eng.Rollback(context.Background(), ActionRequest{RequestID: "req-rollback-01"})
+	wantCode(t, err, "already_armed")
+	if len(r.plat.rolled) != 0 {
+		t.Fatalf("rolled back before the armed update ever booted: %v", r.plat.rolled)
+	}
 }

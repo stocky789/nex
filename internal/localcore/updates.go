@@ -25,6 +25,8 @@ func (s *Service) newImageUpdateEngine() *nexupdate.Engine {
 	cfg := nexupdate.HostConfig()
 	cfg.Platform = nexupdate.HostPlatform()
 	cfg.Reboot = nexupdate.SystemReboot
+	cfg.Appliance = s.engine
+	cfg.ControllerProbe = s.controllerProbe
 	// A pool member prefers the master's blob cache; every blob is still verified against the
 	// signed manifest, and a master that lacks it, or a host with no pool, reads the channel.
 	origin := cfg.Source
@@ -181,4 +183,74 @@ func (s *Service) updateOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(w, http.StatusOK, op)
+}
+
+// updateSettings is PUT /updates/settings: the channel and base URL this host updates from. A package-edition
+// host has no update server of its own: its channel is the stable archive or the dev subtree of it, so it takes
+// a channel only.
+func (s *Service) updateSettings(w http.ResponseWriter, r *http.Request) {
+	var req nexupdate.Settings
+	if !decode(w, r, &req) {
+		return
+	}
+	if s.imageUpdate == nil {
+		if req.BaseURL != "" {
+			updateRefused(w, &nexupdate.Error{Status: http.StatusBadRequest, Code: "invalid_base_url", Message: "this host updates from its package archive (repo_url) and has no base_url"})
+			return
+		}
+		if err := nexupdate.SaveClassicChannel(req.Channel); err != nil {
+			updateRefused(w, err)
+			return
+		}
+		reply(w, http.StatusOK, nexupdate.Settings{Channel: req.Channel})
+		return
+	}
+	got, err := s.imageUpdate.UpdateSettings(r.Context(), req)
+	if err != nil {
+		updateRefused(w, err)
+		return
+	}
+	reply(w, http.StatusOK, got)
+}
+
+// updateMedia is GET /updates/media: offline bundles this host can import, read-only.
+func (s *Service) updateMedia(w http.ResponseWriter, r *http.Request) {
+	if s.imageUpdate == nil {
+		notImageEdition(w)
+		return
+	}
+	media, err := s.imageUpdate.Media(r.Context())
+	if err != nil {
+		updateRefused(w, err)
+		return
+	}
+	reply(w, http.StatusOK, map[string]any{"media": media})
+}
+
+// importUpdate is POST /updates/import: stage a release from media through the same pipeline as apply.
+func (s *Service) importUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.imageUpdate == nil {
+		notImageEdition(w)
+		return
+	}
+	var req nexupdate.ImportRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	op, replayed, err := s.imageUpdate.Import(r.Context(), req)
+	replyOperation(w, op, replayed, err)
+}
+
+// fetchComponent is POST /updates/components/{id}/fetch: place an on_demand payload under the payload directory.
+func (s *Service) fetchComponent(w http.ResponseWriter, r *http.Request) {
+	if s.imageUpdate == nil {
+		notImageEdition(w)
+		return
+	}
+	var req nexupdate.FetchRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	op, replayed, err := s.imageUpdate.FetchComponent(r.Context(), r.PathValue("id"), req)
+	replyOperation(w, op, replayed, err)
 }

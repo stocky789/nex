@@ -1,0 +1,66 @@
+{
+  "summary": "Phase I-4c of the immutable Nex Core plan: the Controller guest image profile (image/controller, image/build.sh controller, image/release.py controller: read-only erofs+verity system disk as a raw GPT image, UEFI only, plus the persistent controller-data.qcow2 layout at /var), appliance/build.py --profile controller emitting the vm-image component entry, deploy wiring of internal/vmhost's two-disk profile (nex-core-local --controller-system-image, core-local-setup configure --controller-image-sha256, profile seed without the update helper, UEFI with Secure Boot pinned off), forge-only image CI workflows, a QEMU boot test of the guest, and the owner-approved policy wording in AGENTS.md, PRODUCT.md and README.md. The Controller's APT helpers, routes and panel are kept for the classic edition and the single-disk appliance.",
+  "paths": [
+    ".gitea/workflows/image.yml",
+    ".github/workflows/image.yml",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "PRODUCT.md",
+    "README.md",
+    "appliance/Dockerfile",
+    "appliance/README.md",
+    "appliance/build-controller-payload.sh",
+    "appliance/build.py",
+    "appliance/firstboot.py",
+    "cmd/nex-core-local/main.go",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-10-01-immutable-nex-core.md",
+    "docs/qa/image/phase4-appliance.md",
+    "docs/qa/image/phase4-controller-image.md",
+    "image/build.sh",
+    "image/controller/controller.packages",
+    "image/controller/mkosi.conf",
+    "image/controller/mkosi.postinst.chroot",
+    "image/release.py",
+    "internal/vmhost/appliance_swap_test.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "packaging/core-local/core-local-setup",
+    "tests/integration/controller_image_boot.py",
+    "tests/test_appliance_build.py",
+    "tests/test_ci_security.py",
+    "tests/test_core_local_package.py",
+    "tests/test_image_layout.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "docs/guide/deploy-controller-appliance.md now says the two-disk Controller image exists, how a host is told to deploy it, and that nothing was walked through; marked unverified (the image booted once under QEMU, Core has not deployed it).",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No HTTP, RPC, report or protocol change. The new surface is a nex-core-local command-line flag pair, a core-local-setup option and the libvirt domain XML of the already documented two-disk profile (UEFI with Secure Boot off); the Controller's own routes, including its APT update routes, are unchanged."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-4 of a plan whose options were approved on 2026-10-02 but whose phases are not accepted; development work validated in simulation only. No published milestone changed."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The Controller guest keeps only /var/lib/nex-controller and /etc/nex-controller (the closed list recovery already enumerates) on controller-data.qcow2; the system image, the checkpoint and the swap journal belong to the Core that hosts it. The deploy option is Core host configuration. No new Controller-owned data.",
+    "record": "/etc/nex/core-local.env key controller_image_sha256 (host configuration), the staged component /var/lib/nex/payload/<sha256>/controller-system.img, the deployment journal's system field, and in the guest the data disk's /var (ext4) with the /etc overlay upper layer at /var/lib/nex/etc. A fresh Controller recovers nothing from this slice."
+  },
+  "verification": {
+    "method": "Docker builds of the guest image with appliance/build.py --profile controller and image/build.sh controller (pinned snapshot, capped containers); tests/integration/controller_image_boot.py under QEMU/KVM with OVMF (first boot, reboot on the same data disk, one-byte tamper); go test -p 1 ./internal/vmhost ./cmd/nex-core-local; python3 -m unittest tests.test_core_local_package tests.test_appliance_build tests.test_image_layout tests.test_ci_security; scripts/check_docs.py --worktree; the repository privacy test. Simulation only: no libvirt, Core deployment, swap, pool or browser.",
+    "evidence": [
+      "docs/qa/image/phase4-controller-image.md",
+      "tests/integration/controller_image_boot.py",
+      "internal/vmhost/engine_test.go",
+      "tests/test_image_layout.py",
+      "tests/test_core_local_package.py",
+      "tests/test_ci_security.py"
+    ]
+  }
+}

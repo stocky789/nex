@@ -360,22 +360,26 @@ func (d *Disk) WriteTable(t *Table) error {
 	le.PutUint32(mbr[446+8:], 1)
 	le.PutUint32(mbr[446+12:], uint32(min(total-1, 0xffffffff)))
 	mbr[510], mbr[511] = 0x55, 0xaa
-	writes := []struct {
+	type write struct {
 		lba int64
 		b   []byte
-	}{
-		{0, mbr},
-		{total - 1 - esec, ents},
-		{total - 1, header(total-1, 1, total-1-esec)},
-		{2, ents},
-		{1, header(1, total-1, 2)},
 	}
-	for _, w := range writes {
-		if _, err := d.File.WriteAt(w.b, w.lba*ss); err != nil {
-			return fmt.Errorf("%s: write GPT: %w", d.Path, err)
+	// One copy is complete and durable before the other is touched: a power cut at any point leaves at
+	// least one valid copy holding either the old table or the new one, never two torn ones.
+	for _, copyWrites := range [][]write{
+		{{total - 1 - esec, ents}, {total - 1, header(total-1, 1, total-1-esec)}},
+		{{0, mbr}, {2, ents}, {1, header(1, total-1, 2)}},
+	} {
+		for _, w := range copyWrites {
+			if _, err := d.File.WriteAt(w.b, w.lba*ss); err != nil {
+				return fmt.Errorf("%s: write GPT: %w", d.Path, err)
+			}
+		}
+		if err := d.File.Sync(); err != nil {
+			return fmt.Errorf("%s: sync GPT: %w", d.Path, err)
 		}
 	}
-	return d.File.Sync()
+	return nil
 }
 
 // SetPartitionIDs changes unique partition GUIDs (by entry number) in both GPT copies.

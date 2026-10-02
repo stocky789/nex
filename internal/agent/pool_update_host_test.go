@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/nexupdate"
 	"nex.local/nex/internal/protocol"
@@ -23,6 +24,8 @@ type stepEngine struct {
 	requests  []string
 	refuse    map[string]*nexupdate.Error
 	afterAply func()
+	scopes    []string             // scope of every apply
+	applyOp   *nexupdate.Operation // what apply answers when set (a swap that is running, committed or failed)
 }
 
 func (e *stepEngine) Status(context.Context) (nexupdate.ImageStatus, error) { return e.status, nil }
@@ -48,7 +51,13 @@ func (e *stepEngine) Apply(_ context.Context, r nexupdate.ApplyRequest) (nexupda
 	if r.Activate != "stage_only" {
 		panic("a rollout stage must never arm the next boot")
 	}
-	return e.call("apply", r.RequestID)
+	e.scopes = append(e.scopes, r.Scope)
+	op, replayed, err := e.call("apply", r.RequestID)
+	if e.applyOp != nil && err == nil {
+		op = *e.applyOp
+		op.ID = r.RequestID
+	}
+	return op, replayed, err
 }
 func (e *stepEngine) Activate(_ context.Context, r nexupdate.ActionRequest) (nexupdate.Operation, bool, error) {
 	if r.RunningVMs != "refuse" {
@@ -267,5 +276,93 @@ func TestPeerBlobCacheServesOnlyVerifiedContent(t *testing.T) {
 	}
 	if _, ok := poolUpdateBlobFile(dir, corrupt); ok {
 		t.Fatal("a file whose content does not match its name was served")
+	}
+}
+
+// The controller step asks the host engine for a Controller swap (scope controller, never a host stage),
+// reports it running until the operation ends, and passes the engine's own refusal code through.
+func TestControllerStepAsksTheEngineForAScopedSwap(t *testing.T) {
+	s, engine, _ := hostStepLab(t)
+	ctx := context.Background()
+	st := step("controller")
+	if res := PoolUpdateHostStep(ctx, s, st); res.Done || res.Code != "" {
+		t.Fatalf("a swap that has only started is still running: %+v", res)
+	}
+	if !reflect.DeepEqual(engine.scopes, []string{"controller"}) || engine.requests[0] != st.StepID {
+		t.Fatalf("scopes %v requests %v", engine.scopes, engine.requests)
+	}
+	finished := time.Now()
+	engine.applyOp = &nexupdate.Operation{Kind: "controller", Phase: nexupdate.PhaseCommitted, FinishedAt: &finished}
+	if res := PoolUpdateHostStep(ctx, s, st); !res.Done {
+		t.Fatalf("a committed swap is done: %+v", res)
+	}
+	engine.applyOp = &nexupdate.Operation{Kind: "controller", Phase: "failed", FinishedAt: &finished, Error: &nexupdate.Error{Code: "controller_rolled_back", Message: "restored"}}
+	if res := PoolUpdateHostStep(ctx, s, st); res.Done || res.Code != "controller_rolled_back" {
+		t.Fatalf("a failed swap reports the engine's code: %+v", res)
+	}
+	engine.applyOp = nil
+	engine.refuse["apply"] = &nexupdate.Error{Status: 409, Code: "scope_unavailable", Message: "no appliance engine"}
+	if res := PoolUpdateHostStep(ctx, s, st); res.Code != "scope_unavailable" {
+		t.Fatalf("a refusal passes through: %+v", res)
+	}
+}
+
+// A host tells the master it runs a swappable Controller (the two-disk profile in its deployment journal)
+// and whether the release is controller_first with a Controller image; a single-disk appliance is not offered.
+func TestHostStatusReportsASwappableControllerAndTheReleasesControllerImage(t *testing.T) {
+	s, engine, _ := hostStepLab(t)
+	engine.status.Available = &nexupdate.Available{Sequence: 2, Compat: nexupdate.Compat{ControllerFirst: true},
+		Components: []nexupdate.ComponentInfo{{Kind: "slot-image", Required: true, Bytes: 1}, {Kind: "vm-image", OnDemand: true, Bytes: 9}}}
+	dir := t.TempDir()
+	previous := ApplianceJournalDir
+	ApplianceJournalDir = dir
+	t.Cleanup(func() { ApplianceJournalDir = previous })
+	status := func() protocol.PoolUpdateHostStatus {
+		got, err := PoolUpdateHostStatusFor(context.Background(), s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := status(); got.ControllerVM || got.Target == nil || !got.Target.ControllerImage {
+		t.Fatalf("no deployment: %+v", got)
+	}
+	journal := func(system string) {
+		body := `{"id":"deploy-1","vm_id":"5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d","kind":"deploy","disk":"/x/controller.qcow2"` + system + `}`
+		if err := os.WriteFile(filepath.Join(dir, "deploy-1.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal("")
+	if got := status(); got.ControllerVM {
+		t.Fatal("a single-disk appliance cannot be swapped and must not be offered")
+	}
+	journal(`,"system":"/x/system-a.img"`)
+	if got := status(); !got.ControllerVM {
+		t.Fatal("a two-disk deployment is swappable")
+	}
+	engine.status.Available.Compat.ControllerFirst = false
+	if got := status(); got.Target.ControllerImage {
+		t.Fatal("a release that is not controller_first must not claim a Controller step")
+	}
+}
+
+// A journal the host cannot read must not look like "no Controller here": the master would skip the
+// Controller step and update Core under a Controller that was never swapped.
+func TestHostStatusFailsWhenTheControllerRecordCannotBeRead(t *testing.T) {
+	s, _, _ := hostStepLab(t)
+	dir := t.TempDir()
+	previous := ApplianceJournalDir
+	ApplianceJournalDir = dir
+	t.Cleanup(func() { ApplianceJournalDir = previous })
+	if err := os.WriteFile(filepath.Join(dir, "deploy-1.json"), []byte(`{"id":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := PoolUpdateHostStatusFor(context.Background(), s); err == nil || got.ControllerVM {
+		t.Fatalf("an unreadable record must be an error: %+v %v", got, err)
+	}
+	ApplianceJournalDir = filepath.Join(dir, "missing")
+	if got, err := PoolUpdateHostStatusFor(context.Background(), s); err != nil || got.ControllerVM {
+		t.Fatalf("a host that never deployed a Controller reports none: %+v %v", got, err)
 	}
 }

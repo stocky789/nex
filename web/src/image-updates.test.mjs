@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const { ImageUpdates, imageActions, imageHosts, submitImageAction, imagePhaseLabel } =
+const { ImageUpdates, imageActions, imageHosts, submitImageAction, submitImageSettings, imagePhaseLabel, imageSnapshot, reportStamp, stillFollowing } =
   await import(bundleTestModule(new URL("./image-updates.tsx", import.meta.url), "image-updates"));
 
 const booted = { label: "2026.10.2", sequence: 2, slot: "a" };
@@ -74,3 +74,49 @@ assert.match(html, /Sequence 1/, "rollback floor");
 assert.match(html, /returned to the previous release[\s\S]*boot_failed: the new release failed its boot check/);
 assert.equal(renderToStaticMarkup(createElement(ImageUpdates, { hosts: [hosts[0]], api, busy: false })), "", "a pool of classic hosts shows no image panel");
 assert.equal(imagePhaseLabel("staged"), "Staged; the next boot is unchanged");
+
+// A new host report replaces a view fetched earlier; a fetched view is used only while the report it
+// was read against is still the one the page has.
+const reported = host("image-host", { last_seen: "2026-10-02T00:00:10Z", capabilities: ["image-update-v1"], inventory: { image: image({ phase: "committed" }) } });
+const fetched = { stamp: reportStamp(reported), view: { host_id: "image-host", connection: "fresh", supported: true, image: image({ phase: "staged", staged: { label: "2026.10.3", sequence: 3 } }) } };
+assert.equal(imageSnapshot(reported, fetched).image.phase, "staged", "a view read after the report is newer");
+const newer = { ...reported, last_seen: "2026-10-02T00:00:40Z", inventory: { image: image({ phase: "armed", staged: { label: "2026.10.3", sequence: 3 } }) } };
+assert.equal(imageSnapshot(newer, fetched).image.phase, "armed", "a new host report is not shadowed by the older view");
+// A host that has since disconnected gets no actions, whatever the earlier view said.
+const gone = { ...reported, connection: "stale" };
+assert.equal(imageSnapshot(gone, fetched).connection, "stale");
+assert.deepEqual(enabled(imageActions(imageSnapshot(gone, fetched).image, imageSnapshot(gone, fetched).connection)), []);
+const goneHTML = renderToStaticMarkup(createElement(ImageUpdates, { hosts: [gone], api, busy: false }));
+assert.match(goneHTML, /actions are unavailable until it reconnects/);
+assert.doesNotMatch(goneHTML, /<button type="button" class="sm"(?![^>]*disabled)/, "every action is disabled");
+// The panel keeps reading while a submitted task has not finished, not only while the host reports an operation.
+assert.equal(stillFollowing(false, { id: "t1", status: "queued" }), true);
+assert.equal(stillFollowing(false, { id: "t1", status: "dispatched" }), true);
+assert.equal(stillFollowing(false, { id: "t1", status: "succeeded" }), false);
+assert.equal(stillFollowing(false, undefined), false);
+assert.equal(stillFollowing(true, { id: "t1", status: "succeeded" }), true, "a running host operation is followed too");
+
+// A channel change travels with the host's current base URL: Core writes both settings together, so
+// leaving the URL out would clear the host's update source. A retry keeps its identity.
+const settingsCalls = [];
+const settingsApi = async (path, method, body) => { settingsCalls.push({ path, method, body }); return { operation: { id: "op-2", status: "queued" } }; };
+const settingsHeld = { id: "", signature: "" };
+await submitImageSettings(settingsApi, "host-1", "dev", "https://updates.example.test", settingsHeld);
+await submitImageSettings(settingsApi, "host-1", "dev", "https://updates.example.test", settingsHeld);
+assert.equal(settingsCalls[0].path, "hosts/host-1/updates/settings");
+assert.equal(settingsCalls[0].method, "POST");
+assert.deepEqual({ ...settingsCalls[0].body, request_id: "x" }, { channel: "dev", base_url: "https://updates.example.test", request_id: "x" });
+assert.equal(settingsCalls[0].body.request_id, settingsCalls[1].body.request_id, "a retry reuses the request_id");
+await submitImageSettings(settingsApi, "host-1", "stable", undefined, settingsHeld);
+assert.deepEqual(Object.keys(settingsCalls[2].body).sort(), ["channel", "request_id"], "a host without a source sends none");
+assert.notEqual(settingsCalls[2].body.request_id, settingsCalls[0].body.request_id, "another channel is another request");
+
+// The host's reported channel is what the panel shows and preselects; the picker is off while the host is busy or away.
+const onDev = host("image-host", { capabilities: ["image-update-v1"], inventory: { image: image({ channel: "dev" }) } });
+const devHTML = renderToStaticMarkup(createElement(ImageUpdates, { hosts: [onDev], api, busy: false }));
+assert.match(devHTML, /<dt>Channel<\/dt><dd>Development<\/dd>/);
+assert.match(devHTML, /<option value="dev" selected="">Development<\/option>/);
+assert.match(devHTML, /<option value="stable">Stable<\/option>/);
+assert.match(renderToStaticMarkup(createElement(ImageUpdates, { hosts: [{ ...onDev, connection: "stale" }], api, busy: false })), /<select disabled=""/);
+const downloadingHost = host("image-host", { capabilities: ["image-update-v1"], inventory: { image: image({ phase: "downloading", operation: { id: "req-apply-0001", kind: "apply", phase: "downloading", started_at: "2026-10-02T00:00:00Z" } }) } });
+assert.match(renderToStaticMarkup(createElement(ImageUpdates, { hosts: [downloadingHost], api, busy: false })), /<select disabled=""/, "no channel change during an update operation");

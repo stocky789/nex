@@ -89,17 +89,14 @@ download_image() {
 }
 
 # One line of progress per nex-hostimage output line, so the installer log follows the
-# write. The exit status is nex-hostimage's, not the reader's.
+# write. The exit status is nex-hostimage's, not the reader's. A pipe, not a named pipe: the
+# installer's BusyBox has no mkfifo (found in the first QEMU run of the image ISO).
 run_hostimage() {
-    fifo=$WORK/progress
-    rm -f "$fifo"
-    mkfifo "$fifo"
-    while IFS= read -r line; do say "$line"; done < "$fifo" &
-    reader=$!
-    status=0
-    "$WORK/nex-hostimage" "$@" > "$fifo" 2>&1 || status=$?
-    wait "$reader" || true
-    return "$status"
+    status_file=$WORK/hostimage.status
+    rm -f "$status_file"
+    { "$WORK/nex-hostimage" "$@" 2>&1; echo $? > "$status_file"; } | while IFS= read -r line; do say "$line"; done
+    status=$(cat "$status_file" 2>/dev/null) || status=1
+    return "${status:-1}"
 }
 
 # /dev/sda + 6 -> /dev/sda6, /dev/nvme0n1 + 6 -> /dev/nvme0n1p6
@@ -211,6 +208,14 @@ mount_data() {
     else
         data=$(partition "${disks%%,*}" 6)
     fi
+    # The kernel re-reads the partition table when nex-hostimage closes the disk and the node can be
+    # absent for a moment (found in the first QEMU run of the image ISO).
+    udevadm settle >/dev/null 2>&1 || true
+    waited=0
+    while [ ! -e "$data" ] && [ "$waited" -lt "${NEX_NODE_WAIT:-30}" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
     [ -e "$data" ] || die "The new data volume $data is missing."
     mkdir -p "$WORK/data"
     mount -t ext4 "$data" "$WORK/data"

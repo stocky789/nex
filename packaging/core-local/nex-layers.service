@@ -17,8 +17,10 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Re-hashes each enabled store file against the signed release manifest. A layer that fails gets no link, so the
-# merge below leaves it out, and is reported in /run/nex/layers/status.json; the command exits 0 so boot never waits on it.
+# Re-hashes each enabled store file against the signed release manifest, which is authenticated with the update
+# engine's trust chain (pinned trust.json plus adopted rotations, in /var/lib/nex/update). A layer that fails gets
+# no link, so the merge below leaves it out, and is reported in /run/nex/layers/status.json; the command exits 0 so
+# boot never waits on it.
 ExecStart=/usr/lib/nex/nex-core-local layers activate
 # refresh merges when nothing is merged yet and replaces the stock merge when one exists.
 ExecStartPost=-/usr/bin/systemd-sysext refresh

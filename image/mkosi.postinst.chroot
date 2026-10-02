@@ -8,6 +8,9 @@ set -eu
 label=${NEX_LABEL:-dev}
 sequence=${NEX_SEQUENCE:-0}
 state_format=${NEX_STATE_FORMAT:-3}
+min_state_format=${NEX_MIN_STATE_FORMAT:-0}
+md_generation=${NEX_MD_GENERATION:-0}
+md_fallback_safe=${NEX_MD_FALLBACK_SAFE:-0}
 
 cat > /usr/lib/os-release <<EOT
 PRETTY_NAME="Nex Core $label"
@@ -20,6 +23,9 @@ IMAGE_VERSION="$label.$sequence"
 BUILD_ID="$label-$sequence"
 SYSEXT_LEVEL="$label-$sequence"
 NEX_STATE_FORMAT=$state_format
+NEX_MIN_STATE_FORMAT=$min_state_format
+NEX_MD_GENERATION=$md_generation
+NEX_MD_FALLBACK_SAFE=$md_fallback_safe
 HOME_URL="https://nex.example/"
 EOT
 ln -sf ../usr/lib/os-release /etc/os-release

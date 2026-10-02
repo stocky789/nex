@@ -9,7 +9,14 @@ appliance. Take the current Core update before using root login. Deployment uses
 bridge created by current GUI installations; hosts installed by an older ISO need a prepared
 management bridge. Login/session rules are described in [secure web access](secure-web-access.md).
 
-Rebuilding media does not update an already deployed Controller VM. Use a private management
+Rebuilding media does not update an already deployed Controller VM. A Controller deployed in the two-disk profile (a read-only
+system image plus a persistent data disk) is updated by the Core that hosts it, either with the **Controller first** step of a
+[pool rollout](update-a-pool.md) or with the host-local `scope:"controller"` update; the swap is journaled, shuts the Controller down
+gracefully, checkpoints its data, and restores the previous image and data if the new one is not ready. The guest image is built by
+`python3 appliance/build.py --profile controller` and a host is told to deploy it with `core-local-setup configure ... --controller-image-sha256`
+(see [appliance/README.md](../../appliance/README.md#controller-profile-read-only-system-image-and-data-disk-phase-i-4b)); without that
+setting, every appliance this page deploys is still the single-disk form and is not updated this way. **Unverified:** the image was
+booted once under QEMU on a development workstation (`docs/qa/image/phase4-controller-image.md`); no deployment by Core and no swap ran. Use a private management
 network or VPN, with no direct Internet exposure. Automatic Controller failover is not provided. Navigation on this page follows the development build 0.4.8 console layout; see
 [Navigate the Controller console](navigate-the-controller-console.md).
 

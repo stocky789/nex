@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -133,6 +134,37 @@ func sparseDisk(t *testing.T, size int64) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// diskDigest hashes a disk image while streaming it: the images are sparse files of several GiB that
+// must never be read into memory whole.
+func diskDigest(t *testing.T, path string) [sha256.Size]byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err = io.Copy(h, f); err != nil {
+		t.Fatal(err)
+	}
+	return [sha256.Size]byte(h.Sum(nil))
+}
+
+// diskHead returns the first n bytes of a disk image.
+func diskHead(t *testing.T, path string, n int) []byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	b := make([]byte, n)
+	if _, err = f.ReadAt(b, 0); err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func readTable(t *testing.T, path string) *Table {

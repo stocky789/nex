@@ -72,6 +72,7 @@ Record `docs/changes/2026-10-01-image-installer.json`; CHANGELOG entry under `[U
 
 - `python3 -m unittest tests.test_image_installer tests.test_image_composition tests.test_image_layout tests.test_netinst tests.test_netinst_network`: 61 tests OK, 1 skipped (2026-10-02 review-fix pass; `test_image_installer` now also pins
   verify-before-write, scoped array stop and assembly, the media payload check, and the serial menu labels; each was shown to fail with its fix reverted).
+- Second review-fix pass (2026-10-02): the earlier fixes (verify before wipe, scoped array stop and assembly, shim chain on every ESP, installation stamp from `image/mkosi.skeleton`, zfs mount ordering, `busy_commands`, serial labels) were re-checked by reverting each one: the matching test failed every time. New: os-release now also carries `NEX_MIN_STATE_FORMAT`, `NEX_MD_GENERATION` and `NEX_MD_FALLBACK_SAFE`.
 - `python3 tests/integration/installer-handoff.py`: all PASS, including that the hook clears no disk before the image installer runs.
 - `sh installer/check.sh`: all PASS (edition floors asserted).
 - `sh -n` / `bash -n` on the changed scripts; `python3 scripts/check_docs.py --worktree`; repository privacy test.
