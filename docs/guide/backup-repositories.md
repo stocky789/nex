@@ -101,13 +101,19 @@ longer use it. Forgetting never deletes anything from the destination.
 
 Core forgets the repository, its recovery points and its run history, and removes its
 mount and saved credential from the pool master and each member. A protected recovery
-point is forgotten too, once you have confirmed the counts shown. Core refuses, changing
-nothing, while a backup job uses the repository (move each such job with **Change repository**;
-a job that lists a deleted VM has the deleted VM removed when you save the change), a backup, restore, test restore or catalog
-operation on it is running, a recovery point of it is held by an unfinished restore or test
-restore, an orphaned-backup cleanup or retention pass is running on it, the name is wrong, or the recovery points changed since the dialog counted them. Core also refuses,
-changing nothing, when a host cannot remove the repository's mount; wait for the mount to be idle and
-send the request again. The task shows the reason, and for an unfinished restore it names the operation and the test VM so you can finish or clean it up. Members also drop any repository record the pool master no longer holds. Sending the same request again returns the same outcome.
+point is forgotten too, once you have confirmed the counts shown. Core refuses before
+removal while a backup job uses the repository (move each such job with **Change repository**;
+deleted-VM overrides are removed when you save), any backup, restore, test restore or
+catalog operation remains unfinished, including `needs_attention`, a point remains
+reserved, cleanup or retention is active, the name is wrong, or the counted points changed.
+The refusal names unfinished restores and their test VMs where applicable.
+
+Mount detachment and credential removal can be interrupted after some local work has
+finished. Restore access, let the mount become idle, and retry the **same request**:
+Core resumes its pending removal and receipt rather than starting another forget.
+An already recorded terminal refusal retains that outcome; correct its cause before
+submitting a new request. Unreachable members retain their exact old registration until
+the master's reconciliation reaches them; newer registrations are not removed by an old retry.
 
 To use a forgotten destination again, register it again with its **original repository
 ID** (see [Reuse a repository ID](#reuse-a-repository-id)), then select **Import points** to
@@ -193,6 +199,19 @@ and test restore read every artifact and verify its digest.
 
 ## Troubleshooting
 
+- After an uncertain registration reply, retry the unchanged draft; the UI preserves the
+  exact request and credential receipt without sending the secret again. Changing pools
+  clears that draft and requires a fresh credential for the new pool. It does not cancel
+  work Core already accepted.
+- A failed SMB3 credential replacement restores the previous mount and access when
+  rollback is confirmed. If rollback is uncertain, keep both credentials and inspect
+  the reported mount state before another replacement; Core does not discard the old
+  usable credential merely because preparation failed.
+- If Core restarts while registration or replacement cleanup is finishing, inspect
+  the original task. A saved successful or uncertain receipt is replayed rather than
+  preparing the destination again. Unfinished or unrecordable rollback remains
+  pending or needs attention and retains both credentials; do not delete them or
+  treat a disconnected Controller as proof of a clean failure.
 - **Create** or **Test access** fails while the master is unavailable: restore its
   connection and matching version, then inspect the exact task. After a lost reply,
   check **Tasks** and retry only the identical request; a new request ID may start
@@ -246,10 +265,10 @@ and test restore read every artifact and verify its digest.
   health pass; until then the member's access shows why delivery failed. If a credential request ID is reused after the key was lost, the credential request is refused with that reason (send the credential again with a new request ID). Only S3 has been exercised for this. If the destination is gone
   or its identity changed, [forget the repository](#forget-a-repository) and register the
   destination as a new one.
-- A member that was unreachable when a repository was forgotten keeps an unused record
-  and mount until the master is asked to forget that repository ID again; the request
-  succeeds when the repository is already gone. A conflict on registering a changed
-  destination under that ID means a member still holds the old record.
+- A member that was unreachable when a repository was forgotten keeps its old record
+  and mount until the master's next successful reconciliation. Detachment or unsettled
+  journal work may require attention; restore connectivity and resolve the reported work.
+  A stale cleanup cannot remove a newly adopted registration under the same ID.
 - A host that joins another pool or is ejected unmounts and forgets the backup
   repositories of the pool it left and erases their backup credentials; its new
   pool delivers its own. Data on the share stays.
@@ -287,7 +306,8 @@ records bounded native registration, backup, restore, outage, replay, member,
 retention and authority checks for all four kinds. The [NFS product lab](../qa/2026-09-27-phase6-product-backup-lab.md)
 and [backup browser report](../qa/2026-09-27-phase6-backup-browser.md) record
 older NFS workflows. Later live candidate browser checks covered SMB3 policy
-switch and SFTP credential handoff. Reusing a repository ID (the **Repository ID** field,
-typed confirmation and SFTP host-key replacement) is covered by Core, Controller and web unit
-checks only; it has not been walked in a browser or against a real destination. A final browser walkthrough on the tracked
-enabled build and the real two-slot missed-schedule check remain open.
+switch and SFTP credential handoff. The [review-fix walkthrough](../qa/2026-10-02-backup-review-fixes.md)
+exercised typed replacement confirmation, an uncertain accepted reply followed by an
+identical credential-receipt retry, and clearing the draft when changing pools in the
+built browser UI with fictional APIs. This is not a real-destination credential replacement
+or SFTP host-key rotation walkthrough; those and the real two-slot missed-schedule check remain open.

@@ -3,7 +3,9 @@ package vmhost
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -1340,6 +1342,13 @@ func replaceCutoverDiskPlan(js []managedJournal, cur managedJournal, spec protoc
 	return targets, disks, retained, nil
 }
 
+// managedRetainedTPM binds a wiping intent to the tree validated before deletion.
+// Remaining entries must still match after an interrupted RemoveAll.
+type managedRetainedTPM struct {
+	OperationID string                      `json:"operation_id"`
+	Manifest    managedSnapshotFileManifest `json:"manifest"`
+}
+
 // releaseRetainedOriginals deletes the disk files and vTPM state that restore replace and VM
 // edits kept beside a stopped VM. It only removes files no live disk chain uses, verified the
 // way a VM delete verifies them, and is safe to run again after an interruption.
@@ -1362,38 +1371,67 @@ func (e *ManagedEngine) releaseRetainedOriginals(ctx context.Context, j *managed
 	if err != nil {
 		return err
 	}
-	var files, tpmDirs []string
-	for _, old := range js {
-		if old.Command.Kind != "vm-update" || old.Command.VM == nil || old.Command.VM.ID != req.VMID || old.Result.Status != "succeeded" {
-			continue
+	if j.Stage == "wiping" && j.RetainedTPM == nil && slices.ContainsFunc(js, func(old managedJournal) bool {
+		return old.Command.Kind == "vm-update" && old.Command.VM != nil && old.Command.VM.ID == req.VMID &&
+			old.Result.Status == "succeeded" && old.BackupTPMPreviousSHA256 != ""
+	}) {
+		return errors.New("retained original TPM wiping intent was not recorded; inspect it on the host")
+	}
+	admitted := j.Stage == "wiping"
+	previousFiles, previousTPM, previousStage := j.Retained, j.RetainedTPM, j.Stage
+	defer func() {
+		if !admitted {
+			j.Retained, j.RetainedTPM, j.Stage = previousFiles, previousTPM, previousStage
 		}
-		for _, path := range old.Retained {
-			// A rerun after an interruption still lists files its earlier run already unlinked.
-			if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) && j.Stage != "wiping" {
+	}()
+	if j.Stage != "wiping" {
+		var files []string
+		tpm := []managedRetainedTPM{}
+		for _, old := range js {
+			if old.Command.Kind != "vm-update" || old.Command.VM == nil || old.Command.VM.ID != req.VMID || old.Result.Status != "succeeded" {
 				continue
 			}
-			if !slices.Contains(files, path) && !slices.ContainsFunc(chains, func(chain []string) bool { return slices.Contains(chain, path) }) {
-				files = append(files, path)
+			for _, path := range old.Retained {
+				if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+					continue
+				}
+				if !slices.Contains(files, path) && !slices.ContainsFunc(chains, func(chain []string) bool { return slices.Contains(chain, path) }) {
+					files = append(files, path)
+				}
+			}
+			if old.BackupTPMPreviousSHA256 == "" {
+				continue
+			}
+			if !protocol.ValidSnapshotOperationID(old.Command.OperationID) {
+				return errors.New("retained original TPM operation is invalid")
+			}
+			kept, err := managedSnapshotManifest(ctx, restoreTPMPath(req.VMID, old.Command.OperationID))
+			if err != nil || kept.Exists && kept.SHA256 != old.BackupTPMPreviousSHA256 {
+				return errors.New("retained original TPM state changed; inspect it on the host")
+			}
+			if kept.Exists {
+				tpm = append(tpm, managedRetainedTPM{OperationID: old.Command.OperationID, Manifest: kept})
 			}
 		}
-		if old.BackupTPMPreviousSHA256 == "" {
-			continue
+		if len(files) == 0 && len(tpm) == 0 {
+			return errors.New("VM has no retained original disks")
 		}
-		dir := restoreTPMPath(req.VMID, old.Command.OperationID)
-		kept, err := managedSnapshotManifest(ctx, dir)
-		if err != nil || kept.Exists && kept.SHA256 != old.BackupTPMPreviousSHA256 {
-			return errors.New("retained original TPM state changed; inspect it on the host")
-		}
-		if kept.Exists {
-			tpmDirs = append(tpmDirs, dir)
-		}
+		j.Retained, j.RetainedTPM = files, tpm
 	}
-	if len(files) == 0 && len(tpmDirs) == 0 {
-		return errors.New("VM has no retained original disks")
+	if len(j.Retained) == 0 && len(j.RetainedTPM) == 0 {
+		return errors.New("retained original wiping intent has no recorded targets")
 	}
-	j.Retained = files
+	// Never widen an admitted wiping intent by rediscovering retained targets.
+	files := j.Retained
+	if slices.ContainsFunc(chains, func(chain []string) bool {
+		return slices.ContainsFunc(files, func(path string) bool { return slices.Contains(chain, path) })
+	}) {
+		return errors.New("retained original disk is now used by the VM")
+	}
+	if err := verifyRetainedTPM(ctx, req.VMID, j.RetainedTPM, js); err != nil {
+		return err
+	}
 	if len(files) > 0 {
-		// Stage "wiping" lets the check skip files an interrupted earlier run already unlinked.
 		check := managedJournal{Command: protocol.Command{Delete: &protocol.VMDeleteRequest{VMID: req.VMID, DeleteDisks: true}}, Retained: files, Stage: "wiping"}
 		if err := e.verifyManagedDeleteFiles(ctx, js, check); err != nil {
 			return err
@@ -1403,12 +1441,64 @@ func (e *ManagedEngine) releaseRetainedOriginals(ctx context.Context, j *managed
 	if err := e.save(*j); err != nil {
 		return err
 	}
+	admitted = true
 	if err := wipeManagedDisks(files); err != nil {
 		return err
 	}
-	for _, dir := range tpmDirs {
-		if err := os.RemoveAll(dir); err != nil {
+	for _, target := range j.RetainedTPM {
+		if err := removeRetainedTPM(restoreTPMPath(req.VMID, target.OperationID)); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+var removeRetainedTPM = os.RemoveAll
+
+func verifyRetainedTPM(ctx context.Context, vmID string, targets []managedRetainedTPM, js []managedJournal) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	if !uuidPattern.MatchString(vmID) || !filepath.IsAbs(backupTPMStateRoot) || filepath.Clean(backupTPMStateRoot) != backupTPMStateRoot {
+		return errors.New("retained original TPM target is invalid")
+	}
+	for dir := backupTPMStateRoot; ; dir = filepath.Dir(dir) {
+		info, err := os.Lstat(dir)
+		if err != nil && !(dir == backupTPMStateRoot && errors.Is(err, os.ErrNotExist)) ||
+			err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return errors.New("retained original TPM path is unsafe")
+		}
+		if filepath.Dir(dir) == dir {
+			break
+		}
+	}
+	for _, target := range targets {
+		if !protocol.ValidSnapshotOperationID(target.OperationID) || !target.Manifest.Exists || !validManagedSnapshotManifest(target.Manifest) {
+			return errors.New("retained original TPM wiping intent is invalid")
+		}
+		encoded, err := json.Marshal(target.Manifest.Files)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(encoded)
+		if hex.EncodeToString(digest[:]) != target.Manifest.SHA256 || !slices.ContainsFunc(js, func(old managedJournal) bool {
+			return old.Command.OperationID == target.OperationID && old.Command.Kind == "vm-update" &&
+				old.Command.VM != nil && old.Command.VM.ID == vmID && old.Result.Status == "succeeded" &&
+				old.BackupTPMPreviousSHA256 == target.Manifest.SHA256
+		}) {
+			return errors.New("retained original TPM wiping intent differs from its validated tree")
+		}
+		remaining, err := managedSnapshotManifest(ctx, restoreTPMPath(vmID, target.OperationID))
+		if err != nil {
+			return errors.New("retained original TPM state changed; inspect it on the host")
+		}
+		for _, file := range remaining.Files {
+			index, found := slices.BinarySearchFunc(target.Manifest.Files, file.RelativePath, func(entry managedSnapshotFileMetadata, path string) int {
+				return strings.Compare(entry.RelativePath, path)
+			})
+			if !found || target.Manifest.Files[index] != file {
+				return errors.New("retained original TPM state changed; inspect it on the host")
+			}
 		}
 	}
 	return nil

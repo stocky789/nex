@@ -487,13 +487,14 @@ queueing. A missing or mismatched receipt is `409`; an unsupported kind is
 `409`; an exact request replay returns the original operation. No secret value
 is stored in the Controller request or repository record.
 
-Before native registration preparation can claim an owner or probe the
-destination, Core checks the exact pool master and writable authority under
-the same backup authority lock used by transfer freeze. A member or frozen
-former master is refused before remote work; a transfer waits for a bounded
-in-flight preparation. SFTP adoption of an established repository refuses a
-missing owner marker instead of creating one. This tightens the existing
-registration contract without changing its routes or payloads.
+Before registration preparation claims an owner or probes a destination, Core checks
+the exact pool master and writable authority. Native/network preparation runs outside
+the backup authority mutex; a transfer can freeze authority while it is outstanding.
+Commit rechecks writable authority and refuses stale preparation. Commit performs no
+repository probe or peer delivery and retains the actual preparation health/access
+observation instead of manufacturing an online result. Member delivery runs separately.
+Existing S3 and SFTP registrations must verify their established owner marker: neither
+an exact retry nor a confirmed credential replacement reclaims a missing owner.
 
 If the first NFS/SMB3 mount start fails before registration commits, Core
 removes the newly created managed mount unit. Exact replay retains that
@@ -502,6 +503,22 @@ same repository ID and a fresh credential handoff where applicable. An
 uncertain unit cleanup is reported as a rollback error rather than treated as
 a successful registration. API impact: **existing contract**; no route or
 schema change.
+
+SMB3 replacement keeps the previous mount unit and credential until commit. Definite
+preparation failure restores prior access; uncertain rollback preserves both credential
+files and reports attention rather than detaching the still-usable old registration.
+A Controller journal left pending after Core saved a terminal registration receipt
+replays that matching receipt before any native preparation: success, failure and
+attention are not converted to reservation conflicts. Changed intent is refused.
+For prepared SMB replacement, a commit refusal leaves its receipt pending until
+actual rollback finishes. Run waits for the worker and persists its final outcome
+on the Store owner before releasing exclusion; it never rewrites a successful receipt.
+A final receipt write refusal is returned as a persistence error and leaves the
+prior durable pending receipt protecting the credentials. Admitted cleanup outcomes
+remain writable if authority froze meanwhile; this does not authorize a new operation.
+Peer cleanup uses the exact prior repository snapshot and cannot retire an active newer
+credential. A failed generation-bound pool-storage preparation may release its failed
+secret while retaining the exact retry binding; explicit retirement/detachment remains final.
 
 For Core-local repository registration/test and policy upsert/pause, a first
 successful `200` returns the saved resource. An exact operation-ID replay after
@@ -598,6 +615,12 @@ or repositories are unreadable also return `503`; only a changed generation on
 a later page returns `409`. An unknown pool returns `404`. Absence never means
 empty history.
 
+The complete Backup jobs history scan is single-flight and is not aborted by the
+15-second inventory poll. Repository and policy observations can be used before
+history completes. A failed history read is reported as unavailable/unknown,
+not as no runs; a generation conflict restarts from the first page with bounded
+retries. Leaving the workspace cancels that scope's unfinished scan.
+
 **Controller presentation — existing contract.** Backups has separate Backup jobs
 and Recovery points views. Search, VM and repository selection use the catalog
 filters above; loading or unavailable inventory is not reported as empty.
@@ -609,6 +632,13 @@ requests, administrator/CSRF checks and Core execution. An uncertain form freeze
 its intent for an exact retry; ordinary presentation drafts remain browser-session
 conveniences, not durable pool records. No endpoint, schema or version contract changes.
 
+Repository registration retries retain the complete original body, including
+replacement confirmation and the acknowledged credential receipt, even if
+repository observations become unavailable. Changing pool scope clears the
+pool-bound draft and receipt; it does not cancel work already accepted by Core.
+Moving a policy prunes only deleted-VM coverage and its overrides, preserving
+all surviving per-VM settings.
+
 Core reports its backup repositories and policies in every managed inventory;
 there is no separate backup capability handshake. A later authenticated `succeeded` or `failed` backup Result for the same
 host and operation ID can settle an earlier Controller `needs_attention`
@@ -619,6 +649,19 @@ inventory, including repository, policy, protect, catalog and test metadata
 commands. A same-ID native VM-create outcome does not replace it, and
 peer-dispatched member work is excluded. Controller may update only its own
 matching nonterminal operation row from that explicit Core outcome.
+An adopted Core-queued mirror refreshes its observation time on every matching
+queued report, including host-scoped operation IDs. Ten minutes without another
+observation changes a dispatched mirror to `needs_attention`. Further absent
+reports never imply success; only an explicit authenticated Core result settles
+it. Retained-release request replay is bound to the original pool and VM as well
+as the unchanged confirmation.
+
+Timed-out local backup/restore work remains live until its actual worker returns.
+Core reports `needs_attention` without redriving the operation, reconciling away
+its restore pin or deleting live staging. Shutdown waits for the worker to stop.
+Silence, departure or failed verification of a member result likewise preserves
+the reservation and uses observation-only recovery. A definite authenticated
+never-started outcome is distinct from an unreachable member.
 For backup and restore work targeting a member, including scheduled and policy
 run-now backups, the pool master uses the pinned pool peer listener
 (`PoolMasterCertificate`) to read
@@ -661,13 +704,38 @@ equal to that repository ID, which replaces the credential (and, for SFTP, the
 pinned host key) while keeping recovery points and history; otherwise register
 a new repository ID and switch policies to it. Controller neither stores nor
 relays this peer secret.
-After forgetting a repository the master calls `POST /api/v1/pool/backup/forget`
-(`{repository_id}`) on each ready member, best effort, so the member drops its record,
-mount and sealed credential; the call is idempotent and is repeated when the master is
-asked to forget the same ID again.
-At the end of each repository probe pass the master also calls `POST /api/v1/pool/backup/retain`
-(`{repository_ids}`, every repository it holds) on each ready member, which drops its record,
-mount and sealed credential for any other repository, such as one whose forget it missed.
+After forgetting a repository the master uses pinned peer mTLS to read
+`GET /api/v1/pool/backup/retain?after_id=<cursor>`
+(`{repositories:[exact member records],next_after_id?:last returned ID}`).
+Omit `after_id` for the first page; follow `next_after_id` until it is absent.
+Each immutable Store-owner snapshot is sorted by unique repository ID and its
+page contains at most 256 records and 4 MiB including the envelope/cursor.
+The complete stale-member inventory can exceed both limits; they are per-page,
+not the master's live-registration limit. Pending-detach snapshots are included.
+Invalid, repeated or unknown query parameters are `400`; a single record that
+cannot fit a page is `503`. The client rejects malformed/nonprogressing pages
+and discards the partial collection on any later refusal or transport failure.
+Insertions/deletions between pages may be deferred to the next sweep; none
+establish negative absence or permit deleting a changed registration.
+It rechecks current master absence before sending
+`POST /api/v1/pool/backup/forget` (`{repository:exact snapshot}`, at most
+64 KiB) or `POST /api/v1/pool/backup/retain`
+(`{repositories:[exact snapshots]}`, at most 256 records and 4 MiB).
+Both mutations are admitted on the member's Store owner, where unsettled journal
+work refuses removal. Identity, credential reference and `updated_at` bind the
+registration; transient health/access observations are ignored. A missing or
+changed registration is a safe `204` no-op, not permission to remove its current
+mount or credential. `400` rejects invalid input/scope, `401` rejects a caller
+other than the current pinned master, `409` reports unsettled work or a removal
+refusal, and `503` reports unavailable member authority/owner. A partially
+completed batch is safe to repeat after reading fresh snapshots.
+Offline members converge on later health sweeps. The former negative
+`repository_ids` sweep and ID-only forget body are removed: upgrade Core peers
+together before using this contract.
+A single snapshot above the forget route's 64 KiB limit is refused without
+sending a mutation; an ordinary retain sweep can still remove it if it fits
+that route's 4 MiB limit. Both receivers enforce their full encoded body bound,
+including trailing bytes, and accept exactly one JSON object.
 For SMB3, the master also calls authenticated
 `POST /api/v1/pool/backup/capability/smb3` with a source-only repository and
 `expected_identity` before dispatch. The ready member resolves its private
@@ -777,12 +845,19 @@ whenever the pool has backup state. It names an ordered `page_count`, total byte
 full SHA-256 root and counts of repositories, definitions, history, catalog, pins,
 metadata receipts and orphaned-backup cleanup records (`orphan_cleanups`), so the new
 master still answers `GET /api/local/v1/pool/backup-orphan-cleanups/{operation_id}` for a
-cleanup the old master ran. There is no aggregate size or record-count bound; a record must
-still fit one 256 KiB page. Pages pack whole records and end where a record's content
-selects, so a changed or appended record resends only its own page. The former inline
-`backup_authority` and per-page-hash manifest (`version`, `page_sha256`, `page_bytes`)
-are removed. API impact: **changed contract**; replicas from a build that still sends
-them are refused.
+cleanup the old master ran. There is no aggregate size or record-count bound;
+each frame still fits one 256 KiB page. Ordinary records use one frame. A cleanup
+uses a kind-7 `{cleanup,point_count}` header with `cleanup.points:null`, followed
+by exactly `point_count` contiguous kind-8 `BackupOrphanPointResult` frames,
+across pages if needed. `orphan_cleanups` counts complete cleanup records, while
+the root and byte count cover every header and point. Validation rejects
+truncated, interleaved, invalid or duplicate cleanup records; history is never
+truncated to fit a page. Pages end at complete frame boundaries selected by the
+content. The former inline `backup_authority` and per-page-hash manifest
+(`version`, `page_sha256`, `page_bytes`) are removed. API impact:
+**changed contract**; old cleanup framing fails closed in either direction.
+Deploy matching Core peers and repush authority from the durable current master
+before promotion.
 
 Pages use authenticated `POST /api/v1/pool/replica/backup-page`, in
 push sessions. The master opens a session with `{replica,index:-1}`. The member
@@ -803,6 +878,9 @@ checks the full root; a content mismatch clears the staging and requests the
 first page again, while a read failure returns `500` and keeps it. Exact
 retries resume transfer without granting authority. The old per-page signed
 replica request is removed.
+Page collection serializes root selection/deletion with replica replacement and
+upload sessions, retaining both the acknowledged replica and every unexpired
+upload root until the relevant transition is complete.
 
 The master reports `pool-backup-authority-capacity` in its host checks:
 `degraded` when repositories (256), policies (1,000), run history, catalog
@@ -5151,7 +5229,7 @@ released files simply no longer exist. There is no new pool-scoped setting.
 
 Flow: the administrator types the VM's name. Controller resolves the VM's host, refuses while an
 edit, power, media, delete, release, restore-replace or test-restore request for the VM is queued or dispatched, and queues the
-command with a stable `request_id` (exact replay `200`, changed payload `409`). Core on the host
+command with a stable `request_id` (exact replay `200`, changed payload, pool or VM `409`). Core on the host
 fails the command, changing nothing, when the confirmation is not the VM's current name, the VM is
 not shut off, the VM has retained snapshots, a restore or other operation on the VM is unfinished
 (the host holds the request until that operation settles), a file is still used by another domain
@@ -5160,8 +5238,15 @@ on the Controller-less route and for a Controller whose own check was stale: the
 pending recovery, a retained snapshot or an unfinished update for the VM, or the host journals an
 unfinished restore, snapshot or VM operation for it. Files in the
 VM's live disk chain are never removed. Otherwise it unlinks the retained disk files, using the same
-ownership checks as a VM delete, and removes the retained original vTPM state after checking its
-recorded digest. An interrupted release is re-run by the host: files already gone are skipped.
+ownership checks as a VM delete. Before any vTPM unlink, the release journal stores
+`retained_tpm`: the exact admitted paths, producing operations and validated per-file
+type/mode/ownership/length/digest manifest. Replay accepts already-missing nodes but
+refuses changed remaining nodes or newly added paths. A validated empty list is `[]`,
+not an absent admission. Pre-fix partial vTPM releases without this durable manifest
+remain `needs_attention`; Core cannot safely reconstruct proof from a partial tree.
+The aggregate admitted release record must fit the managed journal's 1 MiB reader/writer
+limit. Oversized admission fails before any unlink and does not leave oversized manifest
+fields in the failure receipt. All journal writes enforce that same byte boundary.
 Released paths stop counting as storage-detach dependencies. The Controller-less route accepts
 only a VM on the host it runs on.
 
@@ -5192,6 +5277,11 @@ and then relays raw RFB bytes as binary WebSocket frames until either side close
 browser client is bundled noVNC. Tickets, sessions and tunnels are not durable: a Controller
 restart closes open consoles and the browser reports it; guests are unaffected. No pool-scoped
 setting is introduced, so nothing needs a pool-master record.
+Host-tunnel admission is single-use under the console hub lock, before the HTTP
+upgrade starts. A duplicate receives `404` even while the first handshake is in
+flight or after the browser has consumed the queued tunnel. If that first
+handshake fails, open a new console ticket rather than retrying the consumed token.
+This applies to both VM and host consoles and persists no state.
 
 Controller prefers HTTP/1.1 in TLS negotiation so these upgrades can hijack the connection;
 API clients are unaffected. Compatibility: an older Core ignores the `consoles` member and never

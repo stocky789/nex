@@ -306,9 +306,18 @@ class PeerAPIContractTests(APIContractTests):
             handled |= {consts[c].rstrip('/') for c in re.findall(r'r\.URL\.Path [!=]= strings\.TrimSuffix\((\w+Path), "/"\)', line)}
             handled |= set(re.findall(r'r\.URL\.Path [!=]= "(/api/v1/pool/[^"]*)"', line))
         called = set()
-        for method, expr in re.findall(r'NewRequestWithContext\(\w+, http\.Method(\w+), (.+?), (?:nil\)|bytes\.NewReader|strings\.NewReader)', source):
-            if re.fullmatch(r'\w+', expr):
-                expr = re.search(expr + r' := (.+)', source)[1]
+        for call in re.finditer(r'NewRequestWithContext\(\w+, http\.Method(\w+), (.+?), (?:nil\)|bytes\.NewReader|strings\.NewReader)', source):
+            method, expr = call.groups()
+            function = source[source.rfind('\nfunc ', 0, call.start()):call.start()]
+            seen = set()
+            while re.fullmatch(r'\w+', expr) and expr not in seen:
+                seen.add(expr)
+                assignments = re.findall(r'\b' + re.escape(expr) + r' := (.+)', function)
+                if not assignments:
+                    assignments = re.findall(r'\b' + re.escape(expr) + r' := (.+)', source)[:1]
+                if not assignments:
+                    break
+                expr = assignments[-1]
             path = ''
             for token in re.sub(r'strings\.TrimRight\([\w.]+, "/"\)\s*\+', '', expr).split('+'):
                 token = token.strip()
@@ -333,7 +342,7 @@ class PeerAPIContractTests(APIContractTests):
         called.update(('post', consts['poolBackupPeerPath'] + route) for route in
                       re.findall(r'postPeerCapability\([^\n]*"(/capability/\w+)"', source))
         called.update(('post', consts['poolBackupPeerPath'] + route) for route in
-                      re.findall(r'postPeerBackupRoute\([^\n]*, "(/\w+)",', source))
+                      re.findall(r'(?:postPeerBackupRoute|forgetStalePeerRepository)\([^\n]*, "(/\w+)"(?:,|\))', source))
         # CPU observations share a bounded request helper and dispatch on literal
         # operation suffixes. Recover those real routes rather than treating the
         # whole suffix as an arbitrary resource identifier.

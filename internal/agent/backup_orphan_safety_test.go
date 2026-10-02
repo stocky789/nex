@@ -207,11 +207,11 @@ func TestMemberKeepsRepositoryUsedByItsOwnJournal(t *testing.T) {
 	}
 	member.State.Journal = map[string]JournalEntry{"backup-1": {Status: "pending", Command: &protocol.Command{
 		OperationID: "backup-1", Kind: protocol.BackupKindBackupNow, Backup: &protocol.BackupNowRequest{RepositoryID: "repo-1"}}}}
-	if err := forgetMemberBackupRepository(context.Background(), member, "repo-1"); err == nil {
+	if err := forgetMemberBackupRepository(context.Background(), member, "repo-1", &repo); err == nil {
 		t.Fatal("a member dropped a repository its backup is writing to")
 	}
 	member.State.Journal["backup-1"] = JournalEntry{Status: "succeeded", Command: member.State.Journal["backup-1"].Command}
-	if err := forgetMemberBackupRepository(context.Background(), member, "repo-1"); err != nil {
+	if err := forgetMemberBackupRepository(context.Background(), member, "repo-1", &repo); err != nil {
 		t.Fatal(err)
 	}
 }

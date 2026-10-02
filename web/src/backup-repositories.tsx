@@ -192,8 +192,9 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const [forgetting, setForgetting] = useState<BackupRepository | null>(null);
   const [orphans, setOrphans] = useState<BackupRepository | null>(null);
   const requests = useRef<Record<string, string>>({});
-  const createID = useRef("");
+  const createBody = useRef<({ request_id: string; id: string; name: string; kind: BackupKind; credential_request_id?: string; credential_ref?: string; replace_confirmation?: string } & Partial<Pick<BackupRepository, "source" | "smb_source" | "s3_source" | "sftp_source">>) | null>(null);
   const credentialReceipt = useRef("");
+  const formScope = useRef(0);
   const loadGen = useRef(0);
   const loadAbort = useRef<AbortController | null>(null);
   const createKey = "create";
@@ -224,15 +225,14 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   };
 
   useEffect(() => {
+    formScope.current++;
+    resetForm();
+    requests.current = {};
+    setWorking("");
     setRows(null);
     setError("");
-    setForm(false);
-    setFormError("");
     setForgetting(null);
     setOrphans(null);
-    setCreateUncertain(false);
-    requests.current = {};
-    createID.current = "";
     void load();
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 15000);
     return () => { window.clearInterval(timer); loadAbort.current?.abort(); };
@@ -247,7 +247,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const resetForm = () => {
     clearRequest(createKey);
     clearRequest(credentialKey);
-    createID.current = "";
+    createBody.current = null;
     credentialReceipt.current = "";
     setCreateUncertain(false);
     setForm(false);
@@ -260,7 +260,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const change = (update: () => void) => {
     clearRequest(createKey);
     clearRequest(credentialKey);
-    createID.current = "";
+    createBody.current = null;
     credentialReceipt.current = "";
     update();
   };
@@ -271,46 +271,52 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault();
-    if (!canCreate || !source) return;
+    if (unavailable || busy || (!createBody.current && (!canCreate || !source))) return;
+    const scope = formScope.current;
     setWorking(createKey);
     setFormError("");
     try {
-      createID.current ||= repoID.trim() || rid("brepo");
-      const registrationID = requestID(createKey, "brepo");
-      const credentialID = remote.kind === "nfs" ? "" : requestID(credentialKey, "bcred");
-      if (credentialID && !credentialReceipt.current) {
+      if (!createBody.current) {
+        const registrationID = requestID(createKey, "brepo");
+        const credentialID = remote.kind === "nfs" ? "" : requestID(credentialKey, "bcred");
+        createBody.current = {
+          request_id: registrationID, id: repoID.trim() || rid("brepo"), name: name.trim(), kind: remote.kind,
+          ...source!,
+          ...(credentialID ? { credential_request_id: credentialID } : {}),
+          ...(existing ? { replace_confirmation: existing.id } : {}),
+        };
+      }
+      const body = createBody.current;
+      if (body.credential_request_id && !credentialReceipt.current) {
         const credentials = remote.kind === "sftp" ? { username: remote.username.trim(), ssh_private_key: remote.sshKey } : { username: remote.username.trim(), secret: remote.secret, ...(remote.kind === "smb3" && remote.domain.trim() ? { domain: remote.domain.trim() } : {}) };
-        credentialReceipt.current = (await api<{ receipt: string }>("storage/credentials", "POST", {
-          request_id: credentialID, registration_request_id: `backup-credential:${remote.kind}:${registrationID}`,
-          pool_id: poolID, host_id: masterHostID, repository_id: createID.current, credentials, repository: { name: name.trim(), ...source },
-        })).receipt;
+        const reply = await api<{ receipt: string }>("storage/credentials", "POST", {
+          request_id: body.credential_request_id, registration_request_id: `backup-credential:${body.kind}:${body.request_id}`,
+          pool_id: poolID, host_id: masterHostID, repository_id: body.id, credentials, repository: { name: body.name, ...source },
+        });
+        if (scope !== formScope.current) return;
+        credentialReceipt.current = reply.receipt;
+        body.credential_ref = reply.receipt;
         setRemote(current => ({ ...current, secret: "", sshKey: "" }));
       }
-      const reply = await api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "POST", {
-        request_id: registrationID,
-        id: createID.current,
-        name: name.trim(),
-        kind: remote.kind,
-        ...source,
-        ...(credentialID ? { credential_ref: credentialReceipt.current, credential_request_id: credentialID } : {}),
-        ...(existing ? { replace_confirmation: existing.id } : {}),
-      });
+      const reply = await api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "POST", body);
+      if (scope !== formScope.current) return;
       clearRequest(createKey);
-      onNotice(`Backup repository ${name.trim()}: registration requested`, backupOpID(reply));
+      onNotice(`Backup repository ${body.name}: registration requested`, backupOpID(reply));
       resetForm();
       await load();
     } catch (err) {
+      if (scope !== formScope.current) return;
       const status = (err as { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 409) {
         clearRequest(createKey);
         clearRequest(credentialKey);
-        createID.current = "";
+        createBody.current = null;
         credentialReceipt.current = "";
         setCreateUncertain(false);
       } else setCreateUncertain(true);
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {
-      setWorking("");
+      if (scope === formScope.current) setWorking("");
     }
   };
 
@@ -407,7 +413,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
             : <label>{remote.kind === "s3" ? "Secret access key" : "Password"}<input required={!credentialReceipt.current} type="password" value={remote.secret} autoComplete="new-password" disabled={fieldsDisabled} onChange={e => patchRemote({ secret: e.target.value })} /></label>}
         </>}
         <div className="actions">
-          <button type="submit" className="primary" disabled={Boolean(working) || !canCreate}>
+          <button type="submit" className="primary" disabled={Boolean(working) || (!createBody.current && !canCreate) || blocked}>
             {working === createKey ? "Working…" : "Save"}
           </button>
           <button type="button" disabled={Boolean(working)} onClick={closeForm}>Cancel</button>

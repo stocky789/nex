@@ -102,3 +102,58 @@ func TestCoreLocalReleaseRetainedMirrorAcceptsAgentResult(t *testing.T) {
 		t.Fatalf("release mirror is %q", s)
 	}
 }
+
+func TestReleaseRetainedReplayBindsPoolAndVM(t *testing.T) {
+	l := newManagedLab(t, protocol.ManagedVMCapability)
+	var first, second createdVM
+	read(t, l.create("create-release-first", l.spec("guest-release"), 202), &first)
+	commands := l.report().Commands
+	appliedFirst := *commands[0].VM
+	l.reportState("shut off", &protocol.ManagedState{VMs: []protocol.VMCreateSpec{appliedFirst}},
+		protocol.Result{OperationID: commands[0].OperationID, Status: "succeeded"})
+	read(t, l.create("create-release-second", l.spec("guest-second"), 202), &second)
+	commands = l.reportState("shut off", &protocol.ManagedState{VMs: []protocol.VMCreateSpec{appliedFirst}}).Commands
+	appliedSecond := *commands[0].VM
+	state := &protocol.ManagedState{VMs: []protocol.VMCreateSpec{appliedFirst, appliedSecond}}
+	l.reportState("shut off", state, protocol.Result{OperationID: commands[0].OperationID, Status: "succeeded"})
+
+	other := l.a.enroll(l.a.token(l.a.site(), ""), csr(t))
+	otherPool := l.a.poolOf(other.HostID)
+	otherState := hostDefaults(other.HostID)
+	otherState.Storage[0].ID = "other-storage"
+	otherState.Networks[0].ID = "other-network"
+	otherVM := vmSpec(otherPool, other.HostID, "guest-release", otherState.Storage[0].ID, otherState.Networks[0].ID, "")
+	otherVM.ID = "22222222-2222-4222-8222-222222222222"
+	otherState.VMs = []protocol.VMCreateSpec{otherVM}
+	l.a.report(certificate(t, other.CertificatePEM), protocol.ReportRequest{Version: 1, Sequence: 1,
+		Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{
+			Hostname: "other-core", Managed: otherState,
+			NICs: []protocol.NIC{{Name: "nex0", Kind: "physical", Master: "br0"}, {Name: "br0", Kind: "bridge"}},
+			VMs:  []protocol.VM{{ID: otherVM.ID, Name: otherVM.Name, State: "shut off"}},
+		}})
+
+	path := "/api/v1/vms/" + first.VMID + "/release-retained"
+	body := map[string]any{"request_id": "release-bound-target", "confirmation": "guest-release"}
+	var accepted, replay struct {
+		VMID      string             `json:"vm_id"`
+		Operation protocol.Operation `json:"operation"`
+	}
+	read(t, l.a.call("POST", path, body, nil, 202), &accepted)
+	for _, id := range []string{second.VMID, otherVM.ID} {
+		l.a.call("POST", "/api/v1/vms/"+id+"/release-retained", body, nil, 409)
+	}
+	read(t, l.a.call("POST", path, body, nil, 200), &replay)
+	if replay.VMID != first.VMID || replay.Operation.ID != accepted.Operation.ID || replay.Operation.Status != "queued" {
+		t.Fatalf("original replay changed: %+v, accepted %+v", replay, accepted)
+	}
+	l.a.call("POST", path, map[string]any{"request_id": "release-bound-target", "confirmation": "changed-confirmation"}, nil, 409)
+	commands = l.reportState("shut off", state).Commands
+	if len(commands) != 1 || commands[0].OperationID != accepted.Operation.ID {
+		t.Fatalf("target-conflicting retries queued work: %+v", commands)
+	}
+	l.reportState("shut off", state, protocol.Result{OperationID: accepted.Operation.ID, Status: "succeeded"})
+	read(t, l.a.call("POST", path, body, nil, 200), &replay)
+	if replay.VMID != first.VMID || replay.Operation.ID != accepted.Operation.ID || replay.Operation.Status != "succeeded" {
+		t.Fatalf("settled original replay changed: %+v", replay)
+	}
+}

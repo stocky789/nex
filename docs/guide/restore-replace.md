@@ -65,6 +65,18 @@ replace has succeeded and try again. Without the Controller, use the host-local 
 not list what is retained; a VM with nothing retained fails with "VM has no retained
 original disks".
 
+An interrupted vTPM release resumes only the exact tree Core admitted before deletion.
+Missing already-removed files are allowed; changed remaining content, ownership or modes,
+new files, and the current VM's state are not. Keep the same operation, pool and VM when
+retrying; a request ID cannot be reused for another VM.
+
+Older releases that began deleting vTPM state before Core recorded an exact per-file
+manifest cannot safely authenticate the remaining partial tree. They stay `needs_attention`
+for inspection rather than treating an incomplete tree as permission to delete more files.
+Core also refuses before deletion if the complete admitted manifest would exceed its
+1 MiB durable journal limit. Originals remain intact; inspect the retained state on the
+host rather than deleting the journal or bypassing admission.
+
 ## Troubleshooting
 
 - Storage filling after several replaces: [release the retained originals](#release-retained-originals).

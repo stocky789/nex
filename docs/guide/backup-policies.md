@@ -123,6 +123,9 @@ through Core's authenticated paged API.
   destinations. Broader faults remain open.
 - A run that remains reserved or reports `needs_attention` needs host-side inspection
   before an operator submits another run for the same VM.
+- If history is unavailable or loading, **Unknown** is not evidence that a VM has
+  never been backed up. Repository and policy actions remain available while Core's
+  history request is outstanding. Changing pools discards the old scope's pending reads.
 - Retention removes only points created by the same policy, and the catalog records
   that policy on each point and in the point's stored manifest. A catalog rebuild
   from the repository reads the policy back from the manifest, so rebuilt points
@@ -142,16 +145,18 @@ through Core's authenticated paged API.
   the run once the member resolves it, adding a published point to the catalog.
   A run the member never started, including one whose VM moved to another host
   before it began, settles `failed` and the next scheduled occurrence runs normally.
+  Silence, departure from the pool, or an unverified outcome does not prove a run
+  stopped; the master keeps its reservations until authenticated host evidence settles it.
 - If **Change repository** reports a revision conflict, reload the policy,
   review its current settings and submit a new change. If the reply is
   uncertain, keep the panel open and use **Check task status**; any retry must
   use the same request without changing the selected repository.
-- For SMB3, S3 or SFTP credential rotation, register and test a new repository
-  ID at a separate directory, prefix or root, then use step 7 to switch each
-  policy. Verify a new backup and restore before retiring access to the old
-  destination. Keep old credentials valid for the old points' restore window;
-  Core refuses same-ID source or credential changes. An existing CIFS session
-  may temporarily serve an old SMB3 restore after external revocation.
+- For a different SMB3, S3 or SFTP destination, register a new repository ID at a
+  separate directory, prefix or root, then use step 7 to switch each policy. Verify
+  a new backup and restore before retiring access to old points. For a credential
+  replacement at the same destination, follow [Reuse a repository ID](backup-repositories.md#reuse-a-repository-id)
+  and its typed confirmation. Keep old credentials usable until replacement or
+  rollback is confirmed; an existing CIFS session can temporarily survive external revocation.
 - Backup authority limits: the pool master keeps every repository, policy,
   run, recovery point, restore pin and verification receipt in its signed
   authority, so a takeover host holds them all. Core enforces at most 256

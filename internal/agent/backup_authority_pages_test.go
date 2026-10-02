@@ -189,10 +189,11 @@ func TestPoolBackupActivationSwitchesAllStoresWithPeerRecord(t *testing.T) {
 	}
 	auth := &protocol.PoolBackupAuthority{Definitions: []protocol.BackupPolicy{newPolicy}, History: []protocol.BackupRun{run},
 		Catalog: []protocol.BackupRecoveryPoint{point}, Pins: []protocol.BackupRestorePin{pin, secondPin}, MetadataReceipts: []protocol.BackupMetadataReceipt{receipt}}
-	root, rollback, err := stagePoolBackupAuthorityActivation(s, auth, 7)
+	root, rollback, release, err := stagePoolBackupAuthorityActivation(s, auth, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	before, err := loadPoolBackupPolicies(s)
 	if err != nil || before.Policies[old.ID].ID != old.ID {
 		t.Fatalf("old tree disappeared before peer commit: %#v %v", before, err)
@@ -736,7 +737,7 @@ func TestPoolBackupAuthorityV2PromotionStagesBeforeMasterFlip(t *testing.T) {
 	if err := os.WriteFile(page, corrupt, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := stagePoolBackupAuthorityActivationPages(s, manifest, 9); err == nil {
+	if _, _, _, err := stagePoolBackupAuthorityActivationPages(s, manifest, 9); err == nil {
 		t.Fatal("corrupt authority activated")
 	}
 	if peerState(t, s).BackupActiveRoot != oldRoot {
@@ -745,10 +746,11 @@ func TestPoolBackupAuthorityV2PromotionStagesBeforeMasterFlip(t *testing.T) {
 	if err := os.WriteFile(page, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	root, rollback, err := stagePoolBackupAuthorityActivationPages(s, manifest, 9)
+	root, rollback, release, err := stagePoolBackupAuthorityActivationPages(s, manifest, 9)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	if peerState(t, s).BackupActiveRoot != oldRoot {
 		t.Fatal("staging activated before peer commit")
 	}
@@ -995,13 +997,13 @@ func stagePoolBackupAuthority(s *Store, auth *protocol.PoolBackupAuthority) (*pr
 
 // stagePoolBackupAuthorityActivation stages an in-memory authority as pages,
 // then prepares its activation like a promotion does; nil is an empty authority.
-func stagePoolBackupAuthorityActivation(s *Store, auth *protocol.PoolBackupAuthority, generation uint64) (string, func(), error) {
+func stagePoolBackupAuthorityActivation(s *Store, auth *protocol.PoolBackupAuthority, generation uint64) (string, func(), func(), error) {
 	if auth == nil {
 		return stagePoolBackupAuthorityActivationPages(s, nil, generation)
 	}
 	manifest, err := stagePoolBackupAuthority(s, auth)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	return stagePoolBackupAuthorityActivationPages(s, manifest, generation)
 }
@@ -1015,7 +1017,57 @@ func loadPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest) (*pr
 		auth.Catalog = append(auth.Catalog, page.Catalog...)
 		auth.Pins = append(auth.Pins, page.Pins...)
 		auth.MetadataReceipts = append(auth.MetadataReceipts, page.MetadataReceipts...)
+		auth.OrphanCleanups = append(auth.OrphanCleanups, page.OrphanCleanups...)
 		return nil
 	})
 	return auth, err
+}
+
+func TestBackupAuthorityStageRetainsRepositoryUntilPureCommitRelease(t *testing.T) {
+	s := seedBackupMaster(t)
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source:   protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/backups"},
+		Identity: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/backups", FilesystemID: "test-nfs"}, MountPath: t.TempDir()}
+	if err := savePoolBackupRepositories(s, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
+		t.Fatal(err)
+	}
+	previousPrepare, previousVerify := prepareBackupRepositoryNative, verifyBackupRepository
+	defer func() { prepareBackupRepositoryNative, verifyBackupRepository = previousPrepare, previousVerify }()
+	calls := 0
+	prepareBackupRepositoryNative = func(_ context.Context, requested protocol.BackupRepository) (protocol.BackupRepository, error) {
+		calls++
+		requested.MountPath, requested.Identity = repo.MountPath, repo.Identity
+		return requested, nil
+	}
+	verifyBackupRepository = func(context.Context, protocol.BackupRepository) error { return nil }
+	root, _, release, err := stagePoolBackupAuthorityActivation(s, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{repo}}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	requested := repo
+	requested.Name, requested.MountPath, requested.Identity = "Renamed", "", nil
+	command := protocol.Command{OperationID: "register-after-stage", Kind: "backup-repository-register", BackupRepository: &requested}
+	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &command}); !errors.Is(response.Err, ErrBackupConflict) {
+		t.Fatalf("uncommitted activation admitted competing registration: %+v", response)
+	}
+	if _, err := prepareBackupRepositoryForAdoption(context.Background(), s, portablePeerRepository(repo), nil); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("live-host adoption bypassed staging reservation: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("competing request reached native mount: calls=%d", calls)
+	}
+	// An ambiguous activation releases only admission, never the staged tree.
+	release()
+	if _, err := os.Stat(filepath.Join(s.dir, root)); err != nil {
+		t.Fatalf("pure release destroyed staged authority: %v", err)
+	}
+	response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &command})
+	if response.Err != nil || response.Result == nil || response.Result.Status != "succeeded" {
+		t.Fatalf("released stage still excluded registration: %+v", response)
+	}
+	saved, err := GetPoolBackupRepository(s, repo.ID)
+	if err != nil || saved.Name != requested.Name {
+		t.Fatalf("registration did not commit after release: %+v %v", saved, err)
+	}
 }

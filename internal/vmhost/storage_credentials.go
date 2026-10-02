@@ -359,6 +359,12 @@ func releaseStorageCredential(stateDir string, s protocol.StorageRegistration) e
 // projection supplies attached=true while a repository still names the receipt, so a browser
 // request can never detach credentials from an active repository.
 func retireStorageCredential(stateDir, receipt, poolID, hostID string, attached bool) error {
+	return removeStorageCredential(stateDir, receipt, poolID, hostID, attached, false)
+}
+
+// Failed peer preparations discard the secret but preserve their generation-bound
+// replay binding. Browser handoffs and explicit retirements keep a permanent tombstone.
+func removeStorageCredential(stateDir, receipt, poolID, hostID string, attached, retryPoolPeer bool) error {
 	if !storageID.MatchString(receipt) || poolID == "" || hostID == "" {
 		return errors.New("storage credential receipt is invalid")
 	}
@@ -393,7 +399,7 @@ func retireStorageCredential(stateDir, receipt, poolID, hostID string, attached 
 		if stored.PoolID != poolID || stored.HostID != hostID {
 			return errors.New("storage credential receipt does not belong to this pool and host")
 		}
-		if stored.Status == "ready" {
+		if stored.Status == "ready" && !retryPoolPeer {
 			stored.Status = "retired"
 			retired, err := json.Marshal(stored)
 			if err != nil {

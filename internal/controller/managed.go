@@ -146,6 +146,8 @@ func (c *Controller) replayResource(w http.ResponseWriter, tx *sql.Tx, requestID
 			targetMatches = cmd.BackupRepository.ID == pool[1]
 		case cmd.VM != nil:
 			targetMatches = cmd.VM.ID == pool[1]
+		case cmd.ReleaseRetained != nil:
+			targetMatches = cmd.ReleaseRetained.VMID == pool[1]
 		case cmd.ForgetRepository != nil:
 			targetMatches = cmd.ForgetRepository.RepositoryID == pool[1]
 		case cmd.OrphanCleanup != nil:
@@ -1004,20 +1006,14 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 		rows.Close()
 	}
-	// An adopted needs_attention outcome the host no longer reports was settled there (an
-	// interrupted entry re-observed, or a pending command the restarted agent finished).
-	// Snapshot work requires explicit owner settlement; a missing observation proves nothing.
-	settled := []any{stamp(), host, "adopt-outcome:" + host + ":%"}
+	observed := make([]any, 0, len(m.Outcomes))
 	for _, o := range m.Outcomes {
-		settled = append(settled, "adopt-outcome:"+host+":"+o.OperationID)
-	}
-	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ("+settleExcludedKinds()+") AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
-		return err
+		observed = append(observed, "adopt-outcome:"+host+":"+o.OperationID)
 	}
 	// A Core-queued mirror stays dispatched only while Core reports it. Once Core has been
 	// silent for a grace period its outcome is unknown, not succeeded: flag it for the
 	// operator and leave the Core journal as the authority.
-	silent := append([]any{stamp(), host, "adopt-outcome:" + host + ":%", time.Now().UTC().Add(-adoptedQueuedGrace).Format(time.RFC3339Nano)}, settled[3:]...)
+	silent := append([]any{stamp(), host, "adopt-outcome:" + host + ":%", time.Now().UTC().Add(-adoptedQueuedGrace).Format(time.RFC3339Nano)}, observed...)
 	if _, err := tx.Exec("UPDATE operations SET status='needs_attention',error='Core no longer reports this queued operation; check the host history for its outcome',updated_at=? WHERE host_id=? AND status='dispatched' AND request_id LIKE ? AND updated_at<? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", silent...); err != nil {
 		return err
 	}
@@ -1047,17 +1043,22 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 				return err
 			}
 		}
-		// A still-queued outcome carries why Core is holding the work; show it on the task and clear it
-		// once Core stops reporting one. Only the reason text changes, never the status.
+		// Every matching queued observation refreshes the silence clock, even when
+		// Core's reason is unchanged. Observing queued work is not a settlement.
 		if knownOwnOperation && o.Status == "queued" {
-			if _, err = tx.Exec("UPDATE operations SET error=?,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status='dispatched' AND error<>?", clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind, clip(o.Error, 4096)); err != nil {
+			if _, err = tx.Exec("UPDATE operations SET error=?,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status IN ('queued','dispatched','needs_attention')", clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind); err != nil {
 				return err
 			}
 		}
 		// Adopted tasks are passive mirrors: only Core moves them, and they are never
 		// dispatched by this Controller. Terminal history must not regress to queued.
+		if known[requestID] && o.Status == "queued" {
+			if _, err = tx.Exec("UPDATE operations SET error=?,updated_at=? WHERE host_id=? AND kind=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", clip(o.Error, 4096), stamp(), host, o.Kind, requestID); err != nil {
+				return err
+			}
+		}
 		if known[requestID] && o.Status != "queued" {
-			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE host_id=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), host, requestID); err != nil {
+			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE host_id=? AND kind=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), host, o.Kind, requestID); err != nil {
 				return err
 			}
 		}
@@ -1127,11 +1128,6 @@ func backupOutcomeKind(kind string) bool { return slices.Contains(backupOutcomeK
 
 // adoptedQueuedGrace is how long Core may stay silent about a queued mirror before it needs attention.
 const adoptedQueuedGrace = 10 * time.Minute
-
-// settleExcludedKinds is the SQL list of kinds a missing host observation never settles.
-func settleExcludedKinds() string {
-	return "'" + strings.Join(append(slices.Clone(snapshotOutcomeKinds), backupOutcomeKinds...), "','") + "'"
-}
 
 // adoptAppliances rebuilds the appliances rows from the host's deploy journal. A row is
 // inserted when the host observes the VM through healthy libvirt; a row held by a revoked

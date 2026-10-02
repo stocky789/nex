@@ -48,8 +48,9 @@ func upsertTestBackupRepository(s *Store, repo protocol.BackupRepository) (proto
 	prepared.Identity = &protocol.NFSStorageIdentity{
 		Server: repo.Source.Server, Export: repo.Source.Export, FilesystemID: "test-nfs",
 	}
+	prepared = checkBackupRepositoryAccessForStore(context.Background(), s, prepared)
 	repo.MountPath = ""
-	return upsertPoolBackupRepositoryPrepared(s, repo, prepared, false)
+	return upsertPoolBackupRepositoryPrepared(s, repo, prepared, false, nil)
 }
 
 func seedBackupMaster(t *testing.T) *Store {

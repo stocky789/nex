@@ -808,13 +808,14 @@ func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protoc
 	// Backup repositories, policies, retained runs and catalog index land with the same
 	// activation: the survivor must not become master with empty backup authority while
 	// the signed replica still named those jobs (Campaign B).
-	backupRoot, rollbackBackup, err := stagePoolBackupAuthorityActivationPages(s, replica.BackupManifest, replica.Generation)
+	backupRoot, rollbackBackup, releaseBackup, err := stagePoolBackupAuthorityActivationPages(s, replica.BackupManifest, replica.Generation)
 	if err != nil {
 		poolVMMu.Lock()
 		_ = savePoolVMs(s, vmSnapshot)
 		poolVMMu.Unlock()
 		return nil, err
 	}
+	defer releaseBackup()
 	poolVMMu.Lock()
 	poolPeerMu.Lock()
 	state, err = loadPoolPeer(s)
@@ -882,6 +883,7 @@ func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protoc
 		}
 		return nil, errors.New("the pool master change could not be recorded durably")
 	}
+	releaseBackup()
 	if record.Stage == "catalog-rebuild" {
 		if err := reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx, s, record); err != nil {
 			return nil, err

@@ -193,6 +193,113 @@ func reconcileTerminalBackupRestorePins(s *Store) error {
 	return savePoolBackupPins(s, state)
 }
 
+type backupPointMetadataKey struct {
+	store, repositoryID, pointID string
+}
+
+// Reservations serialize marker changes without holding the authority mutex
+// during repository I/O. Retention and repository removal check them at admission.
+var backupPointMetadataReservations = map[backupPointMetadataKey]bool{}
+
+// The caller holds poolBackupAuthorityMu.
+func backupPointMetadataBusy(s *Store, repositoryID, pointID string) bool {
+	return backupPointMetadataReservations[backupPointMetadataKey{s.dir, repositoryID, pointID}]
+}
+
+// The caller holds poolBackupAuthorityMu.
+func backupRepositoryPointMetadataBusy(s *Store, repositoryID string) bool {
+	for key := range backupPointMetadataReservations {
+		if key.store == s.dir && key.repositoryID == repositoryID {
+			return true
+		}
+	}
+	return false
+}
+
+func reserveBackupPointMetadata(ctx context.Context, s *Store, repositoryID, pointID string) error {
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := masterBackupPool(s, s.State.PoolID); err != nil {
+		return err
+	}
+	if err := requirePoolAuthorityWritable(s); err != nil {
+		return err
+	}
+	key := backupPointMetadataKey{s.dir, repositoryID, pointID}
+	if poolBackupPruning[pointID] || backupPointMetadataReservations[key] {
+		return ErrBackupConflict
+	}
+	backupPointMetadataReservations[key] = true
+	return nil
+}
+
+func releaseBackupPointMetadata(s *Store, repositoryID, pointID string) {
+	poolBackupAuthorityMu.Lock()
+	delete(backupPointMetadataReservations, backupPointMetadataKey{s.dir, repositoryID, pointID})
+	poolBackupAuthorityMu.Unlock()
+}
+
+// The caller holds poolBackupAuthorityMu. Protection requests supply their new
+// choice; imports preserve the current choice, including a concurrent unprotect.
+// The second result reports whether the merged point already matches the catalog.
+func mergeBackupPointMetadata(s *Store, point protocol.BackupRecoveryPoint, preserveProtection bool) (protocol.BackupRecoveryPoint, bool, error) {
+	prior, err := getCatalogPoint(s, point.RepositoryID, point.ID)
+	if errors.Is(err, ErrBackupNotFound) {
+		return point, false, nil
+	}
+	if err != nil {
+		return point, false, err
+	}
+	if preserveProtection {
+		point.Protected = prior.Protected
+	}
+	if prior.LastTestResult != "" {
+		point.LastTestResult = prior.LastTestResult
+		point.LastTestedAt = prior.LastTestedAt
+		point.LastTestVMID = prior.LastTestVMID
+	}
+	return point, point == prior, nil
+}
+
+// The caller reserves the metadata and capacity-checks point. Verification may
+// still settle during marker/capacity I/O; re-admit any newer merged record.
+func commitBackupPointMetadata(ctx context.Context, s *Store, point protocol.BackupRecoveryPoint, preserveProtection bool) (protocol.BackupRecoveryPoint, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return point, err
+		}
+		poolBackupAuthorityMu.Lock()
+		err := masterBackupPool(s, s.State.PoolID)
+		if err == nil {
+			err = requirePoolAuthorityWritable(s)
+		}
+		var current protocol.BackupRecoveryPoint
+		if err == nil {
+			current, _, err = mergeBackupPointMetadata(s, point, preserveProtection)
+		}
+		if err == nil {
+			err = current.Valid()
+		}
+		if err != nil {
+			poolBackupAuthorityMu.Unlock()
+			return point, err
+		}
+		if current == point {
+			err = writePoolBackupCatalogEntry(s, current)
+			poolBackupAuthorityMu.Unlock()
+			return current, err
+		}
+		poolBackupAuthorityMu.Unlock()
+		if err := checkBackupCatalogPointCapacity(s, current); err != nil {
+			return point, err
+		}
+		point = current
+	}
+}
+
 // SetPoolBackupPointProtected updates catalog + repository protect marker.
 func SetPoolBackupPointProtected(s *Store, req protocol.ProtectRecoveryPointRequest) (protocol.BackupRecoveryPoint, error) {
 	if err := req.Valid(); err != nil {
@@ -218,52 +325,51 @@ func SetPoolBackupPointProtected(s *Store, req protocol.ProtectRecoveryPointRequ
 	if manifest.RecoveryPointID != req.RecoveryPointID || manifest.RepositoryID != req.RepositoryID || manifest.PoolID != s.State.PoolID {
 		return protocol.BackupRecoveryPoint{}, ErrBackupConflict
 	}
+	if err := reserveBackupPointMetadata(ctx, s, req.RepositoryID, req.RecoveryPointID); err != nil {
+		return protocol.BackupRecoveryPoint{}, err
+	}
+	defer releaseBackupPointMetadata(s, req.RepositoryID, req.RecoveryPointID)
 	poolBackupAuthorityMu.Lock()
-	defer poolBackupAuthorityMu.Unlock()
-	if err := requirePoolAuthorityWritable(s); err != nil {
-		return protocol.BackupRecoveryPoint{}, err
-	}
-	if poolBackupPruning[req.RecoveryPointID] {
-		return protocol.BackupRecoveryPoint{}, ErrBackupConflict
-	}
-	catalog, err := loadPoolBackupCatalog(s)
-	if err != nil {
-		return protocol.BackupRecoveryPoint{}, err
-	}
-	point := protocol.BackupRecoveryPoint{
-		ID: req.RecoveryPointID, RepositoryID: req.RepositoryID, PoolID: s.State.PoolID,
-		SourceVMID: manifest.SourceVMID, SourceVMName: manifest.SourceVMName,
-		CapturedAt: manifest.CapturedAt, Consistency: manifest.Consistency,
-		ManifestSHA256: digest, Protected: req.Protected,
-	}
-	for i := range catalog {
-		if catalog[i].ID == req.RecoveryPointID && catalog[i].RepositoryID == req.RepositoryID {
-			point = catalog[i]
-			point.Protected = req.Protected
-			break
+	point, err := getCatalogPoint(s, req.RepositoryID, req.RecoveryPointID)
+	poolBackupAuthorityMu.Unlock()
+	if errors.Is(err, ErrBackupNotFound) {
+		point = protocol.BackupRecoveryPoint{
+			ID: req.RecoveryPointID, RepositoryID: req.RepositoryID, PoolID: s.State.PoolID,
+			SourceVMID: manifest.SourceVMID, SourceVMName: manifest.SourceVMName,
+			CapturedAt: manifest.CapturedAt, Consistency: manifest.Consistency,
+			ManifestSHA256: digest,
 		}
+	} else if err != nil {
+		return protocol.BackupRecoveryPoint{}, err
 	}
+	point.Protected = req.Protected
 	if err := checkBackupCatalogPointCapacity(s, point); err != nil {
 		return protocol.BackupRecoveryPoint{}, err
 	}
 	if err := backend.SetProtected(ctx, req.RecoveryPointID, req.Protected); err != nil {
 		return protocol.BackupRecoveryPoint{}, err
 	}
-	if err := savePoolBackupCatalogEntry(s, point); err != nil {
-		return protocol.BackupRecoveryPoint{}, err
-	}
-	return point, nil
+	return commitBackupPointMetadata(ctx, s, point, false)
 }
 
 func getCatalogPoint(s *Store, repositoryID, pointID string) (protocol.BackupRecoveryPoint, error) {
-	catalog, err := loadPoolBackupCatalog(s)
+	if !protocol.ValidSnapshotOperationID(repositoryID) || !protocol.ValidSnapshotOperationID(pointID) {
+		return protocol.BackupRecoveryPoint{}, ErrBackupInvalid
+	}
+	raw, err := readBoundedPoolBackupFile(filepath.Join(poolBackupCatalogPath(s), pointID+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return protocol.BackupRecoveryPoint{}, ErrBackupNotFound
+	}
 	if err != nil {
 		return protocol.BackupRecoveryPoint{}, err
 	}
-	for _, point := range catalog {
-		if point.ID == pointID && point.RepositoryID == repositoryID {
-			return point, nil
-		}
+	var point protocol.BackupRecoveryPoint
+	if len(raw) > protocol.PoolBackupPageLimit || json.Unmarshal(raw, &point) != nil ||
+		point.Valid() != nil || point.ID != pointID || point.PoolID != s.State.PoolID {
+		return protocol.BackupRecoveryPoint{}, errors.New("backup catalog entry is corrupt")
 	}
-	return protocol.BackupRecoveryPoint{}, ErrBackupNotFound
+	if point.RepositoryID != repositoryID {
+		return protocol.BackupRecoveryPoint{}, ErrBackupNotFound
+	}
+	return point, nil
 }

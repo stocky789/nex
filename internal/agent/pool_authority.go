@@ -786,11 +786,6 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	if err = verifyPoolAuthorityReplica(state.CAPEM, replica); err != nil {
 		return protocol.PoolReplicaAck{}, err
 	}
-	if replica.BackupManifest != nil {
-		if err = walkPoolBackupAuthorityPages(s, replica.BackupManifest, nil); err != nil {
-			return protocol.PoolReplicaAck{}, errors.New("pool authority replica backup pages are incomplete or invalid")
-		}
-	}
 	var localSanlockGeneration uint64
 	if replica.Membership.StorageLease != nil {
 		localSanlockGeneration, err = preparePoolStorageLeaseHost(context.Background(), s, replica.Membership, false)
@@ -804,6 +799,13 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	}
 	poolReplicaMu.Lock()
 	defer poolReplicaMu.Unlock()
+	poolBackupBlobMu.Lock()
+	defer poolBackupBlobMu.Unlock()
+	if replica.BackupManifest != nil {
+		if err = walkPoolBackupAuthorityPages(s, replica.BackupManifest, nil); err != nil {
+			return protocol.PoolReplicaAck{}, errors.New("pool authority replica backup pages are incomplete or invalid")
+		}
+	}
 	current, err := loadPoolReplica(s)
 	if err != nil {
 		return protocol.PoolReplicaAck{}, errors.New("stored pool authority replica is unavailable")
@@ -898,9 +900,11 @@ func PoolBackupPageHandler(s *Store) http.Handler {
 			openPoolBackupPushSession(s, w, master.HostID, *upload.Replica)
 			return
 		}
+		poolReplicaMu.Lock()
+		defer poolReplicaMu.Unlock()
 		poolBackupPushSessionMu.Lock()
+		defer poolBackupPushSessionMu.Unlock()
 		session, ok := poolBackupPushSessions[s.dir]
-		poolBackupPushSessionMu.Unlock()
 		if !ok || session.manifest.SHA256 != upload.ManifestSHA256 || session.masterHostID != master.HostID || !time.Now().Before(session.expires) {
 			http.Error(w, "backup authority push session is not open", http.StatusConflict)
 			return
@@ -915,15 +919,14 @@ func PoolBackupPageHandler(s *Store) http.Handler {
 			http.Error(w, "backup authority page digest does not match", http.StatusBadRequest)
 			return
 		}
-		poolReplicaMu.Lock()
 		current, err := loadPoolReplicaUnchecked(s)
-		poolReplicaMu.Unlock()
 		if err != nil || (current != nil && session.generation < current.Replica.Generation) {
 			http.Error(w, "backup authority page generation is stale", http.StatusConflict)
 			return
 		}
 		path := poolBackupPageFile(s, m.SHA256, upload.Index)
 		poolBackupBlobMu.Lock()
+		defer poolBackupBlobMu.Unlock()
 		hash := upload.ReuseSHA256
 		if hash == "" {
 			hash, err = storePoolBackupBlob(s, upload.Data)
@@ -931,7 +934,6 @@ func PoolBackupPageHandler(s *Store) http.Handler {
 		if err == nil {
 			err = linkPoolBackupBlob(s, hash, path)
 		}
-		poolBackupBlobMu.Unlock()
 		if (errors.Is(err, os.ErrNotExist) || errors.Is(err, errPoolBackupBlobCorrupt)) && upload.ReuseSHA256 != "" {
 			http.Error(w, "backup authority page blob is unavailable", http.StatusNotFound)
 			return
@@ -941,12 +943,8 @@ func PoolBackupPageHandler(s *Store) http.Handler {
 			return
 		}
 		// Each accepted page extends the session, so a slow push is not cut off mid-way.
-		poolBackupPushSessionMu.Lock()
-		if current, ok := poolBackupPushSessions[s.dir]; ok && current.manifest.SHA256 == m.SHA256 {
-			current.expires = time.Now().Add(poolBackupPushSessionTTL)
-			poolBackupPushSessions[s.dir] = current
-		}
-		poolBackupPushSessionMu.Unlock()
+		session.expires = time.Now().Add(poolBackupPushSessionTTL)
+		poolBackupPushSessions[s.dir] = session
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
@@ -972,7 +970,11 @@ func openPoolBackupPushSession(s *Store, w http.ResponseWriter, masterHostID str
 	}
 	poolReplicaMu.Lock()
 	current, err := loadPoolReplicaUnchecked(s)
-	poolReplicaMu.Unlock()
+	defer poolReplicaMu.Unlock()
+	poolBackupPushSessionMu.Lock()
+	defer poolBackupPushSessionMu.Unlock()
+	poolBackupBlobMu.Lock()
+	defer poolBackupBlobMu.Unlock()
 	if err != nil || (current != nil && replica.Generation < current.Replica.Generation) {
 		http.Error(w, "backup authority page generation is stale", http.StatusConflict)
 		return
@@ -993,12 +995,10 @@ func openPoolBackupPushSession(s *Store, w http.ResponseWriter, masterHostID str
 		}
 	}
 	if next == m.PageCount {
-		poolBackupBlobMu.Lock()
 		verifyErr := verifyPoolBackupAuthorityPages(s, m)
 		var readErr *fs.PathError
 		if errors.As(verifyErr, &readErr) {
 			// A failed read is not evidence the staged root is wrong.
-			poolBackupBlobMu.Unlock()
 			http.Error(w, "backup authority staging could not be read", http.StatusInternalServerError)
 			return
 		}
@@ -1006,16 +1006,13 @@ func openPoolBackupPushSession(s *Store, w http.ResponseWriter, masterHostID str
 			err = os.RemoveAll(filepath.Join(s.dir, poolBackupPageDir, m.SHA256))
 			next = 0
 		}
-		poolBackupBlobMu.Unlock()
 		if err != nil {
 			http.Error(w, "invalid backup authority staging could not be cleared", http.StatusInternalServerError)
 			return
 		}
 	}
-	poolBackupPushSessionMu.Lock()
 	poolBackupPushSessions[s.dir] = poolBackupPushSession{manifest: m, masterHostID: masterHostID,
 		generation: replica.Generation, expires: time.Now().Add(poolBackupPushSessionTTL)}
-	poolBackupPushSessionMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(poolBackupPageProgress{NextIndex: next})
 }

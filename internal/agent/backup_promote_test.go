@@ -97,10 +97,11 @@ func TestAdoptEmptyBackupAuthorityRemovesStaleRecords(t *testing.T) {
 	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{"pol-1": testPolicy()}}); err != nil {
 		t.Fatal(err)
 	}
-	root, rollback, err := stagePoolBackupAuthorityActivation(s, nil, 1)
+	root, rollback, release, err := stagePoolBackupAuthorityActivation(s, nil, 1)
 	if err != nil || rollback == nil {
 		t.Fatalf("stage empty authority: rollback=%v err=%v", rollback != nil, err)
 	}
+	defer release()
 	peer := peerState(t, s)
 	peer.BackupActiveRoot = root
 	if err := savePoolPeer(s, peer); err != nil {
@@ -354,16 +355,18 @@ func TestAdoptPoolBackupAuthorityAndRebuildFromMount(t *testing.T) {
 	if err := auth.Valid(); err != nil {
 		t.Fatal(err)
 	}
-	root, rollback, err := stagePoolBackupAuthorityActivation(s, auth, 1)
+	root, rollback, release, err := stagePoolBackupAuthorityActivation(s, auth, 1)
 	if err != nil || rollback == nil {
 		t.Fatalf("stage: rollback=%v err=%v", rollback != nil, err)
 	}
+	defer release()
 	peer := peerState(t, s)
 	previousRoot := peer.BackupActiveRoot
 	peer.BackupActiveRoot = root
 	if err := savePoolPeer(s, peer); err != nil {
 		t.Fatal(err)
 	}
+	release()
 	_ = reconcilePoolBackupCatalogAfterAuthorityAdopt(context.Background(), s, &poolTransferRecord{})
 	catalog, err := loadPoolBackupCatalog(s)
 	if err != nil || len(catalog) != 1 || catalog[0].ID != "point-rebuild" {
@@ -449,10 +452,11 @@ func TestStageActivationContinuesPastUnreachableRepository(t *testing.T) {
 	bad := protocol.BackupRepository{ID: "repo-bad", PoolID: "pool-1", Name: "Bad", Kind: protocol.BackupRepoKindNFS,
 		Source:   protocol.NFSStorageSource{Server: "nfs.down.test", Export: "/export/bad"},
 		Identity: &protocol.NFSStorageIdentity{Server: "nfs.down.test", Export: "/export/bad", FilesystemID: "test-nfs-bad"}}
-	root, _, err := stagePoolBackupAuthorityActivation(s, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{ok, bad}}, 4)
+	root, _, release, err := stagePoolBackupAuthorityActivation(s, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{ok, bad}}, 4)
 	if err != nil {
 		t.Fatalf("one unreachable repository blocked staging: %v", err)
 	}
+	defer release()
 	adopted, err := loadPoolBackupRepositories(&Store{dir: filepath.Join(s.dir, root)})
 	if err != nil {
 		t.Fatal(err)
@@ -477,10 +481,11 @@ func TestPromotionAdoptsUnreachableRepository(t *testing.T) {
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
 		Source:   protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
 		Identity: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/backups", FilesystemID: "test-nfs"}}
-	root, _, err := stagePoolBackupAuthorityActivation(s, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{repo}}, 3)
+	root, _, release, err := stagePoolBackupAuthorityActivation(s, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{repo}}, 3)
 	if err != nil {
 		t.Fatalf("unreachable repository blocked promotion: %v", err)
 	}
+	defer release()
 	adopted, err := loadPoolBackupRepositories(&Store{dir: filepath.Join(s.dir, root)})
 	got := adopted.Repositories[repo.ID]
 	if err != nil || got.Access.Status != "failed" || got.Health.Status != "offline" || got.MountPath != "" {
@@ -489,6 +494,7 @@ func TestPromotionAdoptsUnreachableRepository(t *testing.T) {
 	if err := savePoolBackupRepositories(s, adopted); err != nil {
 		t.Fatal(err)
 	}
+	release()
 	record := &poolTransferRecord{OperationID: "promote-unreachable", Action: "promote", Role: "candidate", Stage: "catalog-rebuild", TargetHostID: s.State.HostID}
 	if err := savePoolTransfer(s, record); err != nil {
 		t.Fatal(err)

@@ -51,6 +51,8 @@ type fakeS3 struct {
 	failFirmwareDeleteOnce     bool
 	ignoreConditionalDelete    bool
 	failOwnerGetAfterPut       bool
+	loseOwnerReply             bool
+	cancelOwnerPut             context.CancelFunc
 	blockManifestPutOnce       atomic.Bool
 	finalWinsTombstoneOnce     atomic.Bool
 	manifestPutEntered         chan struct{}
@@ -209,6 +211,13 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		f.objects[key] = body
+		if (strings.HasSuffix(key, "/"+s3BackupOwnerKey) || key == s3BackupOwnerKey) && f.loseOwnerReply {
+			f.loseOwnerReply = false
+			if f.cancelOwnerPut != nil {
+				f.cancelOwnerPut()
+			}
+			panic(http.ErrAbortHandler)
+		}
 		if strings.HasSuffix(key, "/manifest.json") && f.loseManifestReply {
 			f.loseManifestReply = false
 			f.failManifestGetOnce = true
@@ -497,22 +506,24 @@ func TestS3CoreRegistrationAndTestUsePrivateReceipt(t *testing.T) {
 	}
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Test", Kind: protocol.BackupRepoKindS3,
 		S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: "pool-1"}, CredentialRef: receipt.Receipt}
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "wrong-operation", ""); err == nil {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "wrong-operation", "", nil); err == nil {
 		t.Fatal("wrong registration operation resolved private credential")
 	}
-	prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1", "")
+	prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1", "", nil)
 	if err != nil || prepared.RemoteIdentity == nil {
 		t.Fatalf("prepare: %#v %v", prepared.RemoteIdentity, err)
 	}
 	if !preparedBackupRepositoryMatches(repo, prepared) {
 		t.Fatal("prepared S3 identity rejected")
 	}
-	saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared, false)
+	saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared, false, nil)
 	if err != nil || saved.RemoteIdentity == nil || saved.MountPath != "" {
 		t.Fatalf("save: %#v %v", saved, err)
 	}
-	if listed, err := ListPoolBackupRepositories(s); err != nil || len(listed) != 1 || listed[0].Health.Status != "online" {
-		t.Fatalf("health right after registration: %#v %v", listed, err)
+	if listed, err := ListPoolBackupRepositories(s); err != nil || len(listed) != 1 ||
+		listed[0].Health.Status != "online" || listed[0].Access.Status != "ok" ||
+		!listed[0].Access.Readable || !listed[0].Access.Writable {
+		t.Fatalf("health and access right after registration: %#v %v", listed, err)
 	}
 	backend, err := openBackupRepositoryStorage(s, saved)
 	if err != nil || backend.Verify(context.Background()) != nil {
@@ -524,11 +535,11 @@ func TestS3CoreRegistrationAndTestUsePrivateReceipt(t *testing.T) {
 	if checked, err := TestPoolBackupRepositoryAccess(s, saved.ID); err != nil || checked.Access.Status != "ok" {
 		t.Fatalf("test access: %#v %v", checked.Access, err)
 	}
-	replayed, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1", "")
+	replayed, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1", "", nil)
 	if err != nil || *replayed.RemoteIdentity != *saved.RemoteIdentity {
 		t.Fatalf("exact replay: %#v %v", replayed.RemoteIdentity, err)
 	}
-	adopted, err := prepareBackupRepositoryForAdoption(context.Background(), s, saved)
+	adopted, err := prepareBackupRepositoryForAdoption(context.Background(), s, saved, nil)
 	if err != nil || !preparedBackupRepositoryMatches(saved, adopted) {
 		t.Fatalf("adoption: %#v %v", adopted, err)
 	}
@@ -1245,6 +1256,148 @@ func testS3Registration(t *testing.T, prefix string) (*Store, *fakeS3, protocol.
 
 var testS3Credential = protocol.StorageCredentials{Username: "test-key", Secret: "test-secret"}
 
+func TestS3RunRegistrationSerializesClaimCleanupAndCommit(t *testing.T) {
+	s := seedBackupMaster(t)
+	fake := &fakeS3{objects: map[string][]byte{}}
+	putEntered, releasePut := make(chan struct{}), make(chan struct{})
+	cleanupEntered, releaseCleanup := make(chan struct{}), make(chan struct{})
+	var firstPut, cleanupPending atomic.Bool
+	firstPut.Store(true)
+	var releasePutOnce, releaseCleanupOnce sync.Once
+	unblock := func() {
+		releasePutOnce.Do(func() { close(releasePut) })
+		releaseCleanupOnce.Do(func() { close(releaseCleanup) })
+	}
+	defer unblock()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/"+s3BackupOwnerKey) {
+			if r.Method == http.MethodPut && firstPut.CompareAndSwap(true, false) {
+				close(putEntered)
+				<-releasePut
+				cleanupPending.Store(true)
+				s3TestError(w, http.StatusBadRequest, "InvalidRequest")
+				return
+			}
+			if r.Method == http.MethodGet && cleanupPending.CompareAndSwap(true, false) {
+				close(cleanupEntered)
+				<-releaseCleanup
+			}
+		}
+		fake.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	previous := newBackupS3Client
+	newBackupS3Client = func(options s3.Options) *s3.Client {
+		options.HTTPClient = server.Client()
+		return s3.New(options)
+	}
+	defer func() { newBackupS3Client = previous }()
+	command := func(operationID string) protocol.Command {
+		receipt, err := saveBackupCredential(s, protocol.StorageCredentialHandoff{
+			Offer: protocol.StorageCredentialOffer{RequestID: "credential-" + operationID,
+				RegistrationRequestID: "backup-credential:s3:" + operationID, PoolID: s.State.PoolID,
+				HostID: s.State.HostID, RepositoryID: "repo-1", ExpiresAt: time.Now().Add(time.Minute)},
+			Credentials: testS3Credential,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Test", Kind: protocol.BackupRepoKindS3,
+			S3Source:      &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: "pool-1"},
+			CredentialRef: receipt.Receipt}
+		return protocol.Command{OperationID: operationID, Kind: "backup-repository-register", BackupRepository: &repo}
+	}
+	first, second := command("register-first"), command("register-second")
+	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{first}}); err != nil {
+		t.Fatal(err)
+	}
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(protocol.ReportResponse{})
+	}))
+	s.State.Controller, s.State.TrustPEM = identity.Controller, identity.TrustPEM
+	s.State.CertificatePEM, s.State.KeyPEM = identity.CertificatePEM, identity.KeyPEM
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	requests, done := make(chan BackupRequest), make(chan error, 1)
+	go func() {
+		done <- Run(ctx, s, RunConfig{Heartbeat: time.Hour, ProbeInterval: time.Hour,
+			ProbeTimeout: 20 * time.Millisecond, BackupRequests: requests})
+	}()
+	stopped := false
+	defer func() {
+		unblock()
+		cancel()
+		if !stopped {
+			if err := <-done; err != nil {
+				t.Errorf("Core Run stopped: %v", err)
+			}
+		}
+	}()
+	waitFor := func(entered <-chan struct{}) {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("registration did not reach the controlled claim stage")
+		}
+	}
+	registerSecond := func() BackupResponse {
+		reply := make(chan BackupResponse, 1)
+		select {
+		case requests <- BackupRequest{Command: &second, Reply: reply}:
+		case <-ctx.Done():
+			t.Fatal("registration request was not accepted")
+		}
+		select {
+		case response := <-reply:
+			return response
+		case <-ctx.Done():
+			t.Fatal("registration request did not finish")
+			return BackupResponse{}
+		}
+	}
+	waitFor(putEntered)
+	if response := registerSecond(); !errors.Is(response.Err, ErrBackupConflict) {
+		t.Fatalf("overlapping repository claim was admitted: %+v", response)
+	}
+	releasePutOnce.Do(func() { close(releasePut) })
+	waitFor(cleanupEntered)
+	if response := registerSecond(); !errors.Is(response.Err, ErrBackupConflict) {
+		t.Fatalf("repository mutation was released before claim cleanup stopped: %+v", response)
+	}
+	releaseCleanupOnce.Do(func() { close(releaseCleanup) })
+	for {
+		response := runLoopPeerRequest(t, ctx, s, done, BackupRequest{OperationID: first.OperationID})
+		if response.Result != nil && response.Result.Status == "failed" {
+			break
+		}
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal("failed claim did not settle")
+		}
+	}
+	response := registerSecond()
+	if response.Err != nil || response.Result == nil || response.Result.Status != "succeeded" || response.Repository == nil {
+		t.Fatalf("completed cleanup still excluded registration: %+v", response)
+	}
+	cancel()
+	runErr := <-done
+	stopped = true
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	saved, err := GetPoolBackupRepository(s, "repo-1")
+	if err != nil || saved.CredentialRef != second.BackupRepository.CredentialRef {
+		t.Fatalf("successful registration was not committed: %+v %v", saved, err)
+	}
+	backend, err := newS3BackupStorageWithCredential(s, saved, testS3Credential)
+	if err != nil || backend.Verify(context.Background()) != nil {
+		t.Fatalf("a failed preparation removed the committed owner: %v", err)
+	}
+}
+
 // Regression for BUG-0720: a registration refused by its probe releases the
 // prefix, so the corrected retry (with a new repository ID) can claim it.
 func TestS3RefusedRegistrationReleasesOwner(t *testing.T) {
@@ -1288,6 +1441,150 @@ func TestS3ClaimWriteReadFailReleasesOwner(t *testing.T) {
 	repo.ID = "repo-2"
 	if _, err := prepareS3BackupRepository(ctx, s, repo, testS3Credential); err != nil {
 		t.Fatalf("corrected registration refused: %v", err)
+	}
+}
+
+func TestS3AmbiguousClaimReleasesOwnerForCorrectedRegistration(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		name := "lost-response"
+		if cancelled {
+			name = "cancelled-response"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, fake, repo := testS3Registration(t, "pool-1")
+			previous := newBackupS3Client
+			newBackupS3Client = func(options s3.Options) *s3.Client {
+				options.RetryMaxAttempts = 1
+				return previous(options)
+			}
+			t.Cleanup(func() { newBackupS3Client = previous })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fake.loseOwnerReply = true
+			if cancelled {
+				fake.cancelOwnerPut = cancel
+			}
+			_, err := prepareS3BackupRepository(ctx, s, repo, testS3Credential)
+			if err == nil || cancelled && !errors.Is(err, context.Canceled) {
+				t.Fatalf("ambiguous registration outcome: %v", err)
+			}
+			key := "pool-1/" + s3BackupOwnerKey
+			fake.mu.Lock()
+			_, owned := fake.objects[key]
+			fake.mu.Unlock()
+			if owned {
+				t.Fatal("ambiguous failed registration kept its committed owner")
+			}
+			repo.ID = "repo-2"
+			if _, err := prepareS3BackupRepository(context.Background(), s, repo, testS3Credential); err != nil {
+				t.Fatalf("corrected new-ID registration refused: %v", err)
+			}
+			storage, err := newS3BackupStorageWithCredential(s, repo, testS3Credential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if !bytes.Equal(fake.objects[key], storage.ownerBytes()) {
+				t.Fatal("corrected registration did not acquire its exact owner")
+			}
+		})
+	}
+}
+
+func TestS3AmbiguousClaimKeepsCompetingOrUnreadableOwner(t *testing.T) {
+	for _, race := range []string{"competing-before-read", "competing-before-delete", "read-denied"} {
+		t.Run(race, func(t *testing.T) {
+			s, fake, repo := testS3Registration(t, "pool-1")
+			storage, err := newS3BackupStorageWithCredential(s, repo, testS3Credential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := storage.key(s3BackupOwnerKey)
+			expected := storage.ownerBytes()
+			if race != "read-denied" {
+				storage.repo.ID = "repo-other"
+				expected = storage.ownerBytes()
+			}
+			var putStarted atomic.Bool
+			fake.onRequest = func(r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/"+s3BackupOwnerKey) {
+					return
+				}
+				if r.Method == http.MethodPut {
+					putStarted.Store(true)
+				}
+				if race == "competing-before-read" && r.Method == http.MethodGet && putStarted.CompareAndSwap(true, false) ||
+					race == "competing-before-delete" && r.Method == http.MethodDelete {
+					fake.mu.Lock()
+					fake.objects[key] = expected
+					fake.mu.Unlock()
+				}
+			}
+			fake.failOwnerGetAfterPut = race == "read-denied"
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fake.loseOwnerReply, fake.cancelOwnerPut = true, cancel
+			_, err = prepareS3BackupRepository(ctx, s, repo, testS3Credential)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("original cancelled outcome lost: %v", err)
+			}
+			switch race {
+			case "competing-before-read":
+				if !errors.Is(err, ErrBackupConflict) {
+					t.Fatalf("competing owner was not reported: %v", err)
+				}
+			case "competing-before-delete":
+				if !isS3Precondition(err) {
+					t.Fatalf("owner replacement during cleanup was not reported: %v", err)
+				}
+			case "read-denied":
+				if !isS3Code(err, "AccessDenied") {
+					t.Fatalf("failed reconciliation read was not reported: %v", err)
+				}
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if !bytes.Equal(fake.objects[key], expected) {
+				t.Fatal("reconciliation removed a competing or unreadable owner")
+			}
+		})
+	}
+}
+
+func TestS3RegistrationDoesNotReleaseACompetingClaim(t *testing.T) {
+	for _, sameOwner := range []bool{false, true} {
+		name := "different-repository"
+		if sameOwner {
+			name = "same-repository"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, fake, repo := testS3Registration(t, "pool-1")
+			storage, err := newS3BackupStorageWithCredential(s, repo, testS3Credential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameOwner {
+				storage.repo.ID = "repo-other"
+			}
+			key, owner := storage.key(s3BackupOwnerKey), storage.ownerBytes()
+			fake.onRequest = func(r *http.Request) {
+				if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/"+s3BackupOwnerKey) {
+					fake.mu.Lock()
+					fake.objects[key] = owner
+					fake.mu.Unlock()
+				}
+			}
+			fake.ignoreConditionalDelete = true
+			if _, err := prepareS3BackupRepository(context.Background(), s, repo, testS3Credential); err == nil {
+				t.Fatal("registration accepted a competing owner or an unsafe delete profile")
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if !bytes.Equal(fake.objects[key], owner) {
+				t.Fatal("failed registration released another attempt's owner claim")
+			}
+		})
 	}
 }
 
@@ -1539,11 +1836,11 @@ func TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced(t *
 		}
 		repo := protocol.BackupRepository{ID: id, PoolID: s.State.PoolID, Name: id, Kind: protocol.BackupRepoKindS3,
 			S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: prefix}, CredentialRef: receipt.Receipt}
-		prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, request, "")
+		prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, request, "", nil)
 		if err != nil {
 			t.Fatalf("prepare %s: %v", id, err)
 		}
-		saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared, false)
+		saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared, false, nil)
 		if err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
@@ -1575,17 +1872,118 @@ func TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced(t *
 	// Replacing a credential this host can still read stays refused.
 	swapped := good
 	swapped.CredentialRef = "someone-elses-receipt"
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, swapped, "register-3", ""); !errors.Is(err, ErrBackupCredentialInUse) {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, swapped, "register-3", "", nil); !errors.Is(err, ErrBackupCredentialInUse) {
 		t.Fatalf("readable credential was replaced: %v", err)
 	}
 	recovered := register("a-broken", "one", "register-4")
 	if recovered.CredentialRef == broken.CredentialRef || *recovered.RemoteIdentity != *broken.RemoteIdentity || !recovered.CreatedAt.Equal(broken.CreatedAt) {
 		t.Fatalf("recovery changed identity: %+v", recovered)
 	}
+	if recovered.LastHealthTransition == nil || recovered.LastHealthTransition.Status != "recovered" ||
+		!recovered.LastHealthTransition.At.Equal(recovered.Health.ObservedAt) {
+		t.Fatalf("credential recovery did not retain the authenticated health transition: %+v", recovered.LastHealthTransition)
+	}
 	if err := probePoolBackupRepositories(context.Background(), s, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if h := health("a-broken"); h.Status != "online" {
 		t.Fatalf("recovered repository health = %+v", h)
+	}
+}
+
+func TestS3LocalRegistrationSerializesAmbiguousClaimCleanup(t *testing.T) {
+	s := seedBackupMaster(t)
+	fake := &fakeS3{objects: map[string][]byte{}}
+	putEntered, releasePut := make(chan struct{}), make(chan struct{})
+	cleanupEntered, releaseCleanup := make(chan struct{}), make(chan struct{})
+	var firstPut, cleanupPending atomic.Bool
+	firstPut.Store(true)
+	var putOnce, cleanupOnce sync.Once
+	unblock := func() {
+		putOnce.Do(func() { close(releasePut) })
+		cleanupOnce.Do(func() { close(releaseCleanup) })
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/"+s3BackupOwnerKey) {
+			if r.Method == http.MethodPut && firstPut.CompareAndSwap(true, false) {
+				close(putEntered)
+				<-releasePut
+				cleanupPending.Store(true)
+				s3TestError(w, http.StatusBadRequest, "InvalidRequest")
+				return
+			}
+			if r.Method == http.MethodGet && cleanupPending.CompareAndSwap(true, false) {
+				close(cleanupEntered)
+				<-releaseCleanup
+			}
+		}
+		fake.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	defer unblock()
+	previous := newBackupS3Client
+	newBackupS3Client = func(options s3.Options) *s3.Client {
+		options.HTTPClient = server.Client()
+		return s3.New(options)
+	}
+	defer func() { newBackupS3Client = previous }()
+	command := func(id string) protocol.Command {
+		receipt, err := saveBackupCredential(s, protocol.StorageCredentialHandoff{
+			Offer: protocol.StorageCredentialOffer{RequestID: "credential-" + id,
+				RegistrationRequestID: "backup-credential:s3:" + id, PoolID: s.State.PoolID,
+				HostID: s.State.HostID, RepositoryID: "repo-1", ExpiresAt: time.Now().Add(time.Minute)},
+			Credentials: testS3Credential,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Cloud", Kind: protocol.BackupRepoKindS3,
+			S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: "pool-1"}, CredentialRef: receipt.Receipt}
+		return protocol.Command{OperationID: id, Kind: "backup-repository-register", BackupRepository: &repo}
+	}
+	first, second := command("register-first"), command("register-second")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	done := make(chan BackupResponse, 1)
+	go func() { done <- acceptBackupRequest(ctx, s, BackupRequest{Command: &first}) }()
+	finished := false
+	defer func() {
+		unblock()
+		if !finished {
+			<-done
+		}
+	}()
+	waitFor := func(stage <-chan struct{}) {
+		select {
+		case <-stage:
+		case <-ctx.Done():
+			t.Fatal("registration did not reach controlled native stage")
+		}
+	}
+	waitFor(putEntered)
+	if response := acceptBackupRequest(ctx, s, BackupRequest{Command: &second}); !errors.Is(response.Err, ErrBackupConflict) {
+		t.Fatalf("competing claim was admitted: %+v", response)
+	}
+	putOnce.Do(func() { close(releasePut) })
+	waitFor(cleanupEntered)
+	if response := acceptBackupRequest(ctx, s, BackupRequest{Command: &second}); !errors.Is(response.Err, ErrBackupConflict) {
+		t.Fatalf("competing claim was admitted before cleanup stopped: %+v", response)
+	}
+	cleanupOnce.Do(func() { close(releaseCleanup) })
+	failure := <-done
+	finished = true
+	if failure.Result == nil || failure.Result.Status != "failed" {
+		t.Fatalf("ambiguous noncommitting claim outcome: %+v", failure)
+	}
+	response := acceptBackupRequest(ctx, s, BackupRequest{Command: &second})
+	if response.Err != nil || response.Result == nil || response.Result.Status != "succeeded" || response.Repository == nil {
+		t.Fatalf("completed cleanup did not release repository: %+v", response)
+	}
+	backend, err := newS3BackupStorageWithCredential(s, *response.Repository, testS3Credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Verify(ctx); err != nil {
+		t.Fatalf("failed claim removed successful owner: %v", err)
 	}
 }

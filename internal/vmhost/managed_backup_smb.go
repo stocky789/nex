@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ import (
 )
 
 // backupSMBCredentialRoot holds one root-only mount.cifs credentials file per credential reference. The
-// mount unit decrypts it itself, so the repository remounts after a reboot without Core.
+// mount unit reads it itself, so the repository remounts after a reboot without Core.
 var backupSMBCredentialRoot = "/var/lib/nex-core-agent/backup-smb-credentials"
 
 var backupSMBPrepareMu sync.Mutex
@@ -42,33 +43,37 @@ func PrepareBackupRepositorySMB(ctx context.Context, repo protocol.BackupReposit
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
+	backupSMBPrepareMu.Lock()
+	defer backupSMBPrepareMu.Unlock()
 	registration := backupStorageRegistration(repo)
 	if err := checkExistingBackupRepositoryOwner(filepath.Join(remoteMountPath(registration), repo.SMBSource.Directory), repo.ID, repo.PoolID); err != nil {
 		return protocol.BackupRepository{}, err
 	}
 	root, path := backupSMBCredentialRoot, filepath.Join(backupSMBCredentialRoot, repo.CredentialRef)
-	_, unitPath := remoteUnitPath(registration)
-	mounted := false
-	if unit, err := os.ReadFile(unitPath); err == nil {
-		if strings.HasPrefix(string(unit), nexMountMarker) && unitHasSMBCredential(unit, path) {
-			mounted = true
-		} else {
-			// Another credential reference replaces the old one, as when the credential key
-			// was lost and the repository is registered again: drop the old mount and its file.
-			if err := detachRemote(ctx, registration); err != nil {
-				return protocol.BackupRepository{}, err
-			}
-			if _, rest, ok := strings.Cut(string(unit), ",credentials="); ok {
-				if old, _, _ := strings.Cut(rest, ","); filepath.Dir(old) == root {
-					_ = os.Remove(old)
-				}
-			}
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	unit, unitPath := remoteUnitPath(registration)
+	oldUnit, err := os.ReadFile(unitPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return protocol.BackupRepository{}, err
 	}
-	backupSMBPrepareMu.Lock()
-	defer backupSMBPrepareMu.Unlock()
+	replacing := err == nil && !unitHasSMBCredential(oldUnit, path)
+	if err == nil && !strings.HasPrefix(string(oldUnit), nexMountMarker) {
+		return protocol.BackupRepository{}, errors.New("refusing to replace an existing mount unit")
+	}
+	if replacing {
+		_, rest, ok := strings.Cut(string(oldUnit), ",credentials=")
+		oldPath, _, _ := strings.Cut(rest, ",")
+		if !ok || filepath.Dir(oldPath) != root || !protocol.ValidSnapshotOperationID(filepath.Base(oldPath)) {
+			return protocol.BackupRepository{}, errors.New("previous backup repository SMB credential scope is invalid")
+		}
+		previous := registration
+		previous.CredentialReceipt = filepath.Base(oldPath)
+		if _, err := credentialFile(context.WithValue(ctx, storageCredentialRootKey{}, root), previous); err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		// Registration admission has blocked repository dependencies. Keep the old
+		// unit and credential available to the native remount rollback.
+		ctx = allowStorageRemount(ctx)
+	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return protocol.BackupRepository{}, err
 	}
@@ -76,13 +81,46 @@ func PrepareBackupRepositorySMB(ctx context.Context, repo protocol.BackupReposit
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return protocol.BackupRepository{}, errors.New("backup repository SMB credential directory is not private")
 	}
-	// A reference never changes its secret, so a mount already using the file keeps it.
-	if _, err := os.Lstat(path); !mounted || err != nil {
+	// A credential reference is immutable, including across registration retries.
+	_, credentialErr := os.Lstat(path)
+	created := errors.Is(credentialErr, os.ErrNotExist)
+	if credentialErr != nil && !created {
+		return protocol.BackupRepository{}, credentialErr
+	}
+	if created {
 		if err := atomicWrite(path, []byte(body)); err != nil {
 			return protocol.BackupRepository{}, err
 		}
 	}
-	return PrepareBackupRepository(context.WithValue(ctx, storageCredentialRootKey{}, root), repo)
+	ctx = context.WithValue(ctx, storageCredentialRootKey{}, root)
+	prepared, prepareErr := PrepareBackupRepository(ctx, repo)
+	if prepareErr != nil {
+		if replacing {
+			// Native preparation rolls back mount/probe failures. Cover failures in
+			// the final repository checks as well, before handing back to registration.
+			current, readErr := os.ReadFile(unitPath)
+			if readErr != nil || !bytes.Equal(current, oldUnit) {
+				cleanupCtx, cancel := context.WithTimeout(storageCleanupContext(ctx), 20*time.Second)
+				defer cancel()
+				rollbackErr := restoreManagedMountUnit(cleanupCtx, unitPath, oldUnit, unit, true)
+				if rollbackErr == nil {
+					_, rollbackErr = inspectSMB(cleanupCtx, registration)
+				}
+				if rollbackErr == nil {
+					rollbackErr = qemuStorageAccess(cleanupCtx, filepath.Join(remoteMountPath(registration), repo.SMBSource.Directory))
+				}
+				if rollbackErr != nil {
+					prepareErr = errors.Join(prepareErr, fmt.Errorf("%w: restore previous backup SMB mount: %v", ErrStorageRollbackUncertain, rollbackErr))
+				}
+			}
+		}
+		if created && !errors.Is(prepareErr, ErrStorageRollbackUncertain) {
+			prepareErr = errors.Join(prepareErr, RemoveBackupSMBCredential(repo.CredentialRef))
+		}
+		return protocol.BackupRepository{}, prepareErr
+	}
+	// Registration removes the superseded credential only after its durable commit.
+	return prepared, nil
 }
 
 func unitHasSMBCredential(unit []byte, credentialPath string) bool {

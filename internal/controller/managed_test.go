@@ -797,9 +797,8 @@ func TestAdoptionRebuildsApplianceOutcomesAndAttention(t *testing.T) {
 	}
 }
 
-// An adopted needs_attention outcome closes once the host stops reporting it: the host settled
-// the entry (an interrupted edit re-observed, or a pending command the restarted agent finished).
-func TestAdoptedOutcomeClosesWhenHostSettlesIt(t *testing.T) {
+// A missing outcome is not settlement; only an explicit terminal Core outcome closes it.
+func TestAdoptedOutcomeRequiresCoreSettlement(t *testing.T) {
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))
 	cert := certificate(t, host.CertificatePEM)
@@ -827,11 +826,18 @@ func TestAdoptedOutcomeClosesWhenHostSettlesIt(t *testing.T) {
 	inv.ObservedAt = now.Add(time.Second)
 	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
 	ops := status()
-	if op := ops["adopt-outcome:"+host.HostID+":op-stuck"]; op.Status != "succeeded" || op.Error != "" {
-		t.Fatalf("settled outcome still needs attention: %+v", op)
+	if op := ops["adopt-outcome:"+host.HostID+":op-stuck"]; op.Status != "needs_attention" {
+		t.Fatalf("missing outcome was falsely settled: %+v", op)
 	}
 	if op := ops["adopt-outcome:"+host.HostID+":op-failed"]; op.Status != "failed" {
 		t.Fatalf("reported failure was closed: %+v", op)
+	}
+	managed.Outcomes = append(managed.Outcomes, protocol.ManagedOutcome{
+		OperationID: "op-stuck", Kind: "vm-update", ID: "12345678-1234-4234-8234-123456789014", Status: "succeeded",
+	})
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 3, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
+	if op := status()["adopt-outcome:"+host.HostID+":op-stuck"]; op.Status != "succeeded" || op.Error != "" {
+		t.Fatalf("explicit settlement was not adopted: %+v", op)
 	}
 }
 
@@ -923,6 +929,14 @@ func TestQueuedOutcomeReasonShowsOnDispatchedTask(t *testing.T) {
 	report([]protocol.ManagedOutcome{outcome})
 	if op := task(); op.Status != "dispatched" || op.Error != "" {
 		t.Fatalf("reason not cleared: %+v", op)
+	}
+	expired := time.Now().UTC().Add(-adoptedQueuedGrace - time.Minute)
+	if _, err := a.c.db.Exec("UPDATE operations SET updated_at=? WHERE id=?", expired.Format(time.RFC3339Nano), queued.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	report([]protocol.ManagedOutcome{outcome})
+	if op := task(); op.Status != "dispatched" || !op.UpdatedAt.After(expired) {
+		t.Fatalf("unchanged queued reason did not refresh own operation: %+v", op)
 	}
 }
 
@@ -1074,5 +1088,110 @@ func TestInvalidMasterVLANDoesNotFailHostReport(t *testing.T) {
 			{ID: network.ID, Name: "Servers", Kind: "vlan", Source: "nex1v100", Uplink: "nex1", VLAN: 100}}}}})
 	if got := attention(); got == "needs_attention" {
 		t.Fatalf("repaired held VLAN kept its attention operation open: %+v", ops)
+	}
+}
+
+func TestMissingQueuedMirrorRequiresCoreSettlement(t *testing.T) {
+	for _, kind := range []string{"vm-release-retained", "vm-power", "backup-now", "snapshot-create"} {
+		t.Run(kind, func(t *testing.T) {
+			a := newClient(t)
+			host := a.enroll(a.token(a.site(), ""), csr(t))
+			cert := certificate(t, host.CertificatePEM)
+			seq := uint64(0)
+			outcome := protocol.ManagedOutcome{OperationID: "core-pending", Kind: kind, ID: "11111111-1111-4111-8111-111111111111", Status: "queued"}
+			report := func(outcomes ...protocol.ManagedOutcome) {
+				seq++
+				a.report(cert, protocol.ReportRequest{Version: 1, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability},
+					Inventory: &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{Outcomes: outcomes}}})
+			}
+			requestID := "adopt-outcome:" + host.HostID + ":" + outcome.OperationID
+			task := func() protocol.Operation {
+				var ops []protocol.Operation
+				read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+				for _, op := range ops {
+					if op.RequestID == requestID {
+						return op
+					}
+				}
+				t.Fatal("adopted task missing")
+				return protocol.Operation{}
+			}
+			report(outcome)
+			if op := task(); op.Status != "dispatched" {
+				t.Fatalf("queued mirror: %+v", op)
+			}
+			expired := time.Now().UTC().Add(-adoptedQueuedGrace - time.Minute).Format(time.RFC3339Nano)
+			if _, err := a.c.db.Exec("UPDATE operations SET updated_at=? WHERE request_id=?", expired, requestID); err != nil {
+				t.Fatal(err)
+			}
+			for i := range 2 {
+				report()
+				if op := task(); op.Status != "needs_attention" {
+					t.Fatalf("missing report %d falsely settled task: %+v", i+1, op)
+				}
+			}
+			outcome.Status = "succeeded"
+			report(outcome)
+			if op := task(); op.Status != "succeeded" || op.Error != "" {
+				t.Fatalf("terminal Core settlement: %+v", op)
+			}
+			outcome.Status = "queued"
+			report(outcome)
+			report()
+			if op := task(); op.Status != "succeeded" {
+				t.Fatalf("terminal history regressed: %+v", op)
+			}
+		})
+	}
+}
+
+func TestQueuedObservationRefreshesMirrorSilenceClock(t *testing.T) {
+	for _, kind := range []string{"vm-release-retained", "backup-now", "snapshot-create"} {
+		t.Run(kind, func(t *testing.T) {
+			a := newClient(t)
+			host := a.enroll(a.token(a.site(), ""), csr(t))
+			cert := certificate(t, host.CertificatePEM)
+			seq := uint64(0)
+			outcome := protocol.ManagedOutcome{OperationID: "core-waiting", Kind: kind, ID: "11111111-1111-4111-8111-111111111111", Status: "queued"}
+			report := func(outcomes ...protocol.ManagedOutcome) {
+				seq++
+				a.report(cert, protocol.ReportRequest{Version: 1, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability},
+					Inventory: &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{Outcomes: outcomes}}})
+			}
+			requestID := "adopt-outcome:" + host.HostID + ":" + outcome.OperationID
+			expired := time.Now().UTC().Add(-adoptedQueuedGrace - time.Minute).Format(time.RFC3339Nano)
+			age := func() {
+				if _, err := a.c.db.Exec("UPDATE operations SET updated_at=? WHERE request_id=?", expired, requestID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			task := func() (string, string) {
+				var status, updated string
+				if err := a.c.db.QueryRow("SELECT status,updated_at FROM operations WHERE request_id=?", requestID).Scan(&status, &updated); err != nil {
+					t.Fatal(err)
+				}
+				return status, updated
+			}
+			report(outcome)
+			age()
+			report(outcome)
+			if status, updated := task(); status != "dispatched" || updated <= expired {
+				t.Fatalf("unchanged queued observation not refreshed: %s at %s", status, updated)
+			}
+			report()
+			if status, _ := task(); status != "dispatched" {
+				t.Fatalf("fresh observation followed by one missing heartbeat: %s", status)
+			}
+			age()
+			report()
+			if status, _ := task(); status != "needs_attention" {
+				t.Fatalf("expired silence: %s", status)
+			}
+			age()
+			report(outcome)
+			if status, updated := task(); status != "needs_attention" || updated <= expired {
+				t.Fatalf("queued reappearance must refresh without settling: %s at %s", status, updated)
+			}
+		})
 	}
 }

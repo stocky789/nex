@@ -138,10 +138,11 @@ func (b sftpBackupStorage) claimOwner(client *sftp.Client) (claimed bool, err er
 	owner, err := b.readFile(client, ownerName, 4096)
 	// Only a new registration claims the root, finishing an interrupted claim.
 	if b.repo.RemoteIdentity == nil && (errors.Is(err, os.ErrNotExist) || err == nil && len(owner) < len(want) && bytes.HasPrefix(want, owner)) {
-		if err := b.writeMarker(client, ownerName, want); err != nil {
-			return false, err
+		claimed, err = b.writeMarkerClaim(client, ownerName, want)
+		if err != nil {
+			return claimed, err
 		}
-		owner, err, claimed = want, nil, true
+		owner = want
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return false, ErrBackupConflict
@@ -221,8 +222,7 @@ func (b sftpBackupStorage) connect(ctx context.Context) (*sftp.Client, func(), e
 		}
 		stopCancel = context.AfterFunc(ctx, func() { conn.Close() })
 		// NewClientConn ignores ClientConfig.Timeout; the read deadline bounds the handshake too.
-		conn = progressConn{conn, 3 * sftpIOTimeout}
-		sshConnection, channels, requests, err = ssh.NewClientConn(conn, address, config)
+		sshConnection, channels, requests, err = ssh.NewClientConn(progressConn{conn, 3 * sftpIOTimeout}, address, config)
 		if err == nil {
 			connection = conn
 			break
@@ -432,9 +432,14 @@ func (b sftpBackupStorage) readFile(client *sftp.Client, name string, limit int6
 }
 
 func (b sftpBackupStorage) writeExclusive(client *sftp.Client, name string, source io.Reader) error {
+	_, err := b.writeExclusiveClaim(client, name, source)
+	return err
+}
+
+func (b sftpBackupStorage) writeExclusiveClaim(client *sftp.Client, name string, source io.Reader) (bool, error) {
 	file, err := client.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, writeErr := io.Copy(file, source)
 	if writeErr == nil {
@@ -442,40 +447,45 @@ func (b sftpBackupStorage) writeExclusive(client *sftp.Client, name string, sour
 	}
 	closeErr := file.Close()
 	if writeErr != nil {
-		return writeErr
+		return true, writeErr
 	}
 	if closeErr != nil {
-		return closeErr
+		return true, closeErr
 	}
-	return syncSFTPDir(client, path.Dir(name))
+	return true, syncSFTPDir(client, path.Dir(name))
 }
 
 // writeMarker makes name hold exactly want. A strict prefix, such as the empty
 // file a failed write leaves on a full server, is replaced; other content is a
 // conflict, and a failed write reports its own error rather than a conflict.
 func (b sftpBackupStorage) writeMarker(client *sftp.Client, name string, want []byte) error {
+	_, err := b.writeMarkerClaim(client, name, want)
+	return err
+}
+
+func (b sftpBackupStorage) writeMarkerClaim(client *sftp.Client, name string, want []byte) (bool, error) {
 	present, err := b.readFile(client, name, 2<<20)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 	case err != nil:
-		return err
+		return false, err
 	case bytes.Equal(present, want):
 		// An earlier attempt may have failed before syncing the file.
 		if err := syncSFTPPath(client, name); err != nil {
-			return err
+			return false, err
 		}
-		return syncSFTPDir(client, path.Dir(name))
+		return false, syncSFTPDir(client, path.Dir(name))
 	case len(present) < len(want) && bytes.HasPrefix(want, present):
 		if err := client.Remove(name); err != nil {
-			return err
+			return false, err
 		}
 		if err := syncSFTPDir(client, path.Dir(name)); err != nil {
-			return err
+			return false, err
 		}
 	default:
-		return ErrBackupConflict
+		return false, ErrBackupConflict
 	}
-	return b.writeExclusive(client, name, bytes.NewReader(want))
+	return b.writeExclusiveClaim(client, name, bytes.NewReader(want))
 }
 
 // parseManifest decodes raw and requires it to be a valid manifest of point id
@@ -724,6 +734,9 @@ func (b sftpBackupStorage) publishOnClient(ctx context.Context, client *sftp.Cli
 		local.Close()
 		if _, err := client.Lstat(remoteName); err == nil {
 			if b.checkArtifact(client, remoteName, wantSize, wantSHA) == nil {
+				if err := syncSFTPPath(client, remoteName); err != nil {
+					return "", err
+				}
 				continue
 			}
 			if err := client.Remove(remoteName); err != nil {
@@ -1364,17 +1377,30 @@ func (b sftpBackupStorage) setProtectedOnClient(client *sftp.Client, id string, 
 	if err != nil {
 		return err
 	}
-	if current != nil {
-		// Protecting again replaces the marker, so a stalled unprotect that read
-		// the old one cannot remove it.
-		if err := b.removeMarkerIfUnchanged(client, name, current); err != nil || !protected {
-			return err
-		}
-	}
 	if !protected {
+		if current != nil {
+			return b.removeMarkerIfUnchanged(client, name, current)
+		}
 		return nil
 	}
-	return b.writeMarker(client, name, newBackupProtectMarker(id))
+	want := newBackupProtectMarker(id)
+	if current == nil {
+		return b.writeMarker(client, name, want)
+	}
+	// Keep the durable directory entry while refreshing the nonce. Even a
+	// partial write still protects the point; never unlink the old protection.
+	file, err := client.OpenFile(name, os.O_WRONLY)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(want)
+	if writeErr == nil {
+		writeErr = file.Truncate(int64(len(want)))
+	}
+	if writeErr == nil {
+		writeErr = syncSFTPFile(file)
+	}
+	return errors.Join(writeErr, file.Close())
 }
 
 // sftpDeleteRecord keeps the exact published manifest bytes, so its digest
@@ -1554,6 +1580,14 @@ func (b sftpBackupStorage) deleteOnClient(ctx context.Context, client *sftp.Clie
 		}
 	}
 	if err := syncSFTPDir(client, b.root()); err != nil {
+		return err
+	}
+	info, err := client.Lstat(point)
+	if err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return ErrBackupConflict
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	allowed := map[string]bool{sftpManifestName: true}

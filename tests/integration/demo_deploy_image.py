@@ -45,6 +45,7 @@ def main():
                 sys.stdin = SimpleNamespace(buffer=compressed)
                 # The tag already exists: a byte-identical config must remain publishable,
                 # even when inspect reports a manifest/index ID instead of the config ID.
+                deployer.receive_archive(imported)
                 deployer.import_image(revision, imported)
                 if deployer.image_config_id(args.image) != original_config:
                     raise AssertionError('republication changed the selected image configuration')

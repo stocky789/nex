@@ -61,7 +61,7 @@ func TestRemoteRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 				}
 				prepared := requested
 				prepared.RemoteIdentity = existing.RemoteIdentity
-				if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared, false); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
+				if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared, false, nil); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
 					t.Fatalf("same-ID replacement committed: %v", err)
 				}
 				saved, err := GetPoolBackupRepository(s, existing.ID)
@@ -71,7 +71,7 @@ func TestRemoteRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 				if retained, err := getCatalogPoint(s, existing.ID, point.ID); err != nil || retained.ID != point.ID {
 					t.Fatalf("retained point lost: %+v, %v", retained, err)
 				}
-				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new", ""); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
+				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new", "", nil); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
 					t.Fatalf("same-ID replacement reached remote preparation: %v", err)
 				}
 			})
@@ -99,7 +99,7 @@ func TestNFSRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 			requested.Identity, requested.MountPath = nil, ""
 			if change == "source" {
 				requested.Source.Server = "other.example.test"
-				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new", ""); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
+				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new", "", nil); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
 					t.Fatalf("source replacement reached mount preparation: %v", err)
 				}
 			} else {
@@ -111,7 +111,7 @@ func TestNFSRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 					}
 					return protocol.BackupRepository{}, ErrBackupUnavailable
 				}
-				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new", ""); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
+				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new", "", nil); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
 					t.Fatalf("changed filesystem reached owner claim: %v", err)
 				}
 			}
@@ -123,7 +123,7 @@ func TestNFSRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 				identity.Server = requested.Source.Server
 			}
 			prepared.Identity, prepared.MountPath = &identity, existing.MountPath
-			if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared, false); !errors.Is(err, ErrBackupUnavailable) {
+			if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared, false, nil); !errors.Is(err, ErrBackupUnavailable) {
 				t.Fatalf("same-ID replacement committed: %v", err)
 			}
 			saved, err := GetPoolBackupRepository(s, existing.ID)
@@ -153,12 +153,12 @@ func TestPeerNFSAdoptionPinsMasterFilesystem(t *testing.T) {
 		}
 		return protocol.BackupRepository{}, ErrBackupUnavailable
 	}
-	if _, err := prepareBackupRepositoryForAdoption(context.Background(), nil, peer); !errors.Is(err, ErrBackupUnavailable) {
+	if _, err := prepareBackupRepositoryForAdoption(context.Background(), nil, peer, nil); !errors.Is(err, ErrBackupUnavailable) {
 		t.Fatalf("member preparation did not fail closed: %v", err)
 	}
 	missing := peer
 	missing.Identity = nil
-	if _, err := prepareBackupRepositoryForAdoption(context.Background(), nil, missing); !errors.Is(err, ErrBackupInvalid) {
+	if _, err := prepareBackupRepositoryForAdoption(context.Background(), nil, missing, nil); !errors.Is(err, ErrBackupInvalid) {
 		t.Fatalf("member accepted missing master identity: %v", err)
 	}
 	changed := peer
@@ -192,35 +192,38 @@ func TestSFTPRegistrationReplacesPinOnlyWithConfirmation(t *testing.T) {
 		return got, nil
 	}
 	ctx := context.Background()
-	if _, err := prepareBackupRepositoryForRegistration(ctx, master, requested, "register-1", ""); !errors.Is(err, ErrBackupUnavailable) {
+	if _, err := prepareBackupRepositoryForRegistration(ctx, master, requested, "register-1", "", nil); !errors.Is(err, ErrBackupUnavailable) {
 		t.Fatalf("unconfirmed host-key change was not refused: %v", err)
 	}
-	if _, err := prepareBackupRepositoryForRegistration(ctx, master, requested, "register-1", "other-repo"); !errors.Is(err, ErrBackupInvalid) {
+	if _, err := prepareBackupRepositoryForRegistration(ctx, master, requested, "register-1", "other-repo", nil); !errors.Is(err, ErrBackupInvalid) {
 		t.Fatalf("wrong confirmation accepted: %v", err)
 	}
 	moved := requested
 	moved.SFTPSource = &protocol.BackupSFTPSource{Host: "other.example.test", Root: "/backups", HostKeySHA256: requested.SFTPSource.HostKeySHA256}
-	if _, err := prepareBackupRepositoryForRegistration(ctx, master, moved, "register-1", existing.ID); !errors.Is(err, ErrBackupUnavailable) || !strings.Contains(err.Error(), "different destination") {
+	if _, err := prepareBackupRepositoryForRegistration(ctx, master, moved, "register-1", existing.ID, nil); !errors.Is(err, ErrBackupUnavailable) || !strings.Contains(err.Error(), "different destination") {
 		t.Fatalf("replacement moved the destination without naming why: %v", err)
 	}
 	unknown := requested
 	unknown.ID = "repo-unknown"
-	if _, err := prepareBackupRepositoryForRegistration(ctx, master, unknown, "register-1", unknown.ID); !errors.Is(err, ErrBackupRepoNotFound) {
+	if _, err := prepareBackupRepositoryForRegistration(ctx, master, unknown, "register-1", unknown.ID, nil); !errors.Is(err, ErrBackupRepoNotFound) {
 		t.Fatalf("replacement of an unknown repository: %v", err)
 	}
-	prepared, err := prepareBackupRepositoryForRegistration(ctx, master, requested, "register-1", existing.ID)
+	prepared, err := prepareBackupRepositoryForRegistration(ctx, master, requested, "register-1", existing.ID, nil)
 	if err != nil {
 		t.Fatalf("confirmed replacement failed: %v", err)
 	}
 	if seen == nil {
 		t.Fatal("replacement would claim the destination instead of verifying it")
 	}
-	if _, err := upsertPoolBackupRepositoryPrepared(master, requested, prepared, false); !errors.Is(err, ErrBackupUnavailable) {
+	if _, err := upsertPoolBackupRepositoryPrepared(master, requested, prepared, false, nil); !errors.Is(err, ErrBackupUnavailable) {
 		t.Fatalf("unconfirmed upsert accepted the new pin: %v", err)
 	}
-	saved, err := upsertPoolBackupRepositoryPrepared(master, requested, prepared, true)
+	saved, err := upsertPoolBackupRepositoryPrepared(master, requested, prepared, true, nil)
 	if err != nil {
 		t.Fatalf("confirmed upsert failed: %v", err)
+	}
+	if saved.LastHealthTransition != nil {
+		t.Fatalf("first successful observation fabricated a recovery transition: %+v", saved.LastHealthTransition)
 	}
 	if saved.SFTPSource.HostKeySHA256 != requested.SFTPSource.HostKeySHA256 || saved.ID != existing.ID || !saved.CreatedAt.Equal(existing.CreatedAt) {
 		t.Fatalf("saved repository lost its identity: %+v", saved)

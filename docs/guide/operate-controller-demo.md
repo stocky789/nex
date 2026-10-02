@@ -103,6 +103,10 @@ update; its matching source remains inside that image.
   forwarding; never enable unrestricted trust of `X-Forwarded-For`.
 - **Publication fails:** the prior image is restored when one exists. Inspect the
   workflow result and local health; correct the image or configuration before retrying.
+- **Archive upload times out:** the wrapper refuses an upload idle for 30 seconds or
+  exceeding 600 seconds overall, releases its deployment lock and removes temporary
+  files before importing an image. The current release stays unchanged; restore the
+  transport and retry the complete archive.
 - **The demo fails after boot:** check the socket tmpfs mount, Docker and proxy service
   ordering. Recheck the runtime after host security updates or an authorized reboot.
 - **Login stops working after an update:** sign in again. Restart intentionally loses

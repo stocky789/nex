@@ -11542,3 +11542,362 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: `pushReplicasWaitingForBusy` (`internal/agent/pool_vm_inventory.go`) retries the push for up to 10 s while it is busy; the confirm still needs a push of its own, so the exact-acknowledgement checks are unchanged.
 - Regression: `go test -count=1 -run TestPushReplicasWaitingForBusyOutlastsBackgroundPush ./internal/agent` (fails with the retry disabled; runs in the existing agent suite). Lab: 1/60 (cold start after a host reboot) then 0/58 on the fixed build.
 - Avoid: making `PushPoolAuthorityReplicas` itself block; other callers and tests rely on its immediate busy refusal.
+
+## Backup review fixes — 2026-10-02
+
+BUG-1801–BUG-1832 cover the 32 deduplicated review findings. The
+[review-fix QA record](qa/2026-10-02-backup-review-fixes.md) records executed commands,
+before/after evidence, browser walkthroughs and simulation limits. The regression
+names below are focused selectors within the existing forge-run suites, not claims
+of real storage or hardware certification.
+
+## BUG-1801 — Deadline recovery raced a still-live native worker
+
+- Date: 2026-10-02
+- Symptom: recovery removed restore staging and pins while the original copy still ran.
+- Root cause: returning `needs_attention` at a deadline was mistaken for worker completion.
+- Fix: Core tracks actual worker lifetime, accepts its late result and waits during shutdown; reconciliation and redispatch exclude live work.
+- Regression: `go test -race ./internal/agent -run 'TestRunDeadlineDoesNotReconcileLiveRestoreStaging|TestLocalRunDeadlinePreservesWorkerAndLateCompletion'`; results in the QA record.
+- Avoid: treating a deadline or cancelled request as proof native effects stopped.
+
+## BUG-1802 — Resumed SFTP deletion followed a replaced point symlink
+
+- Date: 2026-10-02
+- Symptom: persisted delete intent could remove matching files outside the repository.
+- Root cause: the resumed path bypassed the point-directory check.
+- Fix: `Lstat` and require a real point directory before every traversal.
+- Regression: `go test -race ./internal/agent -run TestSFTPResumedDeleteRejectsPointSymlink`; results in the QA record.
+- Avoid: trusting a previously validated path after an interruption.
+
+## BUG-1803 — Resumed SFTP publication accepted unsynced artifacts
+
+- Date: 2026-10-02
+- Symptom: a complete-looking artifact left by failed fsync could be published without durable contents.
+- Root cause: matching size/digest skipped the artifact sync on retry.
+- Fix: sync each reused matching artifact before publication.
+- Regression: `go test -race ./internal/agent -run TestSFTPResumedArtifactRetriesFailedSync`; results in the QA record.
+- Avoid: equating readable bytes or directory sync with file durability.
+
+## BUG-1804 — SFTP protection refresh removed existing protection
+
+- Date: 2026-10-02
+- Symptom: failed marker refresh made a protected point pruneable.
+- Root cause: refresh unlinked the only marker before creating its replacement.
+- Fix: refresh the existing durable inode without removing its directory entry; malformed markers fail closed.
+- Regression: `go test -race ./internal/agent -run TestSFTPProtectionRefreshFailuresStayProtected`; results in the QA record.
+- Avoid: remove-then-create updates for a safety marker.
+
+## BUG-1805 — Forget admitted repositories with unresolved runs
+
+- Date: 2026-10-02
+- Symptom: forgetting could detach a destination underneath an attention-state backup.
+- Root cause: the guard checked only `pending`, not all nonterminal outcomes.
+- Fix: unresolved runs, including `needs_attention`, block forgetting.
+- Regression: `go test -race ./internal/agent -run TestForgetRefusesNeedsAttentionRun`; results in the QA record.
+- Avoid: assuming attention-state work is no longer executing.
+
+## BUG-1806 — Member silence permanently failed a genuine backup
+
+- Date: 2026-10-02
+- Symptom: a member's successful backup could never reconcile after master-only access recovered.
+- Root cause: elapsed silence terminalized an unverified outcome.
+- Fix: retain uncertainty and reservations, observe without restarting, and fail only with proof work never started.
+- Regression: `go test -race ./internal/agent -run 'TestMemberSuccessAfterMasterRepositoryRecoverySettlesWithoutReplay|TestUnservableMemberRunsRemainUncertain'`; results in the QA record.
+- Avoid: treating timeout, departure or master verification failure as a member's terminal failure.
+
+## BUG-1807 — Large orphan results exceeded a single authority frame
+
+- Date: 2026-10-02
+- Symptom: a valid thousands-point cleanup blocked subsequent authority replication.
+- Root cause: its unbounded result array occupied one 256 KiB-limited record.
+- Fix: bounded cleanup header plus contiguous per-point frames, with complete count/order/root validation on adoption.
+- Regression: `go test -race ./internal/agent -run 'TestBackupAuthorityFiveThousandCleanupPointsTransferAndAdopt|TestBackupAuthorityCleanupRejectsInvalidFrames'`; results in the QA record.
+- Avoid: truncating results or relaxing durable-record limits.
+
+## BUG-1808 — Page collection deleted acknowledged or live upload roots
+
+- Date: 2026-10-02
+- Symptom: a verified newer replica lost its pages during an older collector's pass.
+- Root cause: stored-root selection and deletion were not serialized with replacement; live uploads were not rooted.
+- Fix: consistent replica/session/blob locking protects the acknowledged replica and unexpired upload sessions.
+- Regression: `go test -race ./internal/agent -run 'TestBackupAuthorityCollectionKeepsLiveUploadRoot|TestBackupAuthorityCollectionSerializesWithReplicaReplacement'`; results in the QA record.
+- Avoid: releasing the root-selection lock before destructive collection.
+
+## BUG-1809 — Peer cleanup read the live journal off its owner thread
+
+- Date: 2026-10-02
+- Symptom: concurrent member cleanup and command admission could race or panic on the journal map.
+- Root cause: HTTP goroutines inspected Store-owned mutable state directly.
+- Fix: queue authenticated snapshot and cleanup admission on the Store-owning Run loop.
+- Regression: `go test -race ./internal/agent -run TestPeerForgetRequiresOwnerAndChecksJournal`; results in the QA record.
+- Avoid: assuming the backup authority mutex protects maps mutated without that mutex.
+
+## BUG-1810 — Stale retain sweeps erased newly adopted registrations
+
+- Date: 2026-10-02
+- Symptom: an old held-ID list could retire a new member credential.
+- Root cause: negative absence was not bound to the registration being removed.
+- Fix: authenticated exact-snapshot compare-and-forget; changed registrations are safe no-ops and mutations exclude concurrent adoption.
+- Regression: `go test -race ./internal/agent -run 'TestRetainDoesNotDeleteNewlyAdoptedRegistration|TestRetainSnapshotPreservesActiveMemberCredential'`; results in the QA record.
+- Avoid: destructive negative-list reconciliation against mutable inventory.
+
+## BUG-1811 — Failed SMB3 replacement destroyed prior usable access
+
+- Date: 2026-10-02
+- Symptom: rejected new credentials removed the old mount and credential before commit.
+- Root cause: preparation destructively detached the previous configuration.
+- Fix: preserve prior unit/credential, restore confirmed prior access on failure, retain both credentials on uncertain rollback.
+- Regression: `go test -race ./internal/vmhost -run 'TestPrepareBackupRepositorySMBReplacementFailureRestoresPriorAccess|TestPrepareBackupRepositorySMBReplacementRollbackFailureRetainsCredentials'` in the isolated root fixture; consumer uncertainty is covered by `TestSMBRegistrationRollbackUncertaintyRetainsCredentials`. Results in the QA record.
+- Avoid: settling uncertain rollback as failed and making its replacement credential retireable.
+
+## BUG-1812 — Registration commit blocked Core's service loop
+
+- Date: 2026-10-02
+- Symptom: sequential member delivery and a second destination probe stalled heartbeats and completions.
+- Root cause: asynchronous preparation was followed by network/native I/O in the owning-loop commit.
+- Fix: perform preparation outside the authority mutex, recheck authority at commit, preserve its actual observations, and deliver to members separately.
+- Regression: `go test -race ./internal/agent -run 'TestPreparedRegistrationCommitDoesNotProbeRepository|TestCredentialDeliveryDoesNotHoldBackupAuthority'`; results in the QA record.
+- Avoid: reopening an uncommitted credential through the strict durable-use resolver or inventing health without a successful probe.
+
+## BUG-1813 — Catalog import overwrote concurrent point metadata
+
+- Date: 2026-10-02
+- Symptom: protection and restore-test results disappeared after capacity or marker I/O.
+- Root cause: import committed a pre-I/O metadata snapshot.
+- Fix: reserve marker changes, remerge current metadata at commit and re-admit changed records.
+- Regression: `go test -race ./internal/agent -run 'TestCatalogImportPreservesProtectionChangedDuringCapacityAdmission|TestPointMarkerUpdatesPreserveConcurrentVerification|TestCatalogMarkerAdmissionRefusesOverlappingUnprotectAndPrune'`; results in the QA record.
+- Avoid: committing stale safety metadata or allowing overlapping marker effects.
+
+## BUG-1814 — Idle archive reception held the deployment lock forever
+
+- Date: 2026-10-02
+- Symptom: an open idle publishing connection blocked later publication and rollback.
+- Root cause: stdin reception had no idle or overall deadline.
+- Fix: enforce 30-second idle and 600-second total receive limits before Docker import; unwind lock and temporary files on refusal.
+- Regression: `python3 -m unittest discover -s tests -p 'test_demo_archive.py'`; four subprocess/receiver checks passed, with no real deployment.
+- Avoid: relying only on subprocess deadlines after archive reception.
+
+## BUG-1815 — Rebuild dropped a point published after its listing
+
+- Date: 2026-10-02
+- Symptom: a successful concurrent backup vanished from the catalog while its payload remained.
+- Root cause: stale deletion treated a later catalog entry as absent from an earlier remote listing.
+- Fix: delete only unchanged entries from the pre-listing snapshot, respecting protection, pins and metadata reservations.
+- Regression: `go test -race ./internal/agent -run TestCatalogRebuildKeepsPointPublishedAndSettledAfterListing`; results in the QA record.
+- Avoid: interpreting an old listing as proof a newly committed point is stale.
+
+## BUG-1816 — Exact Forget retry could not finish pending removal
+
+- Date: 2026-10-02
+- Symptom: transient detach failure or post-delete receipt interruption stayed attention-state forever.
+- Root cause: pending metadata replay and reconciliation omitted Forget.
+- Fix: resume exact pending detach/removal and reconcile already-removed records into the original receipt.
+- Regression: `go test -race ./internal/agent -run 'TestForgetExactRetryResumesDetachAndReceipt|TestRetainResumesMemberPendingDetachWithoutRepositoryRecord'`; results in the QA record.
+- Avoid: returning uncertainty forever without resuming a provably matching pending intent.
+
+## BUG-1817 — Failed member storage preparation permanently retired its retry binding
+
+- Date: 2026-10-02
+- Symptom: the same repository generation could not recover after a transient member mount failure.
+- Root cause: generation-derived handoff IDs were tombstoned like explicitly retired browser receipts.
+- Fix: failed peer preparation removes its secret while preserving its generation-bound retry; explicit retirement remains final.
+- Regression: `go test -race ./internal/vmhost -run TestPoolStorageCredentialRetryAfterFailedPreparation`; results in the QA record.
+- Avoid: reviving retired access or allocating unrelated handoff identities to hide broken replay.
+
+## BUG-1818 — Missing Core operations became falsely successful
+
+- Date: 2026-10-02
+- Symptom: a queued mirror warned for one heartbeat, then appeared succeeded without a Core result.
+- Root cause: a later absence-based settlement update overrode uncertainty.
+- Fix: remove absence-implies-success settlement; require explicit terminal Core evidence.
+- Regression: `go test -race ./internal/controller -run TestMissingQueuedMirrorRequiresCoreSettlement`; results in the QA record.
+- Avoid: inferring outcomes from disappearing inventory.
+
+## BUG-1819 — Queued silence clock measured admission instead of last observation
+
+- Date: 2026-10-02
+- Symptom: continuously reported queued tasks became attention-state after one missing heartbeat.
+- Root cause: unchanged reasons and remapped adopted IDs did not refresh the observation timestamp.
+- Fix: refresh every queued mirror observation without regressing terminal history.
+- Regression: `go test -race ./internal/controller -run TestQueuedObservationRefreshesMirrorSilenceClock`; results in the QA record.
+- Avoid: using an unchanged error string as proof no new observation arrived.
+
+## BUG-1820 — Retained-release replay accepted another VM
+
+- Date: 2026-10-02
+- Symptom: a same-named VM in another pool received the first VM's replayed operation.
+- Root cause: replay binding omitted pool and VM target.
+- Fix: compare selected pool and `ReleaseRetained.VMID` alongside payload identity.
+- Regression: `go test -race ./internal/controller -run TestReleaseRetainedReplayBindsPoolAndVM`; results in the QA record.
+- Avoid: binding destructive replay only to confirmation text.
+
+## BUG-1821 — Partial retained-vTPM deletion could not resume safely
+
+- Date: 2026-10-02
+- Symptom: the original whole-tree digest refused a partially deleted tree forever.
+- Root cause: no durable per-file deletion admission existed before removal.
+- Fix: persist exact producer-bound manifests, tolerate only missing admitted nodes, and refuse changed/new/current targets; legacy unbound partial trees remain fail-closed.
+- Regression: `go test -race ./internal/vmhost -run '^TestReleaseRetained'`; results in the QA record.
+- Avoid: bypassing digest verification or rediscovering additional targets during replay.
+
+## BUG-1822 — Ambiguous S3 owner creation leaked or removed the wrong claim
+
+- Date: 2026-10-02
+- Symptom: a lost PUT reply left a refused repository claiming its prefix; overlapping same-repository preparation could delete another successful claim.
+- Root cause: ambiguous creation was considered unclaimed; stable owner bytes did not identify a preparation attempt.
+- Fix: reconcile and conditionally release an exact claim on a fresh bounded context, with repository mutation admission held through preparation, cleanup and durable commit.
+- Regression: `go test -race ./internal/agent -run 'TestS3AmbiguousClaim|TestS3RegistrationDoesNotReleaseACompetingClaim|TestS3RunRegistrationSerializesClaimCleanupAndCommit|TestS3LocalRegistrationSerializesAmbiguousClaimCleanup'`; results in the QA record.
+- Avoid: equating matching pool/repository bytes with ownership of a concurrent attempt.
+
+## BUG-1823 — Existing S3 replacement silently reclaimed a missing owner
+
+- Date: 2026-10-02
+- Symptom: emptied or replaced storage was accepted under an established repository identity.
+- Root cause: preparation omitted the durable remote identity and entered first-registration claim mode.
+- Fix: preserve established identity and verify only, for exact retry and confirmed replacement.
+- Regression: `go test -race ./internal/agent -run TestExistingS3RegistrationNeverReclaimsMissingOwner`; results in the QA record.
+- Avoid: treating credential replacement as permission to reinitialize a destination.
+
+## BUG-1824 — Failed SFTP owner sync stranded a valid marker
+
+- Date: 2026-10-02
+- Symptom: corrected new-ID registration conflicted with a marker from refused preparation.
+- Root cause: creation followed by failed sync/close was reported as unclaimed.
+- Fix: track exclusive creation and release only that exact marker after failure.
+- Regression: `go test -race ./internal/agent -run TestSFTPFailedOwnerClaimReleasesOnlyItsMarker`; results in the QA record.
+- Avoid: confusing unsuccessful durability with no remote effect.
+
+## BUG-1825 — Shared-storage capabilities retained ejected hosts
+
+- Date: 2026-10-02
+- Symptom: stale successful access made an ejected host eligible and storage falsely shared.
+- Root cause: retained access observations were projected without current membership/generation checks.
+- Fix: include only ready current members with current-registration observations; preserve local and clustered storage capabilities.
+- Regression: `go test -race ./internal/agent -run 'TestPoolStorageMemberAccessDropsNonreadyEligibility|TestPoolStorageMemberAccessPreservesLocalAndClusteredCapabilities'`; results in the QA record.
+- Avoid: deriving present eligibility from historical success.
+
+## BUG-1826 — Replacement retry lost its typed confirmation
+
+- Date: 2026-10-02
+- Symptom: a failed inventory poll changed an already accepted registration body and caused replay conflict.
+- Root cause: confirmation was rebuilt from live rows.
+- Fix: freeze the complete request, including receipt and replacement confirmation, after handoff.
+- Regression: `cd web && npm test`; built-browser frozen-registration scenario compared both POST bodies after a lost reply and inventory outage.
+- Avoid: reconstructing destructive retry intent from mutable inventory.
+
+## BUG-1827 — Polling repeatedly aborted complete backup history
+
+- Date: 2026-10-02
+- Symptom: slow multi-page history never finished and blocked otherwise available inventories.
+- Root cause: each refresh aborted one combined repository/policy/history collection.
+- Fix: independent inventory publication and singleflight history, with scope cancellation and bounded generation-conflict restart.
+- Regression: `tests/integration/backup_workspace_browser.py --check delayed-history`; built-browser delayed-history and scope-cancellation scenarios passed with fictional APIs.
+- Avoid: displaying absent history as “never backed up” or restarting healthy overlapping scans.
+
+## BUG-1828 — Repository change retained deleted VMs' overrides
+
+- Date: 2026-10-02
+- Symptom: valid surviving coverage was refused because overrides named deleted VMs.
+- Root cause: coverage filtering did not filter its dependent overrides.
+- Fix: retain overrides only for retained VM IDs while preserving their settings and exact retry.
+- Regression: `cd web && npm test`; built-browser repository-deleted-override scenario passed.
+- Avoid: removing surviving overrides or forwarding references outside submitted coverage.
+
+## BUG-1829 — Pool changes reused another pool's credential receipt
+
+- Date: 2026-10-02
+- Symptom: a new-pool draft skipped handoff and locked on an old bound receipt.
+- Root cause: scope reset omitted the receipt and destination draft.
+- Fix: reset complete pool-bound draft state and ignore late acknowledgements from the old scope.
+- Regression: `cd web && npm test`; built-browser pool-bound-receipt scenario passed with fresh request IDs and receipt.
+- Avoid: cancelling already accepted Core work or carrying credentials across scope.
+
+## BUG-1830 — Flat VM lists eagerly built hidden tag groups
+
+- Date: 2026-10-02
+- Symptom: virtualized flat lists still constructed every VM row and repeated tag scans.
+- Root cause: unused tag-group JSX was computed before selecting the display branch.
+- Fix: construct tag rows only for tag grouping; flat rendering remains bounded to its virtual window.
+- Regression: `cd web && npm test`; 1,000-VM flat and grouped behavior checks passed.
+- Avoid: eager hidden rendering or allocating full lists before virtualization.
+
+## BUG-1831 — Demo stacked CPU charts had no plotted series
+
+- Date: 2026-10-02
+- Symptom: Stacked removed the only aggregate series for running hosts and VMs.
+- Root cause: the demo omitted contract-supported per-core/per-vCPU samples.
+- Fix: resource-count-aware component series plus aggregate mean, bounded values and unknown stopped samples.
+- Regression: `go test -race ./internal/demo -run TestStatsCPUStacksMatchResourceCounts`; actual API/browser evidence in the QA record.
+- Avoid: changing the consumer to display duplicate aggregate series in a stack.
+
+## BUG-1832 — Tracked test executable exposed private build paths
+
+- Date: 2026-10-02
+- Symptom: a generated executable embedded identifying workstation paths.
+- Root cause: a build artifact was tracked and binary bytes escaped the text-only scan.
+- Fix: remove the artifact and scan known privacy patterns in binary files too.
+- Regression: `python3 -m unittest discover -s tests -p 'test_repository_privacy.py'`; two checks passed before documentation completion; final results in the QA record.
+- Avoid: claiming current-file removal cleans Git history, releases or caches.
+
+## BUG-1833 — Aggregate retained-vTPM admission wrote an unreadable journal
+
+- Date: 2026-10-02
+- Symptom: multiple valid retained trees exceeded the 1 MiB journal reader limit after deletion began, blocking later host operations.
+- Root cause: the writer accepted an aggregate manifest larger than its reader could load.
+- Fix: enforce the same byte boundary in the single-serialization writer and restore unadmitted intent fields on refusal before any unlink.
+- Regression: `TestReleaseRetainedTPMRefusesOversizedAdmissionBeforeDeletion` failed before the fix with `succeeded`; `go test -race -count=1 ./internal/vmhost -run '^TestReleaseRetained'` passed after it.
+- Avoid: saving oversized manifests again in the failure outcome or deleting before durable admission.
+
+## BUG-1834 — Catalog metadata safety introduced quadratic reimport work
+
+- Date: 2026-10-02
+- Symptom: unchanged large imports repeatedly reread the whole catalog and authority per point.
+- Root cause: unconditional per-point full-store capacity admission and whole-catalog current-point lookup duplicated the bulk admission.
+- Fix: bounded selected-point validation and reuse of unchanged bulk-admitted snapshots; changed/new points retain capacity and replica gates.
+- Regression: `go test -race -count=1 ./internal/agent -run 'TestCatalogReimportReadsGrowLinearly|TestCatalogImportReadmitsNewAndChangedPointsBeforeMarker|TestCatalogPointLookupValidatesSelectedRecord'`; these behavior/cost checks passed in the full Core race suite recorded in the QA report.
+- Avoid: dropping capacity/replica checks to improve cost or caching stale point metadata.
+
+## BUG-1835 — SFTP handshake cancellation raced connection reassignment
+
+- Date: 2026-10-02
+- Symptom: the integrated race detector found cancellation reading an interface while SSH initialization reassigned it.
+- Root cause: the callback captured a mutable connection variable.
+- Fix: capture the immutable underlying TCP connection; pass the progress wrapper directly to SSH.
+- Regression: `go test -race ./internal/agent -run TestSFTPConnectCancelsStalledHandshake`; observed failing-before race and final results in the QA record.
+- Avoid: suppressing cancellation or weakening its prompt-return assertion.
+
+## BUG-1836 — Restart misreported a settled repository registration
+
+- Date: 2026-10-02
+- Symptom: a pending Controller journal reported failed after Core had already saved registration success or uncertainty.
+- Root cause: restart dispatch reserved preparation before replaying its matching terminal metadata receipt.
+- Fix: replay the bound receipt before native preparation and preserve its outcome; changed intent remains a conflict. A legitimately removed repository yields the durable successful result without inventing a resource or returning not-found.
+- Regression: `TestRunRegistrationReplaysReceiptBeforeJournalSettlement` runs actual Core restart for succeeded, failed and needs-attention receipts, with no native replay, plus successful replay after repository removal; passed in the final Core race suite.
+- Avoid: treating a terminal receipt's reservation conflict as proof the original registration failed.
+
+## BUG-1837 — Shutdown lost uncertain SMB rollback evidence
+
+- Date: 2026-10-02
+- Symptom: after shutdown during rollback, a replacement credential could become retireable although its mount outcome was uncertain.
+- Root cause: cancellation discarded the worker's final outcome, cleanup ignored a preliminary failed receipt, and that receipt was written before actual rollback.
+- Fix: retain a pending receipt until rollback completes, transfer the final outcome to Store-owner shutdown cleanup, persist before releasing ownership, and return persistence failures without publishing false journal settlement. Capture the previous SMB registration even for allowed repair of an unreadable old credential without replacement confirmation.
+- Regression: `TestRunRegistrationShutdownPersistsBlockedRollbackUncertainty` covers blocked actual worker lifetime, durable uncertainty and real filesystem receipt-write refusal followed by reload; `TestRunSMBCredentialRepairCommitRefusalRetainsReplacement` covers implicit credential repair and refused commit. Both passed in the final Core race suite; the permission-refusal variant ran without skipping. That variant explicitly skips under root, which bypasses the fault.
+- Avoid: deleting credentials after a preliminary commit failure or ignoring final receipt-write errors.
+
+## BUG-1838 — Returning member inventory exceeded cleanup's live-count bound
+
+- Date: 2026-10-02
+- Symptom: stale registrations and recordless pending detaches stranded member mounts/credentials when complete inventory exceeded 256 rows or 4 MiB.
+- Root cause: the snapshot client applied the master's live-registration limit to a member's accumulated stale inventory.
+- Fix: authenticated bounded `after_id` pages, complete strict client consumption, and existing exact compare-and-forget with a current master-absence check for each mutation. Count/byte limits apply per page, not to the aggregate.
+- Regression: `TestPeerRepositorySnapshotsPageStaleInventory`, `TestPeerRepositoryPagingPreservesConcurrentRegistration`, `TestPeerRepositorySnapshotClientRejectsBrokenPages`, `TestPeerRepositorySnapshotGETValidatesCursorAndOwner`, `TestPeerRepositorySnapshotOversizedRowFailsClosed`, `TestPeerRepositoryMutationBodiesRemainBounded` and `TestPeerRepositoryTargetedForgetOversizedBodyFailsClosed`; final execution results are in the QA report.
+- Avoid: truncating stale inventory, deleting by negative absence, or accepting an incomplete collection after a later page fails.
+
+## BUG-1839 — Console ticket admitted duplicate host tunnels during pairing
+
+- Date: 2026-10-02
+- Symptom: `TestConsoleAuthorizationPairingAndRelay` received a second `101` upgrade instead of refusing ticket reuse.
+- Root cause: admission tested buffered-channel occupancy after releasing the hub lock. Two handshakes could enter before publication; browser dequeue also made an already admitted tunnel look absent before the WebSocket upgrade finished.
+- Fix: atomically claim host admission under the console hub lock before hijacking, independently of the channel's later occupancy. A failed first handshake remains single-use; subsequent console attempts obtain fresh tickets.
+- Regression: forced browser-dequeue and host-pre-upgrade interleavings both failed before the fix with duplicate `101`; `go test -race -count=10 -timeout 2m ./internal/controller -run '^TestConsole(AuthorizationPairingAndRelay|RejectsConcurrentHostTunnelBeforeUpgrade)$'` passed afterward in 16.514 seconds. Both forge phase1 jobs and the GitHub Go job already run this package on pushes and pull requests; no remote run is claimed. Final suite/runtime evidence: [console pairing QA](qa/2026-10-02-console-pairing-race.md).
+- Avoid: using queue length as connection ownership, delaying the duplicate assertion, or allowing another handshake after the browser consumes the tunnel.

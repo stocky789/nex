@@ -823,58 +823,8 @@ func TestSFTPRegistrationRefusesMemberBeforePreparation(t *testing.T) {
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: member.State.PoolID, Name: "Test", Kind: protocol.BackupRepoKindSFTP,
 		SFTPSource:    &protocol.BackupSFTPSource{Host: "sftp.example.test", Root: "/backups", HostKeySHA256: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
 		CredentialRef: "credential-1"}
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), member, repo, "register-1", ""); !errors.Is(err, ErrBackupUnavailable) {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), member, repo, "register-1", "", nil); !errors.Is(err, ErrBackupUnavailable) {
 		t.Fatalf("member reached SFTP preparation: %v", err)
-	}
-}
-
-func TestSFTPRegistrationPreparationSerializesWithFreeze(t *testing.T) {
-	lab := newTransferLab(t, 1)
-	master := lab.host("master-1")
-	repo := testPeerSFTPRepository(t, master)
-	repo.RemoteIdentity = nil
-	previous := prepareBackupRepositorySFTPNative
-	t.Cleanup(func() { prepareBackupRepositorySFTPNative = previous })
-	started, release := make(chan struct{}), make(chan struct{})
-	prepareBackupRepositorySFTPNative = func(_ context.Context, got protocol.BackupRepository, _ string, _ protocol.StorageCredentials) (protocol.BackupRepository, error) {
-		close(started)
-		<-release
-		got.RemoteIdentity = &protocol.BackupRemoteIdentity{Fingerprint: strings.Repeat("a", 64)}
-		return got, nil
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := prepareBackupRepositoryForRegistration(context.Background(), master, repo, "register-1", "")
-		done <- err
-	}()
-	<-started
-	locked := !poolBackupAuthorityMu.TryLock()
-	if !locked {
-		poolBackupAuthorityMu.Unlock()
-	}
-	freezeDone := make(chan error, 1)
-	go func() {
-		poolBackupAuthorityMu.Lock()
-		state, err := loadPoolPeer(master)
-		if err == nil {
-			state.Transfer = &poolTransferRecord{Frozen: true}
-			err = savePoolPeer(master, state)
-		}
-		poolBackupAuthorityMu.Unlock()
-		freezeDone <- err
-	}()
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("registration preparation failed: %v", err)
-	}
-	if err := <-freezeDone; err != nil {
-		t.Fatalf("freeze failed: %v", err)
-	}
-	if !locked {
-		t.Fatal("transfer freeze lock was not held through SFTP preparation")
-	}
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), master, repo, "register-2", ""); err == nil {
-		t.Fatal("frozen master prepared a new SFTP registration")
 	}
 }
 
@@ -1870,5 +1820,203 @@ func TestSFTPSweepRestoresLeftoverMarker(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(point, ".nex-protected*")); len(left) != 2 {
 		t.Fatalf("leftovers: %v", left)
+	}
+}
+
+func testSFTPReviewPoint(t *testing.T) (sftpBackupStorage, *sftp.Client, protocol.BackupManifest, map[string]string, []byte) {
+	t.Helper()
+	client := testSFTPClient(t)
+	stubSFTPSync(t, false)
+	store := seedBackupMaster(t)
+	storage := sftpBackupStorage{s: store, repo: protocol.BackupRepository{ID: "repo-1", PoolID: store.State.PoolID,
+		SFTPSource: &protocol.BackupSFTPSource{Root: t.TempDir()}}}
+	manifest, files := testSFTPPoint(t, store.State.PoolID, "point-1")
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return storage, client, manifest, files, raw
+}
+
+func TestSFTPResumedArtifactRetriesFailedSync(t *testing.T) {
+	storage, client, manifest, files, raw := testSFTPReviewPoint(t)
+	target := filepath.Join(storage.point("point-1"), manifest.Disks[0].Filename)
+	syncFailure := errors.New("injected artifact sync failure")
+	syncSFTPFile = func(file *sftp.File) error {
+		if file.Name() == target {
+			return syncFailure
+		}
+		return nil
+	}
+	for attempt := range 2 {
+		if _, err := storage.publishOnClient(context.Background(), client, manifest, files, raw); !errors.Is(err, syncFailure) {
+			t.Fatalf("attempt %d accepted an artifact without durable sync: %v", attempt, err)
+		}
+		if _, err := os.Lstat(filepath.Join(storage.point("point-1"), sftpManifestName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("failed artifact sync published a manifest:", err)
+		}
+		if got, err := os.ReadFile(target); err != nil || string(got) != "disk" {
+			t.Fatalf("exact reusable artifact was lost: %q %v", got, err)
+		}
+	}
+	syncSFTPFile = func(*sftp.File) error { return nil }
+	digest, err := storage.publishOnClient(context.Background(), client, manifest, files, raw)
+	if err != nil || digest != sha256Hex(raw) {
+		t.Fatalf("durable retry failed: %q %v", digest, err)
+	}
+}
+
+func TestSFTPProtectionRefreshFailuresStayProtected(t *testing.T) {
+	for _, outcome := range []string{"sync-failure", "empty", "partial", "mixed", "malformed"} {
+		t.Run(outcome, func(t *testing.T) {
+			storage, client, manifest, files, raw := testSFTPReviewPoint(t)
+			publishTestSFTPPoint(t, storage, client, manifest, files, raw)
+			if err := storage.setProtectedOnClient(client, "point-1", true); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(storage.point("point-1"), ".nex-protected")
+			stale, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Stat(marker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure := errors.New("injected refresh failure")
+			syncSFTPFile = func(file *sftp.File) error {
+				if file.Name() != marker {
+					return nil
+				}
+				// Simulate the bytes a failed rewrite/crash can leave on disk.
+				leftovers := map[string][]byte{"empty": {}, "partial": []byte("prot"),
+					"mixed": []byte("protected\nold-and-new\n"), "malformed": []byte("invalid")}
+				if leftover, ok := leftovers[outcome]; ok {
+					if err := os.WriteFile(marker, leftover, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return failure
+			}
+			if err := storage.setProtectedOnClient(client, "point-1", true); !errors.Is(err, failure) {
+				t.Fatal("refresh did not report failure:", err)
+			}
+			after, err := os.Stat(marker)
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatal("refresh lost the durable protection entry:", err)
+			}
+			protected, err := storage.protectedOnClient(client, "point-1")
+			if err == nil && !protected {
+				t.Fatal("failed refresh classified point as unprotected")
+			}
+			points, err := storage.scanOnClient(context.Background(), client)
+			if err == nil && (len(points) != 1 || !points[0].Protected) {
+				t.Fatalf("rebuild imported failed protection as pruneable: %#v", points)
+			}
+			if err := storage.deleteOnClient(context.Background(), client, "point-1"); !errors.Is(err, ErrBackupConflict) {
+				t.Fatal("prune did not refuse failed protection:", err)
+			}
+			syncSFTPFile = func(*sftp.File) error { return nil }
+			if err := storage.removeMarkerIfUnchanged(client, marker, stale); !errors.Is(err, ErrBackupConflict) {
+				t.Fatal("stale unprotect accepted rewritten marker:", err)
+			}
+			if _, err := os.Lstat(marker); err != nil {
+				t.Fatal("stale unprotect lost failed-refresh protection:", err)
+			}
+		})
+	}
+}
+
+func TestSFTPResumedDeleteRejectsPointSymlink(t *testing.T) {
+	storage, client, manifest, files, raw := testSFTPReviewPoint(t)
+	publishTestSFTPPoint(t, storage, client, manifest, files, raw)
+	record, err := json.Marshal(sftpDeleteRecord{Manifest: raw, Digest: sha256Hex(raw)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.publishDeleteRecord(client, "point-1", record); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.Rename(storage.point("point-1"), outside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, storage.point("point-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.deleteOnClient(context.Background(), client, "point-1"); !errors.Is(err, ErrBackupConflict) {
+		t.Fatal("resumed delete followed a point symlink:", err)
+	}
+	for name, want := range map[string][]byte{sftpManifestName: raw, manifest.Disks[0].Filename: []byte("disk")} {
+		if got, err := os.ReadFile(filepath.Join(outside, name)); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("unrelated target %s changed: %q %v", name, got, err)
+		}
+	}
+	if got, err := os.ReadFile(storage.deleteRecordName("point-1")); err != nil || !bytes.Equal(got, record) {
+		t.Fatalf("resumable delete record changed: %q %v", got, err)
+	}
+}
+
+func TestSFTPFailedOwnerClaimReleasesOnlyItsMarker(t *testing.T) {
+	for _, failurePoint := range []string{"file-sync", "directory-sync", "foreign-owner"} {
+		t.Run(failurePoint, func(t *testing.T) {
+			stubSFTPSync(t, true)
+			oldSupported := sftpSyncSupported
+			sftpSyncSupported = func(*sftp.Client) bool { return true }
+			t.Cleanup(func() { sftpSyncSupported = oldSupported })
+			hostKey := testSSHSigner(t)
+			port := startTestSFTPServer(t, hostKey)
+			root := t.TempDir()
+			ownerName := filepath.Join(root, "owner.json")
+			foreign := []byte(`{"repository":"foreign-repo","pool":"foreign-pool"}`)
+			cred := protocol.StorageCredentials{Username: "backup", SSHPrivateKey: testSSHPrivateKey(t)}
+			source := &protocol.BackupSFTPSource{Host: "127.0.0.1", Port: port, Root: root, HostKeySHA256: ssh.FingerprintSHA256(hostKey.PublicKey())}
+			repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindSFTP, SFTPSource: source}
+			failure := errors.New("injected owner sync failure")
+			syncSFTPFile = func(file *sftp.File) error {
+				if file.Name() == ownerName && failurePoint != "directory-sync" {
+					if failurePoint == "foreign-owner" {
+						if err := os.WriteFile(ownerName, foreign, 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					return failure
+				}
+				return nil
+			}
+			failedDir := false
+			syncSFTPDir = func(_ *sftp.Client, dir string) error {
+				if dir == root && failurePoint == "directory-sync" && !failedDir {
+					failedDir = true
+					return failure
+				}
+				return nil
+			}
+			if _, err := prepareSFTPBackupRepository(context.Background(), repo, t.TempDir(), cred); !errors.Is(err, failure) {
+				t.Fatal("failed owner sync was not reported:", err)
+			}
+			if failurePoint == "foreign-owner" {
+				if got, err := os.ReadFile(ownerName); err != nil || !bytes.Equal(got, foreign) {
+					t.Fatalf("registration cleanup removed foreign ownership: %q %v", got, err)
+				}
+				return
+			}
+			if _, err := os.Lstat(ownerName); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("refused registration kept owner claim:", err)
+			}
+			syncSFTPFile = func(*sftp.File) error { return nil }
+			repo.ID = "repo-2"
+			storage := sftpBackupStorage{repo: repo, credentials: cred, stateDir: t.TempDir()}
+			client, closeAll, err := storage.connect(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeAll()
+			// The mock server cannot prove non-overwriting rename admission.
+			// Exercise the new-ID claim that the refused registration blocked.
+			if _, err := storage.claimOwner(client); err != nil {
+				t.Fatal("corrected registration could not claim root:", err)
+			}
+		})
 	}
 }

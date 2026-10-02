@@ -205,6 +205,12 @@ For a fence device or a promotion, additionally:
   it over the pool network itself and refuses the promotion if it answers and still holds the
   authority.
 
+For the backup review-fix build, upgrade all Core peers to matching builds before
+using the changed backup cleanup and paged orphan-result contracts. Let the active
+master send a fresh complete authority copy and verify it as **current** on each
+candidate before promotion. An older acknowledged copy is not evidence that the
+new per-point framing has been received. No mixed-version fallback bypasses validation.
+
 ## Steps
 
 ### Read the authority copy

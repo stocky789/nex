@@ -46,6 +46,10 @@ sizes are cataloged. The scan does not read artifact contents, so a large
 repository rebuilds quickly; restore and test restore verify every artifact
 digest. Import does not itself prove a point can boot after restore. Protected points keep
 protection. Active restore pins on the same master remain and block prune.
+Concurrent protection and test-restore verification updates are preserved. A rebuild
+also keeps a point that a backup publishes after the scan began; it does not erase that
+new point merely because the earlier listing did not contain it. Conflicting marker
+changes can be refused while another change is active; retry after that task settles.
 
 ## Troubleshooting
 

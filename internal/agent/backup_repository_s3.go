@@ -136,12 +136,6 @@ func prepareS3BackupRepository(ctx context.Context, s *Store, repo protocol.Back
 	}
 	claimed, err := b.verifyOwner(ctx)
 	if err != nil {
-		if claimed {
-			// Claim write left an owner object; release before the corrected retry.
-			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			err = errors.Join(err, b.deleteExactMarker(cleanup, b.key(s3BackupOwnerKey), b.ownerBytes()))
-		}
 		return protocol.BackupRepository{}, err
 	}
 	identity := b.remoteIdentity()
@@ -207,8 +201,19 @@ func (b *s3BackupStorage) Verify(ctx context.Context) error {
 // registration. claimed reports that this call made the claim.
 func (b *s3BackupStorage) verifyOwner(ctx context.Context) (claimed bool, err error) {
 	key := b.key(s3BackupOwnerKey)
+	owner := b.ownerBytes()
+	defer func() {
+		if !claimed || err == nil {
+			return
+		}
+		// A failed create may still have committed. Reconcile and release only
+		// this exact owner, even when the registration context has expired.
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = errors.Join(err, b.deleteExactMarker(cleanup, key, owner))
+		claimed = false
+	}()
 	raw, err := b.read(ctx, key, 4096)
-	var wroteClaim bool
 	if isS3Missing(err) && b.repo.RemoteIdentity == nil {
 		if err := requirePoolAuthorityWritable(b.s); err != nil {
 			return false, err
@@ -235,27 +240,19 @@ func (b *s3BackupStorage) verifyOwner(ctx context.Context) (claimed bool, err er
 			}
 		}
 		_, putErr := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket),
-			Key: aws.String(key), Body: bytes.NewReader(b.ownerBytes()), IfNoneMatch: aws.String("*")})
-		if putErr != nil && !isS3Precondition(putErr) {
-			return false, putErr
+			Key: aws.String(key), Body: bytes.NewReader(owner), IfNoneMatch: aws.String("*")})
+		// Only a precondition failure proves this attempt did not claim the prefix.
+		claimed = !isS3Precondition(putErr)
+		if putErr != nil && claimed {
+			return claimed, putErr
 		}
-		wroteClaim = putErr == nil
 		raw, err = b.read(ctx, key, 4096)
-		claimed = true
-	}
-	releaseClaim := func(cause error) (bool, error) {
-		if !wroteClaim {
-			return claimed, cause
-		}
-		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		return true, errors.Join(cause, b.deleteExactMarker(cleanup, key, b.ownerBytes()))
 	}
 	if err != nil {
-		return releaseClaim(err)
+		return claimed, err
 	}
-	if !bytes.Equal(raw, b.ownerBytes()) {
-		return releaseClaim(ErrBackupConflict)
+	if !bytes.Equal(raw, owner) {
+		return claimed, ErrBackupConflict
 	}
 	return claimed, nil
 }

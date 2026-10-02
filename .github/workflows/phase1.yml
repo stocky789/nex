@@ -96,12 +96,12 @@ jobs:
       # runner can exceed Go's default ten-minute package deadline.
       - name: Test Go services and recovery
         run: go test -race -timeout 20m ./...
-      - name: Exercise root-owned snapshot recovery fixtures
+      - name: Exercise root-owned snapshot and SMB rollback fixtures
         run: |
           mkdir -p .cache
           go test -race -c -o .cache/vmhost-snapshot.test ./internal/vmhost
-          # Only stoppedSnapshotTestFixture callers skip without root (Geteuid gate).
-          sudo -n .cache/vmhost-snapshot.test -test.run '^(TestBlockedSnapshotCaptureAllowsUnrelatedVMStart|TestPersistedNativeSnapshotRetryReconcilesWithoutRepeatingCreate|TestSnapshotReserveRefusalClearsLocalIntentFence)$' -test.v -test.timeout 5m
+          # These fixtures preserve the native root-owned storage ancestry boundary.
+          sudo -n .cache/vmhost-snapshot.test -test.run '^(TestBlockedSnapshotCaptureAllowsUnrelatedVMStart|TestPersistedNativeSnapshotRetryReconcilesWithoutRepeatingCreate|TestSnapshotReserveRefusalClearsLocalIntentFence|TestPrepareBackupRepositorySMBReplacesMountOfAnotherCredential|TestPrepareBackupRepositorySMBReplacementFailureRestoresPriorAccess|TestPrepareBackupRepositorySMBReplacementRollbackFailureRetainsCredentials)$' -test.v -test.timeout 5m
       - name: Verify Controller package startup gate rejects the SQLite stub
         env:
           DEBIAN_FRONTEND: noninteractive

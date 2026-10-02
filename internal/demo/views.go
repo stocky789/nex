@@ -267,10 +267,17 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request, kind string, item
 	object := "host"
 	hostID := item["id"]
 	memory := float64(128 * GiB)
+	cpuCount := 0
+	cpuKey, cpuLabel := "cpu.core.", "Core "
 	if kind == "vms" {
 		object = "vm"
 		hostID = item["host_id"]
 		memory = float64(item["spec"].(row)["memory"].(row)["size_mib"].(int)) * 1024 * 1024
+		cpuCount = item["spec"].(row)["cpu"].(row)["count"].(int)
+		cpuKey, cpuLabel = "cpu.vcpu.", "vCPU "
+	}
+	if object == "host" {
+		cpuCount = item["inventory"].(row)["cpu_count"].(int)
 	}
 	series := []row{}
 	add := func(key, group, label, unit string, base float64) {
@@ -290,6 +297,9 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request, kind string, item
 		series = append(series, row{"key": key, "group": group, "label": label, "unit": unit, "values": values})
 	}
 	add("cpu.total", "cpu", "CPU total", "percent", 28)
+	for cpu := range cpuCount {
+		add(cpuKey+strconv.Itoa(cpu), "cpu", cpuLabel+strconv.Itoa(cpu), "percent", 28)
+	}
 	add("memory.used", "memory", "Memory used", "bytes", memory*0.46)
 	add("memory.total", "memory", "Memory capacity", "bytes", memory)
 	add("net.eno1.rx", "network", "Network received", "bytes_per_second", 4e6)

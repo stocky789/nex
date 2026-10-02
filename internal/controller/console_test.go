@@ -13,6 +13,18 @@ import (
 	"time"
 )
 
+type blockedConsoleHijacker struct {
+	http.ResponseWriter
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (w blockedConsoleHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	close(w.entered)
+	<-w.release
+	return w.ResponseWriter.(http.Hijacker).Hijack()
+}
+
 func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 	a := newClient(t)
 	site := a.site()
@@ -68,11 +80,21 @@ func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 	}
 	// Hijacking needs a real server: identity is injected the way the middleware would.
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/vms/{id}/console/{ticket}", func(w http.ResponseWriter, r *http.Request) { a.c.browserConsole(w, r, "root", "") })
+	hijackEntered, hijackRelease := make(chan struct{}), make(chan struct{})
+	mux.HandleFunc("GET /api/v1/vms/{id}/console/{ticket}", func(w http.ResponseWriter, r *http.Request) {
+		a.c.browserConsole(blockedConsoleHijacker{w, hijackEntered, hijackRelease}, r, "root", "")
+	})
 	mux.HandleFunc("POST /api/v1/agent/console/{token}", func(w http.ResponseWriter, r *http.Request) { a.c.agentConsole(w, r, host.HostID) })
 	mux.HandleFunc("POST /api/v1/other/console/{token}", func(w http.ResponseWriter, r *http.Request) { a.c.agentConsole(w, r, "other-host") })
 	server := httptest.NewServer(mux)
 	defer server.Close()
+	defer func() {
+		select {
+		case <-hijackRelease:
+		default:
+			close(hijackRelease)
+		}
+	}()
 	origin := "https://" + strings.TrimPrefix(server.URL, "http://")
 	dial := func(request string) (net.Conn, *http.Response) {
 		conn, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "http://"))
@@ -112,14 +134,19 @@ func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 		browser = conn
 		browserDone <- resp
 	}()
-	time.Sleep(100 * time.Millisecond)
 	tunnel, resp := dial(agentRequest("/api/v1/agent/console/" + ticket.Ticket))
 	if resp.StatusCode != 101 {
 		t.Fatalf("host tunnel %d", resp.StatusCode)
 	}
+	select {
+	case <-hijackEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("browser never consumed the host tunnel")
+	}
 	if _, resp := dial(agentRequest("/api/v1/agent/console/" + ticket.Ticket)); resp.StatusCode != 404 {
 		t.Fatalf("second tunnel accepted: %d", resp.StatusCode)
 	}
+	close(hijackRelease)
 	select {
 	case resp := <-browserDone:
 		if resp.StatusCode != 101 {
@@ -154,6 +181,66 @@ func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 		t.Fatalf("browser not closed after host tunnel ended: %v %x", err, frame[0])
 	}
 	browser.Close()
+}
+
+func TestConsoleRejectsConcurrentHostTunnelBeforeUpgrade(t *testing.T) {
+	c := &Controller{consoles: consoleHub{sessions: map[string]*consoleSession{
+		"ticket": {hostID: "host", user: "root", expires: time.Now().Add(time.Minute), agent: make(chan net.Conn, 1)},
+	}}}
+	entered, release := make(chan struct{}), make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /console/{token}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Test-Block-Hijack") == "1" {
+			w = blockedConsoleHijacker{w, entered, release}
+		}
+		c.agentConsole(w, r, "host")
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		c.consoles.mu.Lock()
+		c.consoles.sweep(time.Now().Add(2 * time.Minute))
+		c.consoles.mu.Unlock()
+	}()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.WriteString(conn, "POST /console/ticket HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: nex-console\r\nX-Test-Block-Hijack: 1\r\nContent-Length: 0\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first host tunnel did not reach its upgrade")
+	}
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/console/ticket", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "nex-console")
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("second host tunnel admitted before the first upgrade: %d", response.StatusCode)
+	}
+	close(release)
+	first, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil || first.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("first host tunnel upgrade: response=%v error=%v", first, err)
+	}
 }
 
 func readJSON(t *testing.T, w *httptest.ResponseRecorder, out any) { t.Helper(); read(t, w, out) }

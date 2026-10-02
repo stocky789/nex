@@ -10,8 +10,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,11 +28,91 @@ type backupRefusal string
 func (e backupRefusal) Error() string { return string(e) }
 
 type peerForgetRepository struct {
-	RepositoryID string `json:"repository_id"`
+	Repository protocol.BackupRepository `json:"repository"`
 }
 
 type peerRetainRepositories struct {
-	RepositoryIDs []string `json:"repository_ids"`
+	Repositories []protocol.BackupRepository `json:"repositories"`
+}
+
+const (
+	peerRepositoryPageLimit = 256
+	peerRepositoryBodyLimit = 4 << 20
+)
+
+type peerRepositorySnapshots struct {
+	Repositories []protocol.BackupRepository `json:"repositories"`
+	NextAfterID  peerRepositoryCursor        `json:"next_after_id,omitempty"`
+}
+
+type peerRepositoryCursor string
+
+func (cursor *peerRepositoryCursor) UnmarshalJSON(raw []byte) error {
+	var id string
+	if json.Unmarshal(raw, &id) != nil || !protocol.ValidSnapshotOperationID(id) {
+		return ErrBackupInvalid
+	}
+	*cursor = peerRepositoryCursor(id)
+	return nil
+}
+
+func decodePeerRepositoryBody(reader io.Reader, limit int64, body any) error {
+	raw, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(raw)) > limit {
+		return ErrBackupInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(body); err != nil {
+		return ErrBackupInvalid
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return ErrBackupInvalid
+	}
+	return nil
+}
+
+type backupRepositoryMutation struct{ key string }
+
+var backupRepositoryMutations = map[string]*backupRepositoryMutation{} // guarded by poolBackupAuthorityMu
+
+// The caller holds poolBackupAuthorityMu.
+func backupRepositoryMutationBusy(s *Store, id string, owner *backupRepositoryMutation) bool {
+	if s == nil {
+		return false
+	}
+	key := s.dir + "\x00" + id
+	current := backupRepositoryMutations[key]
+	if owner != nil {
+		return owner.key != key || current != owner
+	}
+	return current != nil
+}
+
+// The caller holds poolBackupAuthorityMu.
+func reserveBackupRepositoryMutation(s *Store, id string) (*backupRepositoryMutation, error) {
+	key := s.dir + "\x00" + id
+	if backupRepositoryMutations[key] != nil {
+		return nil, ErrBackupConflict
+	}
+	owner := &backupRepositoryMutation{key: key}
+	backupRepositoryMutations[key] = owner
+	return owner, nil
+}
+
+func (owner *backupRepositoryMutation) releaseLocked() {
+	if backupRepositoryMutations[owner.key] == owner {
+		delete(backupRepositoryMutations, owner.key)
+	}
+}
+
+func (owner *backupRepositoryMutation) release() {
+	poolBackupAuthorityMu.Lock()
+	owner.releaseLocked()
+	poolBackupAuthorityMu.Unlock()
 }
 
 // forgetPoolBackupRepository drops the repository's record, recovery points and run
@@ -63,10 +146,21 @@ func dropPoolBackupRepositoryRecords(ctx context.Context, s *Store, req protocol
 	if err != nil {
 		return protocol.BackupRepository{}, false, err
 	}
+	mutation, err := reserveBackupRepositoryMutation(s, req.RepositoryID)
+	if err != nil {
+		return protocol.BackupRepository{}, false, err
+	}
+	defer mutation.releaseLocked()
 	repo, ok := repos.Repositories[req.RepositoryID]
 	if !ok {
 		// Record already gone: still finish a pending detach left by a crash mid-forget.
-		return protocol.BackupRepository{}, false, finishPendingBackupDetach(ctx, s, req.RepositoryID)
+		poolBackupAuthorityMu.Unlock()
+		err := finishPendingBackupDetach(ctx, s, req.RepositoryID)
+		poolBackupAuthorityMu.Lock()
+		return protocol.BackupRepository{}, false, err
+	}
+	if backupRepositoryPointMetadataBusy(s, repo.ID) {
+		return repo, true, backupRefusal("a recovery point metadata operation is running on this repository; wait for it to finish")
 	}
 	if req.Confirmation != repo.Name {
 		return repo, true, backupRefusal(fmt.Sprintf("type the repository name %q to confirm", repo.Name))
@@ -93,7 +187,7 @@ func dropPoolBackupRepositoryRecords(ctx context.Context, s *Store, req protocol
 		if run.RepositoryID != repo.ID {
 			continue
 		}
-		if run.Status == "pending" {
+		if run.Status != "succeeded" && run.Status != "failed" {
 			return repo, true, backupRefusal("a backup, restore, test restore or catalog operation is running on this repository; wait for it to finish")
 		}
 		repoRuns = append(repoRuns, run)
@@ -131,12 +225,22 @@ func dropPoolBackupRepositoryRecords(ctx context.Context, s *Store, req protocol
 	}
 	// Detach first and remember the mount: a failed unmount leaves the record, and a crash
 	// after the record is gone still retries from the pending detach.
-	// ponytail: holds the authority lock for the 20 s detach bound when the file server is dead.
+	// Journal admission stays on the Store owner; repository I/O does not hold authority.
 	if err := rememberPendingBackupDetach(s, repo); err != nil {
 		return repo, true, err
 	}
-	if err := detachBackupRepositoryHost(ctx, repo); err != nil {
-		return repo, true, fmt.Errorf("the mount of %q could not be removed on this host; try again: %w", repo.Name, err)
+	poolBackupAuthorityMu.Unlock()
+	detachErr := detachBackupRepositoryHost(ctx, repo)
+	poolBackupAuthorityMu.Lock()
+	if detachErr != nil {
+		return repo, true, fmt.Errorf("the mount of %q could not be removed on this host; try again: %w", repo.Name, detachErr)
+	}
+	repos, err = loadPoolBackupRepositories(s)
+	if err != nil {
+		return repo, true, err
+	}
+	if current, ok := repos.Repositories[repo.ID]; !ok || !sameBackupRepositoryRegistration(current, repo) {
+		return repo, true, ErrBackupConflict
 	}
 	if err := retireBackupRepositoryCredential(s, repo); err != nil {
 		return repo, true, err
@@ -316,7 +420,16 @@ func forgetBackupRepositoryOnMembers(ctx context.Context, s *Store, id string) {
 }
 
 func deliverPeerForgetRepository(ctx context.Context, s *Store, member protocol.PoolMember, id string) error {
-	return postPeerBackupRoute(ctx, s, member, "/forget", peerForgetRepository{RepositoryID: id})
+	repos, err := getPeerBackupRepositorySnapshots(ctx, s, member)
+	if err != nil {
+		return err
+	}
+	for _, repo := range repos {
+		if repo.ID == id {
+			return forgetStalePeerRepository(ctx, s, member, repo, "/forget")
+		}
+	}
+	return nil
 }
 
 func postPeerBackupRoute(ctx context.Context, s *Store, member protocol.PoolMember, route string, payload any) error {
@@ -328,6 +441,13 @@ func postPeerBackupRoute(ctx context.Context, s *Store, member protocol.PoolMemb
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
+	}
+	limit := peerRepositoryBodyLimit
+	if route == "/forget" {
+		limit = 64 << 10
+	}
+	if len(body) > limit {
+		return ErrBackupInvalid
 	}
 	work, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -347,45 +467,107 @@ func postPeerBackupRoute(ctx context.Context, s *Store, member protocol.PoolMemb
 	return nil
 }
 
-// retainBackupRepositoryOnMembers drops the records a member still holds for repositories this
-// master no longer has, such as a forget the member missed. Members keep no unique state, and
-// a member refuses to forget a repository its own journal still uses.
+// Sweeps delete only exact member records observed before verifying master absence.
+// A registration adopted while a request is in flight no longer matches the record.
 func retainBackupRepositoryOnMembers(ctx context.Context, s *Store, membership protocol.PoolMembership) {
 	for _, member := range poolConfirmationPeers(membership, s.State.HostID) {
 		if member.PeerOrigin == "" {
 			continue
 		}
-		// Read again for each member: a repository registered during a slow sweep must not
-		// be missing from the list a later member receives.
-		repos, err := ListPoolBackupRepositories(s)
+		repos, err := getPeerBackupRepositorySnapshots(ctx, s, member)
 		if err != nil {
-			return
+			continue
 		}
-		held := peerRetainRepositories{RepositoryIDs: []string{}}
 		for _, repo := range repos {
-			held.RepositoryIDs = append(held.RepositoryIDs, repo.ID)
-		}
-		if err := postPeerBackupRoute(ctx, s, member, "/retain", held); err != nil {
-			log.Printf("member %s did not drop stale backup repositories: %v", member.HostID, err)
+			if err := forgetStalePeerRepository(ctx, s, member, repo, "/retain"); err != nil {
+				log.Printf("member %s did not drop stale backup repository %s: %v", member.HostID, repo.ID, err)
+			}
 		}
 	}
+}
+
+func getPeerBackupRepositorySnapshots(ctx context.Context, s *Store, member protocol.PoolMember) ([]protocol.BackupRepository, error) {
+	client, err := poolTransferClient(s, member.PeerOrigin, member.HostID)
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
+	work, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	endpoint := strings.TrimRight(member.PeerOrigin, "/") + poolBackupPeerPath + "/retain"
+	var repos []protocol.BackupRepository
+	after := ""
+	for {
+		pageURL := endpoint
+		if after != "" {
+			pageURL += "?" + url.Values{"after_id": {after}}.Encode()
+		}
+		request, err := http.NewRequestWithContext(work, http.MethodGet, pageURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, errors.New("member unreachable")
+		}
+		var body peerRepositorySnapshots
+		if response.StatusCode != http.StatusOK {
+			response.Body.Close()
+			return nil, fmt.Errorf("member refused with status %d", response.StatusCode)
+		}
+		err = decodePeerRepositoryBody(response.Body, peerRepositoryBodyLimit, &body)
+		response.Body.Close()
+		if err != nil || body.Repositories == nil || len(body.Repositories) > peerRepositoryPageLimit {
+			return nil, ErrBackupInvalid
+		}
+		last := after
+		for _, repo := range body.Repositories {
+			if !validPeerForgetSnapshot(s, repo) || repo.ID <= last {
+				return nil, ErrBackupInvalid
+			}
+			last = repo.ID
+		}
+		next := string(body.NextAfterID)
+		if next != "" && (len(body.Repositories) == 0 || next != last || next <= after) {
+			return nil, ErrBackupInvalid
+		}
+		repos = append(repos, body.Repositories...)
+		if next == "" {
+			return repos, nil
+		}
+		after = next
+	}
+}
+
+func forgetStalePeerRepository(ctx context.Context, s *Store, member protocol.PoolMember, repo protocol.BackupRepository, route string) error {
+	poolBackupAuthorityMu.Lock()
+	_, err := GetPoolBackupRepository(s, repo.ID)
+	poolBackupAuthorityMu.Unlock()
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, ErrBackupRepoNotFound) {
+		return err
+	}
+	if route == "/forget" {
+		return postPeerBackupRoute(ctx, s, member, route, peerForgetRepository{Repository: repo})
+	}
+	return postPeerBackupRoute(ctx, s, member, route, peerRetainRepositories{Repositories: []protocol.BackupRepository{repo}})
 }
 
 // The caller authenticated the current master through the pinned peer channel.
 func handlePeerForgetRepository(s *Store, w http.ResponseWriter, r *http.Request) {
 	var body peerForgetRepository
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
-	decoder.DisallowUnknownFields()
-	if r.Method != http.MethodPost || decoder.Decode(&body) != nil || !protocol.ValidSnapshotOperationID(body.RepositoryID) {
+	if r.Method != http.MethodPost || decodePeerRepositoryBody(r.Body, 64<<10, &body) != nil || !validPeerForgetSnapshot(s, body.Repository) {
 		http.Error(w, "invalid forget request", http.StatusBadRequest)
 		return
 	}
-	if membership, err := Membership(s); err != nil || membership.MasterHostID == s.State.HostID {
-		http.Error(w, "not a pool member", http.StatusConflict)
-		return
+	response, err := peerBackupRequest(r.Context(), s, BackupRequest{PeerForgetRepositoryID: body.Repository.ID, PeerForgetRepository: &body.Repository})
+	if err == nil {
+		err = response.Err
 	}
-	if forgetMemberBackupRepository(r.Context(), s, body.RepositoryID) != nil {
-		http.Error(w, "backup repository could not be forgotten", http.StatusConflict)
+	if err != nil {
+		writePeerForgetError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -393,45 +575,172 @@ func handlePeerForgetRepository(s *Store, w http.ResponseWriter, r *http.Request
 
 // The caller authenticated the current master through the pinned peer channel.
 func handlePeerRetainRepositories(s *Store, w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		after := ""
+		if err == nil {
+			for key, values := range query {
+				if key != "after_id" || len(values) != 1 || !protocol.ValidSnapshotOperationID(values[0]) {
+					err = ErrBackupInvalid
+					break
+				}
+				after = values[0]
+			}
+		}
+		if err != nil {
+			http.Error(w, "invalid retain cursor", http.StatusBadRequest)
+			return
+		}
+		response, err := peerBackupRequest(r.Context(), s, BackupRequest{PeerRepositorySnapshots: true})
+		if err == nil {
+			err = response.Err
+		}
+		if err != nil {
+			writePeerForgetError(w, err)
+			return
+		}
+		body, err := encodePeerRepositoryPage(s, response.Repositories, after)
+		if err != nil {
+			writePeerForgetError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+		return
+	}
 	var body peerRetainRepositories
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
-	decoder.DisallowUnknownFields()
-	if r.Method != http.MethodPost || decoder.Decode(&body) != nil || len(body.RepositoryIDs) > 256 {
+	if r.Method != http.MethodPost || decodePeerRepositoryBody(r.Body, peerRepositoryBodyLimit, &body) != nil || len(body.Repositories) > peerRepositoryPageLimit {
 		http.Error(w, "invalid retain request", http.StatusBadRequest)
 		return
 	}
-	if membership, err := Membership(s); err != nil || membership.MasterHostID == s.State.HostID {
-		http.Error(w, "not a pool member", http.StatusConflict)
-		return
-	}
-	held := map[string]bool{}
-	for _, id := range body.RepositoryIDs {
-		if !protocol.ValidSnapshotOperationID(id) {
+	for _, repo := range body.Repositories {
+		if !validPeerForgetSnapshot(s, repo) {
 			http.Error(w, "invalid retain request", http.StatusBadRequest)
 			return
 		}
-		held[id] = true
 	}
-	poolBackupAuthorityMu.Lock()
-	repos, err := loadPoolBackupRepositories(s)
-	poolBackupAuthorityMu.Unlock()
-	if err != nil {
-		http.Error(w, "backup repositories unavailable", http.StatusConflict)
-		return
-	}
-	for id := range repos.Repositories {
-		if !held[id] {
-			err = errors.Join(err, forgetMemberBackupRepository(r.Context(), s, id))
+	for _, repo := range body.Repositories {
+		response, err := peerBackupRequest(r.Context(), s, BackupRequest{PeerForgetRepositoryID: repo.ID, PeerForgetRepository: &repo})
+		if err == nil {
+			err = response.Err
 		}
-	}
-	if err != nil {
-		http.Error(w, "backup repository could not be forgotten", http.StatusConflict)
-		return
+		if err != nil {
+			writePeerForgetError(w, err)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func forgetMemberBackupRepository(ctx context.Context, s *Store, id string) error {
+// The Store owner supplies a detached snapshot; sorting and paging never touch live state.
+func encodePeerRepositoryPage(s *Store, repos []protocol.BackupRepository, after string) ([]byte, error) {
+	sort.Slice(repos, func(i, j int) bool { return repos[i].ID < repos[j].ID })
+	for i, repo := range repos {
+		if !validPeerForgetSnapshot(s, repo) || (i > 0 && repo.ID == repos[i-1].ID) {
+			return nil, ErrBackupInvalid
+		}
+	}
+	start := sort.Search(len(repos), func(i int) bool { return repos[i].ID > after })
+	var body bytes.Buffer
+	body.WriteString(`{"repositories":[`)
+	suffix := `]}`
+	count := 0
+	for i := start; i < len(repos) && count < peerRepositoryPageLimit; i++ {
+		row, err := json.Marshal(repos[i])
+		if err != nil {
+			return nil, err
+		}
+		nextSuffix := `]}`
+		if i+1 < len(repos) {
+			// Valid repository IDs contain no JSON escape characters.
+			nextSuffix = `],"next_after_id":"` + repos[i].ID + `"}`
+		}
+		comma := 0
+		if count > 0 {
+			comma = 1
+		}
+		if body.Len()+comma+len(row)+len(nextSuffix) > peerRepositoryBodyLimit {
+			if count == 0 {
+				return nil, ErrBackupUnavailable
+			}
+			break
+		}
+		if comma != 0 {
+			body.WriteByte(',')
+		}
+		body.Write(row)
+		suffix = nextSuffix
+		count++
+	}
+	body.WriteString(suffix)
+	return body.Bytes(), nil
+}
+
+func validPeerForgetSnapshot(s *Store, repo protocol.BackupRepository) bool {
+	return protocol.ValidSnapshotOperationID(repo.ID) && repo.PoolID == s.State.PoolID
+}
+
+func writePeerForgetError(w http.ResponseWriter, err error) {
+	status := http.StatusConflict
+	if errors.Is(err, ErrBackupUnavailable) {
+		status = http.StatusServiceUnavailable
+	}
+	http.Error(w, "backup repository could not be forgotten", status)
+}
+
+// acceptPeerRepositoryForget runs on the Store owner, including journal inspection.
+func acceptPeerRepositoryForget(ctx context.Context, s *Store, request BackupRequest) BackupResponse {
+	if membership, err := Membership(s); err != nil || membership.MasterHostID == s.State.HostID {
+		return BackupResponse{Err: ErrBackupUnavailable}
+	}
+	if request.PeerRepositorySnapshots {
+		poolBackupAuthorityMu.Lock()
+		defer poolBackupAuthorityMu.Unlock()
+		state, err := loadPoolBackupRepositories(s)
+		if err != nil {
+			return BackupResponse{Err: err}
+		}
+		repos := make([]protocol.BackupRepository, 0, len(state.Repositories))
+		for _, repo := range state.Repositories {
+			repos = append(repos, repo)
+		}
+		entries, err := os.ReadDir(filepath.Dir(pendingBackupDetachPath(s, "unused")))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return BackupResponse{Err: err}
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				continue
+			}
+			id := strings.TrimSuffix(entry.Name(), ".json")
+			if _, exists := state.Repositories[id]; exists {
+				continue
+			}
+			raw, err := os.ReadFile(pendingBackupDetachPath(s, id))
+			var repo protocol.BackupRepository
+			if err != nil || json.Unmarshal(raw, &repo) != nil || repo.ID != id {
+				return BackupResponse{Err: errors.New("pending backup detach record is corrupt")}
+			}
+			repos = append(repos, repo)
+		}
+		return BackupResponse{Repositories: repos}
+	}
+	if request.PeerForgetRepository == nil || request.PeerForgetRepository.ID != request.PeerForgetRepositoryID ||
+		!validPeerForgetSnapshot(s, *request.PeerForgetRepository) {
+		return BackupResponse{Err: ErrBackupInvalid}
+	}
+	return BackupResponse{Err: forgetMemberBackupRepository(ctx, s, request.PeerForgetRepositoryID, request.PeerForgetRepository)}
+}
+
+func sameBackupRepositoryRegistration(a, b protocol.BackupRepository) bool {
+	a.Access, b.Access = protocol.StorageAccess{}, protocol.StorageAccess{}
+	a.Health, b.Health = protocol.BackupRepositoryHealth{}, protocol.BackupRepositoryHealth{}
+	a.MemberAccess, b.MemberAccess = nil, nil
+	a.LastHealthTransition, b.LastHealthTransition = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+
+func forgetMemberBackupRepository(ctx context.Context, s *Store, id string, expected *protocol.BackupRepository) error {
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
 	repos, err := loadPoolBackupRepositories(s)
@@ -440,17 +749,59 @@ func forgetMemberBackupRepository(ctx context.Context, s *Store, id string) erro
 	}
 	repo, ok := repos.Repositories[id]
 	if !ok {
-		return finishPendingBackupDetach(ctx, s, id)
+		raw, err := os.ReadFile(pendingBackupDetachPath(s, id))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var pending protocol.BackupRepository
+		if json.Unmarshal(raw, &pending) != nil || pending.ID != id {
+			return errors.New("pending backup detach record is corrupt")
+		}
+		if expected == nil || !sameBackupRepositoryRegistration(pending, *expected) {
+			return nil
+		}
+		if opID := memberJournalUsesBackupRepository(s, id); opID != "" {
+			return ErrBackupConflict
+		}
+		mutation, err := reserveBackupRepositoryMutation(s, id)
+		if err != nil {
+			return err
+		}
+		defer mutation.releaseLocked()
+		poolBackupAuthorityMu.Unlock()
+		err = finishPendingBackupDetach(ctx, s, id)
+		poolBackupAuthorityMu.Lock()
+		return err
+	}
+	if expected == nil || !sameBackupRepositoryRegistration(repo, *expected) {
+		return nil
 	}
 	if opID := memberJournalUsesBackupRepository(s, id); opID != "" {
 		return fmt.Errorf("operation %s on this host still uses backup repository %s", opID, id)
 	}
-	// Detach before the record goes, so a failed unmount is retried by the next sweep.
+	mutation, err := reserveBackupRepositoryMutation(s, id)
+	if err != nil {
+		return err
+	}
+	defer mutation.releaseLocked()
 	if err := rememberPendingBackupDetach(s, repo); err != nil {
 		return err
 	}
-	if err := detachBackupRepositoryHost(ctx, repo); err != nil {
+	poolBackupAuthorityMu.Unlock()
+	detachErr := detachBackupRepositoryHost(ctx, repo)
+	poolBackupAuthorityMu.Lock()
+	if detachErr != nil {
+		return detachErr
+	}
+	repos, err = loadPoolBackupRepositories(s)
+	if err != nil {
 		return err
+	}
+	if current, ok := repos.Repositories[id]; !ok || !sameBackupRepositoryRegistration(current, *expected) {
+		return nil
 	}
 	if err := retireBackupRepositoryCredential(s, repo); err != nil {
 		return err

@@ -199,10 +199,46 @@ func prepareBackupRepository(ctx context.Context, repo protocol.BackupRepository
 
 // A non-empty replaceID (the typed repository ID) registers over an existing repository, replacing its
 // credential or, for SFTP, its pinned host key; the destination's owner marker must still match.
-func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo protocol.BackupRepository, operationID, replaceID string) (protocol.BackupRepository, error) {
-	// ponytail: one registration holds this lock through its bounded probe; split it if transfer latency becomes a problem.
+func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo protocol.BackupRepository, operationID, replaceID string, mutation *backupRepositoryMutation) (prepared protocol.BackupRepository, prepErr error) {
+	ownedMutation := false
+	defer func() {
+		if ownedMutation {
+			mutation.release()
+		}
+	}()
+	defer func() {
+		if prepErr != nil {
+			return
+		}
+		if backupCredentialKind(prepared.Kind) {
+			// Native preparation already probed with the operation's credential.
+			// The normal backend resolver requires the not-yet-committed row.
+			now := time.Now().UTC()
+			prepared.Health = protocol.BackupRepositoryHealth{Status: "online", ObservedAt: now}
+			prepared.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: now}
+		} else {
+			prepared = checkBackupRepositoryAccessForStore(ctx, s, prepared)
+		}
+	}()
 	poolBackupAuthorityMu.Lock()
-	defer poolBackupAuthorityMu.Unlock()
+	if mutation == nil {
+		var err error
+		mutation, err = reserveBackupRepositoryMutation(s, repo.ID)
+		if err != nil {
+			poolBackupAuthorityMu.Unlock()
+			return protocol.BackupRepository{}, err
+		}
+		ownedMutation = true
+	}
+	locked := true
+	defer func() {
+		if locked {
+			poolBackupAuthorityMu.Unlock()
+		}
+	}()
+	if backupRepositoryMutationBusy(s, repo.ID, mutation) {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
 	membership, err := Membership(s)
 	if err != nil || membership.MasterHostID != s.State.HostID || membership.PoolID != repo.PoolID {
 		return protocol.BackupRepository{}, ErrBackupUnavailable
@@ -217,20 +253,26 @@ func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo 
 	if replace && replaceID != repo.ID {
 		return protocol.BackupRepository{}, ErrBackupInvalid
 	}
+	var existingRepository *protocol.BackupRepository
 	if existing, err := GetPoolBackupRepository(s, repo.ID); err == nil {
 		if err := backupReplacementError(s, existing, repo, replace); err != nil {
 			return protocol.BackupRepository{}, err
 		}
+		existingRepository = &existing
 		if repo.Kind == protocol.BackupRepoKindNFS {
 			if existing.Identity == nil || existing.MountPath == "" {
 				return protocol.BackupRepository{}, ErrBackupUnavailable
 			}
 			repo.Identity, repo.MountPath = existing.Identity, existing.MountPath
+			poolBackupAuthorityMu.Unlock()
+			locked = false
 			return prepareBackupRepositoryNative(ctx, repo)
 		}
 	} else if !errors.Is(err, ErrBackupRepoNotFound) || replace {
 		return protocol.BackupRepository{}, err
 	}
+	poolBackupAuthorityMu.Unlock()
+	locked = false
 	if repo.Kind == protocol.BackupRepoKindNFS {
 		return prepareBackupRepository(ctx, repo)
 	}
@@ -256,6 +298,12 @@ func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo 
 		if err != nil {
 			return protocol.BackupRepository{}, err
 		}
+		if existingRepository != nil {
+			repo.RemoteIdentity = existingRepository.RemoteIdentity
+			if repo.RemoteIdentity == nil {
+				return protocol.BackupRepository{}, ErrBackupUnavailable
+			}
+		}
 		return prepareS3BackupRepository(ctx, s, repo, credentials)
 	}
 	if repo.Kind != protocol.BackupRepoKindSMB3 || repo.Valid() != nil || repo.MountPath != "" || repo.Identity != nil || repo.SMBIdentity != nil {
@@ -265,10 +313,28 @@ func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo 
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
+	if existingRepository != nil {
+		repo.SMBIdentity = existingRepository.SMBIdentity
+	}
 	return prepareBackupRepositorySMBNative(ctx, repo, credentials)
 }
 
-func prepareBackupRepositoryForAdoption(ctx context.Context, s *Store, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
+func prepareBackupRepositoryForAdoption(ctx context.Context, s *Store, repo protocol.BackupRepository, mutation *backupRepositoryMutation) (protocol.BackupRepository, error) {
+	poolBackupAuthorityMu.Lock()
+	if s != nil && mutation == nil {
+		var err error
+		mutation, err = reserveBackupRepositoryMutation(s, repo.ID)
+		if err != nil {
+			poolBackupAuthorityMu.Unlock()
+			return protocol.BackupRepository{}, err
+		}
+		defer mutation.release()
+	}
+	busy := backupRepositoryMutationBusy(s, repo.ID, mutation)
+	poolBackupAuthorityMu.Unlock()
+	if busy {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
 	if repo.Kind == protocol.BackupRepoKindNFS {
 		if repo.Valid() != nil || repo.Identity == nil || repo.MountPath != "" {
 			return protocol.BackupRepository{}, ErrBackupInvalid
@@ -310,17 +376,15 @@ func prepareBackupRepositoryForAdoption(ctx context.Context, s *Store, repo prot
 	return prepareBackupRepositorySMBNative(ctx, repo, credentials)
 }
 
-func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.BackupRepository, replace bool) (protocol.BackupRepository, error) {
+func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.BackupRepository, replace bool, mutation *backupRepositoryMutation) (protocol.BackupRepository, error) {
 	if !preparedBackupRepositoryMatches(repo, prepared) {
 		return protocol.BackupRepository{}, ErrBackupInvalid
 	}
 	poolBackupAuthorityMu.Lock()
-	locked := true
-	defer func() {
-		if locked {
-			poolBackupAuthorityMu.Unlock()
-		}
-	}()
+	defer poolBackupAuthorityMu.Unlock()
+	if backupRepositoryMutationBusy(s, repo.ID, mutation) {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
 	membership, err := Membership(s)
 	if err != nil || membership.MasterHostID != s.State.HostID || membership.PoolID != repo.PoolID {
 		return protocol.BackupRepository{}, ErrBackupUnavailable
@@ -329,8 +393,6 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 		return protocol.BackupRepository{}, err
 	}
 	repo = prepared
-	repo.Health = protocol.BackupRepositoryHealth{}
-	repo.LastHealthTransition = nil
 	state, err := loadPoolBackupRepositories(s)
 	if err != nil {
 		return protocol.BackupRepository{}, err
@@ -355,10 +417,14 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 	now := time.Now().UTC()
 	if existing, ok := state.Repositories[repo.ID]; ok {
 		repo.CreatedAt = existing.CreatedAt
-		if reflect.DeepEqual(repo.Identity, existing.Identity) &&
-			reflect.DeepEqual(repo.SMBIdentity, existing.SMBIdentity) && reflect.DeepEqual(repo.RemoteIdentity, existing.RemoteIdentity) && repo.MountPath == existing.MountPath {
-			repo.Health = existing.Health
-			repo.LastHealthTransition = existing.LastHealthTransition
+		repo.LastHealthTransition = existing.LastHealthTransition
+		if repo.Health.Status != existing.Health.Status &&
+			(repo.Health.Status == "offline" || repo.Health.Status == "online" && existing.Health.Status == "offline") {
+			status := "recovered"
+			if repo.Health.Status == "offline" {
+				status = "offline"
+			}
+			repo.LastHealthTransition = &protocol.BackupRepositoryHealthTransition{Status: status, At: repo.Health.ObservedAt, Error: repo.Health.Error}
 		}
 	} else {
 		repo.CreatedAt = now
@@ -377,21 +443,48 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 		if err := retireSupersededBackupCredentials(s, repo); err != nil {
 			return protocol.BackupRepository{}, ErrBackupUnavailable
 		}
-		// Member delivery is network I/O; never hold the pool backup authority across it.
-		// A member that misses it is retried by the health loop.
-		poolBackupAuthorityMu.Unlock()
-		locked = false
-		projectBackupCredentialToMembers(context.Background(), s, membership, repo)
 	}
-	if locked {
-		poolBackupAuthorityMu.Unlock()
-		locked = false
+	return repo, nil
+}
+
+// A successful native replacement may still fail its durable owner commit.
+// Restore the prior mount only while the repository still names that prior record.
+func rollbackBackupRepositoryRegistration(ctx context.Context, s *Store, request BackupRequest) error {
+	if request.PreviousRepository == nil || request.PreviousRepository.Kind != protocol.BackupRepoKindSMB3 {
+		return nil
 	}
-	// Record real health now instead of "unknown" until the next periodic pass.
-	probeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	repo = checkBackupRepositoryAccessForStore(probeCtx, s, repo)
-	return repo, savePoolBackupRepositoryAccess(s, repo)
+	previous := *request.PreviousRepository
+	poolBackupAuthorityMu.Lock()
+	current, err := GetPoolBackupRepository(s, previous.ID)
+	if err != nil || !sameBackupRepositoryRegistration(current, previous) {
+		poolBackupAuthorityMu.Unlock()
+		return errors.Join(vmhost.ErrStorageRollbackUncertain, err)
+	}
+	mutation := request.RepositoryMutation
+	if mutation == nil {
+		mutation, err = reserveBackupRepositoryMutation(s, previous.ID)
+		if err != nil {
+			poolBackupAuthorityMu.Unlock()
+			return errors.Join(vmhost.ErrStorageRollbackUncertain, err)
+		}
+		defer mutation.release()
+	} else if backupRepositoryMutationBusy(s, previous.ID, mutation) {
+		poolBackupAuthorityMu.Unlock()
+		return errors.Join(vmhost.ErrStorageRollbackUncertain, ErrBackupConflict)
+	}
+	poolBackupAuthorityMu.Unlock()
+	credentials, err := ResolveBackupCredential(s, previous)
+	if err != nil {
+		return errors.Join(vmhost.ErrStorageRollbackUncertain, err)
+	}
+	_, err = prepareBackupRepositorySMBNative(ctx, previous, credentials)
+	if err != nil {
+		return errors.Join(vmhost.ErrStorageRollbackUncertain, err)
+	}
+	if request.PreparedRepository != nil && request.PreparedRepository.CredentialRef != previous.CredentialRef {
+		err = removeBackupSMBCredentialNative(request.PreparedRepository.CredentialRef)
+	}
+	return err
 }
 
 // A repository keeps its credential unless this host can no longer read it (for example the
@@ -555,6 +648,14 @@ func sameBackupProbeRepository(expected, local protocol.BackupRepository) bool {
 
 func probePeerBackupRepository(ctx context.Context, s *Store, expected protocol.BackupRepository) protocol.PoolStorageAccess {
 	access := protocol.PoolStorageAccess{RepositoryID: expected.ID, HostID: s.State.HostID, ObservedAt: time.Now().UTC()}
+	poolBackupAuthorityMu.Lock()
+	mutation, err := reserveBackupRepositoryMutation(s, expected.ID)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		access.Error = "backup repository access probe failed"
+		return access
+	}
+	defer mutation.release()
 	local, err := GetPoolBackupRepository(s, expected.ID)
 	missing := errors.Is(err, ErrBackupRepoNotFound)
 	// The master owns the record's name and credential reference; a re-registration
@@ -570,14 +671,14 @@ func probePeerBackupRepository(ctx context.Context, s *Store, expected protocol.
 	if missing || replaced {
 		adopt := portablePeerRepository(expected)
 		adopt.SMBIdentity = expected.SMBIdentity
-		local, err = prepareBackupRepositoryForAdoption(ctx, s, adopt)
+		local, err = prepareBackupRepositoryForAdoption(ctx, s, adopt, mutation)
 	}
 	if err == nil && !sameBackupProbeRepository(expected, local) {
 		err = ErrBackupConflict
 	}
 	if err == nil && replaced {
 		poolBackupAuthorityMu.Lock()
-		err = adoptPeerBackupRepository(s, BackupRequest{PeerSMBIdentity: expected.SMBIdentity}, expected, local)
+		err = adoptPeerBackupRepository(s, BackupRequest{PeerSMBIdentity: expected.SMBIdentity, RepositoryMutation: mutation}, expected, local)
 		poolBackupAuthorityMu.Unlock()
 	}
 	if err == nil && missing {
@@ -591,8 +692,7 @@ func probePeerBackupRepository(ctx context.Context, s *Store, expected protocol.
 					loadErr = ErrBackupConflict
 				}
 			} else {
-				state.Repositories[expected.ID] = local
-				loadErr = savePoolBackupRepositories(s, state)
+				loadErr = adoptPeerBackupRepository(s, BackupRequest{PeerSMBIdentity: expected.SMBIdentity, RepositoryMutation: mutation}, expected, local)
 			}
 		}
 		poolBackupAuthorityMu.Unlock()
@@ -849,7 +949,14 @@ func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Dur
 func remountAdoptedBackupRepository(ctx context.Context, s *Store, repo protocol.BackupRepository, timeout time.Duration) protocol.BackupRepository {
 	work, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	prepared, err := prepareBackupRepositoryForAdoption(work, s, repo)
+	poolBackupAuthorityMu.Lock()
+	mutation, err := reserveBackupRepositoryMutation(s, repo.ID)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		return repo
+	}
+	defer mutation.release()
+	prepared, err := prepareBackupRepositoryForAdoption(work, s, repo, mutation)
 	if err != nil || prepared.MountPath == "" || prepared.ID != repo.ID {
 		return repo
 	}
@@ -1060,6 +1167,9 @@ func ReservePoolBackupRun(s *Store, run protocol.BackupRun) (protocol.BackupRun,
 	}
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
+	if backupRepositoryMutationBusy(s, run.RepositoryID, nil) {
+		return protocol.BackupRun{}, ErrBackupConflict
+	}
 	membership, err := Membership(s)
 	if err != nil || membership.PoolID != run.PoolID {
 		return protocol.BackupRun{}, ErrBackupUnavailable
@@ -1346,7 +1456,7 @@ func pruneRecoveryPoint(ctx context.Context, s *Store, backend backupRepositoryS
 			return false, err
 		}
 		point, err := getCatalogPoint(s, repositoryID, id)
-		if errors.Is(err, ErrBackupNotFound) || err == nil && (point.Protected || pins[id]) {
+		if errors.Is(err, ErrBackupNotFound) || err == nil && (point.Protected || pins[id] || backupPointMetadataBusy(s, repositoryID, id)) {
 			return false, nil
 		}
 		if err != nil {

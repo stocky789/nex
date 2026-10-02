@@ -7,7 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,34 +79,211 @@ func TestWaitPeerBackupTerminalStopsAtDeadline(t *testing.T) {
 	}
 }
 
-// A master-hosted run that never returns settles needs_attention at the deadline and hands the
-// slot back; one that finishes first keeps its own outcome.
-func TestLocalRunSettlesAtDeadline(t *testing.T) {
-	lab := newTransferLab(t, 1)
-	master := lab.host("master-1")
-	stuck := make(chan struct{})
-	t.Cleanup(func() { close(stuck) })
+func TestLocalRunDeadlinePreservesWorkerAndLateCompletion(t *testing.T) {
+	master := seedBackupMaster(t)
 	run := boundsRun(master, "local", master.State.HostID, "pending")
 	run.CreatedAt = time.Now().UTC().Add(-13 * time.Hour)
 	if err := savePoolBackupRun(master, run); err != nil {
 		t.Fatal(err)
 	}
-	got := runLocalBackupWithDeadline(context.Background(), master, run, func() managedCompletion {
-		<-stuck
-		return managedCompletion{}
+	release := make(chan struct{})
+	var once sync.Once
+	stalled, finished := make(chan managedCompletion, 1), make(chan managedCompletion, 1)
+	received := false
+	t.Cleanup(func() {
+		once.Do(func() { close(release) })
+		if !received {
+			<-finished
+		}
 	})
-	if got.result.Status != "needs_attention" || got.result.Error == "" {
-		t.Fatalf("completion = %+v", got)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		finished <- runLocalBackupWithDeadline(ctx, master, run, func() managedCompletion {
+			<-release
+			return managedCompletion{result: protocol.Result{OperationID: run.OperationID, Status: "succeeded"}}
+		}, func(completion managedCompletion) { stalled <- completion })
+	}()
+	select {
+	case got := <-stalled:
+		if got.result.Status != "needs_attention" {
+			t.Fatalf("deadline result = %+v", got.result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadline was not reported")
 	}
-	if saved, err := loadPoolBackupRun(master, "local"); err != nil || saved.Status != "needs_attention" || saved.Stage != "run_deadline" {
-		t.Fatalf("run = %+v, %v", saved, err)
+	if saved, err := loadPoolBackupRun(master, run.OperationID); err != nil || saved.Status != "needs_attention" {
+		t.Fatalf("deadline run = %+v, %v", saved, err)
 	}
+	cancel()
+	select {
+	case got := <-finished:
+		received = true
+		t.Fatalf("cancellation was mistaken for stopped work: %+v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	once.Do(func() { close(release) })
+	select {
+	case got := <-finished:
+		received = true
+		if got.result.Status != "succeeded" {
+			t.Fatalf("late completion was lost: %+v", got.result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopped worker did not release ownership")
+	}
+}
+
+func TestLocalRunFinishedBeforeDeadlineKeepsOutcome(t *testing.T) {
+	master := seedBackupMaster(t)
+	run := boundsRun(master, "finished", master.State.HostID, "pending")
 	run.CreatedAt = time.Now().UTC()
-	done := runLocalBackupWithDeadline(context.Background(), master, run, func() managedCompletion {
-		return managedCompletion{result: protocol.Result{OperationID: "local", Status: "succeeded"}}
-	})
-	if done.result.Status != "succeeded" {
-		t.Fatalf("finished run = %+v", done)
+	got := runLocalBackupWithDeadline(context.Background(), master, run, func() managedCompletion {
+		return managedCompletion{result: protocol.Result{OperationID: run.OperationID, Status: "succeeded"}}
+	}, func(completion managedCompletion) { t.Errorf("finished work reported stalled: %+v", completion.result) })
+	if got.result.Status != "succeeded" {
+		t.Fatalf("finished run = %+v", got.result)
+	}
+}
+
+func TestRunDeadlineDoesNotReconcileLiveRestoreStaging(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		name := "late-completion"
+		if shutdown {
+			name = "shutdown"
+		}
+		t.Run(name, func(t *testing.T) {
+			master := seedBackupMaster(t)
+			seedFlowRepository(t, master, "point-1")
+			cmd := protocol.Command{OperationID: "live-restore", Kind: protocol.BackupKindRestoreNew,
+				Restore: &protocol.RestoreAsNewRequest{RepositoryID: "repo-1", RecoveryPointID: "point-1",
+					NewVMID: "22222222-2222-4222-8222-222222222222", NewVMName: "restored",
+					StorageID: "storage-1", HostID: master.State.HostID}}
+			if err := applyResponse(master, protocol.ReportResponse{Commands: []protocol.Command{cmd}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := ensureBackupRunReserved(master, cmd); err != nil {
+				t.Fatal(err)
+			}
+			run, err := loadPoolBackupRun(master, cmd.OperationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run.CreatedAt = time.Now().UTC().Add(-13 * time.Hour)
+			if err := savePoolBackupRun(master, run); err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}, 1), make(chan struct{})
+			var starts atomic.Int32
+			previous := requestBackupRestorePlacement
+			requestBackupRestorePlacement = func(context.Context, *Store, protocol.VMCreateSpec, string) error {
+				starts.Add(1)
+				select {
+				case entered <- struct{}{}:
+				default:
+				}
+				<-release
+				return errors.New("disposable placement refusal after staging")
+			}
+			t.Cleanup(func() { requestBackupRestorePlacement = previous })
+			results := make(chan protocol.Result, 32)
+			_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var report protocol.ReportRequest
+				if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+					t.Error(err)
+					return
+				}
+				for _, result := range report.Results {
+					if result.OperationID == cmd.OperationID {
+						select {
+						case results <- result:
+						default:
+						}
+					}
+				}
+				_ = json.NewEncoder(w).Encode(protocol.ReportResponse{})
+			}))
+			master.State.Controller, master.State.TrustPEM = identity.Controller, identity.TrustPEM
+			master.State.CertificatePEM, master.State.KeyPEM = identity.CertificatePEM, identity.KeyPEM
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			done := make(chan error, 1)
+			var once sync.Once
+			runStopped := false
+			defer func() {
+				once.Do(func() { close(release) })
+				cancel()
+				if !runStopped {
+					if err := <-done; err != nil {
+						t.Errorf("Run stopped with error: %v", err)
+					}
+				}
+			}()
+			go func() {
+				done <- Run(ctx, master, RunConfig{Heartbeat: 100 * time.Millisecond, ProbeInterval: 100 * time.Millisecond, ProbeTimeout: 20 * time.Millisecond})
+			}()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal("restore never reached live staging")
+			}
+			for observations := 0; observations < 4; {
+				select {
+				case result := <-results:
+					if result.Status != "needs_attention" {
+						t.Fatalf("live restore was reconciled terminal: %+v", result)
+					}
+					observations++
+				case <-ctx.Done():
+					t.Fatal("deadline outcome was not reported while work remained live")
+				}
+			}
+			artifact := filepath.Join(restoreStagingDir(master, cmd.OperationID), "vda.qcow2")
+			if bytes, err := os.ReadFile(artifact); err != nil || string(bytes) != "disk-bytes-for-restore" {
+				t.Fatalf("live staging was removed or altered: %q, %v", bytes, err)
+			}
+			if starts.Load() != 1 {
+				t.Fatalf("live restore was executed %d times", starts.Load())
+			}
+			if !pinned(t, master, cmd.OperationID) {
+				t.Fatal("live restore lost its recovery-point pin")
+			}
+			if shutdown {
+				cancel()
+				select {
+				case err := <-done:
+					runStopped = true
+					t.Fatalf("Run returned while its worker still owned staging: %v", err)
+				case <-time.After(100 * time.Millisecond):
+				}
+				if _, err := os.Stat(artifact); err != nil {
+					t.Fatalf("shutdown removed live staging: %v", err)
+				}
+				once.Do(func() { close(release) })
+				err := <-done
+				runStopped = true
+				if err != nil {
+					t.Fatalf("Run shutdown failed: %v", err)
+				}
+				if saved, err := loadPoolBackupRun(master, cmd.OperationID); err != nil || saved.Status != "failed" {
+					t.Fatalf("stopped worker did not persist its outcome before shutdown: %+v, %v", saved, err)
+				}
+				return
+			}
+			once.Do(func() { close(release) })
+			for {
+				select {
+				case result := <-results:
+					if result.Status == "failed" {
+						if _, err := os.Stat(artifact); !os.IsNotExist(err) {
+							t.Fatalf("stopped, refused restore retained staging: %v", err)
+						}
+						return
+					}
+				case <-ctx.Done():
+					t.Fatal("late worker outcome never reached the owner journal")
+				}
+			}
+		})
 	}
 }
 

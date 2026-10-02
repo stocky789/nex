@@ -78,7 +78,7 @@ export function repositoryChangeBody(policy: BackupPolicy, repositoryID: string,
     vm_ids: policy.vm_ids,
     retention: policy.retention,
     limits: policy.limits,
-    overrides: policy.overrides,
+    overrides: policy.overrides?.filter(override => policy.vm_ids.includes(override.vm_id)),
   };
 }
 

@@ -14,6 +14,10 @@ import (
 )
 
 var writeImportedBackupProtectMarker = vmhost.WriteBackupProtectMarker
+var checkImportedBackupCatalogPointCapacity = checkBackupCatalogPointCapacity
+var listBackupCatalogRepositoryEntries = func(ctx context.Context, backend backupRepositoryStorage) ([]string, error) {
+	return backend.Entries(ctx)
+}
 
 // importPoolBackupCatalog scans a repository and merges validated manifests into the catalog.
 // Existing protected flags, test results and restore pins are preserved across rebuild.
@@ -94,7 +98,7 @@ func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string)
 		}
 		poolBackupAuthorityMu.Unlock()
 		// Capacity may probe ready members over HTTP; keep that off the backup lock.
-		if err := checkBackupCatalogPointCapacity(s, scanned...); err != nil {
+		if err := checkImportedBackupCatalogPointCapacity(s, scanned...); err != nil {
 			return nil, err
 		}
 		imported := make([]protocol.BackupRecoveryPoint, 0, len(scanned))
@@ -103,21 +107,42 @@ func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string)
 			if err := ctx.Err(); err != nil {
 				return imported, err
 			}
-			if point.Protected {
-				if err := backend.SetProtected(ctx, point.ID, true); err != nil {
-					return imported, err
+			point, writeErr := func() (protocol.BackupRecoveryPoint, error) {
+				admitted := point
+				if err := reserveBackupPointMetadata(ctx, s, repositoryID, point.ID); err != nil {
+					return point, err
 				}
-			}
-			poolBackupAuthorityMu.Lock()
-			if poolBackupPruneSeq.Load() != pruned {
+				defer releaseBackupPointMetadata(s, repositoryID, point.ID)
+				poolBackupAuthorityMu.Lock()
+				if poolBackupPruneSeq.Load() != pruned {
+					poolBackupAuthorityMu.Unlock()
+					restart = true
+					return point, nil
+				}
+				point, unchanged, err := mergeBackupPointMetadata(s, point, true)
 				poolBackupAuthorityMu.Unlock()
-				restart = true
-				break
-			}
-			writeErr := writePoolBackupCatalogEntry(s, point)
-			poolBackupAuthorityMu.Unlock()
+				if err != nil {
+					return point, err
+				}
+				// Reuse bulk admission only for an existing record that is still unchanged.
+				// New records and concurrent metadata changes need fresh admission.
+				if prior, cataloged := byID[point.ID]; !cataloged || prior != admitted || point != admitted || !unchanged {
+					if err := checkBackupCatalogPointCapacity(s, point); err != nil {
+						return point, err
+					}
+				}
+				if point.Protected {
+					if err := backend.SetProtected(ctx, point.ID, true); err != nil {
+						return point, err
+					}
+				}
+				return commitBackupPointMetadata(ctx, s, point, true)
+			}()
 			if writeErr != nil {
 				return imported, writeErr
+			}
+			if restart {
+				break
 			}
 			imported = append(imported, point)
 		}
@@ -150,7 +175,21 @@ func RebuildPoolBackupCatalogFromRepository(ctx context.Context, s *Store, repos
 	if err != nil {
 		return imported, err
 	}
-	entries, err := backend.Entries(ctx)
+	// Only records observed before the unlocked listing can be stale candidates.
+	// Settlement after that snapshot must survive even if the listing missed it.
+	poolBackupAuthorityMu.Lock()
+	before, err := loadPoolBackupCatalog(s)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		return imported, err
+	}
+	candidates := make(map[string]protocol.BackupRecoveryPoint, len(before))
+	for _, point := range before {
+		if point.RepositoryID == repositoryID {
+			candidates[point.ID] = point
+		}
+	}
+	entries, err := listBackupCatalogRepositoryEntries(ctx, backend)
 	if err != nil {
 		return imported, err
 	}
@@ -177,7 +216,9 @@ func RebuildPoolBackupCatalogFromRepository(ctx context.Context, s *Store, repos
 		}
 	}
 	for _, point := range existing {
-		if point.RepositoryID == repositoryID && !seen[point.ID] && !point.Protected {
+		prior, candidate := candidates[point.ID]
+		if candidate && prior == point && !seen[point.ID] && !point.Protected &&
+			!backupPointMetadataBusy(s, repositoryID, point.ID) {
 			if pinned := backupPointPinned(pins, point.ID); pinned {
 				continue
 			}

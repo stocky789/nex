@@ -37,7 +37,7 @@ func (c *Controller) releaseRetainedOriginals(w http.ResponseWriter, r *http.Req
 		return
 	}
 	defer tx.Rollback()
-	if c.replayResource(w, tx, v.RequestID, "vm-release-retained", v) {
+	if c.replayResource(w, tx, v.RequestID, "vm-release-retained", v, pool, id) {
 		return
 	}
 	if err = c.managedHost(tx, pool, host); err != nil {

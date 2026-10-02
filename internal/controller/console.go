@@ -29,6 +29,7 @@ type consoleSession struct {
 	expires            time.Time
 	delivered          bool // sent to the host in a report response
 	claimed            bool // browser attached
+	agentClaimed       bool // host tunnel admitted, even after the browser takes it
 	dead               bool // browser gave up; a late host tunnel is closed
 	agent              chan net.Conn
 }
@@ -270,11 +271,12 @@ func (c *Controller) browserConsole(w http.ResponseWriter, r *http.Request, user
 func (c *Controller) agentConsole(w http.ResponseWriter, r *http.Request, host string) {
 	c.consoles.mu.Lock()
 	s := c.consoles.sessions[r.PathValue("token")]
-	if s == nil || s.hostID != host || s.dead || time.Now().After(s.expires) || len(s.agent) != 0 {
+	if s == nil || s.hostID != host || s.dead || time.Now().After(s.expires) || s.agentClaimed {
 		c.consoles.mu.Unlock()
 		fail(w, 404, "console session unknown")
 		return
 	}
+	s.agentClaimed = true
 	c.consoles.mu.Unlock()
 	hj, ok := w.(http.Hijacker)
 	if !ok {

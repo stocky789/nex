@@ -104,10 +104,11 @@ func TestOrphanCleanupRecordTravelsWithAuthority(t *testing.T) {
 	if err != nil || manifest == nil || manifest.OrphanCleanups != 1 {
 		t.Fatalf("manifest = %+v, %v", manifest, err)
 	}
-	root, _, err := stagePoolBackupAuthorityActivationPages(master, manifest, 3)
+	root, _, release, err := stagePoolBackupAuthorityActivationPages(master, manifest, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	got, err := loadOrphanCleanup(&Store{dir: filepath.Join(master.dir, root)}, "orph-1")
 	if err != nil || got.Status != "succeeded" {
 		t.Fatalf("cleanup on the new master = %+v, %v", got, err)

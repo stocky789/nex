@@ -49,7 +49,7 @@ const (
 	peerBackupRetry      = 30 * time.Second
 	peerBackupRetryMax   = 5 * time.Minute
 	peerBackupStartLimit = 10 * time.Minute
-	// A pending run whose member gives the same non-answer this long settles failed.
+	// A pending run whose member gives the same non-answer this long needs observation.
 	peerBackupSilentLimit = time.Hour
 	// A run reserved this long ago that a member still reports as running settles
 	// needs_attention. It is not failed: the member may yet finish, and then its
@@ -500,6 +500,13 @@ func preparePeerRepository(ctx context.Context, s *Store, repo protocol.BackupRe
 	if !ok || self.Status != "ready" {
 		return protocol.BackupRepository{}, ErrBackupUnavailable
 	}
+	poolBackupAuthorityMu.Lock()
+	mutation, err := reserveBackupRepositoryMutation(s, repo.ID)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		return protocol.BackupRepository{}, err
+	}
+	defer mutation.release()
 	adopt := repo
 	adopt.SMBIdentity = identity
 	current, err := GetPoolBackupRepository(s, repo.ID)
@@ -509,7 +516,7 @@ func preparePeerRepository(ctx context.Context, s *Store, repo protocol.BackupRe
 	if err != nil && !errors.Is(err, ErrBackupRepoNotFound) {
 		return protocol.BackupRepository{}, err
 	}
-	prepared, err := prepareBackupRepositoryForAdoption(ctx, s, adopt)
+	prepared, err := prepareBackupRepositoryForAdoption(ctx, s, adopt, mutation)
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
@@ -690,12 +697,12 @@ func nextPendingPeerBackup(s *Store, notBefore peerBackoff, now time.Time) (pend
 			delete(notBefore, run.OperationID)
 			continue
 		}
-		if reason := abandonedPeerBackupReason(membership, s.State.HostID, run, notBefore, now); reason != "" {
-			run.Status, run.Stage, run.Error = "failed", "peer_dispatch", reason
+		if reason := unobservablePeerBackupReason(membership, s.State.HostID, run, notBefore, now); reason != "" {
+			run.Status, run.Stage, run.Error = "needs_attention", "peer_dispatch", reason
 			if err := settlePoolBackupRun(context.Background(), s, run, nil); err != nil {
 				log.Printf("member backup occurrence remains unsettled: %v", err)
 			}
-			delete(notBefore, run.OperationID)
+			notBefore.observed(run.OperationID, reason, now)
 			continue
 		}
 		cmd := protocol.Command{OperationID: run.OperationID, Kind: protocol.BackupKindBackupNow,
@@ -709,14 +716,12 @@ func nextPendingPeerBackup(s *Store, notBefore peerBackoff, now time.Time) (pend
 				log.Printf("member backup %s cannot be dispatched yet: %v", run.OperationID, err)
 			}
 			notBefore.observed(run.OperationID, err.Error(), now)
-			// A host that became undialable between the abandon check and dial still settles
-			// instead of waiting another full silent window after this same failure answer.
-			if reason := abandonedPeerBackupReason(membership, s.State.HostID, run, notBefore, now); reason != "" {
-				run.Status, run.Stage, run.Error = "failed", "peer_dispatch", reason
+			if reason := unobservablePeerBackupReason(membership, s.State.HostID, run, notBefore, now); reason != "" {
+				run.Status, run.Stage, run.Error = "needs_attention", "peer_dispatch", reason
 				if settleErr := settlePoolBackupRun(context.Background(), s, run, nil); settleErr != nil {
 					log.Printf("member backup occurrence remains unsettled: %v", settleErr)
 				}
-				delete(notBefore, run.OperationID)
+				notBefore.observed(run.OperationID, reason, now)
 			}
 			continue
 		}
@@ -740,17 +745,17 @@ func stalledRunReason() string {
 	return fmt.Sprintf("the backup has not finished %v after it started; the host running it may be stalled or the repository unresponsive. Check that host and the repository; if the backup later completes it is recorded automatically", stalledRunLimit)
 }
 
-// runLocalBackupWithDeadline runs a master-hosted backup or restore and, if it is still
-// unfinished at the stalled-run deadline, settles the run needs_attention so the slot is
-// released. The work is not cancelled: its reservation stays, so no second run of the VM
-// starts, and a later outcome is recorded by the usual reconciliation.
-func runLocalBackupWithDeadline(ctx context.Context, store *Store, run protocol.BackupRun, work func() managedCompletion) managedCompletion {
+// runLocalBackupWithDeadline reports a stalled run without giving up ownership of
+// its worker. It returns only after the work stops, preserving its late outcome.
+func runLocalBackupWithDeadline(ctx context.Context, store *Store, run protocol.BackupRun, work func() managedCompletion, stalled func(managedCompletion)) managedCompletion {
 	finished := make(chan managedCompletion, 1)
 	go func() { finished <- work() }()
+	timer := time.NewTimer(time.Until(run.CreatedAt.Add(stalledRunLimit)))
+	defer timer.Stop()
 	select {
 	case completion := <-finished:
 		return completion
-	case <-time.After(time.Until(run.CreatedAt.Add(stalledRunLimit))):
+	case <-timer.C:
 	case <-ctx.Done():
 		return <-finished
 	}
@@ -759,20 +764,22 @@ func runLocalBackupWithDeadline(ctx context.Context, store *Store, run protocol.
 	if err := settlePoolBackupRun(context.Background(), store, run, nil); err != nil {
 		log.Printf("stalled backup run remains unsettled: %v", err)
 	}
-	return managedCompletion{result: protocol.Result{OperationID: run.OperationID, Status: "needs_attention", Error: reason, ObservedAt: time.Now().UTC()}, background: true}
+	stalled(managedCompletion{result: protocol.Result{OperationID: run.OperationID, Status: "needs_attention", Error: reason, ObservedAt: time.Now().UTC()}, background: true})
+	return <-finished
 }
 
-// abandonedPeerBackupReason says why no member will ever settle run, or "" while one still might.
-func abandonedPeerBackupReason(membership protocol.PoolMembership, self string, run protocol.BackupRun, notBefore peerBackoff, now time.Time) string {
+// unobservablePeerBackupReason identifies missing owner evidence, never proof that
+// execution failed. Keep the reservation and observe only if the owner returns.
+func unobservablePeerBackupReason(membership protocol.PoolMembership, self string, run protocol.BackupRun, notBefore peerBackoff, now time.Time) string {
 	member, found := poolMemberByID(membership, run.HostID)
 	switch {
 	case run.HostID == "":
 	case run.HostID == self:
-		return "this host is now the pool master and holds no record of the backup that was reserved on it"
+		return "this host is now the pool master and holds no local journal of the backup reserved on it; its outcome is unknown"
 	case !found:
-		return "the member that owned this backup is no longer in the pool"
+		return "the member that owned this backup is no longer in the pool; its outcome is unknown"
 	case member.Status != "ready" || member.PeerOrigin == "":
-		return "the member that owns this backup cannot be dialed"
+		return "the member that owns this backup cannot be dialed; its outcome is unknown"
 	case run.Status == "pending":
 		if answer, silent := notBefore.silent(run.OperationID, now); silent {
 			return fmt.Sprintf("the member gave no usable answer for %v (%s), so this backup's outcome is unknown; check the repository catalog", peerBackupSilentLimit, answer)
@@ -792,7 +799,8 @@ func settlePeerBackupCompletion(ctx context.Context, s *Store, completion peerBa
 		var permanent permanentPeerBackupError
 		if !errors.As(completion.err, &permanent) {
 			log.Printf("member backup occurrence remains unsettled: %v", completion.err)
-		} else if completion.run.Status != "needs_attention" {
+		}
+		if (errors.As(completion.err, &permanent) || completion.reply.Result.Status == "succeeded") && completion.run.Status != "needs_attention" {
 			// Recorded on the run once; re-observing it does not log again.
 			run := completion.run
 			run.Status, run.Stage, run.Error = "needs_attention", "peer_verification", completion.err.Error()

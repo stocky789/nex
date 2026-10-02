@@ -16,12 +16,12 @@ func boundsRun(master *Store, id, hostID, status string) protocol.BackupRun {
 		RepositoryID: "repo-1", VMID: "vm-" + id, Stage: "reserved", Status: status, CreatedAt: time.Now().UTC().Add(-3 * time.Hour)}
 }
 
-// A pending run for a member that stays silent, a pending/needs_attention run whose host is
-// the master itself or cannot be dialed, and a needs_attention run whose host left the pool,
-// must settle instead of pinning the pool forever.
-func TestUnservableMemberRunsSettleFailed(t *testing.T) {
+// Silence and missing owner access cannot prove execution failed. Preserve each
+// reservation as needs_attention so returning members can settle it without replay.
+func TestUnservableMemberRunsRemainUncertain(t *testing.T) {
 	lab := newTransferLab(t, 1)
 	master, member := lab.host("master-1"), lab.host("member-1")
+	seedFlowRepository(t, master)
 	now := time.Now()
 	backoff := peerBackoff{}
 	backoff["silent"] = peerBackoffEntry{answer: peerBackupUnreachable, since: now.Add(-2 * peerBackupSilentLimit)}
@@ -51,9 +51,12 @@ func TestUnservableMemberRunsSettleFailed(t *testing.T) {
 	}
 	for _, id := range []string{"silent", "self", "self-attention", "gone", "undialable"} {
 		run, err := loadPoolBackupRun(master, id)
-		if err != nil || run.Status != "failed" || run.Stage != "peer_dispatch" || run.Error == "" {
+		if err != nil || run.Status != "needs_attention" || run.Error == "" {
 			t.Fatalf("run %s = %+v, %v", id, run, err)
 		}
+	}
+	if work, ready := nextPendingPeerBackup(master, peerBackoff{}, now); !ready || work.run.OperationID != "silent" || !work.observe {
+		t.Fatalf("a returning member must be observed without restarting it: ready=%v work=%+v", ready, work)
 	}
 }
 
@@ -88,9 +91,8 @@ func TestPendingRunOfUnreadyOrEjectedMemberDoesNotBlockTransfer(t *testing.T) {
 	}
 }
 
-// A needs_attention backup-now that the pool has no record of must settle so it stops blocking
-// later backups of the same VM.
-func TestStaleNeedsAttentionBackupDoesNotBlockNewRun(t *testing.T) {
+// A missing pool record is not evidence that an admitted command never ran.
+func TestMissingNeedsAttentionBackupStillExcludesNewRun(t *testing.T) {
 	s := seedBackupMaster(t)
 	vm := poolVMTestSpec("vm-1", s.State.HostID)
 	backup := func(id string) protocol.Command {
@@ -102,16 +104,23 @@ func TestStaleNeedsAttentionBackupDoesNotBlockNewRun(t *testing.T) {
 	}
 	fresh := backup("fresh")
 	journal["fresh"] = JournalEntry{Command: &fresh, Status: "pending", Order: 2}
+	s.State.Journal = journal
 	if next := nextManagedCommand(journal, ""); next != "" {
 		t.Fatalf("precondition: needs_attention entry should block, got %q", next)
 	}
 	result, settled := journalBackupSettlement(s, journal["stale"])
-	if !settled || result.Status != "failed" || result.Error == "" {
-		t.Fatalf("stale entry was not settled: %+v %v", result, settled)
+	if settled {
+		t.Fatalf("unknown outcome was terminalized: %+v", result)
 	}
-	journal["stale"] = JournalEntry{Command: &stale, Status: result.Status, Order: 1}
-	if next := nextManagedCommand(journal, ""); next != "fresh" {
-		t.Fatalf("new run stayed blocked: %q", next)
+	if result := unreservedBackupResult(s, stale, time.Now().UTC(), ErrBackupNotFound); result.Status != "needs_attention" {
+		t.Fatalf("missing admitted execution was failed: %+v", result)
+	}
+	if next := nextManagedCommand(journal, ""); next != "" {
+		t.Fatalf("unknown execution released same-VM exclusion: %q", next)
+	}
+	journal["stale"] = JournalEntry{Command: &stale, Status: "pending", PeerDispatched: true, Order: 1}
+	if result := unreservedBackupResult(s, stale, time.Now().UTC(), ErrBackupNotFound); result.Status != "needs_attention" {
+		t.Fatalf("missing peer-admitted execution was failed: %+v", result)
 	}
 }
 

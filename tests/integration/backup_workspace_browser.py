@@ -175,6 +175,171 @@ def repository_poll_focus(page, fixture):
     expect(opener).to_be_focused()
 
 
+def manual_polls(page):
+    # Advance the workspace's production 15-second callbacks without wall-clock sleeps.
+    page.add_init_script("""
+        const originalSet = window.setInterval.bind(window);
+        const originalClear = window.clearInterval.bind(window);
+        const polls = new Map();
+        let next = -1;
+        window.setInterval = (callback, delay, ...args) => {
+            if (delay !== 15000) return originalSet(callback, delay, ...args);
+            const id = next--;
+            polls.set(id, () => callback(...args));
+            return id;
+        };
+        window.clearInterval = id => {
+            if (!polls.delete(id)) originalClear(id);
+        };
+        window.advanceBackupPoll = () => [...polls.values()].forEach(callback => callback());
+    """)
+
+
+def advance_poll(page):
+    with page.expect_response(lambda response: response.url.endswith('/backup-repositories')):
+        page.evaluate("window.advanceBackupPoll()")
+
+
+def delayed_history(page, fixture):
+    data, repos, points, policies, runs = fixture
+    manual_polls(page)
+    held, requests = [], []
+    def defer(route):
+        requests.append(route.request.url)
+        held.append(route)
+        page.evaluate("count => window.heldHistoryRequests = count", len(requests))
+    page.route('**/api/v1/pools/pool-demo/backup-runs*', defer)
+    page.reload(wait_until='domcontentloaded')
+    row = page.locator('.job-row')
+    expect(row).to_contain_text('Nightly servers')
+    expect(row.locator('td').nth(3)).to_have_text('Unknown')
+    page.get_by_role('button', name='Create backup job', exact=True).click()
+    panel = page.locator('.slideover')
+    expect(panel.get_by_role('combobox', name='Repository', exact=True)).to_contain_text('Vault')
+    panel.get_by_role('button', name='Cancel', exact=True).click()
+    page.wait_for_function("window.heldHistoryRequests === 1")
+    assert len(held) == 1
+    for cursor in range(1, 4):
+        advance_poll(page)
+        assert len(requests) == cursor, 'A poll must not abort and restart an unfinished history scan'
+        with page.expect_request(lambda request: f'cursor={cursor}&generation=slow-history' in request.url):
+            held.pop(0).fulfill(json={'items': [], 'generation': 'slow-history', 'total': 1, 'next_cursor': str(cursor)})
+        page.wait_for_function("count => window.heldHistoryRequests === count", arg=cursor + 1)
+        expect(row.locator('td').nth(3)).to_have_text('Unknown')
+    held.pop(0).fulfill(json={'items': runs, 'generation': 'slow-history', 'total': 1})
+    expect(row.locator('td').nth(3)).to_contain_text('1 failed')
+    assert len(requests) == 4, 'All four delayed pages must complete despite three intervening polls'
+
+    advance_poll(page)
+    page.wait_for_function("window.heldHistoryRequests === 5")
+    # Previous complete observations remain on screen while a refresh is pending.
+    expect(row.locator('td').nth(3)).to_contain_text('1 failed')
+    assert len(held) == 1
+    held.pop(0).fulfill(status=503, json={'error': 'Simulated history outage'})
+    expect(page.get_by_role('alert')).to_contain_text('Backup run history unavailable')
+    expect(row.locator('td').nth(3)).to_have_text('Unknown')
+    page.get_by_role('button', name='Inspect Nightly servers', exact=True).click()
+    expect(page.get_by_role('button', name='Change repository of Nightly servers', exact=True)).to_be_enabled()
+
+    # Generation races restart at the first page, with a bounded retry budget.
+    advance_poll(page)
+    page.wait_for_function("window.heldHistoryRequests === 6")
+    with page.expect_request(lambda request: 'cursor=stale&generation=racing-history' in request.url):
+        held.pop(0).fulfill(json={'items': [{**runs[0], 'status': 'failed'}], 'generation': 'racing-history', 'total': 2, 'next_cursor': 'stale'})
+    page.wait_for_function("window.heldHistoryRequests === 7")
+    for count in (8, 9):
+        with page.expect_request(lambda request: request.url.endswith('/backup-runs')):
+            held.pop(0).fulfill(status=409, json={'error': 'Simulated generation change'})
+        page.wait_for_function("count => window.heldHistoryRequests === count", arg=count)
+    recovered = [{**runs[0], 'status': 'succeeded', 'error': ''}]
+    held.pop(0).fulfill(json={'items': recovered, 'generation': 'recovered', 'total': 1})
+    expect(row.locator('td').nth(3)).to_contain_text('1 succeeded')
+    expect(page.get_by_role('alert')).to_have_count(0)
+
+    advance_poll(page)
+    page.wait_for_function("window.heldHistoryRequests === 10")
+    for count in (11, 12):
+        with page.expect_request(lambda request: request.url.endswith('/backup-runs')):
+            held.pop(0).fulfill(status=409, json={'error': 'Simulated repeated generation change'})
+        page.wait_for_function("count => window.heldHistoryRequests === count", arg=count)
+    held.pop(0).fulfill(status=409, json={'error': 'Simulated repeated generation change'})
+    expect(page.get_by_role('alert')).to_contain_text('Backup run history unavailable')
+    expect(row.locator('td').nth(3)).to_have_text('Unknown')
+    assert not held, 'Repeated conflicts stop after three attempts instead of retrying forever'
+    advance_poll(page)
+    page.wait_for_function("window.heldHistoryRequests === 13")
+    held.pop(0).fulfill(json={'items': recovered, 'generation': 'recovered-again', 'total': 1})
+    expect(row.locator('td').nth(3)).to_contain_text('1 succeeded')
+    expect(page.get_by_role('alert')).to_have_count(0)
+
+
+def history_scope_cancellation(page, fixture):
+    data, repos, points, policies, runs = fixture
+    manual_polls(page)
+    held, cancelled = [], []
+    page.on('requestfailed', lambda request: cancelled.append(request.url))
+    def defer(route):
+        held.append(route)
+        page.evaluate("window.heldHistoryRequests = (window.heldHistoryRequests || 0) + 1")
+    page.route('**/api/v1/pools/pool-demo/backup-runs*', defer)
+    page.reload(wait_until='domcontentloaded')
+    expect(page.locator('.job-row td').nth(3)).to_have_text('Unknown')
+    page.wait_for_function("window.heldHistoryRequests === 1")
+    assert len(held) == 1
+    old_url = held.pop(0).request.url
+    with page.expect_event('requestfailed', predicate=lambda request: request.url == old_url):
+        page.evaluate("location.hash='/settings/backups'")
+    expect(page.get_by_role('tab', name='Backup jobs', exact=True)).to_have_count(0)
+    assert old_url in cancelled, 'Leaving workspace cancels its in-flight history scan'
+    with page.expect_request(lambda request: request.url.endswith('/backup-runs')):
+        page.evaluate("location.hash='/backups'")
+    page.wait_for_function("window.heldHistoryRequests === 2")
+    held.pop(0).fulfill(json={'items': [{**runs[0], 'status': 'succeeded', 'error': ''}], 'generation': 'new-scope', 'total': 1})
+    expect(page.locator('.job-row td').nth(3)).to_contain_text('1 succeeded')
+    expect(page.get_by_role('alert')).to_have_count(0)
+
+
+def repository_deleted_override(page, fixture):
+    data, repos, points, policies, runs = fixture
+    manual_polls(page)
+    policy = policies[0]
+    policy['vm_ids'].append('vm-deleted')
+    retained = {'vm_id': 'vm-db', 'capture_mode': 'crash', 'retention': {'keep_latest': 3}}
+    policy['overrides'] = [{'vm_id': 'vm-deleted', 'capture_mode': 'stopped', 'retention': {'keep_latest': 9}}, retained]
+    submissions = []
+    def submit(route):
+        if route.request.method != 'PUT':
+            route.fallback()
+            return
+        body = route.request.post_data_json
+        submissions.append(body)
+        if any(override['vm_id'] not in body['vm_ids'] for override in body.get('overrides', [])):
+            route.fulfill(status=400, json={'error': 'override VM is outside policy coverage'})
+        elif len(submissions) == 1:
+            route.fulfill(status=503, json={'error': 'Simulated uncertain repository change'})
+        else:
+            route.fulfill(status=202, json={'operation': {'id': 'operation-move', 'status': 'queued'}})
+    page.route('**/api/v1/pools/pool-demo/backup-policies/policy-demo', submit)
+    page.reload(wait_until='domcontentloaded')
+    page.get_by_role('button', name='Change repository of Nightly servers', exact=True).click()
+    panel = page.locator('.slideover')
+    panel.get_by_role('combobox', name='New repository', exact=True).select_option('repo-other')
+    panel.get_by_role('checkbox').check()
+    panel.get_by_role('button', name='Save repository change', exact=True).click()
+    expect(panel.get_by_role('button', name='Retry exact request', exact=True)).to_be_visible()
+    assert submissions[0]['vm_ids'] == ['vm-db', 'vm-web']
+    assert submissions[0]['overrides'] == [retained], 'Only the deleted VM override is pruned'
+    # New observations must not change an unresolved move's coverage or retained override.
+    data['vms'][:] = [vm for vm in data['vms'] if vm['id'] != 'vm-web']
+    policy['overrides'][1] = {**retained, 'capture_mode': 'stopped'}
+    policy['vm_ids'] = ['vm-db']
+    policy['revision'] = 2
+    advance_poll(page)
+    panel.get_by_role('button', name='Retry exact request', exact=True).click()
+    expect(panel).to_have_count(0)
+    assert submissions[1] == submissions[0], 'An uncertain move retries the exact original valid payload'
+
+
 CHECKS = {
     'retained-metadata': retained_metadata,
     'draft-route': draft_route,
@@ -184,6 +349,9 @@ CHECKS = {
     'backup-refusal': backup_refusal,
     'repository-inventory': repository_inventory,
     'repository-poll-focus': repository_poll_focus,
+    'delayed-history': delayed_history,
+    'history-scope-cancellation': history_scope_cancellation,
+    'repository-deleted-override': repository_deleted_override,
 }
 
 

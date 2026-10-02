@@ -59,6 +59,9 @@ choice after inspection.
   operation ID, and inspect the host task. The original Core can resume the
   exact retained allocation after restart and verify the result. Do not submit
   a changed target or assume a promoted master can repeat native work.
+- A deadline does not prove the native worker stopped. While it remains live, Core keeps
+  its staging files, restore reservation and pins, and does not start a second attempt
+  or clean up underneath it. Inspect the original operation and its late outcome.
 - An uncertain reply freezes the destination and restore choice. Inspect **Tasks**
   before **Retry restore request**, which resends the same target and request
   identity. Back and Close remain disabled; do not create another VM to resolve

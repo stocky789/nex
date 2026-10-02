@@ -68,10 +68,11 @@ func TestPeerBackupCredentialScopeAndPromotion(t *testing.T) {
 	}
 	missing := repo
 	missing.CredentialRef = "missing"
-	root, _, err := stagePoolBackupAuthorityActivation(member, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{missing}}, 3)
+	root, _, release, err := stagePoolBackupAuthorityActivation(member, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{missing}}, 3)
 	if err != nil {
 		t.Fatalf("missing private receipt blocked promotion: %v", err)
 	}
+	defer release()
 	if adopted, err := loadPoolBackupRepositories(&Store{dir: filepath.Join(member.dir, root)}); err != nil || adopted.Repositories[repo.ID].Access.Status != "failed" {
 		t.Fatalf("missing private receipt not recorded as failed access: %+v, %v", adopted.Repositories[repo.ID], err)
 	}
@@ -185,36 +186,45 @@ func TestBackupRepositoryRegistrationWithOfflineMember(t *testing.T) {
 	missing.ID, missing.CredentialRef = "repo-missing", "missing-receipt"
 	missingPrepared := missing
 	missingPrepared.RemoteIdentity = prepared.RemoteIdentity
-	if _, err := upsertPoolBackupRepositoryPrepared(master, missing, missingPrepared, false); !errors.Is(err, ErrBackupUnavailable) {
+	if _, err := upsertPoolBackupRepositoryPrepared(master, missing, missingPrepared, false, nil); !errors.Is(err, ErrBackupUnavailable) {
 		t.Fatalf("missing master credential committed: %v", err)
 	}
 	if _, err := GetPoolBackupRepository(master, missing.ID); !errors.Is(err, ErrBackupRepoNotFound) {
 		t.Fatalf("missing master credential left a repository: %v", err)
 	}
 	lab.drop(offline.State.HostID, "!"+poolBackupPeerPath+"/credential")
-	saved, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared, false)
+	saved, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared, false, nil)
 	if err != nil {
 		t.Fatalf("offline member blocked master registration: %+v, %v", saved, err)
 	}
 	if _, err := localBackupCredential(offline, saved); err == nil {
 		t.Fatal("offline member acknowledged a credential it never received")
 	}
-	if got, err := localBackupCredential(online, saved); err != nil || got.Credentials.Secret != "private-example-secret" {
-		t.Fatalf("online member lost credential: %v", err)
+	if _, err := localBackupCredential(online, saved); err == nil {
+		t.Fatal("owner commit synchronously delivered a member credential")
 	}
-	root, _, err := stagePoolBackupAuthorityActivation(offline, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{saved}}, 3)
+	membership, err := Membership(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectBackupCredentialToMembers(context.Background(), master, membership, saved)
+	if got, err := localBackupCredential(online, saved); err != nil || got.Credentials.Secret != "private-example-secret" {
+		t.Fatalf("background delivery lost online member credential: %v", err)
+	}
+	root, _, release, err := stagePoolBackupAuthorityActivation(offline, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{saved}}, 3)
 	if err != nil {
 		t.Fatalf("an unreadable repository blocked promotion: %v", err)
 	}
+	defer release()
 	adopted, err := loadPoolBackupRepositories(&Store{dir: filepath.Join(offline.dir, root)})
 	if got := adopted.Repositories[saved.ID]; err != nil || got.Access.Status != "failed" || got.Access.Error == "" || got.Health.Status != "offline" {
 		t.Fatalf("promotion did not record the unreachable repository: %+v, %v", got, err)
 	}
-	if replay, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared, false); err != nil || replay.CredentialRef != saved.CredentialRef || !replay.CreatedAt.Equal(saved.CreatedAt) {
+	if replay, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared, false, nil); err != nil || replay.CredentialRef != saved.CredentialRef || !replay.CreatedAt.Equal(saved.CreatedAt) {
 		t.Fatalf("exact registration retry changed identity: %+v, %v", replay, err)
 	}
 	lab.drop(offline.State.HostID, "")
-	membership, err := Membership(master)
+	membership, err = Membership(master)
 	if err != nil {
 		t.Fatal(err)
 	}

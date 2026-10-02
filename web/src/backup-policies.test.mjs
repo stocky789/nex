@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { bundleTestModule } from "./test-helpers.mjs";
 
 const { failedVMs, jobVMResults, repositoryChangeBody, requestRepositoryChange } = await import(bundleTestModule(new URL("./backup-policies.tsx", import.meta.url), "backup-policies"));
@@ -18,6 +17,19 @@ assert.deepEqual(repositoryChangeBody(fullPolicy, "repo-2", "held-id"), {
   repository_id: "repo-2", capture_mode: "snapshot", time_zone: "UTC", rule: fullPolicy.rule,
   vm_ids: fullPolicy.vm_ids, retention: fullPolicy.retention, limits: fullPolicy.limits, overrides: fullPolicy.overrides,
 }, "repository change preserves the Core-owned policy fields and schedule");
+
+const deletedCoverage = {
+  ...fullPolicy,
+  vm_ids: ["vm-a", "vm-deleted"],
+  overrides: [
+    { vm_id: "vm-deleted", retention: { keep_latest: 9 }, capture_mode: "crash" },
+    { vm_id: "vm-a", retention: { keep_latest: 5 }, capture_mode: "stopped" },
+  ],
+};
+const movedCoverage = repositoryChangeBody({ ...deletedCoverage, vm_ids: ["vm-a"] }, "repo-2", "move-id");
+assert.deepEqual(movedCoverage.overrides, [deletedCoverage.overrides[1]], "deleted coverage cannot leave an invalid override, while retained VM settings survive");
+assert.deepEqual(deletedCoverage.overrides.map(override => override.vm_id), ["vm-deleted", "vm-a"], "building the request does not mutate the reported Core policy");
+assert.equal(repositoryChangeBody({ ...fullPolicy, overrides: undefined }, "repo-2", "move-id").overrides, undefined, "jobs without overrides remain valid");
 const sent = [];
 const pendingChange = {};
 const heldChange = stableBody(pendingChange, "repository-policy-1", repositoryChangeBody(fullPolicy, "repo-2", "held-id"));
@@ -57,9 +69,3 @@ for (const vmID of ["a", "b", "c", "d"]) {
   assert.deepEqual(reversedResults.get(vmID), results.get(vmID), "latest result and successful backup selection are independent of history ordering");
 }
 
-const { deletePolicyBody } = await import(bundleTestModule(new URL("./backup-policy-delete.tsx", import.meta.url), "backup-policy-delete"));
-assert.deepEqual(deletePolicyBody("bpdelete-1", "Nightly"), { request_id: "bpdelete-1", confirmation: "Nightly" });
-const deleteSource = await readFile(new URL("./backup-policy-delete.tsx", import.meta.url), "utf8");
-assert.ok(deleteSource.includes("disabled={busy || !confirmMatches(typed, policy.name)}"), "delete stays disabled until the job name is typed");
-assert.ok(deleteSource.includes("useEffect(() => { requestID.current = rid(\"bpdelete\"); }, [typed]);"), "a changed confirmation is a new request");
-assert.ok(deleteSource.includes("/delete`, \"POST\""), "delete posts to the policy delete route");

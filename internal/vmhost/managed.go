@@ -141,6 +141,7 @@ type managedJournal struct {
 	BackupTPMRootAbsent     bool                                `json:"backup_tpm_root_absent,omitempty"`
 	BackupTPMManifestSHA256 string                              `json:"backup_tpm_manifest_sha256,omitempty"`
 	BackupTPMPreviousSHA256 string                              `json:"backup_tpm_previous_sha256,omitempty"`
+	RetainedTPM             []managedRetainedTPM                `json:"retained_tpm"`
 	// DiskChains is ordered with Disks; each chain is its active head followed by every
 	// backing image. Paths stay in this host journal and never cross the Core API.
 	DiskChains      [][]string      `json:"disk_chains,omitempty"`
@@ -212,6 +213,8 @@ type ejectCleanupReapply struct {
 	MembershipGeneration uint64
 }
 
+const managedJournalMaxBytes = 1 << 20
+
 func (e *ManagedEngine) save(j managedJournal) error {
 	if j.projectionView {
 		path := filepath.Join(e.stateDir, j.Command.OperationID+".json")
@@ -224,15 +227,14 @@ func (e *ManagedEngine) save(j managedJournal) error {
 			DiskChains: cloneDiskChains(j.DiskChains), Domain: append([]byte(nil), j.Domain...),
 			Targets: append([]string(nil), j.Targets...), MediaTarget: j.MediaTarget, DriversTarget: j.DriversTarget,
 		}
-		b, err := json.Marshal(current)
-		if err != nil {
-			return err
-		}
-		return atomicWrite(path, b)
+		j = current
 	}
 	b, err := json.Marshal(j)
 	if err != nil {
 		return err
+	}
+	if len(b) > managedJournalMaxBytes {
+		return errors.New("managed journal exceeds 1 MiB")
 	}
 	return atomicWrite(filepath.Join(e.stateDir, j.Command.OperationID+".json"), b)
 }
@@ -700,7 +702,7 @@ var journalValidations atomic.Int64
 func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 	var j managedJournal
 	path := filepath.Join(e.stateDir, name)
-	b, err := readSmall(path, 1<<20)
+	b, err := readSmall(path, managedJournalMaxBytes)
 	if err != nil {
 		return j, err
 	}
@@ -1178,9 +1180,13 @@ func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch f
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
-		// A refused registration never used its credential; a new attempt hands off a new one.
+		// Failed preparations discard unbound secrets; peer receipts remain retryable.
 		if j.Result.Status == "failed" && c.Kind == "storage-register" && c.Storage.CredentialReceipt != "" && !storageCredentialAttached(js, c.Storage.CredentialReceipt) {
-			_ = releaseStorageCredential(filepath.Dir(e.stateDir), *c.Storage)
+			retryPeer := c.Storage.CredentialRequestID == PoolStorageCredentialRequestID(c.Storage.ID, c.Storage.Generation)
+			if cleanupErr := removeStorageCredential(filepath.Dir(e.stateDir), c.Storage.CredentialReceipt, c.Storage.PoolID, c.Storage.HostID, false, retryPeer); cleanupErr != nil {
+				j.Result.Status = "needs_attention"
+				j.Result.Error = errors.Join(err, fmt.Errorf("release failed registration credential: %w", cleanupErr)).Error()
+			}
 		}
 	}
 	return j.Result, e.save(j)

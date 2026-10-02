@@ -48,6 +48,7 @@
 <li><a href="#peerSubmitCatalogBoundRestore">POST /api/v1/pool/backup/restore</a></li>
 <li><a href="#peerDeliverBackupCredential">POST /api/v1/pool/backup/credential</a></li>
 <li><a href="#peerForgetBackupRepository">POST /api/v1/pool/backup/forget</a></li>
+<li><a href="#peerListBackupRepositorySnapshots">GET /api/v1/pool/backup/retain</a></li>
 <li><a href="#peerRetainBackupRepositories">POST /api/v1/pool/backup/retain</a></li>
 <li><a href="#peerProbeBackupRepositoryAccess">POST /api/v1/pool/backup/access</a></li>
 <li><a href="#peerPullBackupCredentials">GET /api/v1/pool/backup/credentials</a></li>
@@ -1289,12 +1290,12 @@
   }
 }</pre></details></section>
 <section id="peerStagePoolBackupPage"><h2>POST <code>/api/v1/pool/replica/backup-page</code></h2>
-<p>Stage one signed backup authority page in a push session</p><p>The current pool master sends backup authority pages over pinned mutual TLS in a push session. A request carrying the signed replica with index -1 and null data verifies it once, opens a session (expires after 10 minutes, one per member) and returns the next missing page. Page requests carry only manifest_sha256, index and page bytes or reuse_sha256, and are accepted only for the open session&#x27;s manifest and master (409 otherwise). Both formats use the same 256 KiB page limit. Version 0 verifies exact per-page length and SHA-256 against the verified manifest. Version 2 uses page_count and the full-stream root and may send reuse_sha256 with null data, asking the member to link an already durable content-addressed page blob (404 if missing/corrupt). When all version-2 pages exist the open request verifies the full root, clears staging whose content does not match, and returns 500 without clearing on a read failure. Final replica acceptance verifies the full ordered root, total bytes, record frames, unique identities and counts. Staged pages grant no authority.</p>
+<p>Stage one signed backup authority page in a push session</p><p>The current pool master sends content-addressed backup authority pages over pinned mutual TLS in a signed, addressed push session. A signed replica with index -1 and null data opens a session (10-minute expiry, one per member) and returns the next missing page. Page requests name manifest_sha256 and index with page bytes or reuse_sha256; another manifest or master is refused with 409. Each page and complete frame is at most 256 KiB. Cleanup kind-7 frames contain {cleanup,point_count}, where cleanup.points is null; exactly point_count contiguous kind-8 BackupOrphanPointResult frames follow, across pages if necessary. Counts, unique cleanup identities, frame validity, total bytes and the ordered full-stream SHA-256 root are verified before final adoption. No history is truncated. Reuse links an already durable page blob, or returns 404 for bytes to be resent. Opening a complete session verifies the full root; content mismatch clears staging, while read failure returns 500 without clearing it. Collection preserves acknowledged and unexpired-upload roots. Staged pages grant no authority. Matching updated Core peers must be deployed and authority repushed from the durable current master before promotion; old cleanup framing fails closed in either direction.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerStagePoolBackupPage&quot;,
   &quot;summary&quot;: &quot;Stage one signed backup authority page in a push session&quot;,
-  &quot;description&quot;: &quot;The current pool master sends backup authority pages over pinned mutual TLS in a push session. A request carrying the signed replica with index -1 and null data verifies it once, opens a session (expires after 10 minutes, one per member) and returns the next missing page. Page requests carry only manifest_sha256, index and page bytes or reuse_sha256, and are accepted only for the open session&#x27;s manifest and master (409 otherwise). Both formats use the same 256 KiB page limit. Version 0 verifies exact per-page length and SHA-256 against the verified manifest. Version 2 uses page_count and the full-stream root and may send reuse_sha256 with null data, asking the member to link an already durable content-addressed page blob (404 if missing/corrupt). When all version-2 pages exist the open request verifies the full root, clears staging whose content does not match, and returns 500 without clearing on a read failure. Final replica acceptance verifies the full ordered root, total bytes, record frames, unique identities and counts. Staged pages grant no authority.&quot;,
+  &quot;description&quot;: &quot;The current pool master sends content-addressed backup authority pages over pinned mutual TLS in a signed, addressed push session. A signed replica with index -1 and null data opens a session (10-minute expiry, one per member) and returns the next missing page. Page requests name manifest_sha256 and index with page bytes or reuse_sha256; another manifest or master is refused with 409. Each page and complete frame is at most 256 KiB. Cleanup kind-7 frames contain {cleanup,point_count}, where cleanup.points is null; exactly point_count contiguous kind-8 BackupOrphanPointResult frames follow, across pages if necessary. Counts, unique cleanup identities, frame validity, total bytes and the ordered full-stream SHA-256 root are verified before final adoption. No history is truncated. Reuse links an already durable page blob, or returns 404 for bytes to be resent. Opening a complete session verifies the full root; content mismatch clears staging, while read failure returns 500 without clearing it. Collection preserves acknowledged and unexpired-upload roots. Staged pages grant no authority. Matching updated Core peers must be deployed and authority repushed from the durable current master before promotion; old cleanup framing fails closed in either direction.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -1304,7 +1305,7 @@
   &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 pool member&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
-    &quot;description&quot;: &quot;Session open: signed replica with index -1 and no data. Page: manifest_sha256, index and base64 page bytes or version-2 reuse_sha256. Body is bounded by the replica limit plus two page limits.&quot;,
+    &quot;description&quot;: &quot;Session open: signed replica with index -1 and no data. Page: manifest_sha256, index and base64 page bytes or reuse_sha256. Body is bounded by the replica limit plus two page limits.&quot;,
     &quot;content&quot;: {
       &quot;application/json&quot;: {
         &quot;schema&quot;: {
@@ -1318,7 +1319,7 @@
       &quot;description&quot;: &quot;Page staged; replica authority is unchanged.&quot;
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Invalid JSON, index, page size, reuse hint, or version-0 per-page digest.&quot;
+      &quot;description&quot;: &quot;Invalid JSON, index, page size or reuse hint.&quot;
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
@@ -1343,7 +1344,7 @@
       }
     },
     &quot;404&quot;: {
-      &quot;description&quot;: &quot;Version-2 reuse hint names a missing or corrupt local page blob; resend the actual page bytes.&quot;
+      &quot;description&quot;: &quot;Reuse hint names a missing or corrupt local page blob; resend the actual page bytes.&quot;
     }
   }
 }</pre></details></section>
@@ -2791,12 +2792,12 @@
   }
 }</pre></details></section>
 <section id="peerForgetBackupRepository"><h2>POST <code>/api/v1/pool/backup/forget</code></h2>
-<p>Forget a backup repository on a member</p><p>The authenticated current pool master tells a ready member to drop its record, sealed credential and mount for a repository the pool has forgotten. Body is {&quot;repository_id&quot;}, limited to 4 KiB. Idempotent: an unknown repository succeeds. The master sends this best effort after it has forgotten the repository and sends it again whenever it is asked to forget an already-forgotten repository ID.</p>
+<p>Forget a backup repository on a member</p><p>The authenticated current pool master obtains exact member snapshots through GET /api/v1/pool/backup/retain, rechecks that it no longer holds the repository, then sends {repository:exact_snapshot}, at most 64 KiB. The ready member queues admission on its Store owner, checks unsettled journal work, and removes only the still-matching registration, mount and sealed credential. Identity, credential reference and UpdatedAt bind the snapshot; transient health/access observations do not. Unknown or changed records are idempotent no-ops (204), so a late sweep cannot delete a newly adopted registration. Mount detachment is bounded; failed work returns 409 and can be retried through a fresh snapshot. An unavailable owner returns 503. Matching updated Core peers are required; repository_id-only requests are no longer accepted. Offline members converge through later health sweeps.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerForgetBackupRepository&quot;,
   &quot;summary&quot;: &quot;Forget a backup repository on a member&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master tells a ready member to drop its record, sealed credential and mount for a repository the pool has forgotten. Body is {\&quot;repository_id\&quot;}, limited to 4 KiB. Idempotent: an unknown repository succeeds. The master sends this best effort after it has forgotten the repository and sends it again whenever it is asked to forget an already-forgotten repository ID.&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master obtains exact member snapshots through GET /api/v1/pool/backup/retain, rechecks that it no longer holds the repository, then sends {repository:exact_snapshot}, at most 64 KiB. The ready member queues admission on its Store owner, checks unsettled journal work, and removes only the still-matching registration, mount and sealed credential. Identity, credential reference and UpdatedAt bind the snapshot; transient health/access observations do not. Unknown or changed records are idempotent no-ops (204), so a late sweep cannot delete a newly adopted registration. Mount detachment is bounded; failed work returns 409 and can be retried through a fresh snapshot. An unavailable owner returns 503. Matching updated Core peers are required; repository_id-only requests are no longer accepted. Offline members converge through later health sweeps.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -2812,12 +2813,11 @@
           &quot;type&quot;: &quot;object&quot;,
           &quot;additionalProperties&quot;: false,
           &quot;required&quot;: [
-            &quot;repository_id&quot;
+            &quot;repository&quot;
           ],
           &quot;properties&quot;: {
-            &quot;repository_id&quot;: {
-              &quot;type&quot;: &quot;string&quot;,
-              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            &quot;repository&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
             }
           }
         }
@@ -2826,7 +2826,7 @@
   },
   &quot;responses&quot;: {
     &quot;204&quot;: {
-      &quot;description&quot;: &quot;Repository forgotten on the member, or unknown to it.&quot;
+      &quot;description&quot;: &quot;Matching repository forgotten; an unknown or changed registration is a safe no-op.&quot;
     },
     &quot;400&quot;: {
       &quot;description&quot;: &quot;Invalid request.&quot;
@@ -2835,17 +2835,93 @@
       &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The host is not a pool member, or its mount or credential could not be removed; retry.&quot;
+      &quot;description&quot;: &quot;Unsettled member work, invalid member state, or mount/credential removal refused; obtain a fresh snapshot and retry.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The Store owner or member authority is unavailable.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerListBackupRepositorySnapshots"><h2>GET <code>/api/v1/pool/backup/retain</code></h2>
+<p>Read exact member repository registrations for targeted cleanup</p><p>Only the authenticated pinned current pool master may read a ready member&#x27;s exact durable repository records, including pending-detach snapshots whose active registration is absent. The Store owner returns an immutable complete snapshot; this route sorts unique IDs and returns a page strictly after after_id, with at most 256 rows and 4 MiB including envelope and cursor. Follow next_after_id until omitted. These are per-page bounds: a stale member&#x27;s complete inventory can exceed the master&#x27;s live-registration limit. Every page is a new observation; concurrent insertion/deletion may be deferred to the next sweep, never inferred as permission to delete. The master discards partial collections on malformed pages, nonprogressing cursors, later refusal or transport failure and rechecks current absence before each exact targeted mutation. A single row unable to fit a page is 503 and is never silently omitted. Matching updated Core peers are required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerListBackupRepositorySnapshots&quot;,
+  &quot;summary&quot;: &quot;Read exact member repository registrations for targeted cleanup&quot;,
+  &quot;description&quot;: &quot;Only the authenticated pinned current pool master may read a ready member&#x27;s exact durable repository records, including pending-detach snapshots whose active registration is absent. The Store owner returns an immutable complete snapshot; this route sorts unique IDs and returns a page strictly after after_id, with at most 256 rows and 4 MiB including envelope and cursor. Follow next_after_id until omitted. These are per-page bounds: a stale member&#x27;s complete inventory can exceed the master&#x27;s live-registration limit. Every page is a new observation; concurrent insertion/deletion may be deferred to the next sweep, never inferred as permission to delete. The master discards partial collections on malformed pages, nonprogressing cursors, later refusal or transport failure and rechecks current absence before each exact targeted mutation. A single row unable to fit a page is 503 and is never silently omitted. Matching updated Core peers are required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;development&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;after_id&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: false,
+      &quot;description&quot;: &quot;Exclusive repository-ID cursor from next_after_id. Omit on the first page; supply exactly once. Unknown parameters, invalid escaping, duplicates, empty or invalid IDs are rejected.&quot;,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1,
+        &quot;maxLength&quot;: 64,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact durable member registrations and pending detach snapshots.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: false,
+            &quot;required&quot;: [
+              &quot;repositories&quot;
+            ],
+            &quot;properties&quot;: {
+              &quot;repositories&quot;: {
+                &quot;type&quot;: &quot;array&quot;,
+                &quot;maxItems&quot;: 256,
+                &quot;items&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+                }
+              },
+              &quot;next_after_id&quot;: {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1,
+                &quot;maxLength&quot;: 64,
+                &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;,
+                &quot;description&quot;: &quot;Last returned repository ID when another page remains; omitted on the terminal page.&quot;
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid, repeated or unknown query parameter, malformed escaping, or invalid cursor.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Member repository state could not be read.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The Store owner/member authority is unavailable, or a single snapshot cannot fit the bounded page.&quot;
     }
   }
 }</pre></details></section>
 <section id="peerRetainBackupRepositories"><h2>POST <code>/api/v1/pool/backup/retain</code></h2>
-<p>Drop a member&#x27;s backup repositories the pool no longer holds</p><p>The authenticated current pool master sends the IDs of every backup repository it holds; the ready member drops its record, sealed credential and mount for any other repository, such as one whose forget it missed. Body is {&quot;repository_ids&quot;}, at most 256 IDs, limited to 64 KiB. Idempotent. The master sends this at the end of each repository probe pass.</p>
+<p>Drop a member&#x27;s backup repositories the pool no longer holds</p><p>After GET /api/v1/pool/backup/retain returns exact member snapshots, the authenticated pinned current master confirms current absence for each candidate and sends {repositories:[exact_snapshots]}, at most 256 records and 4 MiB. This is targeted compare-and-forget, not a negative list of retained IDs. Each Store-owner admission checks unsettled journal work and the exact registration; changed or missing registrations are safe no-ops. Only matching records, mounts and sealed credentials are removed; destination data is never deleted. An interrupted batch may have removed earlier records; obtain fresh snapshots and repeat idempotently. Mount/credential refusal is 409, unavailable owner is 503. Offline members are retried during later health sweeps. Matching updated Core peers are required; repository_ids-only requests are no longer accepted.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerRetainBackupRepositories&quot;,
   &quot;summary&quot;: &quot;Drop a member&#x27;s backup repositories the pool no longer holds&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master sends the IDs of every backup repository it holds; the ready member drops its record, sealed credential and mount for any other repository, such as one whose forget it missed. Body is {\&quot;repository_ids\&quot;}, at most 256 IDs, limited to 64 KiB. Idempotent. The master sends this at the end of each repository probe pass.&quot;,
+  &quot;description&quot;: &quot;After GET /api/v1/pool/backup/retain returns exact member snapshots, the authenticated pinned current master confirms current absence for each candidate and sends {repositories:[exact_snapshots]}, at most 256 records and 4 MiB. This is targeted compare-and-forget, not a negative list of retained IDs. Each Store-owner admission checks unsettled journal work and the exact registration; changed or missing registrations are safe no-ops. Only matching records, mounts and sealed credentials are removed; destination data is never deleted. An interrupted batch may have removed earlier records; obtain fresh snapshots and repeat idempotently. Mount/credential refusal is 409, unavailable owner is 503. Offline members are retried during later health sweeps. Matching updated Core peers are required; repository_ids-only requests are no longer accepted.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -2861,15 +2937,17 @@
           &quot;type&quot;: &quot;object&quot;,
           &quot;additionalProperties&quot;: false,
           &quot;required&quot;: [
-            &quot;repository_ids&quot;
+            &quot;repositories&quot;
           ],
           &quot;properties&quot;: {
-            &quot;repository_ids&quot;: {
-              &quot;type&quot;: &quot;array&quot;,
+            &quot;repositories&quot;: {
+              &quot;type&quot;: [
+                &quot;array&quot;,
+                &quot;null&quot;
+              ],
               &quot;maxItems&quot;: 256,
               &quot;items&quot;: {
-                &quot;type&quot;: &quot;string&quot;,
-                &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+                &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
               }
             }
           }
@@ -2879,7 +2957,7 @@
   },
   &quot;responses&quot;: {
     &quot;204&quot;: {
-      &quot;description&quot;: &quot;The member now holds only the listed repositories.&quot;
+      &quot;description&quot;: &quot;Matching candidate registrations removed; changed or missing registrations were preserved as safe no-ops.&quot;
     },
     &quot;400&quot;: {
       &quot;description&quot;: &quot;Invalid request.&quot;
@@ -2888,7 +2966,10 @@
       &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The host is not a pool member, or a mount or credential could not be removed; retry.&quot;
+      &quot;description&quot;: &quot;Unsettled member work, invalid member state, or mount/credential removal refused; obtain fresh snapshots and retry.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The Store owner or member authority is unavailable.&quot;
     }
   }
 }</pre></details></section>
@@ -5088,7 +5169,7 @@
     &quot;reuse_sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;,
-      &quot;description&quot;: &quot;Version-2 reuse hint: digest of an already durable 256 KiB-or-smaller page blob. Data must be null; missing/corrupt blob returns 404 so the master sends bytes instead. Version 0 rejects reuse.&quot;
+      &quot;description&quot;: &quot;Digest of an already durable 256 KiB-or-smaller page blob. Data must be null; missing/corrupt blob returns 404 so the master sends bytes instead.&quot;
     },
     &quot;manifest_sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;,

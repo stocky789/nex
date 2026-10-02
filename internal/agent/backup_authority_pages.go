@@ -31,6 +31,7 @@ const poolBackupBlobDir = "pool-backup-page-blobs"
 var errPoolBackupBlobCorrupt = errors.New("backup authority page blob is corrupt")
 var poolBackupBlobMu sync.Mutex
 var activePoolBackupStages = map[string]bool{}
+var removePoolBackupPageRoot = os.RemoveAll
 
 var poolBackupBundleLimit = protocol.PoolBackupBundleLimit
 
@@ -197,26 +198,31 @@ func linkPoolBackupBlob(s *Store, hash, path string) error {
 	return syncPoolBackupDirectory(filepath.Dir(path))
 }
 
-// Keep the pushed or acknowledged root and the root of this host's stored
-// replica, which is what a promotion of this host would activate. A running
-// transfer can still need an older signed replica, so it defers GC.
+// Keep the pushed, stored and live upload roots. Root selection and deletion
+// share the replica/session/blob lock order with replacement and uploads.
+// A running transfer can still need an older signed replica, so it defers GC.
 func gcPoolBackupPages(s *Store, keep string) error {
 	transfer, err := loadPoolTransfer(s)
 	if err != nil || transfer != nil && !poolTransferTerminal(transfer.Stage) {
 		return err
 	}
-	stored := ""
 	poolReplicaMu.Lock()
+	defer poolReplicaMu.Unlock()
+	poolBackupPushSessionMu.Lock()
+	defer poolBackupPushSessionMu.Unlock()
+	poolBackupBlobMu.Lock()
+	defer poolBackupBlobMu.Unlock()
+	stored, uploading := "", ""
 	record, err := loadPoolReplicaUnchecked(s)
-	poolReplicaMu.Unlock()
 	if err != nil {
 		return err
 	}
 	if record != nil && record.Replica.BackupManifest != nil {
 		stored = record.Replica.BackupManifest.SHA256
 	}
-	poolBackupBlobMu.Lock()
-	defer poolBackupBlobMu.Unlock()
+	if session, ok := poolBackupPushSessions[s.dir]; ok && time.Now().Before(session.expires) {
+		uploading = session.manifest.SHA256
+	}
 	parent := filepath.Join(s.dir, poolBackupPageDir)
 	if _, err := removeAbandonedPoolBackupStages(parent); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -229,10 +235,10 @@ func gcPoolBackupPages(s *Store, keep string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == keep || entry.Name() == stored || strings.HasPrefix(entry.Name(), ".stage-") {
+		if !entry.IsDir() || entry.Name() == keep || entry.Name() == stored || entry.Name() == uploading || strings.HasPrefix(entry.Name(), ".stage-") {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(parent, entry.Name())); err != nil {
+		if err := removePoolBackupPageRoot(filepath.Join(parent, entry.Name())); err != nil {
 			return err
 		}
 	}
@@ -435,13 +441,18 @@ func refreshPoolBackupMemberStatus(s *Store, member protocol.PoolMember) (protoc
 	return status, nil
 }
 
-// Each frame is a type byte, a four-byte big-endian JSON length, then exactly
-// one record. No frame crosses a page; no record or page exceeds 256 KiB.
+// Each frame is a type byte and a four-byte big-endian JSON length. Frames
+// never cross pages or exceed 256 KiB; cleanup headers precede point frames.
 type poolBackupEncoder struct {
 	m     protocol.PoolBackupManifest
 	page  bytes.Buffer
 	whole hash.Hash
 	emit  func([]byte) error
+}
+
+type poolBackupOrphanCleanupHeader struct {
+	Cleanup    protocol.BackupOrphanCleanup `json:"cleanup"`
+	PointCount int                          `json:"point_count"`
 }
 
 func (e *poolBackupEncoder) flush() error {
@@ -462,6 +473,22 @@ func (e *poolBackupEncoder) flush() error {
 }
 
 func (e *poolBackupEncoder) add(kind byte, record any) error {
+	if kind == 7 {
+		cleanup := record.(protocol.BackupOrphanCleanup)
+		if err := cleanup.Valid(); err != nil {
+			return err
+		}
+		points := cleanup.Points
+		cleanup.Points = nil
+		if err := e.frame(7, poolBackupOrphanCleanupHeader{Cleanup: cleanup, PointCount: len(points)}); err != nil {
+			return err
+		}
+		return addPoolBackupRecords(e, 8, points)
+	}
+	return e.frame(kind, record)
+}
+
+func (e *poolBackupEncoder) frame(kind byte, record any) error {
 	body, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -494,6 +521,8 @@ func (e *poolBackupEncoder) add(kind byte, record any) error {
 		e.m.MetadataReceipts++
 	case 7:
 		e.m.OrphanCleanups++
+	case 8:
+		// Point frames belong to the preceding cleanup, not a new record.
 	default:
 		return errors.New("backup authority record kind is invalid")
 	}
@@ -695,12 +724,20 @@ func readPoolBackupPage(s *Store, m *protocol.PoolBackupManifest, index int) ([]
 	return page, nil
 }
 
-func decodePoolBackupPage(auth *protocol.PoolBackupAuthority, page []byte) error {
+type poolBackupDecoder struct {
+	cleanup   *protocol.BackupOrphanCleanup
+	remaining int
+}
+
+func (d *poolBackupDecoder) decodePage(auth *protocol.PoolBackupAuthority, page []byte) error {
 	for len(page) > 0 {
 		if len(page) < 5 {
 			return errors.New("backup authority frame is incomplete")
 		}
 		kind, size := page[0], int(binary.BigEndian.Uint32(page[1:5]))
+		if d.cleanup != nil && kind != 8 {
+			return errors.New("backup orphan cleanup point frames are incomplete")
+		}
 		page = page[5:]
 		if size > len(page) {
 			return errors.New("backup authority frame is incomplete")
@@ -749,11 +786,27 @@ func decodePoolBackupPage(auth *protocol.PoolBackupAuthority, page []byte) error
 			}
 			auth.MetadataReceipts = append(auth.MetadataReceipts, value)
 		case 7:
-			var value protocol.BackupOrphanCleanup
-			if json.Unmarshal(body, &value) != nil {
-				return errors.New("backup orphan cleanup frame is invalid")
+			header := poolBackupOrphanCleanupHeader{PointCount: -1}
+			if json.Unmarshal(body, &header) != nil || header.PointCount < 0 ||
+				len(header.Cleanup.Points) != 0 || header.Cleanup.Valid() != nil {
+				return errors.New("backup orphan cleanup header is invalid")
 			}
-			auth.OrphanCleanups = append(auth.OrphanCleanups, value)
+			if header.PointCount == 0 {
+				auth.OrphanCleanups = append(auth.OrphanCleanups, header.Cleanup)
+			} else {
+				d.cleanup, d.remaining = &header.Cleanup, header.PointCount
+			}
+		case 8:
+			var point protocol.BackupOrphanPointResult
+			if d.cleanup == nil || json.Unmarshal(body, &point) != nil || point.Valid() != nil {
+				return errors.New("backup orphan cleanup point frame is invalid")
+			}
+			d.cleanup.Points = append(d.cleanup.Points, point)
+			d.remaining--
+			if d.remaining == 0 {
+				auth.OrphanCleanups = append(auth.OrphanCleanups, *d.cleanup)
+				d.cleanup = nil
+			}
 		default:
 			return errors.New("backup authority frame type is invalid")
 		}
@@ -794,6 +847,7 @@ func walkPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest, visi
 	}
 	digest := sha256.New()
 	total := 0
+	decoder := &poolBackupDecoder{}
 	var counts [7]int
 	seen := map[string]bool{}
 	note := func(kind int, id string) error {
@@ -813,7 +867,7 @@ func walkPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest, visi
 		total += len(page)
 		_, _ = digest.Write(page)
 		auth := &protocol.PoolBackupAuthority{}
-		if err := decodePoolBackupPage(auth, page); err != nil || auth.Valid() != nil {
+		if err := decoder.decodePage(auth, page); err != nil || auth.Valid() != nil {
 			return errors.New("backup authority page has invalid records")
 		}
 		for _, repo := range auth.Repositories {
@@ -857,7 +911,7 @@ func walkPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest, visi
 			}
 		}
 	}
-	if total != m.TotalBytes || fmt.Sprintf("%x", digest.Sum(nil)) != m.SHA256 ||
+	if decoder.cleanup != nil || total != m.TotalBytes || fmt.Sprintf("%x", digest.Sum(nil)) != m.SHA256 ||
 		counts != [7]int{m.Repositories, m.Definitions, m.History, m.Catalog, m.Pins, m.MetadataReceipts, m.OrphanCleanups} {
 		return errors.New("backup authority root or counts do not match")
 	}

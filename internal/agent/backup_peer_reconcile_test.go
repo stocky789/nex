@@ -290,6 +290,89 @@ func TestNeedsAttentionMemberRunSettlesWhenMemberReconciles(t *testing.T) {
 	}
 }
 
+func TestMemberSuccessAfterMasterRepositoryRecoverySettlesWithoutReplay(t *testing.T) {
+	master, member, run, mount := memberRunLab(t)
+	run.Status, run.Stage, run.Error = "pending", "reserved", ""
+	if err := savePoolBackupRun(master, run); err != nil {
+		t.Fatal(err)
+	}
+	seedPublishedPoint(t, mount, run.RepositoryID, run.PoolID, run.OperationID)
+	manifest, digest, err := vmhost.ReadBackupManifest(filepath.Join(mount, run.OperationID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberRun := run
+	memberRun.Kind, memberRun.Status, memberRun.Stage = protocol.BackupKindBackupNow, "succeeded", "published"
+	if err := savePoolBackupRun(member, memberRun); err != nil {
+		t.Fatal(err)
+	}
+	point := protocol.BackupRecoveryPoint{ID: run.OperationID, RepositoryID: run.RepositoryID, PoolID: run.PoolID,
+		SourceVMID: run.VMID, CapturedAt: manifest.CapturedAt, Consistency: manifest.Consistency, ManifestSHA256: digest}
+	queue := make(chan BackupRequest)
+	peerBackupRequests.Store(member, queue)
+	defer peerBackupRequests.Delete(member)
+	var replayed atomic.Int32
+	go func() {
+		for request := range queue {
+			if request.Command != nil {
+				replayed.Add(1)
+			}
+			request.Reply <- BackupResponse{Result: &protocol.Result{OperationID: run.OperationID, Status: "succeeded"}, Point: &point}
+		}
+	}()
+	defer close(queue)
+	var offline atomic.Bool
+	offline.Store(true)
+	previous := verifyBackupRepository
+	verifyBackupRepository = func(ctx context.Context, repo protocol.BackupRepository) error {
+		if repo.MountPath == mount && offline.Load() {
+			return errors.New("master repository access is unavailable")
+		}
+		return previous(ctx, repo)
+	}
+	t.Cleanup(func() { verifyBackupRepository = previous })
+	backoff := peerBackoff{}
+	work, ok := nextPendingPeerBackup(master, backoff, time.Now())
+	if !ok {
+		t.Fatal("pending member run was not observed")
+	}
+	completion := callPeerBackup(context.Background(), work)
+	if completion.err == nil || completion.reply.Result.Status != "succeeded" {
+		t.Fatalf("member success did not expose master verification failure: %+v", completion)
+	}
+	settlePeerBackupCompletion(context.Background(), master, completion)
+	notePeerBackupAnswer(master, backoff, completion)
+	if saved, err := loadPoolBackupRun(master, run.OperationID); err != nil || saved.Status != "needs_attention" {
+		t.Fatalf("unverified member success was terminalized: %+v, %v", saved, err)
+	}
+	// Even long silence must not turn an observed success into terminal failure.
+	afterSilence := time.Now().Add(2 * peerBackupSilentLimit)
+	work, ok = nextPendingPeerBackup(master, backoff, afterSilence)
+	if !ok || !work.observe {
+		t.Fatalf("unknown member outcome stopped observation: ok=%v, work=%+v", ok, work)
+	}
+	completion = callPeerBackup(context.Background(), work)
+	settlePeerBackupCompletion(context.Background(), master, completion)
+	if saved, err := loadPoolBackupRun(master, run.OperationID); err != nil || saved.Status != "needs_attention" {
+		t.Fatalf("repository outage made outcome terminal: %+v, %v", saved, err)
+	}
+	offline.Store(false)
+	work, ok = nextPendingPeerBackup(master, peerBackoff{}, afterSilence)
+	if !ok || !work.observe {
+		t.Fatal("recovered master did not resume observation-only settlement")
+	}
+	settlePeerBackupCompletion(context.Background(), master, callPeerBackup(context.Background(), work))
+	if saved, err := loadPoolBackupRun(master, run.OperationID); err != nil || saved.Status != "succeeded" {
+		t.Fatalf("late verified member success was lost: %+v, %v", saved, err)
+	}
+	if saved, err := getCatalogPoint(master, run.RepositoryID, run.OperationID); err != nil || saved.ManifestSHA256 != digest {
+		t.Fatalf("recovered master did not catalog the exact published point: %+v, %v", saved, err)
+	}
+	if replayed.Load() != 0 {
+		t.Fatalf("unknown outcome was replayed %d times", replayed.Load())
+	}
+}
+
 func TestNeedsAttentionMemberRunWithoutMemberRecordSettlesFailed(t *testing.T) {
 	master, member, run, _ := memberRunLab(t)
 	queue := make(chan BackupRequest)
@@ -424,8 +507,18 @@ func TestCredentialDeliveryDoesNotHoldBackupAuthority(t *testing.T) {
 	server.StartTLS()
 	defer server.Close()
 	setMemberPeerOrigin(t, master, member.State.HostID, server.URL)
-	if _, err := upsertPoolBackupRepositoryPrepared(master, repo, repo, false); err != nil {
+	if _, err := upsertPoolBackupRepositoryPrepared(master, repo, repo, false, nil); err != nil {
 		t.Fatal(err)
+	}
+	if delivered.Load() {
+		t.Fatal("registration commit synchronously delivered a credential")
+	}
+	membership, err := Membership(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed := projectBackupCredentialToMembers(context.Background(), master, membership, repo); len(failed) != 0 {
+		t.Fatalf("background credential delivery: %v", failed)
 	}
 	if !delivered.Load() || heldAuthority.Load() {
 		t.Fatalf("credential delivery: delivered=%v under authority lock=%v", delivered.Load(), heldAuthority.Load())

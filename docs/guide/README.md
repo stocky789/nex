@@ -71,7 +71,7 @@ verification limits that apply to its workflow.
 25. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 26. [Set up backup repositories](backup-repositories.md)
-   (Settings → Backup repositories; NFS destination, Test access, capacity and host access).
+   (Settings → Backup repositories; NFS, SMB3, S3 and SFTP destinations, access checks, exact retries and forgetting).
 27. [Back up a VM now](backup-now.md)
    (Backups → Recovery points → Back up now; destination and review for stopped or running BIOS crash-consistent capture).
 28. [Restore a backup as a new VM](restore-as-new.md)

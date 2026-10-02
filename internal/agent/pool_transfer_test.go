@@ -1449,10 +1449,11 @@ func TestInheritedPendingBackupNeedsAttentionAndKeepsPin(t *testing.T) {
 		MetadataReceipts: []protocol.BackupMetadataReceipt{{OperationID: "pending-metadata", Kind: "backup-protect",
 			IntentSHA256: strings.Repeat("a", 64), Status: "pending", ObservedAt: now}},
 	}
-	root, _, err := stagePoolBackupAuthorityActivation(s, authority, 2)
+	root, _, release, err := stagePoolBackupAuthorityActivation(s, authority, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	peer := peerState(t, s)
 	peer.BackupActiveRoot = root
 	if err := savePoolPeer(s, peer); err != nil {

@@ -91,6 +91,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const [repositoryError, setRepositoryError] = useState("");
   const [policyError, setPolicyError] = useState("");
   const [runError, setRunError] = useState("");
+  const [jobRunError, setJobRunError] = useState("");
   const [pageNotice, setPageNotice] = useState("");
   const [loadingMore, setLoadingMore] = useState("");
   const [query, setQuery] = useState("");
@@ -124,6 +125,8 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const restoreDrafts = useRef<Record<string, RestoreDraft>>({});
   const presentationDrafts = useRef<Record<string, RestoreDraft>>({});
   const inventoryLoad = useLatestLoad();
+  const jobRunLoad = useLatestLoad();
+  const jobRunLoading = useRef(false);
   const catalogLoad = useLatestLoad();
   const runLoad = useLatestLoad();
   const catalogScope = useRef("");
@@ -198,28 +201,66 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     }
   };
 
+  // Complete job history has its own lifetime: polling must not restart a slow scan.
+  const loadJobRuns = async () => {
+    if (!poolID || jobRunLoading.current) return;
+    const { signal, stale } = jobRunLoad.begin();
+    jobRunLoading.current = true;
+    const base = `pools/${encodeURIComponent(poolID)}/backup-runs`;
+    try {
+      for (let retry = 0; ; retry++) {
+        try {
+          const first = await api<BackupRunPage>(base, "GET", undefined, undefined, undefined, signal);
+          if (stale()) return;
+          const all = await collectBackupPageItems(first, (cursor, generation) => api<BackupRunPage>(`${base}?cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, signal));
+          if (stale()) return;
+          setJobRuns(all);
+          setJobRunError("");
+          return;
+        } catch (err) {
+          if (stale()) return;
+          if (err && typeof err === "object" && "status" in err && err.status === 409 && retry < 2) continue;
+          throw err;
+        }
+      }
+    } catch (err) {
+      if (stale()) return;
+      setJobRuns(null);
+      setJobRunError(`Backup run history unavailable: ${String(err)}`);
+    } finally {
+      if (!stale()) jobRunLoading.current = false;
+    }
+  };
+
   const load = async () => {
     if (!poolID) {
       setRepos([]);
+      setPolicies([]);
       return;
     }
     const { signal, stale } = inventoryLoad.begin();
-    const runsBase = `pools/${encodeURIComponent(poolID)}/backup-runs`;
-    const [repositories, policyList, runList] = await Promise.allSettled([
-        api<BackupRepository[]>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "GET", undefined, undefined, undefined, signal),
-        api<BackupPolicy[]>(`pools/${encodeURIComponent(poolID)}/backup-policies`, "GET", undefined, undefined, undefined, signal),
-        // Backup jobs show Failed from the latest run of each VM, so they read the whole run history.
-        api<BackupRunPage>(runsBase, "GET", undefined, undefined, undefined, signal).then(first =>
-          collectBackupPageItems(first, (cursor, generation) => api<BackupRunPage>(`${runsBase}?cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, signal))),
-      ]);
-    if (stale()) return;
-    setJobRuns(runList.status === "fulfilled" ? runList.value : null);
-    setRepos(repositories.status === "fulfilled" ? repositories.value : null);
-    setPolicies(policyList.status === "fulfilled" ? policyList.value : null);
-    setRepositoryError(repositories.status === "rejected" ? `Repository inventory unavailable: ${String(repositories.reason)}` : "");
-    setPolicyError(policyList.status === "rejected" ? `Backup jobs unavailable: ${String(policyList.reason)}` : "");
+    await Promise.all([
+      api<BackupRepository[]>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "GET", undefined, undefined, undefined, signal).then(value => {
+        if (stale()) return;
+        setRepos(value);
+        setRepositoryError("");
+      }).catch(err => {
+        if (stale()) return;
+        setRepos(null);
+        setRepositoryError(`Repository inventory unavailable: ${String(err)}`);
+      }),
+      api<BackupPolicy[]>(`pools/${encodeURIComponent(poolID)}/backup-policies`, "GET", undefined, undefined, undefined, signal).then(value => {
+        if (stale()) return;
+        setPolicies(value);
+        setPolicyError("");
+      }).catch(err => {
+        if (stale()) return;
+        setPolicies(null);
+        setPolicyError(`Backup jobs unavailable: ${String(err)}`);
+      }),
+    ]);
   };
-  const refresh = async () => { await Promise.all([load(), loadCatalog(), loadRuns()]); };
+  const refresh = async () => { await Promise.all([load(), loadJobRuns(), loadCatalog(), loadRuns()]); };
 
   const loadMoreCatalog = async () => {
     if (!catalogPage?.next_cursor || loadingMore) return;
@@ -272,6 +313,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setRepositoryError("");
     setPolicyError("");
     setRunError("");
+    setJobRunError("");
     setPageNotice("");
     setSelectedID("");
     setSelectedPoint(null);
@@ -280,6 +322,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     presentationDrafts.current = {};
     selectedIDRef.current = "";
     runLoading.current = "";
+    jobRunLoading.current = false;
     setBackupUncertain(false);
     setBackupOpen(flow === "backup-now");
     setPolicyOpen(flow === "create-policy");
@@ -290,7 +333,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     restoreDrafts.current = {};
     void refresh();
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 15000);
-    return () => { window.clearInterval(timer); inventoryLoad.cancel(); catalogLoad.cancel(); runLoad.cancel(); };
+    return () => { window.clearInterval(timer); inventoryLoad.cancel(); jobRunLoad.cancel(); catalogLoad.cancel(); runLoad.cancel(); };
   }, [poolID]);
 
   useEffect(() => {
@@ -304,6 +347,8 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   }, [poolID, filterKey]);
 
   useEffect(() => {
+    runLoad.cancel();
+    runLoading.current = "";
     if (!selectedID) return;
     setPointRuns(null);
     setRunError("");
@@ -586,7 +631,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       <button type="button" role="tab" id="backup-jobs-tab" tabIndex={view === "jobs" ? 0 : -1} aria-controls="backup-jobs-view" aria-selected={view === "jobs"} disabled={panelLocked || policyOpen} onClick={() => switchView("jobs")}>Backup jobs</button>
       <button type="button" role="tab" id="backup-points-tab" tabIndex={view === "points" ? 0 : -1} aria-controls="recovery-points" aria-selected={view === "points"} disabled={panelLocked || policyOpen} onClick={() => switchView("points")}>Recovery points</button>
     </div>
-    {[error, catalogError, repositoryError, policyError, runError].filter(Boolean).map((message, index) => <p key={index} className="why" role="alert">{message}</p>)}
+    {[error, catalogError, repositoryError, policyError, jobRunError, runError].filter(Boolean).map((message, index) => <p key={index} className="why" role="alert">{message}</p>)}
     {backupOpen && <Panel wide icon="backup" title="Back up now" onClose={closeBackup} closeDisabled={Boolean(working) || backupUncertain}
       footer={<>
         {backupBlocker && <p className="why" role="status">{backupBlocker}</p>}

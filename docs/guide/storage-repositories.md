@@ -321,6 +321,9 @@ reports its own access. On **Storage**, wait for that member's **Host access** l
 QEMU-writable and locking — before VMs placed on it can select the repository. **Pending** means the
 member has not checked the current registration yet. A failed, stale or missing report is not overridable: fix the
 member's export/share, identity, QEMU permissions, capacity or locking and wait for recheck.
+Only current **ready** pool members with access reported for the current repository
+generation are eligible. An old successful observation does not make a joining,
+ejecting, failed or removed member a usable target.
 
 ISO library entries imported onto that shared repository also reach joined members after the
 repository is healthy there: the member verifies the file digest and reports access. Import the

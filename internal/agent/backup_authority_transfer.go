@@ -17,9 +17,9 @@ import (
 // time; the caller makes the tree active only with the same atomic pool-peer
 // write that makes this host master. A crash before that write keeps the old
 // complete tree active.
-func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBackupManifest, generation uint64) (string, func(), error) {
+func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBackupManifest, generation uint64) (string, func(), func(), error) {
 	if manifest != nil && manifest.Valid() != nil || generation == 0 {
-		return "", nil, errors.New("replicated backup authority manifest is invalid")
+		return "", nil, nil, errors.New("replicated backup authority manifest is invalid")
 	}
 	digest := poolBackupHash(nil) // A nil manifest is an empty authority.
 	if manifest != nil {
@@ -28,23 +28,43 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 	root := filepath.Join("pool-backup-authority", fmt.Sprintf("%020d-%s", generation, digest))
 	current, err := loadPoolPeer(s)
 	if err != nil || current.BackupActiveRoot == root {
-		return "", nil, errors.New("replicated backup authority tree cannot be activated")
+		return "", nil, nil, errors.New("replicated backup authority tree cannot be activated")
 	}
 	parent := filepath.Join(s.dir, "pool-backup-authority")
 	if err := os.MkdirAll(parent, 0700); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	temporary, err := os.MkdirTemp(parent, ".stage-")
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	defer os.RemoveAll(temporary)
 	stage := &Store{dir: temporary, State: s.State} // Not *s: Store holds a lock.
 	repos := poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{}}
 	policies := poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{}}
 	pins := poolBackupPinsState{Pins: map[string]protocol.BackupRestorePin{}}
+	var mutations []*backupRepositoryMutation
+	release := func() {
+		for _, mutation := range mutations {
+			mutation.release()
+		}
+	}
+	staged := false
+	defer func() {
+		if !staged {
+			release()
+		}
+	}()
 	visit := func(page *protocol.PoolBackupAuthority) error {
 		for _, repo := range page.Repositories {
+			// Native units belong to the live host, not the temporary record tree.
+			poolBackupAuthorityMu.Lock()
+			mutation, err := reserveBackupRepositoryMutation(s, repo.ID)
+			poolBackupAuthorityMu.Unlock()
+			if err != nil {
+				return err
+			}
+			mutations = append(mutations, mutation)
 			repo.MountPath, repo.Access, repo.MemberAccess = "", protocol.StorageAccess{}, nil
 			// A repository this host cannot reach or read does not block promotion: the
 			// record is adopted and its access is recorded failed for the operator.
@@ -55,7 +75,7 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 			}
 			if prepErr == nil {
 				work, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				prepared, prepErr = prepareBackupRepositoryForAdoption(work, s, repo)
+				prepared, prepErr = prepareBackupRepositoryForAdoption(work, s, repo, mutation)
 				cancel()
 			}
 			if prepErr != nil {
@@ -104,31 +124,32 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 	}
 	if manifest != nil {
 		if err := walkPoolBackupAuthorityPages(s, manifest, visit); err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 	}
 	if err := savePoolBackupRepositories(stage, repos); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if err := savePoolBackupPolicies(stage, policies); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if err := savePoolBackupPins(stage, pins); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if err := syncPoolBackupTree(temporary); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	destination := filepath.Join(s.dir, root)
 	if err := os.RemoveAll(destination); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if err := os.Rename(temporary, destination); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if err := syncPoolBackupDirectory(parent); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
+	staged = true
 	return root, func() {
 		// A peer write can report a late fsync error after its atomic rename.
 		// Keep the tree whenever the durable peer record may already select it.
@@ -136,7 +157,7 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 		if err == nil && state.BackupActiveRoot != root {
 			_ = os.RemoveAll(destination)
 		}
-	}, nil
+	}, release, nil
 }
 
 func markBackupRepositoryUnreachable(repo *protocol.BackupRepository) {

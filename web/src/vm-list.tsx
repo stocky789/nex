@@ -137,9 +137,9 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
   const virtualize = groupBy === "none" && rows.length > 40;
   const virt = useVirtualWindow(virtualize ? rows.length : 0, 36);
   // A VM with several tags appears under each of them; untagged VMs close the list.
-  const tagNames = [...new Set(rows.flatMap(v => v.spec?.tags ?? []))].sort();
-  const untagged = rows.filter(v => !v.spec?.tags?.length);
-  const byTag = <>
+  const tagNames = groupBy === "tag" ? [...new Set(rows.flatMap(v => v.spec?.tags ?? []))].sort() : [];
+  const untagged = groupBy === "tag" ? rows.filter(v => !v.spec?.tags?.length) : [];
+  const body = groupBy === "tag" ? <>
     {tagNames.map(t => <Fragment key={t}>
       <tr className="group"><td colSpan={span}><span className="tag" style={tagStyle(t)}>{t}</span> <span className="muted">({rows.filter(v => v.spec?.tags?.includes(t)).length})</span></td></tr>
       {rows.filter(v => v.spec?.tags?.includes(t)).map(v => <Fragment key={v.id}>{row(v)}</Fragment>)}
@@ -148,8 +148,7 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
       <tr className="group"><td colSpan={span}>No tags <span className="muted">({untagged.length})</span></td></tr>
       {untagged.map(row)}
     </>}
-  </>;
-  const body = groupBy === "tag" ? byTag : groupBy === "host" ? groups.map(h => <Fragment key={h.id}>
+  </> : groupBy === "host" ? groups.map(h => <Fragment key={h.id}>
     <tr className="group"><td colSpan={span}>{poolName(h.pool_id)} › {h.hostname || h.id} {h.connection !== "fresh" && <Badge value="stale" />}</td></tr>
     {rows.filter(v => v.host_id === h.id).map(row)}
   </Fragment>).concat(unplaced.length ? [<Fragment key="unknown-host">

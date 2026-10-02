@@ -61,9 +61,8 @@ func TestOrphanDeleteDoesNotReprotectAPointGone(t *testing.T) {
 	}
 }
 
-// A needs_attention backup-now run by a member that has left the pool settles instead of
-// being re-observed forever and blocking later backups of the VM.
-func TestNeedsAttentionBackupOfDepartedMemberSettles(t *testing.T) {
+// A member leaving the pool is not proof that its admitted backup stopped.
+func TestNeedsAttentionBackupOfDepartedMemberKeepsExecutionExcluded(t *testing.T) {
 	s := seedBackupMaster(t)
 	vm := poolVMTestSpec("vm-1", "member-gone")
 	cmd := protocol.Command{OperationID: "departed", Kind: protocol.BackupKindBackupNow, VM: vm, Backup: &protocol.BackupNowRequest{RepositoryID: "repo-1"}}
@@ -72,11 +71,20 @@ func TestNeedsAttentionBackupOfDepartedMemberSettles(t *testing.T) {
 	if err := savePoolBackupRun(s, run); err != nil {
 		t.Fatal(err)
 	}
-	result, settled := journalBackupSettlement(s, JournalEntry{Command: &cmd, Status: "needs_attention", Order: 1})
-	if !settled || result.Status != "failed" || !strings.Contains(result.Error, "no longer in the pool") {
-		t.Fatalf("departed member's backup was not settled: %+v %v", result, settled)
+	entry := JournalEntry{Command: &cmd, Status: "needs_attention", Order: 1}
+	if result, settled := journalBackupSettlement(s, entry); settled {
+		t.Fatalf("unknown departed-member outcome became terminal: %+v", result)
 	}
-	if got, err := loadPoolBackupRun(s, run.OperationID); err != nil || got.Status != "failed" {
+	later := cmd
+	later.OperationID = "later"
+	journal := map[string]JournalEntry{
+		cmd.OperationID:   entry,
+		later.OperationID: {Command: &later, Status: "pending", Order: 2},
+	}
+	if next := nextManagedCommand(journal, ""); next != "" {
+		t.Fatalf("departure released same-VM execution exclusion: %q", next)
+	}
+	if got, err := loadPoolBackupRun(s, run.OperationID); err != nil || got.Status != "needs_attention" {
 		t.Fatalf("run row = %+v %v", got, err)
 	}
 }
