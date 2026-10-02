@@ -15,7 +15,10 @@ install -d "$pkg/DEBIAN" \
   "$pkg/usr/share/doc/nex-controller" \
   "$pkg/usr/share/keyrings" \
   "$pkg/etc/nex"
-printf 'repo_url=https://nexvirtualization.com/apt\n' > "$pkg/etc/nex/updates.conf"
+# A development build (version X.Y.Z~dev.N) defaults to the development channel: the dev subtree of the archive.
+repo_url=https://nexvirtualization.com/apt
+case "$NEX_VERSION" in *~dev.*) repo_url=$repo_url/dev ;; esac
+printf 'repo_url=%s\n' "$repo_url" > "$pkg/etc/nex/updates.conf"
 printf '/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conffiles"
 # The Nex APT archive public key; postinst writes the matching signed apt source so
 # apply-update can upgrade through apt with dependency resolution and signature

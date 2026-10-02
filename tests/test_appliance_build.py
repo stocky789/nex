@@ -31,6 +31,19 @@ class ApplianceTests(unittest.TestCase):
         self.assertIn('PermitRootLogin yes\\nPasswordAuthentication yes\\n', script)
         self.assertIn('/etc/ssh/sshd_config.d/00-nex-controller.conf; systemctl enable ssh', script)
 
+    def test_build_profiles_require_their_own_inputs_before_any_container_runs(self):
+        build = str(ROOT / 'appliance/build.py')
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'leftover').write_text('x')
+            # The controller profile needs no Debian cloud image or signing key, but still refuses a dirty output directory.
+            result = subprocess.run(['python3', build, '--profile', 'controller', '--version', '1', '--output', temporary, '--docker', 'false'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('output directory must be empty', result.stderr)
+            # The single-disk profile still needs all three.
+            result = subprocess.run(['python3', build, '--version', '1', '--output', temporary], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('--base-image, --base-sha256 and --signing-key are required', result.stderr)
+
     def test_both_debian_builders_verify_supported_go_before_extracting(self):
         expected = '63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445'
         for name in ('appliance/Dockerfile', 'packaging/core-local/Dockerfile'):

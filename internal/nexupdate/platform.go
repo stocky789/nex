@@ -18,16 +18,18 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"nex.local/nex/internal/hostimage"
+	"nex.local/nex/internal/vmhost"
 )
 
 // Paths of the image edition. Tests replace them; a host never does.
 var (
-	OSReleasePath  = "/usr/lib/os-release"
-	CmdlinePath    = "/proc/cmdline"
-	UpdatesConfig  = "/etc/nex/updates.conf"
-	ImageStateDir  = "/var/lib/nex/image"
-	TrustStateDir  = "/var/lib/nex/update"
-	PinnedTrustPth = "/usr/share/nex/update/trust.json"
+	OSReleasePath   = "/usr/lib/os-release"
+	CmdlinePath     = "/proc/cmdline"
+	UpdatesConfig   = "/etc/nex/updates.conf"
+	ImageStateDir   = "/var/lib/nex/image"
+	TrustStateDir   = "/var/lib/nex/update"
+	PinnedTrustPth  = "/usr/share/nex/update/trust.json"
+	PayloadStateDir = "/var/lib/nex/payload"
 )
 
 // Edition is "image" on a host running the immutable image (its static os-release says IMAGE_ID=nex-core)
@@ -59,7 +61,16 @@ func OSReleaseValue(key string) string {
 // of the host: the service and nex-update both use it, so neither can arm a reboot over guests the
 // other would have seen.
 func HostConfig() Config {
-	return Config{Dir: ImageStateDir, TrustDir: TrustStateDir, PinnedTrust: PinnedTrustPth, Root: "/", RunningVMs: HostRunningVMs}
+	return Config{Dir: ImageStateDir, TrustDir: TrustStateDir, PinnedTrust: PinnedTrustPth, Root: "/", RunningVMs: HostRunningVMs,
+		Layers: HostLayers(), PayloadDir: PayloadStateDir}
+}
+
+// HostLayers is the host's layer manager. It authenticates release manifests with the engine's own trust
+// chain (VerifyReleaseManifest), so the service, nex-update and nex-layers.service share one trust anchor.
+func HostLayers() *vmhost.Layers {
+	cfg := vmhost.DefaultLayerConfig()
+	cfg.Verify = func(manifest, sig []byte) error { return VerifyReleaseManifest(Config{}, manifest, sig) }
+	return vmhost.NewLayers(cfg)
 }
 
 // HostRunningVMs names every libvirt domain that is not shut off (paused, crashed and in-shutdown

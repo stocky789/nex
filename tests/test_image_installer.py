@@ -158,6 +158,43 @@ class ImageInstallerTests(unittest.TestCase):
                           f'mdadm --stop {self.dev}/md/nex-data'])
         self.assertFalse([c for c in calls if '--scan' in c or 'md1' in c], 'a foreign array was touched')
 
+    def test_install_needs_no_mkfifo_and_reports_the_tool_output_and_status(self):
+        """The installer's BusyBox has no mkfifo: progress must flow through a plain pipe and a failing tool must still fail the install."""
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        tools = Path(self.env['PATH'].split(':')[0])
+        (tools / 'mkfifo').write_text('#!/bin/sh\necho "mkfifo $*" >> "$NEX_TEST_LOG"\nexit 127\n')
+        (tools / 'mkfifo').chmod(0o755)
+        (self.media / 'bin/nex-hostimage').write_text(
+            '#!/bin/sh\necho "nex-hostimage $*" >> "$NEX_TEST_LOG"\n'
+            '[ "$1" != install ] || echo "slot a written"\n'
+            '[ "$1" != install ] || [ -z "$NEX_INSTALL_FAIL" ] || exit 7\n'
+            '[ "$1" != verify ] || [ -z "$NEX_VERIFY_FAIL" ]\n')
+        result = self.run_script('install')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('nex-installer: slot a written', result.stdout)
+        self.assertFalse([c for c in self.calls() if c.startswith('mkfifo')])
+        self.env['NEX_INSTALL_FAIL'] = '1'
+        failed = self.run_script('install')
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn('could not install the image', failed.stderr)
+
+    def test_the_data_volume_node_may_appear_a_moment_after_the_image_is_written(self):
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        tools = Path(self.env['PATH'].split(':')[0])
+        # The array node is created by the first sleep, as the kernel's partition re-read does a moment after the tool exits.
+        (tools / 'mdadm').write_text('#!/bin/sh\necho "mdadm $*" >> "$NEX_TEST_LOG"\nexit 0\n')
+        (tools / 'sleep').write_text('#!/bin/sh\necho "sleep $*" >> "$NEX_TEST_LOG"\nmkdir -p "$NEX_DEV/md"; : > "$NEX_DEV/md/nex-data"\nexit 0\n')
+        self.env['NEX_NODE_WAIT'] = '5'
+        result = self.run_script('install')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('sleep 1', self.calls())
+        (self.dev / 'md/nex-data').unlink()
+        (tools / 'sleep').write_text('#!/bin/sh\necho "sleep $*" >> "$NEX_TEST_LOG"\nexit 0\n')
+        self.env['NEX_NODE_WAIT'] = '2'
+        missing = self.run_script('install')
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn('data volume', missing.stderr)
+
 
 class MediaMenuTests(unittest.TestCase):
     """The boot menus installer/build.sh writes: the serial entries run Debian's own questions, never the Nex wizard."""

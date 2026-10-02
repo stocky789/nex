@@ -65,3 +65,7 @@ udev
 dbus
 kmod
 linux-image-amd64
+
+# Console sign-in: agetty executes login(1), which Debian marks Priority required but not Essential, so mkosi
+# installs it only when it is listed. Without it neither the serial nor the VGA console can log anyone in.
+login

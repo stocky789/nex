@@ -9,6 +9,9 @@
     "docs/api/openapi.json",
     "docs/qa/image/phase3-engine.md",
     "internal/hostimage/esp.go",
+    "internal/hostimage/gpt.go",
+    "internal/hostimage/helpers_test.go",
+    "internal/hostimage/hostimage_test.go",
     "internal/hostimage/testsupport.go",
     "internal/hostimage/update.go",
     "internal/hostimage/update_test.go",
@@ -17,13 +20,16 @@
     "internal/localcore/updates_image_test.go",
     "internal/nexupdate/image.go",
     "internal/nexupdate/image_disks_test.go",
+    "internal/nexupdate/image_fixes_test.go",
     "internal/nexupdate/image_test.go",
     "internal/nexupdate/nexupdate.go",
     "internal/nexupdate/platform.go",
     "internal/nexupdate/source.go",
     "internal/nexupdate/stateformat.go",
     "internal/nexupdate/trust.go",
-    "internal/protocol/protocol.go"
+    "internal/protocol/protocol.go",
+    "scripts/update-publish.py",
+    "tests/test_update_publish.py"
   ],
   "guide": {
     "impact": "none",
@@ -51,13 +57,15 @@
     "record": "Per-host /var/lib/nex/image/state.json, update subtree (channel_serial, rollback_floor, current/previous/staged/armed release records, last 20 operations with request digests), pinned trust in the verity root at /usr/share/nex/update/trust.json and rotated trust documents in /var/lib/nex/update/. The disks are the truth (slot partition GUIDs derived from the root hash, UKI names with boot counters on every ESP); a lost state.json is rebuilt from them. A fresh Controller will read the host's report through Inventory.image once the agent sends it (not wired in this slice)."
   },
   "verification": {
-    "method": "go test of ./internal/hostimage, ./internal/nexupdate, ./internal/localcore and ./internal/protocol with fake sources, file-backed disks and an ESP directory standing in for each mounted FAT file system; scripts/generate_api.py and --check; python3 tests/test_api_contract.py; scripts/check_docs.py --worktree; the repository privacy test. Simulation only: no VM, block device, systemd-boot, systemd-bless-boot, Secure Boot or TPM was involved, and the boot-order and counter logic are a re-implementation of the BLS boot-assessment description.",
+    "method": "go test of ./internal/hostimage, ./internal/nexupdate, ./internal/localcore and ./internal/protocol with fake sources, file-backed disks and an ESP directory standing in for each mounted FAT file system; scripts/generate_api.py and --check; python3 tests/test_api_contract.py; scripts/check_docs.py --worktree; the repository privacy test. Simulation only: no VM, block device, systemd-boot, systemd-bless-boot, Secure Boot or TPM was involved, and the boot-order and counter logic are a re-implementation of the BLS boot-assessment description. Independent-review fixes (2026-10-02, see the review section of docs/qa/image/phase3-engine.md): immutable published sequences, final-lock revalidation, trust ratchet and fail-closed chain, rollback floor at arm and rollback, update lock shared by the service and nex-update, guest recheck before arming, zstd-compressed slot-image, backup-first synced GPT writes; each has a regression test that was seen to fail with the fix removed. Run package by package under CPU and memory limits; the VM proof of I-3b was not repeated.",
     "evidence": [
       "docs/qa/image/phase3-engine.md",
       "internal/hostimage/update_test.go",
       "internal/nexupdate/image_test.go",
       "internal/nexupdate/image_disks_test.go",
-      "internal/localcore/updates_image_test.go"
+      "internal/localcore/updates_image_test.go",
+      "internal/nexupdate/image_fixes_test.go",
+      "tests/test_update_publish.py"
     ]
   }
 }

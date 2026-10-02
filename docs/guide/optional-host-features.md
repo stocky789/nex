@@ -64,7 +64,7 @@ nothing here.
   it was made for; use the layer that belongs to the running image. After a rollback this is expected for the newer
   base's layer.
 - **`digest_mismatch` or `signature_invalid`.** The stored file is not the signed one, or the release manifest is missing
-  or not signed by the release key. The layer is refused and not linked for the next merge; a layer that is already merged
+  or not signed by a release key this host currently trusts (a revoked or expired key counts as not trusted). The layer is refused and not linked for the next merge; a layer that is already merged
   stays until the host restarts, and `layers list` shows it as not verified. Replace the file; do not work around the check.
 - **`in_use`.** Something still uses the feature, for example an imported ZFS pool or a loaded module. Export or stop
   that first. `disable` is refused rather than pulling files from under a running service.
@@ -79,6 +79,6 @@ Exercised in a disposable guest only (direct kernel boot, no Secure Boot): `ensu
 the modules, `disable` was refused while a pool existed, a reboot re-verified and merged the layer, and a flipped byte in
 the stored file was refused as `digest_mismatch` by `layers activate`. In that test the layer, merged earlier in the same
 boot, stayed merged and `layers list` showed it as `merged` but not `verified`: the check protects the next merge, it does
-not remove a running layer. Not exercised: a reboot with a tampered file, an installed image edition, Secure Boot module
+not remove a running layer. A unit test (not a VM) shows that, after a reboot, a tampered file is neither linked nor merged. Not exercised in a guest: a reboot with a tampered file, an installed image edition, Secure Boot module
 enforcement, the `nex-cluster` layer, double-build reproducibility, and the steps above on a real host. See the
 [layers QA record](../qa/image/phase2-layers.md) and the [command contract](../API.md#optional-feature-layers-nex-core-local-layers).

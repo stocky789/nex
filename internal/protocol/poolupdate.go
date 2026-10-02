@@ -100,6 +100,25 @@ type PoolUpdatePause struct {
 	Message string `json:"message"`
 }
 
+// Stages of PoolUpdateController.
+const (
+	PoolUpdateControllerScan = "scan"
+	PoolUpdateControllerSwap = "swap"
+	PoolUpdateControllerDone = "done"
+)
+
+// PoolUpdateController records the controller_first step. Stage scan finds the host that runs the
+// Controller VM, swap waits for that host's journaled appliance swap, done means no Controller is left to
+// update first. The host's own vmhost journal holds the swap truth.
+type PoolUpdateController struct {
+	Stage     string    `json:"stage"`
+	HostID    string    `json:"host_id,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	// Attempt is part of the swap's step identity: a resume after a rolled-back swap is a new swap.
+	Attempt int    `json:"attempt,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
 // PoolUpdateRollout is the pool master's durable rollout record (pool-update.json), replicated as
 // the authority section update_rollout. A promoted master finds it paused master_changed.
 type PoolUpdateRollout struct {
@@ -108,14 +127,17 @@ type PoolUpdateRollout struct {
 	Sequence             uint64           `json:"sequence"`
 	RunningVMs           string           `json:"running_vms"`
 	State                string           `json:"state"`
-	Phase                string           `json:"phase"` // staging, hosts, finalize
+	Phase                string           `json:"phase"` // staging, controller, hosts, finalize
 	Pause                *PoolUpdatePause `json:"pause,omitempty"`
 	PauseRequested       bool             `json:"pause_requested,omitempty"`
 	MembershipGeneration uint64           `json:"membership_generation"`
 	Hosts                []PoolUpdateHost `json:"hosts"`
-	FinalizedSequence    uint64           `json:"finalized_sequence,omitempty"`
-	CreatedAt            time.Time        `json:"created_at"`
-	UpdatedAt            time.Time        `json:"updated_at"`
+	// Controller is the controller_first step: the host that owns the Controller VM swaps its
+	// appliance image before any host activates. nil until the phase starts.
+	Controller        *PoolUpdateController `json:"controller,omitempty"`
+	FinalizedSequence uint64                `json:"finalized_sequence,omitempty"`
+	CreatedAt         time.Time             `json:"created_at"`
+	UpdatedAt         time.Time             `json:"updated_at"`
 }
 
 func (r PoolUpdateRollout) Valid() error {
@@ -136,7 +158,7 @@ func (r PoolUpdateRollout) Valid() error {
 type PoolUpdateStep struct {
 	RolloutID  string   `json:"rollout_id"`
 	StepID     string   `json:"step_id"`
-	Action     string   `json:"action"` // check, stage, drain, activate, confirm, undrain, rollback
+	Action     string   `json:"action"` // check, stage, controller, drain, activate, confirm, undrain, rollback
 	Sequence   uint64   `json:"sequence"`
 	RunningVMs string   `json:"running_vms,omitempty"`
 	VMIDs      []string `json:"vm_ids,omitempty"` // drain: guests to shut down; undrain: guests to start
@@ -147,7 +169,7 @@ func (s PoolUpdateStep) Valid() error {
 		return errors.New("pool update step is invalid")
 	}
 	switch s.Action {
-	case "check", "stage", "drain", "activate", "confirm", "undrain", "rollback":
+	case "check", "stage", "controller", "drain", "activate", "confirm", "undrain", "rollback":
 		return nil
 	}
 	return errors.New("pool update step action is invalid")
@@ -168,6 +190,8 @@ type PoolUpdateTarget struct {
 	MinControllerAPIEpoch int    `json:"min_controller_api_epoch"`
 	MixedPool             bool   `json:"mixed_pool"`
 	RequiredBytes         uint64 `json:"required_bytes"`
+	// ControllerImage is true when the release is controller_first and carries a Controller image.
+	ControllerImage bool `json:"controller_image,omitempty"`
 }
 
 // PoolUpdateHostStatus is GET /api/v1/pool/updates/status: this host's own observation.
@@ -181,8 +205,9 @@ type PoolUpdateHostStatus struct {
 	StateFormat     int               `json:"state_format"`
 	FreeBytes       uint64            `json:"free_bytes"`
 	Target          *PoolUpdateTarget `json:"target,omitempty"`
-	RunningVMs      []string          `json:"running_vms,omitempty"` // VM IDs not shut off
-	Busy            bool              `json:"busy,omitempty"`        // a non-terminal local update operation
-	Failure         string            `json:"failure,omitempty"`     // stable code of the last host failure
+	RunningVMs      []string          `json:"running_vms,omitempty"`   // VM IDs not shut off
+	Busy            bool              `json:"busy,omitempty"`          // a non-terminal local update operation
+	Failure         string            `json:"failure,omitempty"`       // stable code of the last host failure
+	ControllerVM    bool              `json:"controller_vm,omitempty"` // this host runs a Controller appliance it can swap
 	ObservedAt      time.Time         `json:"observed_at"`
 }

@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - main
+      - dev
   pull_request:
 concurrency:
   # One shared Gitea act_runner also runs Release ISO builds. Serialize every

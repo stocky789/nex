@@ -37,7 +37,7 @@ TREES = {'docs/brand/logo': {'.svg', '.png', '.pdf'}, 'cmd': {'.go'}, 'internal'
          'packaging/systemd': {'.service'},
          'appliance': {'.py', '.sh', '.service', '.md'},
          'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example', '.gpg',
-                                  '.conf'},
+                                  '.conf', '.preset'},
          'packaging/controller': {'.py', '.sh', '.service', '.path', '.md'},
          'packaging/cluster-storage': {'.sh'},
          'packaging/libvirt': {'.sh', '.patch'},

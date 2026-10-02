@@ -83,8 +83,37 @@ Requires an image-edition host that is freshly connected and whose Nex Core and 
 action appears as the task's error, for example `update_in_progress: another update operation is running`; the host keeps
 running. Nothing is stored by the Controller: replace the Controller and the same state appears from the host's next report.
 
-Pool-wide rolling updates (hosts one at a time, members before the master) do not exist yet; update each host on its own.
+Updating several hosts as a pool, one at a time with members before the master, is described in [update a pool](update-a-pool.md) (unverified).
 
+## Update channels
+
+Nex is published on two channels. **Stable**, the default, follows the `main` branch. **Development** follows the `dev` branch:
+every change merged for the next stable release is published as a pre-release numbered just below that release (for example
+`0.4.19~dev.231`), so it can be rough. Use Development on disposable hosts that should test early builds. A host installed from
+a development ISO starts on Development.
+
+An image-edition host follows one channel from one update server. Both are host settings
+that the host keeps in `/etc/nex/updates.conf` and reports in its image status. There is no built-in server: until an
+operator sets a base URL, a check fails with `source_unconfigured`. Changing the channel or server clears the host's
+available release and starts replay tracking for the new source; the host refuses the change while a check or an update
+operation is running. Hosts verify signed channel information whatever the transport, so an HTTP mirror is acceptable.
+A package-edition host reads its channel from the archive it uses: Stable is the archive root and Development its `dev` subdirectory.
+
+The channel is kept on each host, so every host in a pool chooses its own, and a pool rolling update refuses a pool whose hosts
+are on different channels (`channel_mismatch`): set the same channel on all of them first. To change it:
+
+1. Nex Controller, image-edition host: **Settings** → **Updates**, find the host under **Host images**, choose **Update channel**
+   and select **Change channel**. The host reports the new channel with its next report. The picker offers Stable and Development;
+   a channel set through the API stays visible but is not offered again.
+2. Nex Core host-local page: **Updates**, choose **Update channel** and select **Change channel**; the page checks again.
+3. Select **Check** to read the release the new channel offers.
+
+Moving a host from Development back to Stable never downgrades it: a package host's `apt` does not install an older version by
+itself, and the image engine refuses a release below the host's rollback floor, so nothing is offered until Stable publishes
+something newer than the host runs. A package-edition Controller (the appliance's own package updater) has no selector: it follows
+the archive in `repo_url` in `/etc/nex/updates.conf`; to move it, set `repo_url` to the archive root plus `/dev`
+(`https://<site>/apt/dev`) on the Controller and select **Check**. This section is unverified: the channel selectors have not
+been walked through in a browser or on a running host (see [Verification](#verification)).
 
 ## Troubleshooting
 
@@ -184,3 +213,8 @@ relay through the embedded agent into the host's engine and the Host images pane
 running image host through the Controller was done; the steps above are therefore unverified. The host engine itself was
 driven in a virtual machine through its command-line tool, not through these routes
 ([Phase I-3b results](../qa/image/phase3-boot.md)).
+
+Update channels: the package edition's channel setting (archive subtree, host-local route, refusals) and the channel picker's
+request and rendering are covered by automated tests only (`go test ./internal/nexupdate ./internal/localcore`,
+`web/src/channel.test.mjs`, `web/src/image-updates.test.mjs`). No browser walkthrough, no host switched between channels and no
+published development archive were exercised; the release side is in [publish a release](publish-a-release.md#release-channels).

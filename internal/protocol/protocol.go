@@ -268,6 +268,25 @@ type ImageStatus struct {
 	SecureBoot *bool           `json:"secure_boot,omitempty"`
 	Operation  *ImageOperation `json:"operation,omitempty"`
 	Failure    *ImageError     `json:"failure,omitempty"`
+	// BaseURL is the update server this host reads (host-scoped setting, /etc/nex/updates.conf); empty when
+	// none is configured. Media is the host's last scan of offline bundles.
+	BaseURL string       `json:"base_url,omitempty"`
+	Media   []ImageMedia `json:"media,omitempty"`
+}
+
+// ImageMedia is one offline update bundle the host found. Channels are read from the unverified
+// channel.json for display; the host verifies everything on import.
+type ImageMedia struct {
+	ID        string              `json:"id"`
+	Source    string              `json:"source"`
+	Mounted   bool                `json:"mounted"`
+	Channels  []ImageMediaChannel `json:"channels,omitempty"`
+	Checksums bool                `json:"has_sha256sums"`
+}
+
+type ImageMediaChannel struct {
+	Name     string `json:"name"`
+	Sequence int    `json:"sequence"`
 }
 type Host struct {
 	Capabilities []string   `json:"capabilities,omitempty"`

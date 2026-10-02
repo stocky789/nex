@@ -58,25 +58,28 @@ class ReleaseReachabilityTests(unittest.TestCase):
                 workflow = (ROOT / provider / 'workflows/release.yml').read_text()
                 step = workflow.split('      - name: Confirm the release is actually reachable\n', 1)[1]
                 script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - name:', 1)[0])
-                for unauthorized, missing_version, settling in ((False, False, 0), (True, False, 0), (False, True, 0), (False, False, 1)):
-                    with self.subTest(provider=provider, unauthorized=unauthorized, missing_version=missing_version, settling=settling):
-                        requests.clear()
-                        result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
-                            env={**os.environ, 'NEX_VERSION': '0.3.4',
-                                 'NEX_PUBLIC_URL': f'http://127.0.0.1:{server.server_port}'},
-                            text=True, capture_output=True, timeout=30, cwd=temporary.name)
-                        if unauthorized:
-                            self.assertNotEqual(result.returncode, 0)
-                            self.assertIn('returned 401', result.stderr)
-                        elif missing_version:
-                            self.assertNotEqual(result.returncode, 0)
-                            self.assertIn('published index does not list 0.3.4', result.stderr)
-                        else:
-                            self.assertEqual(result.returncode, 0, result.stderr)
-                            self.assertTrue(any(method == 'HEAD' and path.endswith('.tar.gz') for method, path in requests))
-                            self.assertFalse(any(method == 'GET' and path.endswith('.tar.gz') for method, path in requests))
-                            self.assertIn(('GET', '/apt/dists/nex/main/binary-amd64/Packages'), requests)
-                            self.assertIn(('HEAD', '/downloads/0.3.4/' + payload.name), requests)
+                for apt_path, downloads_path in (('apt', 'downloads'), ('apt/dev', 'downloads/dev')):
+                    for unauthorized, missing_version, settling in ((False, False, 0), (True, False, 0), (False, True, 0), (False, False, 1)):
+                        with self.subTest(provider=provider, apt=apt_path, unauthorized=unauthorized, missing_version=missing_version, settling=settling):
+                            requests.clear()
+                            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                                env={**os.environ, 'NEX_VERSION': '0.3.4', 'NEX_APT_PATH': apt_path,
+                                     'NEX_DOWNLOADS_PATH': downloads_path,
+                                     'NEX_PUBLIC_URL': f'http://127.0.0.1:{server.server_port}'},
+                                text=True, capture_output=True, timeout=30, cwd=temporary.name)
+                            if unauthorized:
+                                self.assertNotEqual(result.returncode, 0)
+                                self.assertIn('returned 401', result.stderr)
+                            elif missing_version:
+                                self.assertNotEqual(result.returncode, 0)
+                                self.assertIn('published index does not list 0.3.4', result.stderr)
+                            else:
+                                self.assertEqual(result.returncode, 0, result.stderr)
+                                self.assertTrue(any(method == 'HEAD' and path.endswith('.tar.gz') for method, path in requests))
+                                self.assertFalse(any(method == 'GET' and path.endswith('.tar.gz') for method, path in requests))
+                                # Each channel is verified at its own URLs, never the other's.
+                                self.assertIn(('GET', f'/{apt_path}/dists/nex/main/binary-amd64/Packages'), requests)
+                                self.assertIn(('HEAD', f'/{downloads_path}/0.3.4/' + payload.name), requests)
         finally:
             temporary.cleanup()
             server.shutdown()

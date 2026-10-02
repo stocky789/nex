@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"nex.local/nex/internal/agent"
 	"nex.local/nex/internal/hostimage"
 	"nex.local/nex/internal/nexupdate"
@@ -85,14 +86,23 @@ func signedRelease(t *testing.T, label string, seq int) signedTree {
 		t.Fatal(err)
 	}
 	rootHash, _ := os.ReadFile(filepath.Join(rel, "roothash"))
-	sum := sha256.Sum256(buf.Bytes())
+	var blob bytes.Buffer
+	zw, zerr := zstd.NewWriter(&blob, zstd.WithEncoderConcurrency(1))
+	if zerr != nil {
+		t.Fatal(zerr)
+	}
+	if _, zerr = zw.Write(buf.Bytes()); zerr != nil || zw.Close() != nil {
+		t.Fatal(zerr)
+	}
+	sum := sha256.Sum256(blob.Bytes())
 	sha := hex.EncodeToString(sum[:])
-	write("blobs/sha256-"+sha, buf.Bytes())
+	write("blobs/sha256-"+sha, blob.Bytes())
 	n := strconv.Itoa(seq)
 	m := nexupdate.Manifest{Format: 1, Sequence: seq, Label: label, Architecture: nexupdate.Architecture, Created: now,
 		Compat: nexupdate.Compat{UpdateEngine: 1, StateFormat: 2},
-		Components: []nexupdate.Component{{ID: "base", Kind: "slot-image", SHA256: sha, Bytes: int64(buf.Len()),
-			URL: "blobs/sha256-" + sha, Required: true, VerityRootHash: strings.TrimSpace(string(rootHash))}}}
+		Components: []nexupdate.Component{{ID: "base", Kind: "slot-image", SHA256: sha, Bytes: int64(blob.Len()),
+			Encoding: nexupdate.SlotEncoding,
+			URL:      "blobs/sha256-" + sha, Required: true, VerityRootHash: strings.TrimSpace(string(rootHash))}}}
 	mraw := signed("releases/"+n+"/manifest.json", "releases/"+n+"/manifest.sig", m, relKey)
 	msum := sha256.Sum256(mraw)
 	signed("stable/channel.json", "stable/channel.sig", nexupdate.Channel{Format: 1, Channel: "stable", ChannelSerial: 1, Sequence: seq,

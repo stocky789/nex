@@ -66,6 +66,10 @@
 <li><a href="#localStartPoolRollout">POST /api/local/v1/pool/updates/rollouts</a></li>
 <li><a href="#localGetPoolRollout">GET /api/local/v1/pool/updates/rollouts/{id}</a></li>
 <li><a href="#localControlPoolRollout">POST /api/local/v1/pool/updates/rollouts/{id}/control</a></li>
+<li><a href="#localPutUpdateSettings">PUT /api/local/v1/updates/settings</a></li>
+<li><a href="#localListUpdateMedia">GET /api/local/v1/updates/media</a></li>
+<li><a href="#localImportUpdate">POST /api/local/v1/updates/import</a></li>
+<li><a href="#localFetchUpdateComponent">POST /api/local/v1/updates/components/{id}/fetch</a></li>
 <li><a href="#listOrphanedBackupsLocal">GET /api/local/v1/pool/backup-repositories/{id}/orphans</a></li>
 <li><a href="#cleanupOrphanedBackupsLocal">POST /api/local/v1/pool/backup-repositories/{id}/orphan-cleanups</a></li>
 <li><a href="#getOrphanCleanupLocal">GET /api/local/v1/pool/backup-orphan-cleanups/{operation_id}</a></li>
@@ -213,7 +217,7 @@
     &quot;format&quot;: &quot;list prints one JSON array on stdout; activate prints one `layer NAME: verified` or `layer NAME: refused (REASON); left unmerged` line per enabled layer; ensure and disable print nothing on success.&quot;
   },
   &quot;failure&quot;: &quot;ensure and disable exit nonzero with `layer-unavailable: NAME: REASON[: detail]` on stderr when the layer cannot be provided or is in use; activate exits 0 even when a layer is refused.&quot;,
-  &quot;compatibility&quot;: &quot;A layer is bound to exactly one base build by SYSEXT_LEVEL equal to the base BUILD_ID; a layer built for another base is refused (base_mismatch), so a rolled-back base never merges a newer base&#x27;s layer. The release key is the raw 32-byte Ed25519 key at /usr/share/nex/update/release.pub.&quot;
+  &quot;compatibility&quot;: &quot;A layer is bound to exactly one base build by SYSEXT_LEVEL equal to the base BUILD_ID; a layer built for another base is refused (base_mismatch), so a rolled-back base never merges a newer base&#x27;s layer. The stored release manifest is authenticated with the update engine&#x27;s trust (the pinned /usr/share/nex/update/trust.json plus every adopted rotation): a revoked or expired release key, or a broken trust chain, refuses every layer (signature_invalid).&quot;
 }</pre></section>
 <section id="localLogin"><h2>POST <code>/api/local/v1/session</code></h2>
 <p>Sign in to this host</p><p>Authenticates only username root against the host operating-system password using PAM authentication and account checks, and validates browser origin. Use the root password set during Nex Core installation, or its current value after an OS password change. Locked or expired accounts/passwords and authentication-service failures fail closed, including the five-second helper timeout. Sets __Host-nex_local_session with Secure, HttpOnly, SameSite=Strict, Path=/ and no Domain. Each login creates a new session; at most 64 active sessions per service. Sessions expire after 30 minutes without an authenticated mutation and eight hours absolutely; GET/HEAD polling does not renew them. Legacy unprefixed cookies are not accepted; sign in again after upgrade. The former separate local admin account and saved credential files are not accepted; there is no fallback. Upgrades require matching local service, PAM helper/configuration and web assets. Root password changes affect subsequent logins; existing sessions remain valid until logout, expiry or service restart. Controller admin credentials and Core protocol v1 are unchanged. Local process restart invalidates its in-memory sessions. Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop.</p>
@@ -1722,12 +1726,12 @@
   }
 }</pre></details></section>
 <section id="localApplyUpdates"><h2>POST <code>/api/local/v1/updates/apply</code></h2>
-<p>Apply a host-local update</p><p>Image edition: verifies signed release metadata (trust.json, channel.json, manifest), downloads the slot image with Range resume, writes it to the inactive slot on every disk and, only when activate is reboot, arms the boot entry and reboots. activate stage_only (default) never changes the next boot. request_id is the operation ID: an exact replay returns the original operation with 200 (an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. scope controller is refused (scope_unavailable) until the appliance swap exists. Classic edition: runs apt-get update then apt-get install nex-core-local as root against the signed Nex archive and returns 202 scheduled; the request body is ignored. CSRF and same-origin required.</p>
+<p>Apply a host-local update</p><p>Image edition: verifies signed release metadata (trust.json, channel.json, manifest), downloads the slot image with Range resume, writes it to the inactive slot on every disk and, only when activate is reboot, arms the boot entry and reboots. activate stage_only (default) never changes the next boot. request_id is the operation ID: an exact replay returns the original operation with 200 (an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. scope controller swaps the Controller appliance&#x27;s read-only system image on the host that owns the Controller VM, as a journaled operation under this request_id (kind controller): the vm-image component&#x27;s digest in the signed release manifest is verified, the component is staged under /var/lib/nex/payload/&lt;sha256&gt;/, the guest shuts down gracefully through its guest agent (never forced), controller-data.qcow2 is checkpointed (fsynced and read back against the disk; the swap is refused while another domain, running or defined, references the disk), the domain is redefined with the new system disk (same UUID and MAC) and started, and readiness (the running domain booted from the expected image and the Controller answering) is probed for 10 minutes; on failure the data checkpoint and the old image are restored (controller_rolled_back) and, if that fails too, the VM stays stopped (controller_needs_attention). A controller swap never changes the host&#x27;s own image lifecycle, has no activation step (activate reboot is invalid_request), cannot be cancelled while it runs (swap_in_progress), and is resumed by repeating its request_id. Refusals: scope_unavailable (no appliance engine on this host), no_controller_image, controller_no_appliance, controller_not_profile, controller_digest_mismatch, controller_shutdown_failed, controller_rolled_back, controller_needs_attention, controller_swap_in_progress. Classic edition: runs apt-get update then apt-get install nex-core-local as root against the signed Nex archive and returns 202 scheduled; the request body is ignored. CSRF and same-origin required.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localApplyUpdates&quot;,
   &quot;summary&quot;: &quot;Apply a host-local update&quot;,
-  &quot;description&quot;: &quot;Image edition: verifies signed release metadata (trust.json, channel.json, manifest), downloads the slot image with Range resume, writes it to the inactive slot on every disk and, only when activate is reboot, arms the boot entry and reboots. activate stage_only (default) never changes the next boot. request_id is the operation ID: an exact replay returns the original operation with 200 (an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. scope controller is refused (scope_unavailable) until the appliance swap exists. Classic edition: runs apt-get update then apt-get install nex-core-local as root against the signed Nex archive and returns 202 scheduled; the request body is ignored. CSRF and same-origin required.&quot;,
+  &quot;description&quot;: &quot;Image edition: verifies signed release metadata (trust.json, channel.json, manifest), downloads the slot image with Range resume, writes it to the inactive slot on every disk and, only when activate is reboot, arms the boot entry and reboots. activate stage_only (default) never changes the next boot. request_id is the operation ID: an exact replay returns the original operation with 200 (an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. scope controller swaps the Controller appliance&#x27;s read-only system image on the host that owns the Controller VM, as a journaled operation under this request_id (kind controller): the vm-image component&#x27;s digest in the signed release manifest is verified, the component is staged under /var/lib/nex/payload/&lt;sha256&gt;/, the guest shuts down gracefully through its guest agent (never forced), controller-data.qcow2 is checkpointed (fsynced and read back against the disk; the swap is refused while another domain, running or defined, references the disk), the domain is redefined with the new system disk (same UUID and MAC) and started, and readiness (the running domain booted from the expected image and the Controller answering) is probed for 10 minutes; on failure the data checkpoint and the old image are restored (controller_rolled_back) and, if that fails too, the VM stays stopped (controller_needs_attention). A controller swap never changes the host&#x27;s own image lifecycle, has no activation step (activate reboot is invalid_request), cannot be cancelled while it runs (swap_in_progress), and is resumed by repeating its request_id. Refusals: scope_unavailable (no appliance engine on this host), no_controller_image, controller_no_appliance, controller_not_profile, controller_digest_mismatch, controller_shutdown_failed, controller_rolled_back, controller_needs_attention, controller_swap_in_progress. Classic edition: runs apt-get update then apt-get install nex-core-local as root against the signed Nex archive and returns 202 scheduled; the request body is ignored. CSRF and same-origin required.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
@@ -5401,6 +5405,326 @@
     }
   }
 }</pre></details></section>
+<section id="localPutUpdateSettings"><h2>PUT <code>/api/local/v1/updates/settings</code></h2>
+<p>Set the channel and update server of this host</p><p>Image edition: validates the channel (lower-case letters, digits and -, starting with a letter) and the base URL (http or https, no credentials, query or fragment; empty clears it), writes channel= and base_url= to /etc/nex/updates.conf and answers with the stored values. The change takes effect for the next check. The channel pointer history (channel_serial) belongs to the update server and channel it came from, so a changed source starts empty and an earlier source keeps its own; the rollback floor is kept. Refused while an update operation or an update check is running (409 update_in_progress) and while NEX_UPDATE_BASE_URL or NEX_UPDATE_CHANNEL fix the settings in the service environment (409 settings_overridden). Package edition: takes a channel only, stable or dev (400 invalid_channel otherwise; a base_url is refused with 400 invalid_base_url because the host updates from its package archive), and records it as the archive the host reads: repo_url in /etc/nex/updates.conf becomes the archive root for stable and its dev subdirectory for dev, other lines are kept, and the next check refreshes the package index from the new archive. Refused while NEX_UPDATE_REPO fixes the archive (409 settings_overridden). The settings are host-scoped; the Controller reads the image edition&#x27;s from Inventory.image.base_url and never stores them. Root local session, CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localPutUpdateSettings&quot;,
+  &quot;summary&quot;: &quot;Set the channel and update server of this host&quot;,
+  &quot;description&quot;: &quot;Image edition: validates the channel (lower-case letters, digits and -, starting with a letter) and the base URL (http or https, no credentials, query or fragment; empty clears it), writes channel= and base_url= to /etc/nex/updates.conf and answers with the stored values. The change takes effect for the next check. The channel pointer history (channel_serial) belongs to the update server and channel it came from, so a changed source starts empty and an earlier source keeps its own; the rollback floor is kept. Refused while an update operation or an update check is running (409 update_in_progress) and while NEX_UPDATE_BASE_URL or NEX_UPDATE_CHANNEL fix the settings in the service environment (409 settings_overridden). Package edition: takes a channel only, stable or dev (400 invalid_channel otherwise; a base_url is refused with 400 invalid_base_url because the host updates from its package archive), and records it as the archive the host reads: repo_url in /etc/nex/updates.conf becomes the archive root for stable and its dev subdirectory for dev, other lines are kept, and the next check refreshes the package index from the new archive. Refused while NEX_UPDATE_REPO fixes the archive (409 settings_overridden). The settings are host-scoped; the Controller reads the image edition&#x27;s from Inventory.image.base_url and never stores them. Root local session, CSRF and same-origin required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateSettings&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Stored settings.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateSettings&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;invalid_channel or invalid_base_url; malformed JSON or unknown field.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;update_in_progress or settings_overridden.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localListUpdateMedia"><h2>GET <code>/api/local/v1/updates/media</code></h2>
+<p>List offline update bundles</p><p>Image edition only. Read-only: lists the host inbox (/var/lib/nex/image/inbox and its directories) and the device labelled NEXUPDATE; nothing is mounted and nothing on the media is changed. The scan is remembered in the engine&#x27;s record and reported in GET /updates and Inventory.image.media. Channels are the unverified channel.json of each bundle; only import verifies. Root local session required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localListUpdateMedia&quot;,
+  &quot;summary&quot;: &quot;List offline update bundles&quot;,
+  &quot;description&quot;: &quot;Image edition only. Read-only: lists the host inbox (/var/lib/nex/image/inbox and its directories) and the device labelled NEXUPDATE; nothing is mounted and nothing on the media is changed. The scan is remembered in the engine&#x27;s record and reported in GET /updates and Inventory.image.media. Channels are the unverified channel.json of each bundle; only import verifies. Root local session required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The candidates.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;media&quot;: {
+                &quot;type&quot;: &quot;array&quot;,
+                &quot;items&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateMedia&quot;
+                }
+              }
+            },
+            &quot;required&quot;: [
+              &quot;media&quot;
+            ]
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;unsupported_edition.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localImportUpdate"><h2>POST <code>/api/local/v1/updates/import</code></h2>
+<p>Stage a release from offline media</p><p>Image edition only. The same pipeline as apply with the bundle as source: trust.json (rotation allowed, as online), channel.json signature and its own expires (a bundle is signed with a later expiry, default 180 days), channel_serial and rollback-floor checks, manifest hash and signature, a host clock earlier than the manifest&#x27;s created is refused (clock_behind), every blob SHA-256, then layers, slot write and verity as for an online stage. Stage never changes the next boot; activate reboot also arms. request_id is the operation ID: an exact replay returns the original operation (200, an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. Unlabelled or unmounted labelled media is mounted read-only for the operation and released at its end. Root local session, CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localImportUpdate&quot;,
+  &quot;summary&quot;: &quot;Stage a release from offline media&quot;,
+  &quot;description&quot;: &quot;Image edition only. The same pipeline as apply with the bundle as source: trust.json (rotation allowed, as online), channel.json signature and its own expires (a bundle is signed with a later expiry, default 180 days), channel_serial and rollback-floor checks, manifest hash and signature, a host clock earlier than the manifest&#x27;s created is refused (clock_behind), every blob SHA-256, then layers, slot write and verity as for an online stage. Stage never changes the next boot; activate reboot also arms. request_id is the operation ID: an exact replay returns the original operation (200, an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. Unlabelled or unmounted labelled media is mounted read-only for the operation and released at its end. Root local session, CSRF and same-origin required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateImportRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Operation started.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of an earlier request_id.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;invalid_request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;unsupported_edition, update_in_progress, request_conflict, already_armed, running_vms. Failures of the background operation (unknown_media, channel_ambiguous, channel_not_in_bundle, channel_expired, channel_replayed, below_rollback_floor, clock_behind, bad_signature, manifest_mismatch, layer_base_mismatch, blob_mismatch, image_invalid, roothash_mismatch, ...) are in the operation&#x27;s error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localFetchUpdateComponent"><h2>POST <code>/api/local/v1/updates/components/{id}/fetch</code></h2>
+<p>Fetch an on_demand payload</p><p>Image edition only. Downloads one on_demand component of the release the source offers (the update server, or the bundle named by media) to /var/lib/nex/payload/&lt;sha256&gt;/&lt;name&gt;, after the same metadata checks as a check and with Range resume and a SHA-256 check of the whole file; a payload already in place is not downloaded again. The slot image and layers are not payloads (not_on_demand: they come with a stage); an unknown component is unknown_component. It never changes the lifecycle phase of a staged release. request_id is the operation ID, with the replay and conflict rules of apply. Root local session, CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localFetchUpdateComponent&quot;,
+  &quot;summary&quot;: &quot;Fetch an on_demand payload&quot;,
+  &quot;description&quot;: &quot;Image edition only. Downloads one on_demand component of the release the source offers (the update server, or the bundle named by media) to /var/lib/nex/payload/&lt;sha256&gt;/&lt;name&gt;, after the same metadata checks as a check and with Range resume and a SHA-256 check of the whole file; a payload already in place is not downloaded again. The slot image and layers are not payloads (not_on_demand: they come with a stage); an unknown component is unknown_component. It never changes the lifecycle phase of a staged release. request_id is the operation ID, with the replay and conflict rules of apply. Root local session, CSRF and same-origin required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Component id from the manifest.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateFetchRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Operation started; phase fetched when the file is in place.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of an earlier request_id.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;invalid_request (including a component id that is not a plain name).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;unsupported_edition, update_in_progress, request_conflict. Background failures (unknown_component, not_on_demand, blob_mismatch, source_unreachable, ...) are in the operation&#x27;s error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="listOrphanedBackupsLocal"><h2>GET <code>/api/local/v1/pool/backup-repositories/{id}/orphans</code></h2>
 <p>List a repository&#x27;s orphaned recovery points</p><p>Read-only. Recovery points whose VM id is not in this pool master&#x27;s durable VM inventory, grouped per VM. 409 when the inventory cannot be established.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
@@ -7056,6 +7380,14 @@
     },
     &quot;repo_url&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;channel&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stable&quot;,
+        &quot;dev&quot;
+      ],
+      &quot;description&quot;: &quot;Package edition, host-local check only: stable, or dev when repo_url is the development subdirectory of the archive.&quot;
     },
     &quot;phase&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -9178,6 +9510,8 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
         &quot;apply&quot;,
+        &quot;import&quot;,
+        &quot;fetch&quot;,
         &quot;activate&quot;,
         &quot;rollback&quot;,
         &quot;cancel&quot;
@@ -9185,7 +9519,7 @@
     },
     &quot;phase&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;checking, downloading, writing, staged, armed, cancelled or failed.&quot;
+      &quot;description&quot;: &quot;checking, downloading, writing, staged, armed, fetched, cancelled or failed.&quot;
     },
     &quot;progress&quot;: {
       &quot;type&quot;: &quot;object&quot;,
@@ -9362,6 +9696,17 @@
         &quot;code&quot;,
         &quot;message&quot;
       ]
+    },
+    &quot;base_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The update server this host reads; absent when none is configured.&quot;
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: &quot;array&quot;,
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateMedia&quot;
+      },
+      &quot;description&quot;: &quot;The last scan of offline bundles (GET /updates/media records it).&quot;
     }
   },
   &quot;required&quot;: [
@@ -9377,7 +9722,7 @@
 <details id="PoolUpdateHost"><summary>PoolUpdateHost</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart.&quot;,
+  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolUpdateHost&quot;,
   &quot;properties&quot;: {
     &quot;host_id&quot;: {
@@ -9409,6 +9754,10 @@
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;attempt&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
     }
   },
   &quot;required&quot;: [
@@ -9453,7 +9802,8 @@
         &quot;staging&quot;,
         &quot;hosts&quot;,
         &quot;finalize&quot;
-      ]
+      ],
+      &quot;description&quot;: &quot;staging, controller, hosts, finalize&quot;
     },
     &quot;pause&quot;: {
       &quot;anyOf&quot;: [
@@ -9480,6 +9830,16 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateHost&quot;
       }
+    },
+    &quot;controller&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateController&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     },
     &quot;finalized_sequence&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -9621,6 +9981,165 @@
   &quot;required&quot;: [
     &quot;code&quot;,
     &quot;message&quot;
+  ]
+}</pre></details>
+<details id="ImageUpdateSettings"><summary>ImageUpdateSettings</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The host&#x27;s update source. There is no built-in base URL: an empty base_url means no online source. Persisted in /etc/nex/updates.conf on the host and reported in Inventory.image.&quot;,
+  &quot;properties&quot;: {
+    &quot;channel&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-z][a-z0-9-]{0,31}$&quot;
+    },
+    &quot;base_url&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 2048,
+      &quot;description&quot;: &quot;http or https URL without credentials, query or fragment; empty clears it. Plain http is allowed because signatures and blob hashes carry integrity.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;channel&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ImageUpdateMedia"><summary>ImageUpdateMedia</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One offline bundle candidate. Channels are read from the unverified channel.json for display; the host verifies everything on import.&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;inbox, inbox/&lt;name&gt; (directories of /var/lib/nex/image/inbox) or label (the device labelled NEXUPDATE).&quot;
+    },
+    &quot;source&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;inbox&quot;,
+        &quot;label&quot;
+      ]
+    },
+    &quot;mounted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;false for labelled media that is not mounted; import mounts it read-only for the operation.&quot;
+    },
+    &quot;channels&quot;: {
+      &quot;type&quot;: &quot;array&quot;,
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;properties&quot;: {
+          &quot;name&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          },
+          &quot;sequence&quot;: {
+            &quot;type&quot;: &quot;integer&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;name&quot;,
+          &quot;sequence&quot;
+        ]
+      }
+    },
+    &quot;has_sha256sums&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;source&quot;,
+    &quot;mounted&quot;,
+    &quot;has_sha256sums&quot;
+  ]
+}</pre></details>
+<details id="ImageUpdateImportRequest"><summary>ImageUpdateImportRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{7,63}$&quot;,
+      &quot;description&quot;: &quot;Operation ID; idempotency key.&quot;
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;A media id from GET /updates/media.&quot;
+    },
+    &quot;channel&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Channel inside the bundle; default the host&#x27;s channel if the bundle has it, else its only one.&quot;
+    },
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;activate&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stage_only&quot;,
+        &quot;reboot&quot;
+      ],
+      &quot;default&quot;: &quot;stage_only&quot;
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;refuse&quot;,
+        &quot;shutdown&quot;
+      ],
+      &quot;default&quot;: &quot;refuse&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;media&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ImageUpdateFetchRequest"><summary>ImageUpdateFetchRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{7,63}$&quot;,
+      &quot;description&quot;: &quot;Operation ID; idempotency key.&quot;
+    },
+    &quot;media&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Read the payload from this bundle instead of the update server.&quot;
+    },
+    &quot;channel&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolUpdateController"><summary>PoolUpdateController</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;The controller_first step of a rollout. stage scan looks for the host that runs the Controller VM, swap waits for that host&#x27;s journaled appliance swap, done means no Controller is left to update first. attempt is part of the swap&#x27;s step identity (a resume after a failed swap is a new swap) and is omitted while 0; error is the code: message of the last failed swap.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateController&quot;,
+  &quot;properties&quot;: {
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;attempt&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;stage&quot;,
+    &quot;started_at&quot;
   ]
 }</pre></details>
 <details id="BackupS3Source"><summary>BackupS3Source</summary><pre>{

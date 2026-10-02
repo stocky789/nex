@@ -106,6 +106,28 @@ class CoreLocalPackageTests(unittest.TestCase):
             self.assertFalse(json.loads(setup.CONFIG.read_text())['automatic'])
             self.assertEqual(setup.CONFIG.stat().st_mode & 0o777, 0o600)
 
+    def test_controller_profile_digest_selects_the_two_disk_flags_and_survives_reconfiguration(self):
+        digest = 'ab' * 32
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            config = state / 'config'
+            with patch.object(setup, 'CONFIG', config), patch.object(setup, 'STATE', state), patch.object(setup, 'PAYLOAD', state / 'payload'):
+                setup.configure('192.0.2.5', directory, '', controller_image_sha256=digest)
+                setup.configure('192.0.2.6', directory, '', automatic=True)
+                self.assertEqual(json.loads(config.read_text())['controller_image_sha256'], digest)
+                with patch.object(setup.os, 'geteuid', return_value=0), patch.object(setup.os, 'umask'), \
+                        patch.object(setup.os, 'execv') as execute, patch.object(sys, 'argv', ['core-local-setup', 'run']):
+                    setup.main()
+                    argv = execute.call_args.args[1]
+                self.assertEqual(argv[argv.index('--controller-system-image') + 1], str(state / 'payload' / digest / 'controller-system.img'))
+                self.assertEqual(argv[argv.index('--controller-system-image-sha256') + 1], digest)
+                for single_disk in ('--image', '--manifest', '--signature', '--trusted-key'):
+                    self.assertNotIn(single_disk, argv)
+                with self.assertRaises(ValueError):
+                    setup.configure('192.0.2.5', directory, '', controller_image_sha256='not-a-digest')
+                setup.configure('192.0.2.5', directory, '', controller_image_sha256='')
+                self.assertNotIn('controller_image_sha256', json.loads(config.read_text()))
+
     def test_recovery_command_reuses_configured_paths_and_forwards_private_request(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)

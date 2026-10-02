@@ -170,3 +170,10 @@
 @media (prefers-reduced-motion: reduce) {
   .backup-tabs button, .backup-choice, .backup-workspace :is(.backup-points, .backup-jobs) tbody tr { transition: none; }
 }
+.rollout-steps { margin: 8px 0 12px; }
+.rollout-steps tbody th { color: var(--text); font-weight: 500; }
+.rollout-start { display: grid; gap: 8px; max-width: 520px; margin-top: 8px; }
+.rollout-start input[type="number"] { width: 10ch; }
+.channel-picker { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin: 12px 0; }
+.channel-picker label { display: grid; gap: 4px; }
+.channel-picker p { flex-basis: 100%; margin: 0; }

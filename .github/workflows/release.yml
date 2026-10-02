@@ -1,14 +1,22 @@
 name: Release
-# Push-driven release. Every push to main rebuilds both ISOs and Debian packages
-# at the newest CHANGELOG version, then creates the Gitea release for tag vX.Y.Z[-preN],
-# replacing that version's previous release and moving its tag when the version was
-# already published. Forge release assets are the two ISOs and their checksums.
+# Push-driven release for two channels. Every push to main (stable) or dev (development)
+# rebuilds both ISOs and Debian packages, publishes them to that channel's APT archive and
+# download tree, then creates the Gitea release for the tag. Stable builds the newest
+# CHANGELOG version, tag vX.Y.Z[-preN], replacing that version's previous release and
+# moving its tag when the version was already published. Development builds a pre-release
+# of the next release, tag vX.Y.Z-dev.N (scripts/release-version.py --channel dev), marked
+# as a Gitea pre-release with only the newest builds kept.
+# Forge release assets are the two ISOs and their checksums.
 # Source, compliance manifests and hash-pinned Nex netinst payloads live in the
 # website download tree. Packages remain build
 # products for the ISO and the signed APT update feed.
 # The CHANGELOG heading and the Debian package version are one number in two
 # notations, so a release can never ship stamped with a version its changelog does
 # not describe.
+#
+# The development channel is a subtree of each stable root on the website host: the APT
+# archive at /apt/dev (/srv/nex-apt/dev) and the downloads at /downloads/dev
+# (/srv/nex-downloads/dev). Only a stable run deploys the static website pages.
 #
 # The ISO build runs builder containers on the runner's Docker host. On a runner that
 # executes jobs inside a container, the workspace is a Docker volume; the job finds
@@ -27,6 +35,7 @@ on:
   push:
     branches:
       - main
+      - dev
 concurrency:
   # Same group as Controller foundation: one act_runner cannot ISO-build and
   # run Playwright labs at once (runs 4222+4223).
@@ -50,16 +59,34 @@ jobs:
         with:
           go-version: '1.27.1'
 
-      - name: Resolve release version and notes from CHANGELOG
+      - name: Resolve release channel, version and notes
         id: version
+        env:
+          NEX_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          read -r tag_version version < <(python3 scripts/release-version.py --current --format both)
           mkdir -p .cache
-          python3 scripts/release-version.py --current --notes > .cache/release-notes.md
-          echo "tag=v$tag_version" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Releasing v$tag_version as Debian version $version"
+          # main publishes the stable channel from its newest CHANGELOG heading. dev publishes the
+          # development channel: a numbered pre-release of the release main publishes next.
+          args=()
+          case "$NEX_BRANCH" in
+            main) channel=stable apt=apt downloads=downloads ;;
+            dev)
+              channel=dev apt=apt/dev downloads=downloads/dev
+              git show origin/main:CHANGELOG.md > .cache/stable-changelog.md
+              args=(--channel dev --build "$(git rev-list --count HEAD)" --stable-changelog .cache/stable-changelog.md) ;;
+            *) echo "Release runs for main and dev only, not $NEX_BRANCH" >&2; exit 1 ;;
+          esac
+          read -r tag_version version < <(python3 scripts/release-version.py --current "${args[@]}" --format both)
+          python3 scripts/release-version.py --current "${args[@]}" --notes > .cache/release-notes.md
+          {
+            echo "tag=v$tag_version"
+            echo "version=$version"
+            echo "channel=$channel"
+            echo "apt_path=$apt"
+            echo "downloads_path=$downloads"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing v$tag_version on the $channel channel as Debian version $version"
 
       - name: Locate the workspace on the Docker host
         id: host
@@ -127,6 +154,7 @@ jobs:
       - name: Build source archive, packages and both ISOs
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_DOWNLOADS_PATH: ${{ steps.version.outputs.downloads_path }}
           NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
           NEX_APPLIANCE_SIGNING_KEY: ${{ steps.signing.outputs.key }}
           NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
@@ -139,7 +167,7 @@ jobs:
           mkdir -p "$TMPDIR"
           # build.sh rebuilds the appliance and the nex-core-local package from current
           # source, then the ISO from that package. The Controller package is separate.
-          export NEX_NETINST_BASE_URL="${NEX_PUBLIC_URL%/}/downloads/${NEX_VERSION}"
+          export NEX_NETINST_BASE_URL="${NEX_PUBLIC_URL%/}/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}"
           bash installer/build.sh
           python3 packaging/controller/build.py \
             --source dist/nex-source.tar.gz --version "$NEX_VERSION" \
@@ -255,6 +283,7 @@ jobs:
         if: steps.deploy.outputs.enabled == 'true'
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_CHANNEL: ${{ steps.version.outputs.channel }}
           NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
           NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
           NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
@@ -300,20 +329,32 @@ jobs:
           # Reuse the transferred Core bytes under APT's required package filename.
           # Packages first: the signing key never leaves the host, and nex-apt-publish
           # is the one command the publishing user may run as root without a password.
+          # The development channel is its own repository and download root beneath the
+          # stable ones, so it has its own pool, indexes, `latest` link and retention.
+          apt_args="" root_args=""
+          if [ "$NEX_CHANNEL" = dev ]; then
+            apt_args="--repo-root /srv/nex-apt/dev --keep 3"
+            root_args="--root /srv/nex-downloads/dev"
+          fi
           # shellcheck disable=SC2086
           ssh $ssh_opts "$target" "set -eu
             ln '$staging'/nex-core-local-*.deb '$staging/nex-core-local_${NEX_VERSION}_amd64.deb'
-            sudo -n /usr/local/sbin/nex-apt-publish '$staging/nex-core-local_${NEX_VERSION}_amd64.deb' '$staging/nex-controller_${NEX_VERSION}_amd64.deb'
-            python3 '$staging/release-publish.py' --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_VERSION}-compliance-manifest.json' --netinst-iso '$staging/nex-core-${NEX_VERSION}-amd64-netinst.iso' --netinst-manifest '$staging/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json' ${payload_args[*]} --keep 3
+            sudo -n /usr/local/sbin/nex-apt-publish $apt_args '$staging/nex-core-local_${NEX_VERSION}_amd64.deb' '$staging/nex-controller_${NEX_VERSION}_amd64.deb'
+            python3 '$staging/release-publish.py' $root_args --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_VERSION}-compliance-manifest.json' --netinst-iso '$staging/nex-core-${NEX_VERSION}-amd64-netinst.iso' --netinst-manifest '$staging/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json' ${payload_args[*]} --keep 3
             rm -rf '$staging'"
 
-          # Static pages last: same host, same secrets, one Release run.
-          scripts/website-ci-deploy.sh
+          # Static pages last: same host, same secrets, one Release run. Only the stable
+          # channel publishes them; a development run must never replace the live site.
+          if [ "$NEX_CHANNEL" = stable ]; then
+            scripts/website-ci-deploy.sh
+          fi
 
       - name: Confirm the release is actually reachable
         if: steps.deploy.outputs.enabled == 'true'
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_APT_PATH: ${{ steps.version.outputs.apt_path }}
+          NEX_DOWNLOADS_PATH: ${{ steps.version.outputs.downloads_path }}
           NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
         run: |
           set -euo pipefail
@@ -324,22 +365,22 @@ jobs:
           payload_paths=()
           for payload in dist/netinst/*.deb; do
             [ -f "$payload" ] || { echo 'missing netinst payloads' >&2; exit 1; }
-            payload_paths+=("/downloads/${NEX_VERSION}/${payload##*/}")
+            payload_paths+=("/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/${payload##*/}")
           done
           for path in \
             "/" \
-            "/apt/dists/nex/InRelease" \
-            "/apt/dists/nex/main/binary-amd64/Packages" \
-            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
-            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-source.tar.gz" \
-            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-compliance-manifest.json" \
-            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64-netinst.iso" \
-            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json" \
+            "/${NEX_APT_PATH}/dists/nex/InRelease" \
+            "/${NEX_APT_PATH}/dists/nex/main/binary-amd64/Packages" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-source.tar.gz" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-compliance-manifest.json" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64-netinst.iso" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json" \
             "${payload_paths[@]}"; do
             code=$(curl -sSI -o /dev/null -w '%{http_code}' --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}${path}")
             [ "$code" = 200 ] || { echo "$path returned $code" >&2; exit 1; }
           done
-          curl -sS --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}/apt/dists/nex/main/binary-amd64/Packages" \
+          curl -sS --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}/${NEX_APT_PATH}/dists/nex/main/binary-amd64/Packages" \
             | grep -x "Version: ${NEX_VERSION}" > /dev/null || {
               echo "published index does not list ${NEX_VERSION}" >&2; exit 1; }
 
@@ -348,11 +389,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEX_VERSION: ${{ steps.version.outputs.version }}
           NEX_TAG: ${{ steps.version.outputs.tag }}
+          NEX_CHANNEL: ${{ steps.version.outputs.channel }}
         run: |
           set -euo pipefail
+          args=(--name "Nex Core $NEX_VERSION")
+          if [ "$NEX_CHANNEL" = dev ]; then
+            # The tag carries -dev.N, so the forge lists it as a pre-release. Only the newest
+            # builds stay, as many as the download tree keeps, so every kept netinst ISO still works.
+            # The = form is required: argparse reads a separate value that starts with - as an option.
+            args=(--name "Nex Core $NEX_VERSION (development)" '--prune-tags=-dev\.[0-9]+$' --keep 3)
+          fi
           python3 scripts/gitea-release.py \
             --tag "$NEX_TAG" --target "$GITHUB_SHA" \
-            --name "Nex Core $NEX_VERSION" --notes .cache/release-notes.md \
+            "${args[@]}" --notes .cache/release-notes.md \
             "dist/nex-core-${NEX_VERSION}-amd64.iso" \
             "dist/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
             "dist/nex-core-${NEX_VERSION}-amd64-netinst.iso" \

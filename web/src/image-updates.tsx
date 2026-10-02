@@ -4,6 +4,8 @@ import type { API, Host } from "./types";
 import { Badge, Banner, Section, date } from "./ui";
 import { heldRequestID } from "./managed";
 import { relativeTime } from "./labels";
+import { unfinished } from "./dock";
+import { ChannelPicker, channelLabel } from "./channel";
 
 // Image-edition hosts update themselves: the host's own engine fetches and verifies the release,
 // writes the unused slot, arms the next boot only on Activate and falls back by itself when a boot
@@ -16,7 +18,7 @@ export type ImageError = { code: string; message: string };
 export type ImageOperation = { id: string; kind: string; phase: string; sequence?: number; error?: ImageError; started_at: string; finished_at?: string };
 export type ImageStatus = {
   booted: ImageRelease; staged?: ImageRelease; previous?: ImageRelease; available?: ImageRelease;
-  channel?: string; phase: string; rollback_floor: number; state_format: number; secure_boot?: boolean;
+  channel?: string; base_url?: string; phase: string; rollback_floor: number; state_format: number; secure_boot?: boolean;
   operation?: ImageOperation; failure?: ImageError;
 };
 export type ImageView = { host_id: string; connection: string; supported: boolean; image?: ImageStatus };
@@ -73,6 +75,18 @@ export async function submitImageAction(
   return accepted.operation;
 }
 
+// The settings action changes the host's update source. Core writes channel and base URL together, so the
+// host's current base URL travels with the new channel; leaving it out would clear the source.
+export async function submitImageSettings(
+  api: API, host: string, channel: string, baseURL: string | undefined, held: { id: string; signature: string },
+): Promise<Task> {
+  const body: Record<string, unknown> = { channel };
+  if (baseURL) body.base_url = baseURL;
+  body.request_id = heldRequestID(held, `${host}:settings:${JSON.stringify(body)}`);
+  const accepted = await api<{ operation: Task }>(`hosts/${encodeURIComponent(host)}/updates/settings`, "POST", body);
+  return accepted.operation;
+}
+
 const verb: Record<ImageAction, string> = { check: "Check", apply: "Download and stage", activate: "Reboot into update", rollback: "Roll back", cancel: "Cancel" };
 const release = (r?: ImageRelease) => r ? `${r.label} (sequence ${r.sequence}${r.slot ? `, slot ${r.slot}` : ""})` : "—";
 const fault = (e?: ImageError) => e ? `${e.code}: ${e.message}` : "";
@@ -86,27 +100,52 @@ export function ImageUpdates({ hosts, api, busy }: { hosts: Host[]; api: API; bu
   </Section>;
 }
 
+// A host's report is identified by when it was last seen and how it was connected. A view fetched
+// from the Controller is only newer than the report the panel was given while that identity is
+// unchanged; a new report (or a lost connection) replaces it, so the panel never shows older data
+// than the page's own host list.
+export const reportStamp = (host: Host) => `${host.last_seen ?? ""}|${host.connection}`;
+export type FetchedView = { view: ImageView; stamp: string };
+export function imageSnapshot(host: Host, fetched?: FetchedView): { image: ImageStatus | undefined; connection: string } {
+  const current = fetched && fetched.stamp === reportStamp(host) ? fetched.view : undefined;
+  return { image: current?.image ?? hostImage(host), connection: current?.connection ?? host.connection };
+}
+// The panel keeps reading while the host reports a running operation or a task it submitted has
+// not finished: the task's end is the signal that the host's report is due.
+export const stillFollowing = (active: boolean, task?: Task) => active || Boolean(task && unfinished.has(task.status));
+
 function ImageHost({ host, api, busy }: { host: Host; api: API; busy: boolean }) {
-  const [view, setView] = useState<ImageView | undefined>();
+  const [fetched, setFetched] = useState<FetchedView | undefined>();
   const [task, setTask] = useState<Task | undefined>();
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState<ImageAction | "">("");
   const [shutdown, setShutdown] = useState(false);
   const held = useRef({ id: "", signature: "" });
-  const image = view?.image ?? hostImage(host);
-  const connection = view?.connection ?? host.connection;
+  const stamp = useRef("");
+  stamp.current = reportStamp(host);
+  const { image, connection } = imageSnapshot(host, fetched);
   const actions = imageActions(image, connection);
   const active = image ? running(image) : false;
+  const following = stillFollowing(active, task);
 
   async function refresh() {
-    try { setView(await api<ImageView>(`hosts/${encodeURIComponent(host.id)}/updates`)); } catch { /* the next tick or action tries again; the host report is the record */ }
+    const requested = stamp.current;
+    try { setFetched({ view: await api<ImageView>(`hosts/${encodeURIComponent(host.id)}/updates`), stamp: requested }); } catch { /* the next tick or action tries again; the host report is the record */ }
   }
-  // Follow a running operation from the host's own report while the tab is visible.
+  // Follow a running operation, and a submitted task until it ends, from the host's own report
+  // while the tab is visible. A task's end is followed by one more read: the host reports its result.
   useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 3000);
+    if (!following) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void refresh();
+      if (task && unfinished.has(task.status)) {
+        void api<Task[]>("operations").then(list => { const current = list.find(op => op.id === task.id); if (current) setTask(current); }).catch(() => { /* retried on the next tick */ });
+      }
+    }, 3000);
     return () => clearInterval(timer);
-  }, [active, host.id]);
+  }, [following, host.id, task?.id, task?.status]);
+  useEffect(() => { if (task && !unfinished.has(task.status)) void refresh(); }, [task?.id, task?.status]);
 
   async function run(action: ImageAction) {
     setConfirming(""); setError("");
@@ -117,6 +156,12 @@ function ImageHost({ host, api, busy }: { host: Host; api: API; busy: boolean })
       // The host reports the result with its next heartbeat; read it again shortly.
       setTimeout(() => void refresh(), 2000);
     } catch (e) { setError((e as Error).message || "The request failed."); }
+  }
+  async function changeChannel(channel: string) {
+    setError("");
+    setTask(await submitImageSettings(api, host.id, channel, image?.base_url, held.current));
+    held.current = { id: "", signature: "" };
+    setTimeout(() => void refresh(), 2000);
   }
   const ask = (action: ImageAction) => (action === "activate" || action === "rollback") ? setConfirming(action) : void run(action);
   const button = (action: ImageAction, primary = false) =>
@@ -129,12 +174,13 @@ function ImageHost({ host, api, busy }: { host: Host; api: API; busy: boolean })
       <dt>Staged</dt><dd>{release(image.staged)}</dd>
       <dt>Previous</dt><dd>{release(image.previous)}</dd>
       <dt>Available</dt><dd>{image.available ? release(image.available) : "Nothing newer is known"}</dd>
-      <dt>Channel</dt><dd>{image.channel || "—"}</dd>
+      <dt>Channel</dt><dd>{channelLabel(image.channel)}</dd>
       <dt>Rollback floor</dt><dd>Sequence {image.rollback_floor}</dd>
       <dt>State format</dt><dd>{image.state_format}</dd>
       {image.secure_boot !== undefined && <><dt>Secure Boot</dt><dd>{image.secure_boot ? "Enforcing" : "Off"}</dd></>}
       {image.operation && <><dt>Last operation</dt><dd>{image.operation.kind} · {image.operation.phase}{" "}<time dateTime={image.operation.started_at} title={date(image.operation.started_at)}>{relativeTime(image.operation.started_at)}</time></dd></>}
     </dl>}
+    {image && <ChannelPicker current={image.channel} disabled={busy || connection !== "fresh" || active} apply={changeChannel} />}
     {image?.failure && <Banner tone="bad" role="status">{image.failure.code === "boot_failed" ? "The new release failed its health check and the host returned to the previous release. " : ""}{fault(image.failure)}</Banner>}
     {image?.operation?.error && <Banner tone="warn" role="status">{fault(image.operation.error)}</Banner>}
     {error && <Banner tone="bad" role="alert">{error}</Banner>}

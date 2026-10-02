@@ -1,0 +1,76 @@
+{
+  "summary": "Phase I-3d of the immutable Nex Core plan: layer components (kind layer, requires_base, optional verity_root_hash, on_demand) are verified with the release manifest and staged in the same transaction as the base (store files and the signed manifest under /var/lib/nex/layers, written before the inactive slot, enabled.json switched only when the release is armed, old layers kept until the next stage); a layer built for another base is refused; the host-local routes PUT /api/local/v1/updates/settings, GET updates/media, POST updates/import and POST updates/components/{id}/fetch (settings persisted in /etc/nex/updates.conf and reported in Inventory.image, no built-in base URL; import through the one verification path of fetchMetadataFrom with the bundle's own expiry and a clock-behind refusal; on_demand payloads placed at /var/lib/nex/payload/<sha256>/<name>); the Controller relays settings, media, import and fetch to the addressed host through the existing hosts/{id}/updates/{action} route and stores nothing; update-publish.py gains --layer, --on-demand-layer and --payload and update-bundle.py carries the layers in the minimal profile; nex-update gains settings, media, import and fetch.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/plans/2026-10-01-immutable-nex-core.md",
+    "docs/qa/image/phase3-engine.md",
+    "docs/qa/image/phase3-layers-update.md",
+    "internal/agent/image_status.go",
+    "internal/agent/imageupdate.go",
+    "internal/agent/imageupdate_test.go",
+    "internal/controller/imageupdate.go",
+    "internal/controller/imageupdate_test.go",
+    "internal/localcore/service.go",
+    "internal/localcore/updates.go",
+    "internal/localcore/updates_offline_test.go",
+    "internal/nexupdate/cmd/nex-update/main.go",
+    "internal/nexupdate/image.go",
+    "internal/nexupdate/image_fixes_test.go",
+    "internal/nexupdate/image_test.go",
+    "internal/nexupdate/layers.go",
+    "internal/nexupdate/offline.go",
+    "internal/nexupdate/offline_test.go",
+    "internal/nexupdate/source.go",
+    "internal/nexupdate/platform.go",
+    "internal/nexupdate/trust.go",
+    "internal/protocol/imageupdate.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/layers.go",
+    "internal/vmhost/layers_test.go",
+    "scripts/update-bundle.py",
+    "scripts/update-publish.py",
+    "tests/test_update_publish.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow can be walked through yet: there is no booted image to stage a layered release on, no Controller screen for the settings, media, import and fetch actions, and no published update tree. docs/guide/software-updates.md and publish-a-release.md are rewritten after a lab walkthrough; a page claims verification only after one.",
+    "pages": []
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Host-local PUT /api/local/v1/updates/settings, GET updates/media, POST updates/import and POST updates/components/{id}/fetch (schemas ImageUpdateSettings, ImageUpdateMedia, ImageUpdateImportRequest, ImageUpdateFetchRequest; operation kinds import and fetch, phase fetched); Controller relay actions settings, media, import and fetch on POST /api/v1/hosts/{id}/updates/{action} with the new optional body fields channel, base_url, media and component, mirrored in the managed command payload ImageUpdateRequest; additive Inventory.image.base_url and Inventory.image.media (schemas ImageMedia, ImageMediaChannel) and ImageUpdateStatus.base_url and .media, all inside Inventory.image, which is already withheld until the Controller acknowledges image-update-v1; additive manifest component field name. Authentication, validation, refusal codes, asynchronous results, replay and conflict rules, and the older-Core behaviour (a failed unsupported_edition result) are documented in docs/API.md, Phase I-3d.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-3 of a proposed, not yet authorized plan; development work validated by unit tests only, no published milestone changed."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Each host's Core owns its update source, its staged layers, its media scan and its payloads; the Controller only relays a request and displays Inventory.image, and stores nothing.",
+    "record": "Host-local: /etc/nex/updates.conf (channel and base URL), /var/lib/nex/image/state.json update subtree (last media scan, staged and previous release records with their layer files, channel_serial, rollback_floor), /var/lib/nex/layers/store/sha256-<hex>.raw, /var/lib/nex/layers/enabled.json (changed only at activate and rollback), /var/lib/nex/layers/releases/<BUILD_ID>/manifest.json and manifest.sig, and /var/lib/nex/payload/<sha256>/<name>. A fresh Controller recovers channel, base_url, media and the phase from the host's Inventory.image on the next report; deleting the Controller loses nothing."
+  },
+  "verification": {
+    "method": "go test -p 1 of ./internal/nexupdate (also -race), ./internal/vmhost, ./internal/protocol, ./internal/agent, ./internal/controller, ./internal/localcore and ./cmd/nex-core-local under systemd-run limits; python3 -m unittest tests.test_update_publish; a throwaway cross-check in which the real update-publish.py and update-bundle.py wrote a tree and a bundle with layers and a payload and the Go engine checked, scanned and fetched from it; mutation checks of the seven new gates; scripts/generate_api.py --check, tests/test_api_contract.py, scripts/check_docs.py --worktree and the repository privacy test. Simulation only: no VM, block device, labelled medium, mount, systemd-sysext or boot of a layered base was involved; the real media mount and the new base's layer verification at boot were not run.",
+    "evidence": [
+      "docs/qa/image/phase3-layers-update.md",
+      "internal/nexupdate/offline_test.go",
+      "internal/vmhost/layers_test.go",
+      "internal/localcore/updates_offline_test.go",
+      "internal/agent/imageupdate_test.go",
+      "internal/controller/imageupdate_test.go",
+      "tests/test_update_publish.py"
+    ]
+  }
+}

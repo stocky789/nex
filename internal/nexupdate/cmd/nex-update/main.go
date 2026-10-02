@@ -7,6 +7,10 @@
 //	nex-update status
 //	nex-update check
 //	nex-update apply [-sequence N] [-activate stage_only|reboot] -request-id ID
+//	nex-update settings -channel NAME [-base-url URL]
+//	nex-update media
+//	nex-update import -media ID [-channel NAME] [-sequence N] [-activate stage_only|reboot] -request-id ID
+//	nex-update fetch -component ID [-media ID] [-channel NAME] -request-id ID
 //	nex-update activate|rollback|cancel -request-id ID
 //	nex-update state-guard
 //
@@ -28,7 +32,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: nex-update status|check|apply|activate|rollback|cancel|state-guard")
+		fail("usage: nex-update status|check|apply|settings|media|import|fetch|activate|rollback|cancel|state-guard")
 	}
 	cmd, args := os.Args[1], os.Args[2:]
 	if cmd == "state-guard" {
@@ -41,6 +45,10 @@ func main() {
 	activate := fs.String("activate", "stage_only", "apply: stage_only or reboot")
 	vms := fs.String("running-vms", "refuse", "refuse or shutdown")
 	wait := fs.Duration("wait", 20*time.Minute, "apply: how long to wait for the staging to finish")
+	media := fs.String("media", "", "import and fetch: media id (inbox, inbox/NAME or label)")
+	channel := fs.String("channel", "", "settings, import and fetch: channel name")
+	baseURL := fs.String("base-url", "", "settings: update server URL (empty clears it)")
+	component := fs.String("component", "", "fetch: on_demand component id")
 	_ = fs.Parse(args)
 
 	cfg := nexupdate.HostConfig()
@@ -56,8 +64,17 @@ func main() {
 		print(e.Status(ctx))
 	case "check":
 		print(e.Check(ctx))
-	case "apply":
-		op, _, err := e.Apply(ctx, nexupdate.ApplyRequest{RequestID: *requestID, Sequence: *sequence, Activate: *activate, RunningVMs: *vms})
+	case "apply", "import", "fetch":
+		var op nexupdate.Operation
+		var err error
+		switch cmd {
+		case "apply":
+			op, _, err = e.Apply(ctx, nexupdate.ApplyRequest{RequestID: *requestID, Sequence: *sequence, Activate: *activate, RunningVMs: *vms})
+		case "import":
+			op, _, err = e.Import(ctx, nexupdate.ImportRequest{RequestID: *requestID, Media: *media, Channel: *channel, Sequence: *sequence, Activate: *activate, RunningVMs: *vms})
+		default:
+			op, _, err = e.FetchComponent(ctx, *component, nexupdate.FetchRequest{RequestID: *requestID, Media: *media, Channel: *channel})
+		}
 		if err != nil {
 			refused(err)
 		}
@@ -72,12 +89,16 @@ func main() {
 			}
 			time.Sleep(time.Second)
 		}
-		fmt.Fprintln(os.Stderr, "apply operation", op.ID)
+		fmt.Fprintln(os.Stderr, cmd, "operation", op.ID)
 		if *activate == "reboot" {
 			// The engine reboots a moment after arming; keep the process alive until it does.
 			time.Sleep(30 * time.Second)
 		}
 		print(e.Status(ctx))
+	case "settings":
+		print(e.UpdateSettings(ctx, nexupdate.Settings{Channel: *channel, BaseURL: *baseURL}))
+	case "media":
+		print(e.Media(ctx))
 	case "activate", "rollback", "cancel":
 		call := map[string]func(context.Context, nexupdate.ActionRequest) (nexupdate.Operation, bool, error){
 			"activate": e.Activate, "rollback": e.Rollback, "cancel": e.Cancel}[cmd]

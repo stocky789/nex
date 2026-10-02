@@ -102,6 +102,54 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(versions, ordered)
 
 
+class DevelopmentBuildTests(unittest.TestCase):
+    """Builds of the dev branch are pre-releases of the release main publishes next."""
+
+    def dpkg_lt(self, lower, higher):
+        return subprocess.run(["dpkg", "--compare-versions", lower, "lt", higher],
+                              check=False).returncode == 0
+
+    def test_build_after_a_published_release_numbers_the_next_patch(self):
+        # dev's newest heading is already on main, so the build works toward 0.1.7.
+        version = release.dev_version(CHANGELOG, CHANGELOG, 231)
+        self.assertEqual(version, "0.1.7-dev.231")
+        self.assertEqual(release.debian_version(version), "0.1.7~dev.231")
+        if not shutil.which("dpkg"):
+            self.skipTest("dpkg required to check Debian version ordering")
+        deb = release.debian_version(version)
+        self.assertTrue(self.dpkg_lt("0.1.6-alpha1".replace("-", "~"), deb), "above the published release")
+        self.assertTrue(self.dpkg_lt(deb, "0.1.7"), "below the release it works toward")
+        self.assertTrue(self.dpkg_lt(deb, release.debian_version("0.1.7-dev.1000")), "build numbers compare as numbers")
+
+    def test_heading_cut_on_dev_is_the_release_being_built(self):
+        cut = CHANGELOG.replace("## [0.1.6-alpha1]", "## [0.1.7] — 2026-09-11\n\n- Cut.\n\n## [0.1.6-alpha1]")
+        # main still stops at 0.1.6-alpha1: dev builds below 0.1.7 so the stable 0.1.7
+        # published at promotion sorts above every build made while it waited.
+        self.assertEqual(release.dev_version(cut, CHANGELOG, 5), "0.1.7-dev.5")
+
+    def test_main_ahead_of_dev_is_refused(self):
+        cut = CHANGELOG.replace("## [0.1.6-alpha1]", "## [0.1.7] — 2026-09-11\n\n- Cut.\n\n## [0.1.6-alpha1]")
+        with self.assertRaisesRegex(release.ReleaseVersionError, "merge main into dev"):
+            release.dev_version(CHANGELOG, cut, 5)
+
+    def test_prerelease_heading_converts_every_dash(self):
+        self.assertEqual(release.debian_version("0.2.0-rc.1-dev.7"), "0.2.0~rc.1~dev.7")
+
+    def test_notes_are_the_unreleased_entries_without_the_maintainer_block(self):
+        text = CHANGELOG.replace(
+            "> **Maintainers / agents:** Put new entries here until a release is cut.",
+            "> **Maintainers / agents:** Put new entries here until a release is cut.\n\n- Staged work.")
+        self.assertEqual(release.unreleased_notes(text), "- Staged work.\n")
+        self.assertEqual(release.unreleased_notes(CHANGELOG),
+                         "No changes since the last stable release.\n")
+
+    def test_cli_needs_the_build_number_and_the_stable_changelog(self):
+        import io
+        from contextlib import redirect_stderr
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            release.main(["--current", "--channel", "dev"])
+
+
 class CliTests(unittest.TestCase):
     def test_cli_reports_failure_without_printing_a_version(self):
         import io

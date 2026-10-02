@@ -569,6 +569,8 @@ static void offer_repair(void)
         gchar *text = g_strdup_printf("A Nex Core data volume was found on %s.\nErase and install wipes the selected disks and installs a new system. Repair image rewrites only the system partitions and boot files of these disks and keeps the data volume: the host name, settings, virtual machines and payloads stay as they are.", repair_found);
         gtk_label_set_text(GTK_LABEL(repair_note), text); g_free(text);
     }
+    /* gtk_widget_show_all() returns at once for a widget marked no-show-all, even when called on that widget. */
+    gtk_widget_set_no_show_all(repair_box, FALSE);
     gtk_widget_show_all(repair_box);
 }
 /* Repair names exactly the disks that hold the data volume; the operator can neither widen nor narrow that
@@ -947,10 +949,10 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(box), label("This installer sets up Nex Core and its local web UI.\nDeploy Nex Controller from that UI or separately."), FALSE, FALSE, 8);
     /* Hidden until offer_repair() finds an existing Nex Core data volume on image-edition media. */
     repair_box = gtk_vbox_new(FALSE, 4); gtk_widget_set_no_show_all(repair_box, TRUE);
-    repair_note = label(""); repair_combo = gtk_combo_box_new_text();
+    repair_note = label(""); g_signal_connect(repair_note, "size-allocate", G_CALLBACK(wrap_label_allocate), NULL); repair_combo = gtk_combo_box_new_text();
     gtk_combo_box_append_text(GTK_COMBO_BOX(repair_combo), "Erase and install"); gtk_combo_box_append_text(GTK_COMBO_BOX(repair_combo), "Repair image"); gtk_combo_box_set_active(GTK_COMBO_BOX(repair_combo), 0);
     gtk_box_pack_start(GTK_BOX(repair_box), repair_note, FALSE, FALSE, 0);
-    field(repair_box, "_What do you want to do?", repair_combo);
+    field(repair_box, "_Action", repair_combo);
     gtk_box_pack_start(GTK_BOX(box), repair_box, FALSE, FALSE, 8);
 
     box = page_box(); host = entry(); password = entry(); repeat = entry(); zone_entry = gtk_combo_box_new_text(); timezone_area = gtk_combo_box_new_text(); keymap = gtk_combo_box_new_text();

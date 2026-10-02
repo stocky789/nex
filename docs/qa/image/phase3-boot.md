@@ -10,6 +10,10 @@ involved. Release images were built by `image/build.sh` in the pinned tools cont
 (the I-3a engine, `HostPlatform`, `systemctl reboot`) against a local static HTTP server. All development keys are throwaway files
 kept outside the repository (`.cache/`, gitignored).
 
+**Historical: this VM proof predates the independent-review fixes and two image changes (counted-boot check, ESP no longer mounted at `/boot`); [phase3-reproof.md](phase3-reproof.md) is the current record** ([phase3-engine.md](phase3-engine.md#independent-review-fixes)). It ran the engine
+with an uncompressed-tar `slot-image`, no cross-process update lock and a single-pass GPT write. The lab was re-run on the fixed tree; see
+[phase3-reproof.md](phase3-reproof.md). The results below describe the older engine and blob format.
+
 - API impact: **existing contract**. `Inventory.image` (defined in I-3a, `image-update-v1`) gains one additive optional field,
   `secure_boot`, and now has a producer (agent probe `image`, image hosts only). No route, request or response changed.
   `docs/API.md` and `docs/api/openapi.json` were updated; `scripts/generate_api.py --check` and `tests/test_api_contract.py` pass.
@@ -25,12 +29,12 @@ kept outside the repository (`.cache/`, gitignored).
 | Where | What |
 |---|---|
 | `image/mkosi.extra/usr/lib/systemd/system/nex-boot-check.service` | `After=` only the units it judges (`nex-state-guard`, `libvirtd`, `nex-core-local`); `RequiredBy=boot-complete.target` through a static `boot-complete.target.requires/` link (not a preset); never ordered after `chrony-wait`, `time-sync.target` or `network-online.target` |
-| `image/mkosi.extra/usr/libexec/nex/nex-boot-check` | image-caused failures only (`/var` and `/etc` overlay writable, libvirtd answers, `nex-core-local` when enabled, `nex-state-guard`, `boot-check.d/*`); on a counted boot `systemd-bless-boot bad` + reboot; no mark or reboot while `/run/nex/maintenance-hold` exists. New: `NEX_BOOT_CHECK_TRIES` (default 20) and `NEX_BOOT_CHECK_WAIT` (default 10 s) |
+| `image/mkosi.extra/usr/libexec/nex/nex-boot-check` | image-caused failures only (`/var` and `/etc` overlay writable, libvirtd answers, `nex-core-local` when enabled, `nex-state-guard`, `boot-check.d/*`); on a counted boot: reboot while boot tries are left, `nex-bless-boot bad` + reboot on the last try; no mark or reboot while `/run/nex/maintenance-hold` exists. New: `NEX_BOOT_CHECK_TRIES` (default 20) and `NEX_BOOT_CHECK_WAIT` (default 10 s) |
 | `nex-state-guard.service` + `libvirtd.service.d`, `nex-core-local.service.d` drop-ins | `nex-update state-guard` fails when `RequiredStateFormat("/")` exceeds `NEX_STATE_FORMAT` of the image's os-release; libvirtd and nex-core-local `Requires=` it, and `nex-boot-check` reads its failure, so a counted boot of an image that cannot read the state falls back |
 | `nex-update-reconcile.service` | `nex-update status` after every boot (After bless and boot check): folds the boot assessment into the engine record so `Inventory.image` is current without an operator |
 | `internal/nexupdate/cmd/nex-update` | on-host CLI over the same `Engine` (`status`, `check`, `apply`, `activate`, `rollback`, `cancel`, `state-guard`); installed at `/usr/bin/nex-update` |
-| `image/build.sh`, `mkosi.conf`, `mkosi.postinst.chroot` | `NEX_UPDATE_TRUST` pins `trust.json` at `/usr/share/nex/update/trust.json` inside the verity root (warns when unset); `NEX_STATE_FORMAT` (default 3) lands in os-release; `nex-update` is built and installed beside `nex-hostimage` |
-| `scripts/update-publish.py` | `keygen`, `trust`, `publish`, `promote`: signs `trust.json`, `channel.json`, `manifest.json` (Ed25519, raw signature over the exact bytes), stores the tar `slot-image` blob and the source and compliance blobs content-addressed; fails closed without a key, without source or compliance files, on an incomplete release directory, and when sequence order disagrees with `dpkg --compare-versions` order |
+| `image/build.sh`, `mkosi.conf`, `mkosi.postinst.chroot` | `NEX_UPDATE_TRUST` pins `trust.json` at `/usr/share/nex/update/trust.json` inside the verity root (warns when unset); `NEX_STATE_FORMAT` (default 3), `NEX_MIN_STATE_FORMAT`, `NEX_MD_GENERATION` and `NEX_MD_FALLBACK_SAFE` (default 0) land in os-release; `nex-update` is built and installed beside `nex-hostimage` |
+| `scripts/update-publish.py` | `keygen`, `trust`, `publish`, `promote`: signs `trust.json`, `channel.json`, `manifest.json` (Ed25519, raw signature over the exact bytes), stores the `slot-image` blob (an uncompressed tar when this was run; a zstd-compressed tar since the review fixes) and the source and compliance blobs content-addressed; fails closed without a key, without source or compliance files, on an incomplete release directory, and when sequence order disagrees with `dpkg --compare-versions` order |
 | `scripts/update-bundle.py` | offline bundle of one release (`minimal` or `full`), `SHA256SUMS`, its own re-signed `channel.json` expiry |
 | `internal/agent/image_status.go` | `Inventory.image` producer: running release from `/proc/cmdline` and os-release, retained/staged/previous slots, phase, `rollback_floor`, `state_format`, operation and failure from the engine's `state.json` (read-only: `nexupdate.ReadStatus`), `secure_boot` from the firmware `SecureBoot` variable |
 | `tests/test_update_publish.py`, `internal/agent/image_status_test.go`, `tests/integration/image_update.py` | publisher tests, producer mapping tests, the VM proof below |
@@ -69,12 +73,13 @@ product behaved identically across runs 4-7 up to the step each stopped at.
 
 ## Findings
 
-- **The boot check fails a counted boot at once, not after three boots.** The I-3a script marks the entry bad when its own retry window
-  ends, so a failed check costs one boot, not three. "Three tries" in this record are three check attempts inside one boot. The
-  three-boot counter path (sd-boot exhausting `+3` after panics or hangs without the check running) was **not run**.
-- **gpt-auto mounts the ESP at `/boot`** (`boot.mount`, an automount) on the image, contrary to the plan's "Core mounts each ESP
-  transiently". The engine, `nex-esp-sync` and the harness all worked with it mounted; it is not fixed here (masking it changes the
-  generator behaviour, or needs `systemd.gpt_auto=no`, which changes the signed command line).
+- **Superseded (fixed, re-proved in [phase3-reproof.md](phase3-reproof.md)): the boot check failed a counted boot at once.** The I-3a
+  script marked the entry bad when its own retry window ended, so a failed check cost one boot, not three. It now reboots without marking
+  while the boot counter has tries left and marks bad only on the last try.
+- **Superseded (fixed, re-proved in [phase3-reproof.md](phase3-reproof.md)): gpt-auto mounted the ESP at `/boot`.** `boot.mount`,
+  `boot.automount`, `efi.mount` and `efi.automount` are masked in the image; Core mounts ESPs transiently under `/run/nex/esp`, and
+  `systemd-bless-boot` goes through `/usr/libexec/nex/nex-bless-boot`, which mounts the booted ESP for the call (without it the tool
+  cannot find the ESP and nothing is blessed).
 - The boot check is not run on boots without a counter (nothing pulls `boot-complete.target` except `systemd-bless-boot`, which only
   exists for counted entries), so a blessed image is not re-assessed on later boots.
 - `nex-update-reconcile.service` made the record current after each boot; it was not the only path (the harness also ran `status`).

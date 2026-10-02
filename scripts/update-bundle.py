@@ -8,7 +8,8 @@ The output (trust.json, <channel>/channel.json, releases/<sequence>/, blobs/, SH
 labelled NEXUPDATE or into /var/lib/nex/image/inbox/ and is verified by the host through the same pipeline as
 a download. The bundle's channel.json is signed again with its own `expires` (default 180 days), so a
 bundle outlives the online pointer; the release key is needed for that and the command fails closed without it.
-`minimal` carries the slot-image only; `full` adds the source, compliance and every on-demand component.
+`minimal` carries the slot-image and the layers that every update stages (a layer is part of the base's
+transaction); `full` adds the source, compliance, on-demand layers and every on-demand payload.
 """
 import argparse
 import datetime
@@ -34,7 +35,8 @@ def bundle(args):
     if hashlib.sha256(manifest_body).hexdigest() != channel["manifest_sha256"]:
         raise publish.PublishError("the published channel does not match its manifest")
     manifest = json.loads(manifest_body)
-    wanted = [c for c in manifest["components"] if args.profile == "full" or c["kind"] == "slot-image"]
+    wanted = [c for c in manifest["components"]
+              if args.profile == "full" or c["kind"] == "slot-image" or (c["kind"] == "layer" and not c.get("on_demand"))]
 
     out.mkdir(parents=True, exist_ok=True)
     for name in ("trust.json", "trust.sig"):

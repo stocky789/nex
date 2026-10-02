@@ -13,8 +13,11 @@ go version /build/nex-controller > /output/go-version.txt
 cp /input/base.qcow2 /output/controller.qcow2
 qemu-img resize /output/controller.qcow2 32G
 export LIBGUESTFS_MEMSIZE=2048
-printf 'repo_url=https://nexvirtualization.com/apt\n' > /build/updates.conf
-printf 'Types: deb\nURIs: https://nexvirtualization.com/apt\nSuites: nex\nComponents: main\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/nex-archive-keyring.gpg\n' > /build/nex.sources
+# A development build (version X.Y.Z~dev.N) updates from the development channel: the dev subtree of the archive.
+repo_url=https://nexvirtualization.com/apt
+case "${NEX_VERSION:-}" in *~dev.*) repo_url=$repo_url/dev ;; esac
+printf 'repo_url=%s\n' "$repo_url" > /build/updates.conf
+printf 'Types: deb\nURIs: %s\nSuites: nex\nComponents: main\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/nex-archive-keyring.gpg\n' "$repo_url" > /build/nex.sources
 virt-customize -a /output/controller.qcow2 \
  --mkdir /usr/local/lib/nex --mkdir /usr/local/share/nex --mkdir /usr/share/keyrings --mkdir /etc/nex-controller --mkdir /etc/nex --mkdir /etc/systemd/system/corosync-qnetd.service.d \
  --upload /build/appliance/package-service-policy.sh:/usr/local/lib/nex/package-service-policy \

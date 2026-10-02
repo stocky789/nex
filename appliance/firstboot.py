@@ -104,7 +104,8 @@ def main():
             shutil.rmtree(cache)
     for filename in ('/var/log/cloud-init.log', '/var/log/cloud-init-output.log'):
         Path(filename).unlink(missing_ok=True)
-    ready = Path('/usr/local/share/nex/dist/appliance-ready.json')
+    # The system image's root is read-only: there the path is a link into the data disk, and the marker is written through it.
+    ready = Path('/usr/local/share/nex/dist/appliance-ready.json').resolve()
     temporary = ready.with_suffix('.tmp')
     temporary.write_text(json.dumps({'bootstrap_version': 1, 'status': 'ready'}) + '\n')
     temporary.chmod(0o644)

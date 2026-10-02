@@ -91,16 +91,25 @@ class Guest:
 def owned(uri, target, state, storage):
     if str(uuid.UUID(target)) != target:
         raise ValueError('select a canonical VM UUID')
-    disk = str(storage / target / 'controller.qcow2')
     journals = [json.loads(p.read_text()) for p in state.glob('*.json')]
-    matches = [j for j in journals if j.get('vm_id') == target and j.get('kind') == 'deploy' and j.get('disk') == disk]
-    if len(matches) != 1:
+    matches = [j for j in journals if j.get('vm_id') == target and j.get('kind') == 'deploy']
+    # Single-disk appliance: controller.qcow2 is the only disk. Two-disk profile: a read-only system
+    # image (swapped by Nex Core) plus the persistent controller-data.qcow2 that holds the state exported here.
+    system = matches[0].get('system') if len(matches) == 1 else None
+    disk = str(storage / target / ('controller-data.qcow2' if system else 'controller.qcow2'))
+    if len(matches) != 1 or matches[0].get('disk') != disk or (system and str(Path(system).parent) != str(storage / target)):
         raise ValueError('VM lacks unique Nex deployment ownership')
     for flags in ((), ('--inactive',)):
         xml = ET.fromstring(virsh(uri, 'dumpxml', target, *flags))
         disks = xml.findall('./devices/disk[@device="disk"]')
-        if (xml.findtext('uuid') != target or xml.findtext('name') != matches[0]['name'] or len(disks) != 1
-                or disks[0].find('source').get('file') != disk or disks[0].find('readonly') is not None):
+        data = [d for d in disks if d.find('source').get('file') == disk]
+        others = [d for d in disks if d not in data]
+        if system:
+            system_ok = len(others) == 1 and others[0].find('source').get('file') == system and others[0].find('readonly') is not None
+        else:
+            system_ok = not others
+        if (xml.findtext('uuid') != target or xml.findtext('name') != matches[0]['name'] or len(data) != 1
+                or data[0].find('readonly') is not None or not system_ok):
             raise ValueError('VM definition differs from owned appliance')
 
 

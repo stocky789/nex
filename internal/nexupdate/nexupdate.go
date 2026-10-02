@@ -49,6 +49,7 @@ type Status struct {
 	AvailableVersion string `json:"available_version,omitempty"`
 	UpdateAvailable  bool   `json:"update_available"`
 	RepoURL          string `json:"repo_url"`
+	Channel          string `json:"channel,omitempty"` // the host's own check only: stable, or dev when repo_url is the development subtree
 	Phase            string `json:"phase,omitempty"`    // idle|downloading|installing|restarting|done|failed
 	Progress         *int   `json:"progress,omitempty"` // 0-100 when known
 	Message          string `json:"message,omitempty"`
@@ -128,7 +129,7 @@ func isPrivateHTTPRepoURL(repoURL string) bool {
 }
 
 func rewriteUpdatesConf(repoURL string) {
-	path := "/etc/nex/updates.conf"
+	path := UpdatesConfig
 	content := "repo_url=" + strings.TrimRight(repoURL, "/") + "\n"
 	tmp := path + ".tmp"
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -144,7 +145,7 @@ func DefaultRepoURL() string {
 	if v := strings.TrimSpace(os.Getenv("NEX_UPDATE_REPO")); v != "" {
 		return NormalizeRepoURL(v)
 	}
-	if b, err := os.ReadFile("/etc/nex/updates.conf"); err == nil {
+	if b, err := os.ReadFile(UpdatesConfig); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "repo_url=") {
@@ -443,6 +444,7 @@ func Check(ctx context.Context, repoURL, packageName string) (Status, error) {
 		Package:          packageName,
 		InstalledVersion: InstalledVersion(packageName),
 		RepoURL:          repoURL,
+		Channel:          RepoChannel(repoURL),
 	}
 	candidate := AptCandidate(ctx, packageName)
 	if candidate == "" {

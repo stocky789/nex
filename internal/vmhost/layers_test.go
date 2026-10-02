@@ -33,15 +33,20 @@ func newLayerFixture(t *testing.T) *layerFixture {
 	f.cfg = LayerConfig{
 		Dir: filepath.Join(root, "layers"), OSRelease: filepath.Join(root, "os-release"),
 		LayerInfoDir: filepath.Join(root, "usr-lib-nex-layers"), ExtensionsDir: filepath.Join(root, "run-extensions"),
-		ReportPath: filepath.Join(root, "run", "status.json"), TrustedKey: filepath.Join(root, "release.pub"),
-		SysModule: filepath.Join(root, "sys-module"),
+		ReportPath: filepath.Join(root, "run", "status.json"),
+		SysModule:  filepath.Join(root, "sys-module"),
 	}
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.priv = priv
-	f.write(f.cfg.TrustedKey, pub)
+	f.cfg.Verify = func(manifest, sig []byte) error {
+		if !ed25519.Verify(pub, manifest, sig) {
+			return errors.New("bad signature")
+		}
+		return nil
+	}
 	f.write(f.cfg.OSRelease, []byte("ID=nex-core\nBUILD_ID="+f.build+"\nSYSEXT_LEVEL="+f.build+"\n"))
 	layer := []byte("layer-bytes-of-nex-zfs")
 	f.publish(map[string]any{"id": "nex-zfs", "kind": "layer", "bytes": len(layer), "requires_base": f.build}, layer)
@@ -271,6 +276,37 @@ func TestLayerActivateConvergesAfterCrashAndRefusesTamper(t *testing.T) {
 	}
 }
 
+// A reboot starts with nothing linked or merged (/run is empty): a store file that no longer matches the signed
+// digest must stay out of the merge that nex-layers.service runs next, and be reported as unmerged and unverified.
+func TestLayerTamperedStoreFileIsNotLinkedOrMergedAfterReboot(t *testing.T) {
+	f := newLayerFixture(t)
+	ctx := context.Background()
+	if err := f.layers().Ensure(ctx, "nex-zfs"); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(f.cfg.Dir, "store"))
+	store := filepath.Join(f.cfg.Dir, "store", entries[0].Name())
+	b, _ := os.ReadFile(store)
+	b[len(b)-1] ^= 1
+	os.WriteFile(store, b, 0644)
+	if err := os.RemoveAll(f.cfg.ExtensionsDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(f.cfg.LayerInfoDir); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.layers().Activate(ctx); got["nex-zfs"] != LayerDigestMismatch {
+		t.Fatalf("verification = %v", got)
+	}
+	if _, err := os.Lstat(filepath.Join(f.cfg.ExtensionsDir, "nex-zfs.raw")); !os.IsNotExist(err) {
+		t.Fatalf("the tampered layer was linked for the merge: %v", err)
+	}
+	inv, err := f.layers().Inventory(ctx)
+	if err != nil || len(inv) != 1 || inv[0].Merged || inv[0].Verified || inv[0].Reason != LayerDigestMismatch {
+		t.Fatalf("inventory = %#v, %v", inv, err)
+	}
+}
+
 func TestLayerInventoryOffersSignedLayersWithoutHashing(t *testing.T) {
 	f := newLayerFixture(t)
 	inv, err := f.layers().Inventory(context.Background())
@@ -291,5 +327,130 @@ func TestLayerActivateReportsUnreadableJournalWithoutLinking(t *testing.T) {
 	}
 	if err := f.layers().Ensure(context.Background(), "nex-zfs"); err == nil {
 		t.Fatal("Ensure overwrote an unreadable journal")
+	}
+}
+
+// stagedFor writes a layer file the way the update engine leaves one in its staging directory.
+func (f *layerFixture) stagedFor(build string, data []byte) StagedLayer {
+	sum := sha256.Sum256(data)
+	path := filepath.Join(f.t.TempDir(), "staged")
+	f.write(path, data)
+	return StagedLayer{Name: "nex-zfs", SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(data)), RequiresBase: build, Path: path}
+}
+
+func TestLayerStageReleaseKeepsTheRunningBaseAndNeverTouchesTheJournal(t *testing.T) {
+	f := newLayerFixture(t)
+	l := f.layers()
+	if err := l.Ensure(context.Background(), "nex-zfs"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(l.statePath())
+	next := f.stagedFor("20261002.1", []byte("layer-bytes-of-the-next-base"))
+	manifest, sig := []byte(`{"components":[]}`), []byte("sig")
+	if err := l.StageRelease(context.Background(), "20261002.1", manifest, sig, []StagedLayer{next}); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(l.storePath(next.SHA256)); err != nil || string(b) != "layer-bytes-of-the-next-base" {
+		t.Fatalf("staged layer not in the store: %v", err)
+	}
+	if _, err := os.Stat(l.storePath(f.state().Layers["nex-zfs"].SHA256)); err != nil {
+		t.Fatalf("the running base's layer must stay: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.cfg.Dir, "releases", "20261002.1", "manifest.json")); string(got) != string(manifest) {
+		t.Fatalf("manifest = %q", got)
+	}
+	if after, _ := os.ReadFile(l.statePath()); string(after) != string(before) {
+		t.Fatal("staging changed enabled.json")
+	}
+	// Idempotent: a repeat after a crash changes nothing and succeeds.
+	if err := l.StageRelease(context.Background(), "20261002.1", manifest, sig, []StagedLayer{next}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLayerStageReleaseRefusesWithoutWritingAnything(t *testing.T) {
+	f := newLayerFixture(t)
+	l := f.layers()
+	good := f.stagedFor("20261002.1", []byte("next"))
+	wrongBase := good
+	wrongBase.RequiresBase = f.build
+	tampered := good
+	tampered.SHA256 = strings.Repeat("0", 64)
+	for name, c := range map[string]struct {
+		build string
+		layer StagedLayer
+		why   string
+	}{
+		"built for another base":              {"20261002.1", wrongBase, LayerBaseMismatch},
+		"bytes differ from the signed digest": {"20261002.1", tampered, LayerDigestMismatch},
+		"build id is a path":                  {"../x", good, LayerBaseMismatch},
+	} {
+		err := l.StageRelease(context.Background(), c.build, []byte("{}"), []byte("sig"), []StagedLayer{c.layer})
+		wantReason(t, err, c.why)
+		if _, statErr := os.Stat(filepath.Join(f.cfg.Dir, "releases", c.build)); statErr == nil && c.build != f.build {
+			t.Errorf("%s: a manifest was written", name)
+		}
+	}
+	if _, err := os.Stat(l.storePath(tampered.SHA256)); err == nil {
+		t.Error("a file that does not hash to its digest got the digest's name")
+	}
+}
+
+func TestLayerSwitchReleaseChangesOnlyEnabledLayers(t *testing.T) {
+	f := newLayerFixture(t)
+	l := f.layers()
+	if err := l.Ensure(context.Background(), "nex-zfs"); err != nil {
+		t.Fatal(err)
+	}
+	next := f.stagedFor("20261002.1", []byte("next"))
+	other := StagedLayer{Name: "nex-cluster", SHA256: strings.Repeat("a", 64), RequiresBase: "20261002.1"}
+	if err := l.SwitchRelease(context.Background(), "20261002.1", []StagedLayer{next, other}); err != nil {
+		t.Fatal(err)
+	}
+	st := f.state()
+	if e := st.Layers["nex-zfs"]; e.SHA256 != next.SHA256 || e.Base != "20261002.1" || !e.Enabled {
+		t.Fatalf("%+v", e)
+	}
+	if _, ok := st.Layers["nex-cluster"]; ok {
+		t.Fatal("a layer the operator never enabled was enabled by an update")
+	}
+}
+
+func TestLayerPruneKeepsOnlyWhatABootableBaseNeeds(t *testing.T) {
+	f := newLayerFixture(t)
+	l := f.layers()
+	next := f.stagedFor("20261002.1", []byte("next"))
+	nextManifest, _ := json.Marshal(map[string]any{"components": []any{map[string]any{"id": "nex-zfs", "kind": "layer", "sha256": next.SHA256}}})
+	if err := l.StageRelease(context.Background(), "20261002.1", nextManifest, []byte("sig"), []StagedLayer{next}); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(f.cfg.Dir, "store", "sha256-"+strings.Repeat("c", 64)+".raw")
+	f.write(stray, []byte("left over"))
+
+	// Both bases bootable: both layers stay, the stray file goes.
+	if err := l.PruneReleases(context.Background(), []string{f.build, "20261002.1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stray); err == nil {
+		t.Error("an unreferenced store file survived")
+	}
+	if _, err := os.Stat(l.storePath(next.SHA256)); err != nil {
+		t.Error("the next base's layer was removed")
+	}
+	// The running base alone: the next base's record and layer go.
+	if err := l.PruneReleases(context.Background(), []string{"20261002.1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.cfg.Dir, "releases", f.build)); err == nil {
+		t.Error("the release record of a base that is no longer bootable survived")
+	}
+	// An unreadable manifest of a kept base is proof of nothing: nothing is removed.
+	f.write(filepath.Join(f.cfg.Dir, "releases", "20261002.1", "manifest.json"), []byte("{broken"))
+	f.write(stray, []byte("left over"))
+	if err := l.PruneReleases(context.Background(), []string{"20261002.1"}); err == nil {
+		t.Fatal("an unreadable retained manifest must stop the prune")
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Error("files were removed although a retained manifest could not be read")
 	}
 }

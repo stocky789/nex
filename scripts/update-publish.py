@@ -14,7 +14,8 @@ environment) and refuses to run without one.
 
     update-publish.py keygen --out DIR                          throwaway development keys (refuses to overwrite)
     update-publish.py trust --base B --root-key K --release-key K [--version N]
-    update-publish.py publish --base B --release-dir D --source F --compliance F --channel dev ...
+    update-publish.py publish --base B --release-dir D --source F --compliance F --channel dev
+                              [--layer F]... [--on-demand-layer F]... [--payload vm-image:ID=F]...
     update-publish.py promote --base B --channel stable --sequence N --release-key K
 
 A release's order is its integer `sequence`. The label is display text, but the publisher asserts that the
@@ -41,6 +42,11 @@ CHANNEL_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 SLOT_FILES = ("root.erofs", "root.verity", "roothash", "manifest.json")
 SLOT_ENCODING = "tar+zstd"
 SLOT_ZSTD_LEVEL = 10
+LAYER_ID_RE = re.compile(r"^nex-[a-z0-9]+(-[a-z0-9]+)*$")
+COMPONENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+PAYLOAD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PAYLOAD_KINDS = ("vm-image", "iso")
+HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class PublishError(RuntimeError):
@@ -203,6 +209,42 @@ def describe_blob(source, component_id, kind, required, on_demand, extra=None):
     return component
 
 
+def layer_component(path, on_demand, label, sequence):
+    """A layer component from `<name>.raw` and the `<name>.raw.json` that image/mkosi.images/build-layer.sh
+    writes beside it. The layer must have been built for exactly this release's base (BUILD_ID is
+    <label>-<sequence>): a release that carried a layer of another base would be refused by every host."""
+    path = Path(path)
+    descriptor = Path(str(path) + ".json")
+    if not path.is_file() or not descriptor.is_file():
+        raise PublishError(f"a layer needs the file and its descriptor: {path} and {descriptor}")
+    meta = json.loads(descriptor.read_text())
+    if meta.get("kind") != "layer" or not LAYER_ID_RE.match(str(meta.get("id", ""))):
+        raise PublishError(f"{descriptor} does not describe a layer")
+    if meta.get("sha256") != sha256_file(path) or meta.get("bytes") != os.path.getsize(path):
+        raise PublishError(f"{path} does not match its descriptor; rebuild the layer")
+    build = f"{label}-{sequence}"
+    if meta.get("requires_base") != build:
+        raise PublishError(f"layer {meta['id']} was built for base {meta.get('requires_base')}, not for {build}; "
+                           "every release rebuilds all layers against its base")
+    extra = {"requires_base": build}
+    if meta.get("verity_root_hash"):
+        if not HEX64_RE.match(meta["verity_root_hash"]):
+            raise PublishError(f"layer {meta['id']} has a malformed verity_root_hash")
+        extra["verity_root_hash"] = meta["verity_root_hash"]
+    return describe_blob(path, meta["id"], "layer", not on_demand, on_demand, extra)
+
+
+def payload_component(spec):
+    """KIND:ID=FILE, an on_demand payload placed on hosts at /var/lib/nex/payload/<sha256>/<file name>."""
+    head, _, file = spec.partition("=")
+    kind, _, component_id = head.partition(":")
+    path = Path(file)
+    if kind not in PAYLOAD_KINDS or not COMPONENT_ID_RE.match(component_id) or not path.is_file() \
+            or not PAYLOAD_NAME_RE.match(path.name):
+        raise PublishError(f"--payload takes KIND:ID=FILE with KIND in {PAYLOAD_KINDS}, a plain file name and an existing file: {spec!r}")
+    return describe_blob(path, component_id, kind, False, True, {"name": path.name})
+
+
 def store_blob(base, source, component):
     """Store a described file content-addressed under blobs/. A blob that already exists must hold the same bytes."""
     blobs = Path(base) / "blobs"
@@ -261,6 +303,12 @@ def publish(args):
             (Path(args.source), describe_blob(args.source, "source", "source", False, True)),
             (Path(args.compliance), describe_blob(args.compliance, "compliance", "compliance", False, True)),
         ]
+        sources += [(Path(layer), layer_component(layer, False, label, sequence)) for layer in args.layer]
+        sources += [(Path(layer), layer_component(layer, True, label, sequence)) for layer in args.on_demand_layer]
+        sources += [(Path(spec.partition("=")[2]), payload_component(spec)) for spec in args.payload]
+        ids = [component["id"] for _, component in sources]
+        if len(ids) != len(set(ids)):
+            raise PublishError("component ids must be unique across the slot image, layers and payloads")
         manifest = {"format": FORMAT, "sequence": sequence, "label": label, "architecture": ARCHITECTURE,
                     "created": stamp(now()), "min_from_sequence": args.min_from_sequence,
                     "compat": {"update_engine": 1, "state_format": args.state_format, "min_state_format": args.min_state_format,
@@ -334,6 +382,9 @@ def main(argv=None):
     p.add_argument("--release-dir", required=True, help="image/build.sh release output (manifest.json, root.erofs, ...)")
     p.add_argument("--source", help="matching source archive (hosted as the source component)")
     p.add_argument("--compliance", help="component and licence manifest (hosted as the compliance component)")
+    p.add_argument("--layer", action="append", default=[], metavar="FILE", help="a layer built for this release's base (FILE.json beside it); staged with every update")
+    p.add_argument("--on-demand-layer", action="append", default=[], metavar="FILE", help="like --layer, but staged only on hosts that enabled it")
+    p.add_argument("--payload", action="append", default=[], metavar="KIND:ID=FILE", help="an on_demand payload (vm-image or iso) fetched on request")
     p.add_argument("--state-format", type=int, default=3)
     p.add_argument("--min-state-format", type=int, default=0)
     p.add_argument("--api-epoch", type=int, default=1)

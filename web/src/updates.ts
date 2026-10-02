@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-export type UpdateStatus = { package: string; core_available_version?: string; installed_version: string; available_version?: string; update_available: boolean; repo_url: string; phase?: string; progress?: number; message?: string; error?: string };
+// channel and base_url come from the host's own status (package edition: channel only; image edition: both).
+export type UpdateStatus = { package: string; core_available_version?: string; installed_version: string; available_version?: string; update_available: boolean; repo_url: string; channel?: string; base_url?: string; phase?: string; progress?: number; message?: string; error?: string };
 
 // Polls the update status once a second until the helper reports done or failed, for up to
 // ten minutes. The service restarts mid-apply, so a poll that cannot reach it is part of a

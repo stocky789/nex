@@ -220,7 +220,7 @@ class LocalAPIContractTests(APIContractTests):
     def test_service_cli_flags_are_documented(self):
         source = (ROOT / 'cmd/nex-core-local/main.go').read_text()
         flags = set(re.findall(r'flag\.\w+Var\([^,]+,\s*"([^"]+)"', source))
-        documented = set(re.findall(r'`--?([a-z][a-z-]+)`', (ROOT / 'docs/API.md').read_text()))
+        documented = set(re.findall(r'`--?([a-z][a-z0-9-]+)`', (ROOT / 'docs/API.md').read_text()))
         self.assertTrue(flags)
         self.assertFalse(flags - documented, f'Undocumented local service flags: {flags - documented}')
 

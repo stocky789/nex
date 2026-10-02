@@ -25,7 +25,8 @@ static char **disk_list(GKeyFile *config, const char *key, gsize *count) {
     return entries;
 }
 static void fail(const char *message) {g_error("%s",message);}
-static gboolean image_edition(void) {return FALSE;} /* this harness renders the classic answers */
+static gboolean image_mode=FALSE;
+static gboolean image_edition(void) {return image_mode;} /* FALSE: classic answers; check_image() flips it */
 static void protected_write(const char *path,const char *text) {
     g_hash_table_replace(files,g_strdup(path),g_strdup(text));
 }
@@ -97,6 +98,31 @@ static void check_disks(const char **disks, gsize count, const char *targets, co
     }
     g_key_file_free(config);
 }
+/* The image edition has no partman or GRUB step, but Debian Installer still runs its keyboard, root account, clock and
+ * network-name steps before the hook that starts the image install. Without their answers it stops to ask the operator
+ * again (found in the first QEMU run of the image ISO: "Configure the keyboard" after the wizard). */
+static void check_image(void) {
+    GKeyFile *config=g_key_file_new();
+    const char *disks[]={"/dev/vda","/dev/vdb"};
+    g_key_file_set_string(config,"Host","hostname","nexcore.example.test");
+    g_key_file_set_string(config,"Host","timezone","Australia/Sydney");
+    g_key_file_set_string(config,"Host","keymap","gb");
+    g_key_file_set_string_list(config,"Host","disk",disks,2);
+    image_mode=TRUE;g_hash_table_remove_all(files);render(config);image_mode=FALSE;
+    const char *seed=g_hash_table_lookup(files,"/run/nex-installer/answers.cfg");
+    g_assert_nonnull(seed);
+    g_assert(strstr(seed,"d-i debian-installer/locale string en_US.UTF-8\n"));
+    g_assert(strstr(seed,"d-i keyboard-configuration/xkb-keymap select gb\n"));
+    g_assert(strstr(seed,"d-i time/zone string Australia/Sydney\n"));
+    g_assert(strstr(seed,"d-i clock-setup/utc boolean true\n"));
+    g_assert(strstr(seed,"d-i netcfg/get_hostname string nexcore\n"));
+    g_assert(strstr(seed,"d-i passwd/root-login boolean true\n"));
+    g_assert(strstr(seed,"d-i passwd/make-user boolean false\n"));
+    g_assert(strstr(seed,"d-i passwd/root-password-crypted password $6$test-only-hash\n"));
+    g_assert(!strstr(seed,"partman"));
+    g_assert(!strstr(seed,"grub-installer"));
+    g_key_file_free(config);
+}
 int main(void) {
     files=g_hash_table_new_full(g_str_hash,g_str_equal,g_free,g_free);
     check_hostname("nexcore.example.test","nexcore","example.test","nexcore.example.test");
@@ -109,6 +135,7 @@ int main(void) {
     check_disks(one,1,"/dev/sda","/dev/sda3","/dev/sda4");
     check_disks(two,2,"/dev/sda /dev/nvme0n1","/dev/sda3#/dev/nvme0n1p3","/dev/sda4#/dev/nvme0n1p4");
     check_disks(three,3,"/dev/sda /dev/nvme0n1 /dev/vda","/dev/sda3#/dev/nvme0n1p3#/dev/vda3","/dev/sda4#/dev/nvme0n1p4#/dev/vda4");
+    check_image();
     g_hash_table_destroy(files);return 0;
 }
 '''

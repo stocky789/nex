@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"nex.local/nex/internal/hostimage"
+	"nex.local/nex/internal/vmhost"
 )
 
 // Lifecycle phases of the update subtree (the plan's host pipeline table) plus the two resting ones.
@@ -37,6 +38,7 @@ const (
 	PhaseBooted      = "booted"
 	PhaseCommitted   = "committed"
 	PhaseRolledBack  = "rolled_back"
+	PhaseSwapping    = "swapping" // a Controller appliance swap (scope controller); never a host lifecycle phase
 )
 
 const (
@@ -99,6 +101,23 @@ type Config struct {
 	RunningVMs func(ctx context.Context) ([]string, error)
 	Reboot     func(ctx context.Context) error
 	Now        func() time.Time
+	// Layers is the host's layer store: the layers of a release are placed beside the base in the same
+	// transaction. nil on a host (or test) that has none; a release that needs one is then refused.
+	Layers *vmhost.Layers
+	// Appliance replaces the Controller appliance's system image (the host's vmhost engine). nil on a
+	// host (or test) without one: scope "controller" is then refused scope_unavailable.
+	Appliance Appliance
+	// ControllerProbe answers whether the Controller's readiness path responds at its management URL.
+	ControllerProbe func(ctx context.Context, url string) error
+	// PayloadDir receives on_demand components, one directory per SHA-256 (/var/lib/nex/payload).
+	PayloadDir string
+	// InboxDir holds offline bundles in the online layout (/var/lib/nex/image/inbox).
+	InboxDir string
+	// Mount makes labelled update media readable and returns its directory with a release function; the
+	// engine never writes to media.
+	Mount func(ctx context.Context, device string) (dir string, done func(), err error)
+	// SaveSettings persists the update settings (/etc/nex/updates.conf).
+	SaveSettings func(Settings) error
 	// RebootDelay lets the HTTP response out before the host goes down.
 	RebootDelay time.Duration
 }
@@ -114,6 +133,8 @@ type ReleaseRecord struct {
 	MDGeneration   int    `json:"md_generation,omitempty"`
 	MDFallbackSafe bool   `json:"md_fallback_safe,omitempty"`
 	Rollback       bool   `json:"rollback,omitempty"` // the armed record is a revert
+	// Layers are the layer files that came with this release; they are switched in when it is armed.
+	Layers []LayerRef `json:"layers,omitempty"`
 }
 
 // Available is a verified newer release.
@@ -158,20 +179,22 @@ type opRecord struct {
 }
 
 type updateState struct {
-	Channel       string         `json:"channel,omitempty"`
-	ChannelSerial int            `json:"channel_serial"`
-	ChannelSHA    string         `json:"channel_manifest_sha256,omitempty"`
-	RollbackFloor int            `json:"rollback_floor"`
-	TrustVersion  int            `json:"trust_version,omitempty"` // newest trust document adopted; never goes back
-	CheckedAt     time.Time      `json:"checked_at,omitempty"`
-	Available     *Available     `json:"available,omitempty"`
-	Phase         string         `json:"phase"`
-	Current       *ReleaseRecord `json:"current,omitempty"`
-	Previous      *ReleaseRecord `json:"previous,omitempty"`
-	Staged        *ReleaseRecord `json:"staged,omitempty"`
-	Armed         *ReleaseRecord `json:"armed,omitempty"`
-	Failure       *Error         `json:"failure,omitempty"`
-	Operations    []opRecord     `json:"operations,omitempty"`
+	Channel string `json:"channel,omitempty"`
+	// Replay is the newest channel pointer accepted from each source (see replayKey). A channel_serial
+	// counts one publisher's channel, so the history belongs to the source and never mixes.
+	Replay        map[string]replayPoint `json:"replay,omitempty"`
+	RollbackFloor int                    `json:"rollback_floor"`
+	TrustVersion  int                    `json:"trust_version,omitempty"` // newest trust document adopted; never goes back
+	CheckedAt     time.Time              `json:"checked_at,omitempty"`
+	Available     *Available             `json:"available,omitempty"`
+	Phase         string                 `json:"phase"`
+	Current       *ReleaseRecord         `json:"current,omitempty"`
+	Previous      *ReleaseRecord         `json:"previous,omitempty"`
+	Staged        *ReleaseRecord         `json:"staged,omitempty"`
+	Armed         *ReleaseRecord         `json:"armed,omitempty"`
+	Failure       *Error                 `json:"failure,omitempty"`
+	Operations    []opRecord             `json:"operations,omitempty"`
+	Media         []Media                `json:"media,omitempty"` // the last scan of offline bundles
 }
 
 // SlotStatus is one slot as the engine knows it.
@@ -195,8 +218,10 @@ type ImageStatus struct {
 	CheckedAt     *time.Time   `json:"checked_at,omitempty"`
 	Operation     *Operation   `json:"operation,omitempty"`
 	Failure       *Error       `json:"failure,omitempty"`
-	// ChannelSerial is the newest channel pointer accepted; it only grows.
-	ChannelSerial int `json:"channel_serial"`
+	// ChannelSerial is the newest pointer accepted from the configured source and channel; it only grows.
+	ChannelSerial int     `json:"channel_serial"`
+	BaseURL       string  `json:"base_url,omitempty"`
+	Media         []Media `json:"media,omitempty"`
 }
 
 // ApplyRequest is POST /updates/apply.
@@ -206,6 +231,9 @@ type ApplyRequest struct {
 	Scope      string `json:"scope,omitempty"`    // host (default) or controller
 	Activate   string `json:"activate,omitempty"` // stage_only (default) or reboot
 	RunningVMs string `json:"running_vms,omitempty"`
+	// kind is apply, import or fetch; media, channel and component carry what Import and FetchComponent
+	// ask for. They are not part of the apply request body.
+	kind, media, channel, component string
 }
 
 // ActionRequest is the body of activate, rollback and cancel.
@@ -224,6 +252,9 @@ type Engine struct {
 	loaded    bool
 	active    *activeOp
 	lastCheck time.Time
+	// checks counts Checks in flight: a Check releases mu while it reads the source, so a settings change
+	// must wait for it.
+	checks int
 	// rest is the lifecycle phase to return to when an apply fails (in memory: after a restart it is idle).
 	rest   string
 	ctx    context.Context
@@ -258,6 +289,9 @@ func NewEngine(cfg Config) *Engine {
 	}
 	if cfg.Root == "" {
 		cfg.Root = "/"
+	}
+	if cfg.PayloadDir == "" {
+		cfg.PayloadDir = d.PayloadDir
 	}
 	if cfg.Settings == nil {
 		cfg.Settings = ImageSettings
@@ -516,6 +550,20 @@ func readFileLimit(p string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return readLimited(f, limit)
+}
+
+// readFileIn reads a small file of untrusted media through openRegular.
+func readFileIn(root *os.Root, name string, limit int64) ([]byte, error) {
+	f, err := openRegular(root, name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return readLimited(f, limit)
+}
+
+func readLimited(f *os.File, limit int64) ([]byte, error) {
 	b := make([]byte, limit+1)
 	n, err := f.Read(b)
 	if err != nil && n == 0 {
@@ -532,6 +580,9 @@ func readFileLimit(p string, limit int64) ([]byte, error) {
 type verified struct {
 	manifest Manifest
 	src      Source
+	// manifestRaw and manifestSig are the exact signed bytes: the layer store keeps them so the new base
+	// can verify its layers when it boots.
+	manifestRaw, manifestSig []byte
 }
 
 // fetchMetadata runs the plan's host checks in order and, only when every one passes, ratchets
@@ -544,7 +595,14 @@ func (e *Engine) fetchMetadata(ctx context.Context, target int) (*verified, erro
 	if channel == "" {
 		channel = "stable"
 	}
-	src := e.cfg.Source(base)
+	return e.fetchMetadataFrom(ctx, e.cfg.Source(base), channel, target)
+}
+
+// fetchMetadataFrom is the one verification path of every source: the update server, the pool master's
+// cache and an offline bundle in the online layout.
+func (e *Engine) fetchMetadataFrom(ctx context.Context, src Source, channel string, target int) (*verified, error) {
+	base, _ := e.cfg.Settings()
+	key := replayKey(base, channel)
 	trust, err := e.loadTrust()
 	if err != nil {
 		return nil, err
@@ -576,7 +634,7 @@ func (e *Engine) fetchMetadata(ctx context.Context, target int) (*verified, erro
 		return nil, err
 	}
 	e.mu.Lock()
-	floor, err := e.admitLocked(ch, ch.Sequence)
+	floor, err := e.admitLocked(key, ch, ch.Sequence)
 	e.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -607,35 +665,58 @@ func (e *Engine) fetchMetadata(ctx context.Context, target int) (*verified, erro
 	if m.Sequence != seq {
 		return nil, refuse(502, "metadata_invalid", "the manifest is for another sequence")
 	}
+	if m.Created.After(now) {
+		return nil, refuse(409, "clock_behind", "the host clock is earlier than the release was created; set the clock first")
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// The record may have moved while the network was busy (another operation in this process): judge
 	// the metadata against what it says now, and only ever raise the serial and the floor.
-	newFloor, err := e.admitLocked(ch, seq)
+	newFloor, err := e.admitLocked(key, ch, seq)
 	if err != nil {
 		return nil, err
 	}
 	if err = e.checkCompat(m, e.st.Current); err != nil {
 		return nil, err
 	}
-	e.st.ChannelSerial, e.st.ChannelSHA, e.st.RollbackFloor = max(e.st.ChannelSerial, ch.ChannelSerial), ch.ManifestSHA256, newFloor
+	e.recordPointLocked(key, ch)
+	e.st.RollbackFloor = newFloor
 	e.st.Channel = channel
 	e.st.CheckedAt = now
 	if err = e.save(); err != nil {
 		return nil, err
 	}
-	return &verified{manifest: m, src: src}, nil
+	return &verified{manifest: m, src: src, manifestRaw: mraw, manifestSig: msig}, nil
 }
 
-// admitLocked judges a verified channel pointer for sequence seq against the accepted record: not older
-// than the newest pointer accepted, not below the rollback floor. It returns the floor to keep, the
-// larger of the one on record and the pointer's min_sequence. e.mu is held.
-func (e *Engine) admitLocked(ch Channel, seq int) (int, error) {
-	st := &e.st
-	if ch.ChannelSerial < st.ChannelSerial || (ch.ChannelSerial == st.ChannelSerial && st.ChannelSHA != "" && ch.ManifestSHA256 != st.ChannelSHA) {
+// replayPoint is the newest channel pointer accepted from one source.
+type replayPoint struct {
+	Serial int    `json:"serial"`
+	SHA    string `json:"manifest_sha256,omitempty"`
+}
+
+// replayKey names the pointer history of a source: the configured update server and the channel read from
+// it, or from a bundle carrying that channel. Changing the server therefore needs no reset, and a bundle's
+// other channels keep their own history instead of being judged against the configured one.
+func replayKey(base, channel string) string { return base + "\n" + channel }
+
+func (e *Engine) recordPointLocked(key string, ch Channel) {
+	if e.st.Replay == nil {
+		e.st.Replay = map[string]replayPoint{}
+	}
+	e.st.Replay[key] = replayPoint{Serial: max(e.st.Replay[key].Serial, ch.ChannelSerial), SHA: ch.ManifestSHA256}
+}
+
+// admitLocked judges a verified channel pointer for sequence seq against the source's accepted record: not
+// older than the newest pointer accepted, not below the rollback floor (which is about releases and spans
+// sources). It returns the floor to keep, the larger of the one on record and the pointer's min_sequence.
+// e.mu is held.
+func (e *Engine) admitLocked(key string, ch Channel, seq int) (int, error) {
+	seen := e.st.Replay[key]
+	if ch.ChannelSerial < seen.Serial || (ch.ChannelSerial == seen.Serial && seen.SHA != "" && ch.ManifestSHA256 != seen.SHA) {
 		return 0, refuse(502, "channel_replayed", "channel.json is older than the one already accepted")
 	}
-	floor := max(st.RollbackFloor, ch.MinSequence)
+	floor := max(e.st.RollbackFloor, ch.MinSequence)
 	if ch.Sequence < floor || seq < floor {
 		return 0, refuse(409, "below_rollback_floor", "the release is below the rollback floor")
 	}
@@ -703,7 +784,7 @@ func (e *Engine) checkCompat(m Manifest, current *ReleaseRecord) error {
 		return refuse(409, "bridge_required", "the release cannot be installed from this version; install the bridge release first")
 	}
 	for _, c := range m.Components {
-		if c.Required && !c.OnDemand && c.Kind != "slot-image" && c.Kind != "source" && c.Kind != "compliance" {
+		if c.Required && !c.OnDemand && c.Kind != "slot-image" && c.Kind != "source" && c.Kind != "compliance" && c.Kind != "layer" {
 			return refuse(409, "unsupported_component", "the release has a required component this engine cannot install yet")
 		}
 	}
@@ -761,7 +842,7 @@ func (e *Engine) reconcile(ctx context.Context) error {
 		}
 		switch {
 		case b.RootHash == st.Armed.RootHash && blessed > 0:
-			e.commit()
+			e.commit(ctx)
 			changed = true
 		case b.RootHash == st.Armed.RootHash:
 			if st.Phase != PhaseBooted {
@@ -790,12 +871,6 @@ func (e *Engine) reconcile(ctx context.Context) error {
 		}
 		changed = true
 	}
-	if st.Current != nil && st.Current.RootHash == b.RootHash && st.Current.StateFormat == 0 && b.StateFormat != 0 {
-		// A record without the compat facts (written before they were kept): the running image states them.
-		slot := st.Current.Slot
-		*st.Current = recordOfBooted(b)
-		st.Current.Slot, changed = slot, true
-	}
 	if st.Available != nil && st.Current != nil && st.Available.Sequence <= st.Current.Sequence {
 		st.Available, changed = nil, true
 	}
@@ -805,7 +880,7 @@ func (e *Engine) reconcile(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) commit() {
+func (e *Engine) commit(ctx context.Context) {
 	st := &e.st
 	armed := *st.Armed
 	armed.Rollback = false
@@ -815,6 +890,9 @@ func (e *Engine) commit() {
 	st.Phase = PhaseCommitted
 	st.Failure = nil
 	e.removeStaging()
+	// The base before this one stays bootable (rollback is open until the next stage), so its layers
+	// stay; anything older goes.
+	e.pruneLayers(ctx, st.Current, st.Previous)
 }
 
 func (e *Engine) removeStaging() { _ = os.RemoveAll(filepath.Join(e.cfg.Dir, "staging")) }
@@ -824,10 +902,13 @@ func (e *Engine) removeStaging() { _ = os.RemoveAll(filepath.Join(e.cfg.Dir, "st
 func (e *Engine) statusLocked() ImageStatus {
 	st := e.st
 	s := ImageStatus{Running: e.active != nil, Channel: st.Channel, Available: st.Available, Phase: st.Phase,
-		RollbackFloor: st.RollbackFloor, ChannelSerial: st.ChannelSerial, Failure: st.Failure,
+		RollbackFloor: st.RollbackFloor, Failure: st.Failure,
 		StateFormat: RequiredStateFormat(e.cfg.Root), Slots: []SlotStatus{}}
+	base, channel := e.cfg.Settings()
+	s.BaseURL, s.Media = base, st.Media
+	s.ChannelSerial = st.Replay[replayKey(base, channel)].Serial
 	if s.Channel == "" {
-		_, s.Channel = e.cfg.Settings()
+		s.Channel = channel
 	}
 	if !st.CheckedAt.IsZero() {
 		t := st.CheckedAt
@@ -917,6 +998,12 @@ func (e *Engine) Check(ctx context.Context) (ImageStatus, error) {
 		e.mu.Unlock()
 		return ImageStatus{}, refuse(429, "check_throttled", "the update source was checked less than a minute ago")
 	}
+	e.checks++
+	defer func() {
+		e.mu.Lock()
+		e.checks--
+		e.mu.Unlock()
+	}()
 	if err := e.reconcile(ctx); err != nil {
 		e.mu.Unlock()
 		return ImageStatus{}, err
@@ -977,7 +1064,7 @@ func (e *Engine) begin(id, kind, digest string, sequence int) (op Operation, rep
 	for i := range e.st.Operations {
 		o := &e.st.Operations[i].Op
 		if o.FinishedAt == nil {
-			if o.Kind == "apply" {
+			if o.Kind == "apply" || o.Kind == "import" || o.Kind == "controller" {
 				// An interrupted apply is resumed by repeating its request_id or cancelled, never abandoned silently.
 				return Operation{}, false, false, refuse(409, "update_in_progress", "an interrupted update must be resumed with its request_id or cancelled first")
 			}
@@ -1028,6 +1115,7 @@ func (e *Engine) finish(id string, phase string, opErr error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.cfg.Now()
+	fetch := sideJob(e.opKind(id)) // a payload fetch or Controller swap never moves the lifecycle phase of a staged release
 	e.updateOp(id, func(o *Operation) {
 		o.FinishedAt = &now
 		if phase != "" {
@@ -1043,7 +1131,7 @@ func (e *Engine) finish(id string, phase string, opErr error) {
 			o.Phase = "failed"
 		}
 	})
-	if opErr != nil {
+	if opErr != nil && !fetch {
 		switch {
 		case e.st.Staged != nil:
 			e.st.Phase = PhaseStaged
@@ -1053,8 +1141,9 @@ func (e *Engine) finish(id string, phase string, opErr error) {
 			e.st.Phase = PhaseIdle
 		}
 	}
-	e.clearActive()
+	// Write the record while the update lock is still held: clearActive gives the lock to the next process.
 	_ = e.save()
+	e.clearActive()
 }
 
 func (e *Engine) setPhase(id, phase string) {
@@ -1063,8 +1152,9 @@ func (e *Engine) setPhase(id, phase string) {
 	if e.active != nil && e.active.id == id {
 		e.active.phase = phase
 	}
+	fetch := sideJob(e.opKind(id))
 	e.updateOp(id, func(o *Operation) { o.Phase = phase })
-	if phase == PhaseChecking || phase == PhaseDownloading || phase == PhaseWriting {
+	if !fetch && (phase == PhaseChecking || phase == PhaseDownloading || phase == PhaseWriting) {
 		e.st.Phase = phase
 	}
 	_ = e.save()
@@ -1087,7 +1177,7 @@ func normalizeApply(r ApplyRequest) (ApplyRequest, error) {
 		r.RunningVMs = "refuse"
 	}
 	if r.Sequence < 0 || (r.Scope != "host" && r.Scope != "controller") || (r.Activate != "stage_only" && r.Activate != "reboot") ||
-		(r.RunningVMs != "refuse" && r.RunningVMs != "shutdown") {
+		(r.RunningVMs != "refuse" && r.RunningVMs != "shutdown") || (r.Scope == "controller" && r.Activate == "reboot") {
 		return r, refuse(400, "invalid_request", "scope, activate or running_vms has an unknown value")
 	}
 	return r, nil
@@ -1106,17 +1196,30 @@ func normalizeAction(r ActionRequest) (ActionRequest, error) {
 // Apply is POST /updates/apply: verify, download, stage and optionally arm and reboot, in the
 // background. replayed is true when request_id repeats an earlier identical request (200, not 202).
 func (e *Engine) Apply(ctx context.Context, req ApplyRequest) (op Operation, replayed bool, err error) {
+	return e.startJob(ctx, "apply", req)
+}
+
+// startJob runs apply, import and fetch: one background operation under the update lock, from a source
+// (the update server, or an offline bundle for import and fetch), recorded and resumable by request_id.
+func (e *Engine) startJob(ctx context.Context, kind string, req ApplyRequest) (op Operation, replayed bool, err error) {
 	if req, err = normalizeApply(req); err != nil {
 		return Operation{}, false, err
 	}
 	if req.Scope == "controller" {
-		return Operation{}, false, refuse(409, "scope_unavailable", "the Controller appliance cannot be updated through this engine yet")
+		if e.cfg.Appliance == nil || e.cfg.ControllerProbe == nil {
+			return Operation{}, false, refuse(409, "scope_unavailable", "this host has no Controller appliance engine")
+		}
+		kind = "controller"
 	}
-	digest := digestOf("apply", struct {
+	req.kind = kind
+	digest := digestOf(kind, struct {
 		S int
 		A string
 		V string
-	}{req.Sequence, req.Activate, req.RunningVMs})
+		M string `json:",omitempty"`
+		C string `json:",omitempty"`
+		K string `json:",omitempty"`
+	}{req.Sequence, req.Activate, req.RunningVMs, req.media, req.channel, req.component})
 	if err = e.enter(lockWait); err != nil {
 		return Operation{}, false, err
 	}
@@ -1139,20 +1242,20 @@ func (e *Engine) Apply(ctx context.Context, req ApplyRequest) (op Operation, rep
 			return Operation{}, false, err
 		}
 	}
-	op, replay, resume, err := e.begin(req.RequestID, "apply", digest, req.Sequence)
+	op, replay, resume, err := e.begin(req.RequestID, kind, digest, req.Sequence)
 	if err != nil {
 		return Operation{}, false, err
 	}
 	if replay && !resume {
 		return op, true, nil
 	}
-	if !replay {
+	if !replay && !sideJob(kind) {
 		if st := e.st.Phase; st == PhaseArmed || st == PhaseBooted {
 			e.dropOp(req.RequestID)
 			return Operation{}, false, refuse(409, "already_armed", "a release is armed; reboot into it or roll back before staging another")
 		}
 	}
-	if !replay {
+	if !replay && !sideJob(kind) {
 		e.rest = ""
 		switch e.st.Phase {
 		case PhaseCommitted, PhaseRolledBack, PhaseStaged:
@@ -1168,8 +1271,8 @@ func (e *Engine) Apply(ctx context.Context, req ApplyRequest) (op Operation, rep
 		e.mu.Lock()
 		if err != nil {
 			cancel()
+			e.dropOp(req.RequestID) // the refused request leaves no trace: forget it before the lock goes to the next process
 			e.release(op.ID)
-			e.dropOp(req.RequestID)
 			return Operation{}, false, err
 		}
 	}
@@ -1194,7 +1297,16 @@ func (e *Engine) dropOp(id string) {
 }
 
 func (e *Engine) runApply(ctx context.Context, id string, req ApplyRequest) {
-	phase, err := e.pipeline(ctx, id, req)
+	var phase string
+	var err error
+	switch req.kind {
+	case "fetch":
+		phase, err = e.fetchPipeline(ctx, id, req)
+	case "controller":
+		phase, err = e.controllerPipeline(ctx, id, req)
+	default:
+		phase, err = e.pipeline(ctx, id, req)
+	}
 	if ctx.Err() != nil {
 		// Cancelled or shutting down. The operation stays unfinished here: Cancel records its end, and
 		// after a shutdown a repeat of the request_id resumes it.
@@ -1208,7 +1320,12 @@ func (e *Engine) runApply(ctx context.Context, id string, req ApplyRequest) {
 
 func (e *Engine) pipeline(ctx context.Context, id string, req ApplyRequest) (string, error) {
 	e.setPhase(id, PhaseChecking)
-	v, err := e.fetchMetadata(ctx, req.Sequence)
+	src, channel, done, err := e.sourceFor(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	v, err := e.fetchMetadataFrom(ctx, src, channel, req.Sequence)
 	if err != nil {
 		return "", err
 	}
@@ -1266,6 +1383,11 @@ func (e *Engine) pipeline(ctx context.Context, id string, req ApplyRequest) (str
 	if err = ctx.Err(); err != nil {
 		return "", err
 	}
+	layers, err := e.stageLayers(ctx, id, v, dir)
+	if err != nil {
+		return "", err
+	}
+	target.Layers = layers
 	e.setPhase(id, PhaseWriting)
 	// The slot about to be written holds the retained previous version: it stops being one now.
 	e.mu.Lock()
@@ -1295,6 +1417,10 @@ func (e *Engine) pipeline(ctx context.Context, id string, req ApplyRequest) (str
 	if err != nil {
 		return "", err
 	}
+	e.mu.Lock()
+	current := e.st.Current
+	e.mu.Unlock()
+	e.pruneLayers(ctx, current, &target)
 	return e.afterStage(ctx, id, req, m)
 }
 
@@ -1351,6 +1477,9 @@ func (e *Engine) armLocked(ctx context.Context) error {
 	if rel.Manifest.RootHash != staged.RootHash {
 		return refuse(409, "roothash_mismatch", "the staged image does not match the record; stage it again")
 	}
+	if err = e.switchLayers(ctx, staged); err != nil {
+		return err
+	}
 	if err = e.cfg.Platform.Arm(ctx, rel); err != nil {
 		return err
 	}
@@ -1385,26 +1514,38 @@ func (e *Engine) Activate(ctx context.Context, req ActionRequest) (Operation, bo
 	})
 }
 
-// Rollback is POST /updates/rollback: arm the retained previous version and reboot.
+// Rollback is POST /updates/rollback: arm the retained previous version and reboot. During the trial boot of an
+// update (phase booted) the running release is not yet committed; the release it replaced is the one to return to,
+// as the Controller offers it and the guide describes.
 func (e *Engine) Rollback(ctx context.Context, req ActionRequest) (Operation, bool, error) {
 	return e.action(ctx, req, "rollback", func(ctx context.Context) (string, error) {
 		st := &e.st
+		current, previous := st.Current, st.Previous
 		if st.Armed != nil {
-			return "", refuse(409, "already_armed", "a release is armed; reboot or wait for the boot assessment")
+			if st.Phase != PhaseBooted {
+				return "", refuse(409, "already_armed", "a release is armed; reboot or wait for the boot assessment")
+			}
+			running := *st.Armed
+			running.Rollback = false
+			current, previous = &running, st.Current
 		}
-		if st.Previous == nil || st.Current == nil {
+		if previous == nil || current == nil {
 			return "", refuse(409, "nothing_to_roll_back", "no previous version is retained")
 		}
-		prev := *st.Previous
+		prev := *previous
 		if prev.Sequence < st.RollbackFloor {
 			return "", refuse(409, "below_rollback_floor", "the previous version is below the rollback floor")
 		}
-		if err := e.guardTarget(prev, st.Current); err != nil {
+		if err := e.guardTarget(prev, current); err != nil {
 			return "", err
 		}
-		if err := e.cfg.Platform.Rollback(ctx, *st.Current, prev); err != nil {
+		if err := e.switchLayers(ctx, prev); err != nil {
+			return "", err
+		}
+		if err := e.cfg.Platform.Rollback(ctx, *current, prev); err != nil {
 			return "", refuse(409, "previous_unavailable", "the previous version's slot or boot entry is not intact on every disk")
 		}
+		st.Current, st.Previous = current, previous
 		prev.Rollback = true
 		st.Armed = &prev
 		st.Staged = nil
@@ -1544,6 +1685,10 @@ func (e *Engine) Cancel(ctx context.Context, req ActionRequest) (Operation, bool
 		return op, false, e.save()
 	}
 	if a := e.active; a != nil {
+		if a.phase == PhaseSwapping {
+			e.mu.Unlock()
+			return Operation{}, false, refuse(409, "swap_in_progress", "the Controller swap cannot be cancelled; it restores the previous image itself if the new one fails")
+		}
 		if a.phase == PhaseWriting {
 			e.mu.Unlock()
 			return Operation{}, false, refuse(409, "write_in_progress", "the image is being written to the slots and cannot be cancelled")
@@ -1556,17 +1701,23 @@ func (e *Engine) Cancel(ctx context.Context, req ActionRequest) (Operation, bool
 		defer e.mu.Unlock()
 		now := e.cfg.Now()
 		e.updateOp(id, func(o *Operation) { o.Phase = "cancelled"; o.FinishedAt = &now; o.Progress = nil })
-		e.st.Phase = PhaseIdle
+		if !sideJob(e.opKind(id)) {
+			e.st.Phase = PhaseIdle
+		}
 		return record()
 	}
 	defer e.mu.Unlock()
 	if e.st.Phase == PhaseStaged {
 		e.st.Staged, e.st.Phase = nil, PhaseIdle
+		e.pruneLayers(ctx, e.st.Current, e.st.Previous)
 		e.removeStaging()
 		return record()
 	}
 	for _, r := range e.st.Operations {
-		if r.Op.FinishedAt == nil {
+		if r.Op.FinishedAt == nil && r.Op.Kind == "controller" {
+			return Operation{}, false, refuse(409, "swap_in_progress", "an interrupted Controller swap is resumed by repeating its request_id; it cannot be cancelled")
+		}
+		if r.Op.FinishedAt == nil && !sideJob(r.Op.Kind) {
 			// An interrupted apply: forget its partial downloads.
 			now := e.cfg.Now()
 			e.updateOp(r.Op.ID, func(o *Operation) { o.Phase = "cancelled"; o.FinishedAt = &now })

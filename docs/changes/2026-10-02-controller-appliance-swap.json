@@ -1,0 +1,83 @@
+{
+  "summary": "Phase I-4b of the immutable Nex Core plan: Core's journaled, resumable Controller appliance swap (internal/vmhost: read-only raw system image plus persistent controller-data.qcow2 deployment profile keeping the VM UUID and MAC; graceful guest-agent shutdown, reflink data checkpoint, domain redefinition, readiness probe for 10 minutes, commit keeping the old image, restore and re-probe on failure, needs_attention when that fails too), apply scope:\"controller\" in internal/nexupdate wired to it in internal/localcore, the controller_first phase and step of the pool rollout coordinator, host-recovery support for the two-disk layout, and the Pool rollout panel in the Controller UI that only shows host and master reported data. The Controller's APT update helpers and routes are kept: the guest image the profile needs is not built, so their replacement is not wired.",
+  "paths": [
+    "CHANGELOG.md",
+    "appliance/README.md",
+    "appliance/host-recovery.py",
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/README.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/guide/update-a-pool.md",
+    "docs/qa/image/phase4-appliance.md",
+    "internal/agent/pool_update.go",
+    "internal/agent/pool_update_host.go",
+    "internal/agent/pool_update_host_test.go",
+    "internal/agent/pool_update_test.go",
+    "internal/localcore/appliance_probe.go",
+    "internal/localcore/appliance_probe_test.go",
+    "internal/localcore/updates.go",
+    "internal/nexupdate/controller.go",
+    "internal/nexupdate/controller_test.go",
+    "internal/nexupdate/image.go",
+    "internal/nexupdate/offline.go",
+    "internal/protocol/poolupdate.go",
+    "internal/vmhost/appliance_swap.go",
+    "internal/vmhost/appliance_swap_test.go",
+    "internal/vmhost/engine.go",
+    "tests/test_host_recovery.py",
+    "web/src/pool-rollout.test.mjs",
+    "web/src/pool-rollout.tsx",
+    "web/src/settings.css",
+    "web/src/settings.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New docs/guide/update-a-pool.md (rollout, running_vms, pause/resume/abort/rollback_host, refusal codes) and a note in deploy-controller-appliance.md that a two-disk Controller is updated by the Core that hosts it; both and the README index entry are marked unverified because no walkthrough ran (no lab, no real Controller, no browser session).",
+    "pages": [
+      "docs/guide/update-a-pool.md",
+      "docs/guide/deploy-controller-appliance.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "POST /api/local/v1/updates/apply with scope controller now runs the Controller appliance swap (was 409 scope_unavailable); additive operation kind controller and phase swapping; peer PoolUpdateStep.action controller, PoolUpdateHostStatus.controller_vm, PoolUpdateTarget.controller_image; additive PoolUpdateRollout.phase value controller and PoolUpdateRollout.controller (PoolUpdateController). No Controller route changed. Authorization is unchanged (host-local root session and CSRF; pinned mTLS from the master); safe retry is the request_id / step_id; outage and reconnect behaviour is the journal resume; compatibility is the existing pool-update-rollout-v1 gate, and a peer without the new fields ignores controller_vm.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/local.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-4 of a proposed, not yet authorized plan; development work validated by automated tests with a fake libvirt and fake peers only, no published milestone changed (the Phase 8 Rolling updates row is updated when a lab walkthrough passes)."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The Core that hosts the Controller VM runs the swap and keeps its only record; the Controller keeps nothing. The Controller-scoped data on controller-data.qcow2 is the existing closed list (/var/lib/nex-controller, /etc/nex-controller); no new Controller-owned data.",
+    "record": "The swap's operation journal /var/lib/nex/core-local/vmhost/<request_id>.json beside the deployment journal (system image, previous image, checkpoint path, stage), the deployment journal's system and previous_system fields, the files system-<sha256>.img and controller-data.qcow2(.pre-<sequence>) in the VM's storage directory, and the rollout's controller step inside the master's pool-update.json (replica section update_rollout). A fresh Controller reads the rollout from Inventory.managed.update_rollout and the swap result from the host's update operations (Inventory.image)."
+  },
+  "verification": {
+    "method": "go test -p 1 of ./internal/vmhost ./internal/nexupdate ./internal/localcore ./internal/agent ./internal/protocol under systemd-run limits with a fake virsh and fake peers; python3 -m unittest tests.test_host_recovery; node web/src/pool-rollout.test.mjs, settings and ui tests and tsc --noEmit; scripts/generate_api.py --check; python3 tests/test_api_contract.py; scripts/check_docs.py --worktree; the repository privacy test. Simulation only: no VM, libvirt, guest, browser or pool was involved.",
+    "evidence": [
+      "docs/qa/image/phase4-appliance.md",
+      "internal/vmhost/appliance_swap_test.go",
+      "internal/nexupdate/controller_test.go",
+      "internal/agent/pool_update_test.go",
+      "internal/agent/pool_update_host_test.go",
+      "internal/localcore/appliance_probe_test.go",
+      "web/src/pool-rollout.test.mjs",
+      "tests/test_host_recovery.py"
+    ]
+  }
+}

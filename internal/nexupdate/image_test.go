@@ -510,9 +510,9 @@ func TestCheckVerifiesAndRefusesBadMetadata(t *testing.T) {
 			r.pub.serial = 2
 			r.pub.release(2, "v2", true)
 		}, "bridge_required"},
-		{"required layer this engine cannot install", func(r *rig) {
+		{"required component this engine cannot install", func(r *rig) {
 			r.pub.manifest = func(m *Manifest) {
-				m.Components = append(m.Components, Component{ID: "zfs", Kind: "layer", SHA256: strings.Repeat("b", 64), Bytes: 1, Required: true})
+				m.Components = append(m.Components, Component{ID: "controller", Kind: "vm-image", SHA256: strings.Repeat("b", 64), Bytes: 1, Required: true})
 			}
 			r.pub.serial = 2
 			r.pub.release(2, "v2", true)

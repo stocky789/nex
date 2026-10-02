@@ -311,6 +311,47 @@ func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 	}
 }
 
+// The system-image profile has no in-guest update helper: even when the single-disk bundle's helper files exist
+// beside the engine's image path, a profile seed never carries them.
+func TestProfileSeedCarriesNoUpdateHelper(t *testing.T) {
+	e := testEngine(t)
+	bundle := t.TempDir()
+	e.config.ImagePath = filepath.Join(bundle, "controller.qcow2")
+	updateDir := filepath.Join(bundle, "update")
+	if err := os.MkdirAll(updateDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"apply-update", "appliance-firstboot", "nex-controller-update.path", "nex-controller-update.service", "updates.conf"} {
+		if err := os.WriteFile(filepath.Join(updateDir, name), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := validSpec(t)
+	id := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	dir := filepath.Join(e.config.StorageDir, id)
+	j := journal{Operation: Operation{ID: s.RequestID, VMID: id}, Name: s.Name, Disk: filepath.Join(dir, "controller-data.qcow2"), System: filepath.Join(dir, "system-"+strings.Repeat("c", 64)+".img"), Bridge: e.config.Bridge}
+	if err := os.Mkdir(dir, 0711); err != nil {
+		t.Fatal(err)
+	}
+	fakeCommand(t, "genisoimage", "exit 0")
+	if err := e.seed(context.Background(), j, s); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(e.config.StateDir, id+"-seed", "user-data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	if !strings.Contains(text, "/etc/nex-controller/bootstrap.json") {
+		t.Fatalf("profile seed lacks the bootstrap credentials: %s", text)
+	}
+	for _, unwanted := range []string{"apply-update", "nex-controller-update", "/etc/nex/updates.conf", "runcmd"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("profile seed carries the update helper (%q): %s", unwanted, text)
+		}
+	}
+}
+
 func TestSeedAndDomainContainUniquePrivateConfiguration(t *testing.T) {
 	e := testEngine(t)
 	s := validSpec(t)

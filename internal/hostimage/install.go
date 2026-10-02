@@ -189,6 +189,9 @@ func (d *Disk) relay(ctx context.Context, r Runner, t *Table) error {
 func (w *Writer) makeData(ctx context.Context, disks []*Disk, layout string) error {
 	dev := NodeName(disks[0].Path, DataIndex)
 	if layout == LayoutRAID1 {
+		// No --assume-clean: the members hold whatever the disks held before, so the two copies of every block that was
+		// never written differ and a scrub would report them as mismatches. The initial resync makes them identical; it
+		// runs in the background and carries on at the first boot when the installer stops the array before it ends.
 		args := []string{"--create", mdDevice(), "--run", "--level=1", "--metadata=1.2",
 			"--name=" + DataMDName, "--bitmap=internal", "--raid-devices=" + strconv.Itoa(len(disks))}
 		for _, d := range disks {

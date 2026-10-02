@@ -94,14 +94,16 @@ def debian_sort_key(version):
     """Order versions the way dpkg does for the subset release tags use.
 
     '~' sorts below everything including the empty string, so 0.1.6~alpha1 comes
-    before 0.1.6. Anything else compares numerically per dot-separated field.
+    before 0.1.6. Anything else compares numerically per dot-separated field, and a
+    pre-release compares its digit runs as numbers so 0.1.7~dev.1000 follows 0.1.7~dev.999.
     """
     release, _, pre = version.partition("~")
     fields = []
     for part in release.split("."):
         fields.append((0, int(part)) if part.isdigit() else (1, 0, part))
+    runs = [(0, int(run), "") if run.isdigit() else (1, 0, run) for run in re.findall(r"\d+|\D+", pre)]
     # No pre-release sorts above any pre-release of the same version.
-    return (fields, pre == "", pre)
+    return (fields, pre == "", runs)
 
 
 def existing_releases(root):
@@ -134,7 +136,9 @@ def write_download_page(directory, version):
              '<meta name="viewport" content="width=device-width, initial-scale=1">',
              f"<title>Nex Core {version} downloads</title>",
              f"<h1>Nex Core {version}</h1>",
-             "<p>Development build for disposable evaluation.</p>"]
+             "<p>Development channel build of the next release, for testing only. It is replaced "
+             "by newer builds without notice.</p>" if "~dev." in version
+             else "<p>Development build for disposable evaluation.</p>"]
     for heading, names in (("Installer images", images), ("Source and compliance", documents)):
         lines.extend((f"<h2>{heading}</h2>", "<ul>"))
         for name in names:

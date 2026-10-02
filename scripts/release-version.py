@@ -11,6 +11,10 @@ its changelog does not describe.
 
 Debian sorts '~' before everything, so a pre-release sorts below its final release;
 '-' would sort above it and make 0.1.6-alpha1 look newer than 0.1.6.
+
+The development channel (the `dev` branch) numbers a build as a pre-release of the release `main` will
+publish next, `0.1.7-dev.231` for build 231, so it sorts below that release and above every release
+already published. Releasing from `main` never needs the build number.
 """
 import argparse
 import re
@@ -20,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HEADING = re.compile(r"^## \[(?P<version>[^\]]+)\]")
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$")
-PRERELEASE = re.compile(r"^(?P<release>\d+\.\d+\.\d+)-(?P<pre>[0-9A-Za-z.]+)$")
+PRERELEASE = re.compile(r"^(?P<release>\d+\.\d+\.\d+)-(?P<pre>[0-9A-Za-z.-]+)$")
 
 
 class ReleaseVersionError(RuntimeError):
@@ -65,7 +69,7 @@ def debian_version(version):
     match = PRERELEASE.match(version)
     if not match:
         return version
-    return f"{match.group('release')}~{match.group('pre')}"
+    return f"{match.group('release')}~{match.group('pre').replace('-', '~')}"
 
 
 def resolve(tag, text):
@@ -105,6 +109,30 @@ def current(text):
     return versions[0], debian_version(versions[0])
 
 
+def sort_key(version):
+    """Order of two CHANGELOG versions: numeric release, then a final above its pre-releases."""
+    release, _, pre = version.partition("-")
+    return tuple(int(part) for part in release.split(".")), pre == "", pre
+
+
+def dev_version(text, stable_text, build):
+    """The version of development build `build`: a pre-release of the next stable release.
+
+    The next release is the newest heading when `main` has not published it yet (it was cut on
+    `dev`), otherwise that heading with the patch number raised by one.
+    """
+    top = current(text)[0]
+    published = current(stable_text)[0]
+    if sort_key(published) > sort_key(top):
+        raise ReleaseVersionError(
+            f"main already published {published}, newer than dev's {top}; merge main into dev first, "
+            "or this build would sort below a stable release")
+    if top == published:
+        major, minor, patch = top.partition("-")[0].split(".")
+        top = f"{major}.{minor}.{int(patch) + 1}"
+    return f"{top}-dev.{build}"
+
+
 def notes(text, version):
     """The CHANGELOG body of one version heading, for use as release notes."""
     lines = text.splitlines()
@@ -124,6 +152,13 @@ def notes(text, version):
     return "\n".join(body).strip() + "\n"
 
 
+def unreleased_notes(text):
+    """What a development build ships: [Unreleased] without its maintainer instruction block."""
+    body = "\n".join(line for line in notes(text, "Unreleased").splitlines()
+                     if not line.lstrip().startswith(">")).strip()
+    return (body or "No changes since the last stable release.") + "\n"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -131,23 +166,35 @@ def main(argv=None):
     source.add_argument("--current", action="store_true",
                         help="newest CHANGELOG version, without tag validation")
     parser.add_argument("--changelog", default=str(ROOT / "CHANGELOG.md"))
+    parser.add_argument("--channel", choices=("stable", "dev"), default="stable",
+                        help="dev numbers a build of the dev branch; needs --current, --build and --stable-changelog")
+    parser.add_argument("--build", type=int, help="development build number (git rev-list --count HEAD)")
+    parser.add_argument("--stable-changelog",
+                        help="CHANGELOG.md of main, to learn which release is already published")
     parser.add_argument("--format", choices=("debian", "tag", "both"), default="debian",
                         help="debian prints 0.1.6~alpha1; tag prints 0.1.6-alpha1")
     parser.add_argument("--notes", action="store_true",
                         help="print the version's CHANGELOG section instead of the version")
     args = parser.parse_args(argv)
+    if args.channel == "dev" and not (args.current and args.build and args.stable_changelog):
+        parser.error("--channel dev needs --current, --build and --stable-changelog")
     try:
         text = Path(args.changelog).read_text()
+        stable_text = Path(args.stable_changelog).read_text() if args.stable_changelog else ""
     except OSError as error:
         print(f"release-version: {error}", file=sys.stderr)
         return 1
     try:
-        tag_version, deb = current(text) if args.current else resolve(args.tag, text)
+        if args.channel == "dev":
+            tag_version = dev_version(text, stable_text, args.build)
+            deb = debian_version(tag_version)
+        else:
+            tag_version, deb = current(text) if args.current else resolve(args.tag, text)
     except ReleaseVersionError as error:
         print(f"release-version: {error}", file=sys.stderr)
         return 1
     if args.notes:
-        print(notes(text, tag_version), end="")
+        print(unreleased_notes(text) if args.channel == "dev" else notes(text, tag_version), end="")
     elif args.format == "debian":
         print(deb)
     elif args.format == "tag":

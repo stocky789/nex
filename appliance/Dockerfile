@@ -6,4 +6,5 @@ RUN python3 -c 'import urllib.request; urllib.request.urlretrieve("https://go.de
 ENV PATH="/usr/local/go/bin:${PATH}" GOTOOLCHAIN=local
 ENV LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg
 COPY build-inside.sh /usr/local/bin/nex-appliance-build
+COPY build-controller-payload.sh /usr/local/bin/nex-appliance-controller-payload
 ENTRYPOINT ["/usr/local/bin/nex-appliance-build"]

@@ -1,10 +1,12 @@
 # Immutable Nex Core
 
-Status: **proposed, not authorized.** Date: 2026-10-01. Scope: turn Nex Core from a mutable Debian host
-managed by `apt` into an image-based host with a verified read-only root, atomic A/B updates with
+Status: **options approved by the project owner on 2026-10-02 (UEFI-only image edition; Debian stays the package source; one root
+signature; no remote publishing); partly implemented, simulation-tested only.** Date: 2026-10-01. Scope: turn Nex Core from a mutable
+Debian host managed by `apt` into an image-based host with a verified read-only root, atomic A/B updates with
 automatic rollback, persistent state kept apart from software, optional features as signed layers, and a
 reproducible, auditable image build. Debian 13 stays the package source; the immutable layer is built on it.
-Nothing here is implemented. Every `[INFERENCE]` marker is an unverified claim that a Phase I-0 spike must settle.
+What exists and what does not is in [Implementation status (2026-10-02)](#implementation-status-2026-10-02); the sections below keep
+their original proposal wording, and every `[INFERENCE]` marker there is an unverified claim unless that section says it was run.
 
 - **API impact:** changed contract (existing update/status operations, host observed state) and new
   contract (image stage/activate/rollback, pool rollout job, layer inventory/ensure, on-demand payload fetch).
@@ -17,6 +19,42 @@ Nothing here is implemented. Every `[INFERENCE]` marker is an unverified claim t
 - **Architecture invariant check:** Core runs staging, verification, activation, rollback and the pool rollout.
   The Controller only submits requests and displays host-reported results, and no update step depends on it
   staying connected.
+
+## Implementation status (2026-10-02)
+
+Written from the QA records in `docs/qa/image/` and from what ran in this session. **Every result is simulation only**: unit tests,
+fake libvirt and fake peers, Docker builds, and single disposable QEMU/KVM guests on one workstation. No physical hardware, firmware,
+Secure Boot, TPM, md RAID mirror on real disks, three-host pool or browser walkthrough of the new screens was involved. "Done" below
+means the gate's items were observed in that environment, not that the phase is accepted.
+
+| Phase | State | Evidence and what is missing |
+|---|---|---|
+| **I-0** | **Partly done** | Spikes S1-S6 and S9 ([phase0.md](../qa/image/phase0.md)) and S7 ([phase2-installer.md](../qa/image/phase2-installer.md)). **S8** (full size budget) not run. Owner decisions recorded: UEFI-only image edition, Debian stays the package source (policy wording now in `AGENTS.md`, `PRODUCT.md`, `README.md`), one root signature, no remote publishing, private hosts never in tracked files. **Still open:** CDDL module redistribution (layers are internal-lab only), Secure Boot posture beyond "supported, not required", release-key custody, reinstall versus conversion of existing dev hosts. |
+| **I-1** Read-only classic | **Partly done** | Separate `/var`, read-only root with `/etc` and `/root` kept on `/var` by an initramfs script, package installs in a remount window, the host package trim and the system-disk replacement changes: change record `docs/changes/2026-10-01-readonly-classic-root.json`. Verified by Go unit tests, `installer/check.sh` and a simulated QEMU host (`readonly_root.py`) only; **not run:** a real Debian Installer run, the installed `nex-core-local` package, GRUB and UEFI boot of it, a real mirror rebuild. The classic edition keeps its `apt` update path, the Controller `.deb` and the single-disk appliance until the plan retires them. |
+| **I-2** Image, layers, trim | **Partly done** | `image/` build, `internal/hostimage`, installer payload, layers and the double build: [phase2-build.md](../qa/image/phase2-build.md), [phase2-installer.md](../qa/image/phase2-installer.md), [phase2-layers.md](../qa/image/phase2-layers.md), [phase2-repro.md](../qa/image/phase2-repro.md) (base image byte-identical across two builds; layers and the Nex-built debs were not double-built). Not run: licence gate D5 inspection, physical install. |
+| **I-3** A/B, verity, update API | **Partly done** | Engine, boot wiring, rollback, Controller relay, layers and offline media: [phase3-engine.md](../qa/image/phase3-engine.md), [phase3-boot.md](../qa/image/phase3-boot.md), [phase3-reproof.md](../qa/image/phase3-reproof.md) (its own "Not run" lists apply), [phase3-controller.md](../qa/image/phase3-controller.md), [phase3-layers-update.md](../qa/image/phase3-layers-update.md). VM proof on a single disk only; md mirror, Secure Boot and hardware not run. |
+| **I-4** Appliance and pool rollout | **Partly done** | Coordinator ([phase4-rollout.md](../qa/image/phase4-rollout.md), fake peers) and the journaled appliance swap ([phase4-appliance.md](../qa/image/phase4-appliance.md), fake libvirt). **New:** the Controller guest image profile (`image/controller/`, `appliance/build.py --profile controller`), the deploy wiring (`core-local-setup configure --controller-image-sha256`, `nex-core-local --controller-system-image`) and a QEMU boot of the guest: [phase4-controller-image.md](../qa/image/phase4-controller-image.md). **Not run:** a Core deployment of that image, a swap or a restore on a real guest, the three-host pool, quorum and fencing behaviour, the Controller UI in a browser against any of it. |
+| **I-5** Secure Boot / TPM | **Not started** | The Controller guest image and its UKI are unsigned; its domain pins UEFI with Secure Boot off. |
+
+Cross-cutting items:
+
+- **CI:** `.github/workflows/image.yml` and `.gitea/workflows/image.yml` exist (forge-only jobs: layout tests, host image build and boot,
+  tamper and A/B proof, Controller guest build and boot, double build). **They have not run on any forge**; `tests/test_ci_security.py`
+  pins their shape. `github.yml` is unchanged.
+- **Controller update helpers:** removed only where the swap replaces them: the profile's cloud-init seed no longer carries
+  `apply-update` or the update units, and the guest image has no `apt` or helper. **Still present, for the classic edition and the
+  single-disk appliance:** `packaging/controller/{apply-update,nex-controller-update.path,nex-controller-update.service,postinst,prerm}`,
+  `appendUpdateBootstrap` (single-disk seeds), the appliance build's copies, the Controller `.deb`, and the Controller's own APT routes
+  (`GET/POST /api/v1/updates`, `internal/controller/updates.go`) and Settings panel. They go with the classic edition.
+- **Deviations from the plan text:** the guest's `/etc` is the same persistent overlay as the host's (upper layer on the data disk), not a
+  bind mount of `/etc/nex-controller`; `/etc/nex-controller` therefore lives on `controller-data.qcow2` through the overlay and recovery
+  sees the same two guest paths. The release carries the Controller image as an on-demand `vm-image` component, `controller-system.img`,
+  a raw GPT disk (ESP, erofs, verity) rather than a bare erofs.
+- **Open:** deployment of the profile by the local deploy page end to end; a real swap (reflink checkpoint, libvirt redefine, readiness,
+  restore); host-recovery export of a swapped Controller; the Controller UI for choosing the profile; the guide pages stay marked
+  unverified; reproducibility of the Controller guest image (a double build was not run; the release step alone repeated byte-identical
+  over one tree); source delivery for `image/` (the source archive does not contain it); layers' double build; the standalone Controller
+  `.deb` decision (open question 7) and retirement of the classic edition.
 
 ## Feasibility verdict and how imaging works (revision 2026-10-01)
 
@@ -412,6 +450,19 @@ Removed: `packaging/controller/{apply-update,nex-controller-update.path,nex-cont
 stages through the identical pipeline. A bundle's `channel.json` has its own `expires` (default 180 days); a clock earlier than `created` is
 refused. Non-slot items (Controller image, Windows driver ISO) are `on_demand` components fetched to `/var/lib/nex/payload/<sha256>/` by
 `POST …/updates/components/{id}/fetch`, extending the netinst model (`installer/netinst-manifest.py:51`); the offline ISO still bundles them.
+
+**Implementation status, 2026-10-02 (Phase I-3d; unit-tested in simulation only).** The settings, media, import and fetch routes exist
+on the host and are relayed by the Controller through the existing `POST /api/v1/hosts/{id}/updates/{action}` (`settings`, `media`,
+`import`, `fetch`; host-scoped, relay only, nothing stored by the Controller). API impact: **new contract**
+([docs/API.md](../API.md#image-edition-layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)); state owner `core`
+(`/etc/nex/updates.conf`, `/var/lib/nex/image/state.json`, `/var/lib/nex/layers/`, `/var/lib/nex/payload/`; a fresh Controller
+recovers it from `Inventory.image`). Decisions applied: layers are staged with the base before the slot is written and recorded in
+`enabled.json` only at activate (rollback switches them back); a layer's `requires_base` must equal the release's
+`<label>-<sequence>` (`layer_base_mismatch`); an `on_demand` layer follows its base only where the operator enabled it, and
+`on_demand` payloads carry a `name` and are placed at `/var/lib/nex/payload/<sha256>/<name>`; `channel_serial` is kept per update server
+and channel (a bundle's channels each have their own, nothing is reset by a settings change; the rollback floor spans them); a host clock earlier than the manifest's
+`created` is refused for every source. The `slot-image` stays a zstd tar, one root signature, rollback until the next stage; releases
+are local, nothing is published remotely.
 
 ### Update API
 

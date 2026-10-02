@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Publish a signed Debian APT repository layout for Nex packages."""
+"""Publish a signed Debian APT repository layout for Nex packages.
+
+One repository root is one channel. The stable archive is the root itself; the development channel is a
+second, independent repository in its subdirectory (`--repo-root <root>/dev`, same suite name), so each has
+its own pool, indexes and retention and one signing key serves both.
+"""
 import argparse
+import functools
 from datetime import datetime, timezone
 from email.utils import format_datetime
 import gzip
@@ -139,6 +145,28 @@ def copy_deb(deb, repo_root, component):
     if dest.is_symlink():
         raise AptPublishError(f"refusing symlink after copy: {dest}")
     return Path("pool") / component / letter / package / deb.name
+
+
+def prune_pool(repo_root, component, keep):
+    """Delete all but the newest `keep` versions of every package in the component's pool.
+
+    Each nex-core-local package embeds the Controller appliance, so a channel that publishes on every
+    merge would otherwise grow without bound.
+    """
+    def by_version(left, right):
+        a, b = left.name.split("_")[1], right.name.split("_")[1]
+        return debian_newer(a, b) - debian_newer(b, a)
+
+    removed = []
+    for package_dir in sorted(_safe_under(repo_root, Path("pool") / component).glob("*/*")):
+        if package_dir.is_symlink() or not package_dir.is_dir():
+            continue
+        debs = sorted((deb for deb in package_dir.glob("*.deb") if not deb.is_symlink()),
+                      key=functools.cmp_to_key(by_version))
+        for deb in debs[:-keep]:
+            deb.unlink()
+            removed.append(deb.name)
+    return removed
 
 
 def _deb_control_fields(deb_path):
@@ -459,12 +487,14 @@ def init_key(gpg_home):
     raise AptPublishError(f"failed to create signing key: {last_error}")
 
 
-def publish(repo_root, codename, component, arch, deb_paths, gpg_home):
+def publish(repo_root, codename, component, arch, deb_paths, gpg_home, keep=None):
     repo_root = _ensure_real_dir(repo_root, create=True)
     _ensure_real_dir(_safe_under(repo_root, Path("pool") / component), create=True)
     collect = collect_debs(deb_paths) if deb_paths else []
     for deb in collect:
         copy_deb(deb, repo_root, component)
+    if keep:
+        prune_pool(repo_root, component, keep)
     packages_path, packages_gz_path, packages_text = scan_packages(
         repo_root, codename, component, arch)
     release_path = write_release(
@@ -485,17 +515,21 @@ def main(argv=None):
     parser.add_argument("--component", default="main")
     parser.add_argument("--arch", default="amd64")
     parser.add_argument("--gpg-home", default="/etc/nex-apt/gnupg")
+    parser.add_argument("--keep", type=int, metavar="N",
+                        help="keep only the newest N versions of each package (default: keep all)")
     parser.add_argument("--init-key", action="store_true",
                         help="create a non-interactive archive signing key and exit")
     parser.add_argument("debs", nargs="*",
                         help=".deb paths or a directory of .deb files")
     args = parser.parse_args(argv)
+    if args.keep is not None and args.keep < 1:
+        parser.error("--keep must be at least 1")
     try:
         if args.init_key:
             if args.debs:
                 parser.error("--init-key does not take package paths")
             return init_key(args.gpg_home)
-        publish(args.repo_root, args.codename, args.component, args.arch, args.debs, args.gpg_home)
+        publish(args.repo_root, args.codename, args.component, args.arch, args.debs, args.gpg_home, args.keep)
     except AptPublishError as error:
         print(f"apt-publish: {error}", file=sys.stderr)
         return 1

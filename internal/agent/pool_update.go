@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -140,6 +141,13 @@ func NewPoolUpdateCoordinator(s *Store) *poolUpdateCoordinator {
 
 // RunPoolUpdateCoordinator advances the rollout until ctx ends. It is cheap while none exists.
 func RunPoolUpdateCoordinator(ctx context.Context, s *Store) {
+	// NEX_POOL_UPDATE_STEP_TIMEOUT shortens the six-hour step timeout (a Go duration, one second or
+	// more) so a lab can watch a refuse-policy pause; the unit's environment is root's to set.
+	if v := os.Getenv("NEX_POOL_UPDATE_STEP_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= time.Second {
+			poolUpdateStepTimeout = d
+		}
+	}
 	c := NewPoolUpdateCoordinator(s)
 	ticker := time.NewTicker(poolUpdateTickInterval)
 	defer ticker.Stop()
@@ -385,6 +393,13 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 				r.Hosts[i].DeadlineAt = now.Add(poolUpdateBootDeadline)
 			}
 		}
+		if ctl := r.Controller; ctl != nil && ctl.Stage == protocol.PoolUpdateControllerSwap {
+			// A failed swap rolled the Controller back; resuming asks for a new swap, not a replay of the failed one.
+			if ctl.Error != "" {
+				ctl.Attempt++
+			}
+			ctl.Error, ctl.StartedAt = "", now
+		}
 	case "abort":
 		if !poolUpdateActive(r) {
 			return nil, updateRefusal("rollout_finished", "the rollout is %s", r.State)
@@ -575,6 +590,10 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 	now := poolUpdateNow()
 	if r.PauseRequested && poolUpdateBetweenHosts(r) {
 		poolUpdatePause(r, protocol.PoolUpdatePausedByOperator, "paused by the operator")
+		return
+	}
+	if r.Phase == "controller" {
+		c.controllerFirst(ctx, r, membership)
 		return
 	}
 	if r.Phase == "staging" {
@@ -801,7 +820,66 @@ func (c *poolUpdateCoordinator) stageEverywhere(ctx context.Context, r *protocol
 		}
 	}
 	if all {
-		r.Phase = "hosts"
+		r.Phase = "controller"
+	}
+}
+
+// controllerFirst is the controller_first step: before any host activates, the host that runs the
+// Controller VM replaces its appliance image, so the Controller is upgraded before Core. A release
+// without a Controller image, or a pool with no Controller appliance on any host, goes straight on
+// (a Controller outside the pool is updated on its own host with scope "controller"). The swap itself
+// is the host's journaled operation; this only asks and waits.
+func (c *poolUpdateCoordinator) controllerFirst(ctx context.Context, r *protocol.PoolUpdateRollout, membership protocol.PoolMembership) {
+	now := poolUpdateNow()
+	if r.Controller == nil {
+		r.Controller = &protocol.PoolUpdateController{Stage: protocol.PoolUpdateControllerScan, StartedAt: now}
+	}
+	ctl := r.Controller
+	waiting := func(what string) {
+		if now.Sub(ctl.StartedAt) >= poolUpdateStepTimeout {
+			poolUpdatePause(r, protocol.PoolUpdateStepTimeout, what)
+		}
+	}
+	switch ctl.Stage {
+	case protocol.PoolUpdateControllerScan:
+		for _, host := range r.Hosts {
+			member, ok := poolMemberByID(membership, host.HostID)
+			if !ok {
+				poolUpdatePause(r, protocol.PoolUpdateMembershipChanged, "host "+host.HostID+" is no longer a member")
+				return
+			}
+			status, err := c.peers.Status(ctx, member)
+			if err != nil || status.ControllerVM && (status.Target == nil || status.Target.Sequence != r.Sequence) {
+				waiting(host.HostID + ": the host cannot be reached to look for the Controller")
+				return
+			}
+			if status.ControllerVM && status.Target.ControllerImage {
+				ctl.Stage, ctl.HostID, ctl.StartedAt = protocol.PoolUpdateControllerSwap, host.HostID, now
+				return
+			}
+		}
+		ctl.Stage, r.Phase = protocol.PoolUpdateControllerDone, "hosts"
+	case protocol.PoolUpdateControllerSwap:
+		member, ok := poolMemberByID(membership, ctl.HostID)
+		if !ok {
+			poolUpdatePause(r, protocol.PoolUpdateMembershipChanged, "host "+ctl.HostID+" is no longer a member")
+			return
+		}
+		res, err := c.peers.Step(ctx, member, protocol.PoolUpdateStep{RolloutID: r.ID, StepID: poolUpdateStepID(r.ID, ctl.HostID, "controller", ctl.Attempt),
+			Action: "controller", Sequence: r.Sequence})
+		switch {
+		case err != nil:
+			waiting(ctl.HostID + ": the host cannot be reached")
+		case res.Code != "":
+			// controller_rolled_back (the old image and its data are back) or controller_needs_attention:
+			// either way an operator decides; nothing else of the pool has been touched yet.
+			ctl.Error = res.Code + ": " + res.Message
+			poolUpdatePause(r, protocol.PoolUpdateNeedsAttention, ctl.HostID+": "+ctl.Error)
+		case res.Done:
+			ctl.Stage, r.Phase = protocol.PoolUpdateControllerDone, "hosts"
+		default:
+			waiting(ctl.HostID + ": the Controller swap did not finish in time")
+		}
 	}
 }
 
@@ -869,6 +947,13 @@ func poolUpdateQuorumGate(ctx context.Context, s *Store, membership protocol.Poo
 	nodes, want, _ := poolClusterIntent(s, membership)
 	clustered := poolHasClusteredStorage(s)
 	q, err := localQuorum(ctx)
+	// A host with no corosync-quorumtool has no cluster software (an image without the nex-cluster
+	// layer): the pool's cluster intent cannot form, nothing votes and no watchdog is fed, so there
+	// is no quorum to lose. Found by the three-host lab: without this a three-host image pool could
+	// never leave quorum_margin.
+	if errors.Is(err, exec.ErrNotFound) && !clustered {
+		return nil
+	}
 	if err != nil || !q.Observed {
 		if want || clustered {
 			return updateRefusal(protocol.PoolUpdateQuorumMargin, "this pool keeps a Corosync cluster and the master cannot read its quorum, so it cannot tell what stopping %s would cost", hostID)

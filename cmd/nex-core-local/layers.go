@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"nex.local/nex/internal/vmhost"
+	"nex.local/nex/internal/nexupdate"
 )
 
 // runLayers is the on-host entry for optional feature layers (nex-layers.service and the operator).
@@ -21,7 +21,7 @@ func runLayers(args []string, out io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	l := vmhost.NewLayers(vmhost.DefaultLayerConfig())
+	l := nexupdate.HostLayers()
 	switch args[0] {
 	case "activate":
 		report := l.Activate(ctx)

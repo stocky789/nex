@@ -245,10 +245,19 @@
       </div>
       <div class="release-details">
         <div>
-          <span class="release-kicker">Development download</span
+          <span class="release-kicker">Stable channel</span
           ><strong><a href="https://nexvirtualization.com/downloads/latest/">Latest Nex Core build</a></strong>
           <p>
-            Check the build’s release notes and verification limits before evaluating it.
+            Releases from the main branch. Check the build’s release notes and verification
+            limits before evaluating it.
+          </p>
+        </div>
+        <div>
+          <span class="release-kicker">Development channel</span
+          ><strong><a href="https://nexvirtualization.com/downloads/dev/latest/">Latest development build</a></strong>
+          <p>
+            A pre-release of the next stable release, built from every change merged for it.
+            Expect rough edges; choose the channel in Nex Core and Nex Controller settings.
           </p>
         </div>
         <div>
@@ -303,9 +312,9 @@
           Can I download or use Nex today?<span aria-hidden="true">+</span>
         </summary>
         <p>
-          Approved testers can use the latest development build from this private
-          site. Use it only in disposable environments; installation, upgrades and
-          recovery are still being tested.
+          Approved testers can use the latest stable or development build from this
+          private site. Use either only in disposable environments; installation,
+          upgrades and recovery are still being tested.
         </p>
       </details>
       <details>
