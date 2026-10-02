@@ -5,7 +5,7 @@ from pathlib import Path
 import re, subprocess, tempfile
 source=Path('installer/gui/nex-wizard.c').read_text()
 assert 'keyboard_changed(GTK_COMBO_BOX(keymap), NULL); prepare();' in source, 'Initial and restarted wizard must apply its displayed layout'
-callback=source.split('static void keyboard_changed(',1)[1].split('static gboolean collect(void)',1)[0]
+callback=source.split('static void keyboard_changed(',1)[1].split('static gboolean collect_repair(void)',1)[0]
 keymaps=re.search(r'static const gchar \*keymaps\[\] = .*?;',source).group()
 check=r'''
 #include <glib.h>

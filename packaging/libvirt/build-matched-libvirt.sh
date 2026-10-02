@@ -43,14 +43,24 @@ exec > >(tee "$output/build.log") 2>&1
 # writers, then release the lock before the CPU-heavy package build.
 readonly apt_cache_lock=/apt-cache/recovery-libvirt-apt.lock
 
-# Slim builder images often lack CA certificates. Bootstrap them from the image's
-# default Debian HTTP mirrors before pinning immutable HTTPS snapshots, otherwise
-# apt fails SSL verification and cannot install ca-certificates itself.
+# Slim builder images often lack CA certificates. Bootstrap them from the same pinned
+# snapshots over plain HTTP (apt still verifies the signed indexes), otherwise apt fails
+# SSL verification and cannot install ca-certificates itself. The live Debian mirror must
+# not be used: it ships newer libssl3t64/openssl than the snapshot, and apt cannot
+# downgrade them back for libssl-dev.
 readonly -a apt_bootstrap=(
+    -o Dir::Etc::sourcelist=/build/bootstrap-sources.list
+    -o Dir::Etc::sourceparts=-
+    -o Acquire::Check-Valid-Until=false
     -o Dir::Cache::archives=/apt-cache
     -o Dir::Cache::archives::partial=/apt-cache/partial
 )
 if ! test -s /etc/ssl/certs/ca-certificates.crt; then
+    cat > /build/bootstrap-sources.list <<SOURCES
+deb ${source_snapshot/https:/http:} trixie main
+deb ${source_snapshot/https:/http:} trixie-updates main
+deb ${security_snapshot/https:/http:} trixie-security main
+SOURCES
     flock "$apt_cache_lock" apt-get "${apt_bootstrap[@]}" update
     flock "$apt_cache_lock" apt-get "${apt_bootstrap[@]}" install -y --no-install-recommends ca-certificates
 fi
