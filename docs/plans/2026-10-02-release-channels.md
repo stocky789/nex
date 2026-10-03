@@ -44,6 +44,13 @@ above everything already released (dpkg and the image publisher's `sequence`-equ
   cannot sort above that already published alpha/rc.
 - Release notes are `[Unreleased]`, preceded by the cut heading's entries when that heading is ahead of `main`.
 
+Release cutover (2026-10-03): project owner requested the changelog/version bump to **0.4.20**.
+The current Unreleased entries move under that heading; Unreleased remains empty. This prepares
+the source release identity only, without tagging, publishing or promoting branches.
+**API impact: none** — version resolution already reads the newest changelog heading; no
+Controller/Core or client-facing contract changes. **Guide impact: none** — documented publishing
+steps are unchanged. Both release workflow copies continue using the same version resolver.
+
 Switching a host from Development to Stable never downgrades it: apt does not install an older version by itself and
 the image engine refuses a `sequence` below the host's `rollback_floor`. The host stays put until Stable publishes
 something newer. The guide says so next to the selector.

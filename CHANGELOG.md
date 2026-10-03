@@ -6,9 +6,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Stable builds (from `main`) use the newest numbered changelog heading (`0.4.19` →
-> Debian `0.4.19`); development builds (from `dev`) are pre-releases of the next release (`0.4.20-dev.231` →
-> Debian `0.4.20~~dev.231`) and ship the `[Unreleased]` entries. Entries under `[Unreleased]` do not change a stable build version.
+> development software. Stable builds (from `main`) use the newest numbered changelog heading (`0.4.20` →
+> Debian `0.4.20`); development builds (from `dev`) are pre-releases of the next release (`0.4.21-dev.231` →
+> Debian `0.4.21~~dev.231`) and ship the `[Unreleased]` entries. Entries under `[Unreleased]` do not change a stable build version.
 
 ## [Unreleased]
 
@@ -17,6 +17,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > create a new `## [x.y.z]` heading and do **not** append under a numbered version while
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
+
+## [0.4.20] — 2026-10-03
 
 ### Minor Feature
 
