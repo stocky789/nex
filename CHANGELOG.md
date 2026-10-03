@@ -24,6 +24,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Release builds no longer stop because the compliance manifests recorded a different version than the release file names.
 - The Controller image boot check now finds the image the Controller appliance build produces.
 - Backup forgetting and SFTP read-only tests, and the host-network tests, no longer depend on running as a normal user or on a systemd host, so they pass in CI.
+- A Nex Core host no longer races its own report counter while registering the two-host witness, and a large pool authority push is no longer cut off by a fixed 15-second request limit.
 
 ### Miscellaneous
 

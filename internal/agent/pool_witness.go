@@ -43,7 +43,9 @@ func ReconcilePoolWitness(ctx context.Context, s *Store) error {
 	if readyPoolMemberCount(membership) != 2 || membership.StorageLease != nil || membership.HostFencingDisabled {
 		return nil
 	}
-	c, err := client(s.State, true)
+	// Only the Controller identity fields: copying the whole State would race with Run,
+	// which advances the report sequence while this worker is in flight.
+	c, err := client(State{Controller: s.State.Controller, ControllerServerName: s.State.ControllerServerName, TrustPEM: s.State.TrustPEM, CertificatePEM: s.State.CertificatePEM, KeyPEM: s.State.KeyPEM}, true)
 	if err != nil {
 		return err
 	}

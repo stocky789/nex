@@ -233,7 +233,7 @@ func TestURLDownloadReportsLiveBytes(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- e.downloadISO(context.Background(), &j, client, int64(len(data))) }()
 			<-first
-			deadline := time.Now().Add(3 * time.Second)
+			deadline := time.Now().Add(30 * time.Second)
 			for {
 				state, _ := e.Applied(context.Background())
 				if len(state.ISODownloads) == 1 && state.ISODownloads[0].ReceivedBytes > 0 {

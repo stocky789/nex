@@ -1534,6 +1534,9 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 		return err
 	}
 	defer client.CloseIdleConnections()
+	// The caller's budget (the context below) bounds the push; the client's own 15 s cap
+	// would cut off a member still verifying a large authority the caller allowed time for.
+	client.Timeout = 0
 	work, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// The status read is also how this master learns the member's certified public key
