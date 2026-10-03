@@ -228,6 +228,13 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   guest**), or the VM was created before clipboard support (**Clipboard: Not available** in the
   **Guest tools** block of its panel, with *Channel missing* under **Why?**). Install the
   [guest tools](guest-tools.md) or use **Type into VM**.
+- **Wayland desktop leaves black blocks, cursor trails, or ghosted windows in the console:** the
+  browser console is VNC over VirtIO display. Hyprland damage tracking and hardware cursors leave
+  stale tiles on that path. In the guest force software cursors and full redraws, for example in
+  Omarchy's `~/.config/hypr/looknfeel.lua`:
+  `cursor = { no_hardware_cursors = true }` and `debug = { damage_tracking = 0 }`, disable
+  animations, keep monitor scale at 1, then reload the compositor and reopen the console tab.
+  This is a guest compositor setting, not a missing Spice display.
 - **Resize guest to window cannot be chosen:** the guest has not reported that it can act on
   a resize request — an installer before drivers load, or a guest without the
   [guest tools](guest-tools.md), whose agent is what applies the new resolution. The option

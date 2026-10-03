@@ -114,6 +114,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.4.18] — 2026-09-28
 
+### Minor Feature
+
+- Guest OS icons now cover more popular distros, including Omarchy, AnduinOS, PikaOS,
+  BigLinux, Q4OS, Artix, AerynOS, MiniOS, TUXEDO OS, Puppy, SparkyLinux, Linux Lite,
+  FydeOS, KDE Linux, ZimaOS and Bluestar.
+
 ### Bug Fixes
 
 - After a host reboot, Core no longer stays stuck with unknown host and VM state when the
