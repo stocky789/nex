@@ -431,7 +431,7 @@ class ControllerImageTest(unittest.TestCase):
 class ZfsModuleBuildTest(unittest.TestCase):
     """scripts/build-zfs-modules.sh in a copy of the tree with a fake docker: only the sources the builder is given matter."""
 
-    def sources(self, **env):
+    def sources(self, relative_paths=False, **env):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "scripts").mkdir()
@@ -441,25 +441,47 @@ class ZfsModuleBuildTest(unittest.TestCase):
             (root / "image/snapshot").write_text("20300101T000000Z\n")
             (root / "bin").mkdir()
             fake = root / "bin/docker"
-            fake.write_text('#!/bin/sh\n[ "$1" != run ] || cat >/dev/null\nexit 0\n')
+            fake.write_text(
+                '#!/usr/bin/env python3\n'
+                'import pathlib, sys\n'
+                'if sys.argv[1] == "run":\n'
+                '    args = sys.argv[2:]\n'
+                '    mounts = {}\n'
+                '    for i, arg in enumerate(args):\n'
+                '        if arg == "-v":\n'
+                '            source, target, *_ = args[i + 1].split(":")\n'
+                '            path = pathlib.Path(source)\n'
+                '            if not path.is_absolute() or not path.exists():\n'
+                '                sys.exit("invalid Docker bind-mount source: " + source)\n'
+                '            mounts[target] = path\n'
+                '    (mounts["/out"] / "signed-module-test").write_bytes(\n'
+                '        mounts["/keys/module.key"].read_bytes() + mounts["/keys/module.crt"].read_bytes())\n'
+                '    sys.stdin.buffer.read()\n')
             fake.chmod(0o755)
             (root / "module.key").write_text("key\n")
             (root / "module.crt").write_text("cert\n")
             environ = {k: v for k, v in os.environ.items() if not k.startswith("NEX_") and k != "ZFS_DKMS_VERSION"}
-            environ.update(PATH=f"{root / 'bin'}:{os.environ['PATH']}", NEX_MODULE_KEY=str(root / "module.key"),
-                           NEX_MODULE_CERT=str(root / "module.crt"), **env)
+            environ.update(PATH=f"{root / 'bin'}:{os.environ['PATH']}",
+                           NEX_MODULE_KEY="module.key" if relative_paths else str(root / "module.key"),
+                           NEX_MODULE_CERT="module.crt" if relative_paths else str(root / "module.crt"), **env)
             subprocess.run(["sh", str(root / "scripts/build-zfs-modules.sh"), "--base-tree", str(root / "base"), "--kver", "6.12.0-test",
-                            "--out", str(root / "out")], env=environ, check=True, capture_output=True)
-            return (root / ".cache/image-builder/zfs/sources.list").read_text()
+                            "--out", "out" if relative_paths else str(root / "out")],
+                           cwd=root, env=environ, check=True, capture_output=True)
+            return ((root / ".cache/image-builder/zfs/sources.list").read_text(),
+                    (root / "out/signed-module-test").read_bytes())
+
+    def test_relative_paths_supply_the_selected_signing_material_and_output(self):
+        _, material = self.sources(relative_paths=True)
+        self.assertEqual(material, b"key\ncert\n")
 
     def test_modules_are_built_from_the_snapshot_the_image_is_pinned_to(self):
         # The layer's zfsutils-linux and zfs-zed come from image/snapshot; modules from another snapshot would be another OpenZFS.
-        text = self.sources()
+        text, _ = self.sources()
         self.assertIn("snapshot.debian.org/archive/debian/20300101T000000Z/", text)
         self.assertIn("snapshot.debian.org/archive/debian-security/20300101T000000Z/", text)
 
     def test_an_explicit_snapshot_still_overrides_the_pin(self):
-        text = self.sources(NEX_SNAPSHOT="20310202T000000Z")
+        text, _ = self.sources(NEX_SNAPSHOT="20310202T000000Z")
         self.assertIn("archive/debian/20310202T000000Z/", text)
         self.assertNotIn("20300101T000000Z", text)
 

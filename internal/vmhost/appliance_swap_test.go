@@ -401,6 +401,110 @@ func TestSwapRestoreInterruptedAtEveryStepResumes(t *testing.T) {
 	}
 }
 
+func TestSwapRollbackRestoresDataAfterFailedImageAutostartsAgain(t *testing.T) {
+	for _, stage := range []string{swapRestore, swapRedefine} {
+		for _, mode := range []string{"running", "already stopped", "no guest agent"} {
+			t.Run(stage+"/"+mode, func(t *testing.T) {
+				l := newSwapLab(t)
+				l.ready[l.newSHA] = false
+				if _, err := l.swap(crashAt(stage)); err == nil {
+					t.Fatal("expected the simulated crash")
+				}
+				l.setDomain(l.newPath())
+				l.put("booted", "system-"+l.newSHA+".img\n")
+				l.put("state", "running\n")
+				if mode == "already stopped" {
+					l.put("state", "shut off\n")
+				} else if mode == "no guest agent" {
+					l.put("fail_shutdown", "")
+				}
+				if err := os.WriteFile(l.data, []byte("controller state\nwritten-after-power-cut\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				op, err := l.swap(nil)
+				if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" || l.dataContent() != "controller state\n" {
+					t.Fatalf("failed-image writes survived rollback: %+v %v data %q", op, err, l.dataContent())
+				}
+				if l.read("state") != "running" || !strings.Contains(l.read("booted"), l.oldSHA) || l.deployment().System != l.oldPath() {
+					t.Fatalf("the old Controller was not restarted: %+v", l.deployment())
+				}
+				if mode == "no guest agent" && l.count("destroy") != 1 || mode != "no guest agent" && l.count("destroy") != 0 {
+					t.Fatalf("only the failed image without an agent may be forced:\n%s", l.read("log"))
+				}
+				if err := checkDomain([]byte(l.read("inactive.xml")), l.deployment()); err != nil {
+					t.Fatalf("rollback changed appliance identity or data ownership: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestSwapRollbackPreservesOldImageWritesAfterRedefinition(t *testing.T) {
+	const late = "controller state\nwritten-by-restored-old-image\n"
+	for _, stage := range []string{swapRedefine, swapRestart, swapReprobe} {
+		t.Run(stage, func(t *testing.T) {
+			l := newSwapLab(t)
+			l.ready[l.newSHA] = false
+			if _, err := l.swap(crashAt(stage)); err == nil {
+				t.Fatal("expected the simulated crash")
+			}
+			// At swap_redefine, libvirt completed the define before the journal could advance.
+			l.setDomain(l.oldPath())
+			l.put("state", "running\n")
+			l.put("booted", "system-"+l.oldSHA+".img\n")
+			if err := os.WriteFile(l.data, []byte(late), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			op, err := l.swap(nil)
+			if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" || l.dataContent() != late {
+				t.Fatalf("resuming rollback lost the restored image's writes: %+v %v data %q", op, err, l.dataContent())
+			}
+			if l.read("state") != "running" || l.count("destroy") != 0 {
+				t.Fatalf("the restored old image was stopped or forced:\n%s", l.read("log"))
+			}
+			if cp, err := os.ReadFile(l.data + ".pre-7"); err != nil || string(cp) != "controller state\n" {
+				t.Fatalf("rollback changed its checkpoint: %q %v", cp, err)
+			}
+		})
+	}
+}
+
+func TestSwapRollbackRechecksOwnedImageBeforeRepeatingRestore(t *testing.T) {
+	for _, changed := range []string{"system", "data", "MAC", "inactive"} {
+		t.Run(changed, func(t *testing.T) {
+			l := newSwapLab(t)
+			l.ready[l.newSHA] = false
+			if _, err := l.swap(crashAt(swapRedefine)); err == nil {
+				t.Fatal("expected the simulated crash")
+			}
+			l.setDomain(l.newPath())
+			l.put("state", "running\n")
+			switch changed {
+			case "system":
+				l.put("live.xml", strings.ReplaceAll(l.read("live.xml"), l.newPath(), l.newPath()+".foreign"))
+			case "data":
+				l.put("live.xml", strings.ReplaceAll(l.read("live.xml"), l.data, l.data+".foreign"))
+			case "MAC":
+				l.put("live.xml", strings.ReplaceAll(l.read("live.xml"), mac(l.id), "52:54:00:00:00:01"))
+			case "inactive":
+				l.put("inactive.xml", strings.ReplaceAll(l.read("inactive.xml"), l.newPath(), l.newPath()+".foreign"))
+			}
+			const changedData = "do-not-restore-unverified-guest\n"
+			if err := os.WriteFile(l.data, []byte(changedData), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			shutdowns := l.count("shutdown")
+			op, err := l.swap(nil)
+			if codeOf(err) != SwapNeedsAttention || op.Status != "needs_attention" || l.count("destroy") != 0 || l.dataContent() != changedData {
+				t.Fatalf("an unverified guest was forced or its disk replaced: %+v %v data %q", op, err, l.dataContent())
+			}
+			if changed != "inactive" && l.count("shutdown") != shutdowns {
+				t.Fatalf("an unverified guest was shut down:\n%s", l.read("log"))
+			}
+		})
+	}
+}
+
 func TestSwapReplayAndConflicts(t *testing.T) {
 	l := newSwapLab(t)
 	if _, err := l.swap(nil); err != nil {
@@ -647,6 +751,23 @@ func TestSwapRestoresDataWhenLibvirtAutostartedTheNewImage(t *testing.T) {
 	}
 	if l.deployment().System != l.oldPath() || !strings.Contains(l.read("booted"), l.oldSHA) {
 		t.Fatalf("the old image is not running again: %s", l.read("booted"))
+	}
+}
+
+func TestSwapKeepsCheckpointWhenAlreadyDefinedNewImageStoppedAfterWriting(t *testing.T) {
+	l := newSwapLab(t)
+	l.ready[l.newSHA] = false
+	if _, err := l.swap(crashAt(swapDefine)); err == nil {
+		t.Fatal("expected the simulated crash")
+	}
+	l.setDomain(l.newPath())
+	l.put("state", "shut off\n")
+	if err := os.WriteFile(l.data, []byte("controller state\nwritten-by-new-image\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	op, err := l.swap(nil)
+	if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" || l.dataContent() != "controller state\n" {
+		t.Fatalf("the new image overwrote the old checkpoint: %+v %v data %q", op, err, l.dataContent())
 	}
 }
 
@@ -907,6 +1028,38 @@ func TestSwapContinuesWhenLibvirtAutostartedTheOldImage(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSwapRefreshesCheckpointWhenRestartedOldImageAlreadyStopped(t *testing.T) {
+	const late = "controller state\nwritten-by-old-image-before-stopping\n"
+	for _, ready := range []bool{true, false} {
+		t.Run(fmt.Sprintf("ready=%v", ready), func(t *testing.T) {
+			l := newSwapLab(t)
+			l.ready[l.newSHA] = ready
+			if _, err := l.swap(crashAt(swapDefine)); err == nil {
+				t.Fatal("expected the simulated crash")
+			}
+			// The old image autostarted, wrote, then shut down before the service resumed.
+			l.put("state", "shut off\n")
+			if err := os.WriteFile(l.data, []byte(late), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			op, err := l.swap(nil)
+			if cp, err := os.ReadFile(l.data + ".pre-7"); err != nil || string(cp) != late {
+				t.Fatalf("the checkpoint lost the old image's writes: %q %v", cp, err)
+			}
+			if ready {
+				if err != nil || op.Status != "completed" || l.dataContent() != late+"written-by-new-image\n" {
+					t.Fatalf("the resumed swap did not finish: %+v %v data %q", op, err, l.dataContent())
+				}
+			} else if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" || l.dataContent() != late {
+				t.Fatalf("rollback lost committed old-image writes: %+v %v data %q", op, err, l.dataContent())
+			}
+			if err := checkDomain([]byte(l.read("inactive.xml")), l.deployment()); err != nil {
+				t.Fatalf("swap changed appliance identity or data ownership: %v", err)
+			}
+		})
 	}
 }
 

@@ -6145,6 +6145,14 @@ interrupted apply resumes when its `request_id` is repeated, a changed body is `
 `refuse` (default) refuses to reboot while virtual machines are running (`409 running_vms`); `shutdown` accepts their downtime; the guests are listed again right before an `apply` with `activate: reboot` arms the staged release.
 Apply, import and stage check free space before any download, on `/var/lib/nex/image`: about twice the slot image plus twice the required layers plus 64 MiB (an estimate, the manifest carries no extracted size), less what a resumed `.part` or finished blob already holds. Every layer that will be staged counts, including an `on_demand` layer the operator has enabled; a release with layers on a host with no layer store is refused `layers_unavailable` at this check, before any download. Too little is `409 insufficient_space` as the failed operation's error; a disk that fills during download, extraction or the slot write maps to the same code (it was `502 image_invalid` or `500 internal`). Repeating the `request_id` of an activate or rollback that failed with a non-4xx error returns that recorded error, not the old operation. Applying a release that is already staged does not stage it again. Pool rollout gates are not evaluated here; the pool coordinator calls the engine's own steps.
 
+Arm intent is durable before any bootable entry is published. The existing `armed` record with phase
+`staged` denotes interrupted publication: reconciliation preserves a target that booted, or removes
+its unbooted entries and restores the running layers. Failed cleanup reports `arm_incomplete`.
+An interrupted apply that already armed resumes completion, not staging. Cancelling an interrupted
+staged apply/import finishes that operation as well as discarding its stage. Exact activation or
+rollback replay reschedules a lost delayed reboot only while its own target is still the latest
+armed operation; it never re-arms or reboots a target that already booted.
+
 Refusals are `{ "code": "<stable code>", "error": "<one literal message>" }`; the host keeps running. Compatibility guards run at
 stage, activate and rollback: `state_format_downgrade` (the target's `state_format` is below `RequiredStateFormat`, the Go port of
 the retired storage guard: any ZFS record ⇒ 3, managed VM storage records ⇒ 2, unreadable ⇒ present), `state_format_too_old`, and
@@ -6369,6 +6377,38 @@ of every `step_id`, so a repeated step in one attempt is a replay and the first 
 | `GET /api/v1/pool/updates/status` | peer, master only → `PoolUpdateHostStatus` (engine phase, running and staged release, verified target, free space, running guests, busy) |
 | `GET /api/v1/pool/updates/blobs/{sha256}` | peer, any ready member, served by the master only: `HEAD`/`GET` with `Range`; a staged file is served only when its content hashes to the requested digest; `206` for a range, `404` for an unknown or unverified blob (members treat it as the master lacking the blob), `405` for other methods, `409` when this host is not the master |
 
+Control identities are Core state, not Controller state: `PoolUpdateRollout.controls` in
+`pool-update.json` and the signed `update_rollout` replica stores normalized request intent
+and a pending receipt or the original result/error. Result snapshots omit nested controls.
+An exact control retry returns that original snapshot/error even after subsequent rollouts
+or promotion; refresh the GET view for current progress. Changed intent is `request_conflict`.
+A reused start ID also compares normalized `running_vms` (`refuse` equals the omitted default).
+`replica_pending` retains a destructive intent or a terminal result awaiting the existing strict
+authority acknowledgement. `replication_pending` marks the latter even though a result already
+exists; `control_pending` excludes competing controls/new rollouts until it is acknowledged.
+`rollback_started` preserves the original host attempt/step identity across an ambiguous rollback
+reply; transport loss returns `rollback_pending`, not a cached terminal refusal. Core's existing
+coordinator continues accepted pending controls before normal rollout stepping, including paused
+or aborted records, without another Controller request or an open browser. Exact-ID replay remains
+valid; a deliberate new attempt after a terminal refusal uses a new ID.
+
+The existing Core managed journal can report a recovered control result for the same Controller
+operation. Controller only settles a matching `needs_attention` control from its authenticated
+owning Core; terminal outcomes and non-control commands are not reopened. After promotion, an old
+Controller task can remain `needs_attention` if its originally assigned Core never reports again:
+the current master's rollout/control receipt, not that old audit-task status, is authoritative.
+The promoted Core completes the receipt without the old master's managed journal.
+
+Control history is retained, never silently evicted. New identity/new-rollout admission returns
+`authority_capacity` before persistence or effects if the prospective addressed authority and
+reserved terminal-result capacity exceed the existing 1 MiB limit. `reserved_result_bytes` is
+Core-owned, bounded to 0..1048576 and released when an unresolved result becomes a terminal
+snapshot/error; other authority admission must preserve that room. Older Core builds that drop
+receipt fields fail the signed section digest check before storage/ACK, rather than accepting
+reduced authority; update all participating Cores before these controls.
+Promotion keeps the newly serving master last among unfinished hosts, without abandoning an
+already-active host. Host activation refuses a staged/armed sequence different from the rollout.
+
 The Controller answers the three POST routes `409` ("upgrade Nex Core on `<host>`") unless the master and every non-ejected member
 advertise `pool-update-rollout-v1`, and also when the master is not fresh and active. `check` is the extra, dry-run route; the plan lists
 `step` actions `stage,drain,activate,confirm,undrain,rollback` and the coordinator additionally uses `check`. Members read blobs from the
@@ -6413,6 +6453,15 @@ checkpoint, redefines the old image, restarts and probes it: the operation then 
 VM is left stopped, `controller_needs_attention`, and host-recovery export still applies. Every step observes the real domain and files
 first, so repeating the request ID after a crash resumes from the journal, and repeating a failed one answers with the code of the first refusal; a swap already running the release is a no-op. A second swap
 is `controller_swap_in_progress` while one is unfinished and an unfinished swap cannot be cancelled (`swap_in_progress`).
+
+At the forward redefine boundary, the old image's quiescent data refreshes the checkpoint even
+if an autostarted old guest already stopped before replay. During rollback, a persistent definition
+still naming the failed new image is stopped after ownership checks and the checkpoint is restored
+again; once the old image was redefined, its subsequent writes are preserved instead.
+Host recovery accepts only the deployment's image or an alternate read-only image proven by a
+matching durable running/needs-attention swap journal, in both live and inactive definitions.
+The helper still needs the guest agent; it does not start a stopped appliance. Root-owned journals,
+not a new signature scheme, are the recovery provenance boundary.
 
 controller_first. After staging everywhere and before any host goes into maintenance, the master's coordinator scans the hosts'
 `controller_vm` and, for a release that carries a Controller image (`controller_image`), asks the owning host for one `controller`

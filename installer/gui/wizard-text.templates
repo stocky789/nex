@@ -154,7 +154,7 @@ Description: Erase ${disk} and install Nex Core?
  .
  Answer no to go back and change any of these settings.
 
-Template: nex-installer/mode
+Template: nex-installer/action
 Type: select
 Choices: Erase and install, Repair image
 Default: Erase and install

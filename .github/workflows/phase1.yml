@@ -1,19 +1,15 @@
 name: Controller foundation
 on:
-  # Branch pushes are covered by their pull request run. Both events share the one
-  # cancelling group below, so a '**' push trigger made the push and pull_request
-  # runs of the same commit cancel each other and left it red (BUG-0412).
+  # Integration pushes and feature pull requests each need their own verdict.
   push:
     branches:
       - main
       - dev
   pull_request:
-concurrency:
-  # One shared Gitea act_runner also runs Release ISO builds. Serialize every
-  # heavy Controller foundation and Release run (runs 4222+4223): browser
-  # Page.reload timed out while the ISO job starved the host.
-  group: ${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}
-  cancel-in-progress: true
+defaults:
+  run:
+    # Host-side flock preserves every queued run, including on forges without queue:max.
+    shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 permissions:
   contents: read
 jobs:
@@ -213,6 +209,7 @@ jobs:
     if: always() && github.server_url != 'https://github.com'
     steps:
       - name: Require every lane
+        shell: bash
         run: |
           set -eu
           echo "go=${{ needs.go.result }}"

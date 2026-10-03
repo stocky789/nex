@@ -171,15 +171,17 @@ def main():
     ap.add_argument("--cc-image", default="nex-lab-gtk:phase6")
     ap.add_argument("--work", default=os.path.join(REPO, ".cache/phase6/iso-work"))
     a = ap.parse_args()
-    work = os.path.abspath(a.work)
+    work = os.path.realpath(a.work)
     stage = os.path.join(work, "stage")
     overlay = os.path.join(work, "overlay")
-    rel = os.path.abspath(a.release)
-    out = os.path.abspath(a.out)
+    rel = os.path.realpath(a.release)
+    out = os.path.realpath(a.out)
     if os.path.commonpath([rel, out]) in (rel, out):
         sys.exit(f"--out {out} is, contains or lies inside --release {rel}")
     if os.path.commonpath([rel, work]) in (rel, work):
         sys.exit(f"--work {work} contains or lies inside --release {rel}")
+    if os.path.commonpath([out, work]) in (out, work):
+        sys.exit(f"--out {out} is, contains or lies inside --work {work}")
     marker = os.path.join(work, ".image_iso_lab")
     if os.path.isdir(work) and os.listdir(work) and not os.path.exists(marker):
         sys.exit(f"{work} exists and was not created by this script; pass an empty or new --work")

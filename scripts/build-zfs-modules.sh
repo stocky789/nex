@@ -73,6 +73,8 @@ if [ -z "$key" ] || [ -z "$cert" ]; then
   fi
 fi
 [ -r "$key" ] && [ -r "$cert" ] || { echo "module key or certificate not readable" >&2; exit 1; }
+key=$(realpath -- "$key")
+cert=$(realpath -- "$cert")
 
 builddir=$root/image/mkosi.images/nex-zfs/zfs-builder
 ctx=$root/.cache/image-builder/zfs
@@ -92,6 +94,7 @@ docker image inspect "$tag" >/dev/null 2>&1 || \
 
 rm -rf "$out"
 mkdir -p "$out"
+out=$(cd "$out" && pwd -P)
 docker run --rm -i -e "KVER=$kver" -e "SOURCE_DATE_EPOCH=$sde" -e "HOST_UID=$(id -u)" -e "HOST_GID=$(id -g)" \
   -v "$out":/out -v "$key":/keys/module.key:ro -v "$cert":/keys/module.crt:ro "$tag" sh -eu <<'EOF'
 export LC_ALL=C TZ=UTC KBUILD_BUILD_USER=nex KBUILD_BUILD_HOST=nex KBUILD_BUILD_TIMESTAMP="$(date -u -d "@$SOURCE_DATE_EPOCH")"

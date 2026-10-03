@@ -913,6 +913,14 @@ func (e *Engine) reconcile(ctx context.Context) error {
 			}
 			e.restoreLayers(ctx, st.Current)
 			changed = true
+		case st.Phase == PhaseStaged:
+			// An arm intent was saved before publishing entries. Until the target actually boots,
+			// an interrupted publication is taken back rather than reported as a complete arm.
+			st.Phase = PhaseArmed
+			st.Failure = refuse(500, "arm_incomplete", "arming was interrupted; the release may start on the next restart")
+			if err := e.disarmIncomplete(ctx); err != nil {
+				changed = true
+			}
 		}
 	} else if st.Current.RootHash != b.RootHash {
 		// Booted something the record did not expect: the operator picked the previous entry in the
@@ -1315,7 +1323,31 @@ func (e *Engine) startJob(ctx context.Context, kind string, req ApplyRequest) (o
 		return Operation{}, false, err
 	}
 	if replay && !resume {
+		if e.retryReboot(op) {
+			e.scheduleReboot(op.ID)
+		}
 		return op, true, nil
+	}
+	if resume && !sideJob(kind) && op.Sequence > 0 {
+		if e.st.Armed != nil {
+			if e.st.Armed.Sequence != op.Sequence {
+				return Operation{}, false, refuse(409, "already_armed", "a different release is armed; the interrupted update cannot be resumed")
+			}
+			if !e.incompleteArm() || e.st.Phase == PhaseBooted {
+				e.finishLocked(op.ID, PhaseArmed, nil)
+				op = e.recorded(op.ID)
+				if e.retryReboot(op) {
+					e.scheduleReboot(op.ID)
+				}
+				return op, true, nil
+			}
+			if err = e.disarmIncomplete(ctx); err != nil {
+				return Operation{}, false, err
+			}
+		} else if e.st.Current != nil && e.st.Current.Sequence == op.Sequence && e.st.Phase == PhaseCommitted {
+			e.finishLocked(op.ID, PhaseArmed, nil)
+			return e.recorded(op.ID), true, nil
+		}
 	}
 	if !replay && !sideJob(kind) {
 		if st := e.st.Phase; st == PhaseArmed || st == PhaseBooted {
@@ -1600,7 +1632,11 @@ func (e *Engine) afterStage(ctx context.Context, id string, req ApplyRequest, m 
 	if err := e.armLocked(ctx); err != nil {
 		return "", err
 	}
-	e.scheduleReboot()
+	e.updateOp(id, func(o *Operation) { o.Phase = PhaseArmed })
+	if err := e.save(); err != nil {
+		return "", err
+	}
+	e.scheduleReboot(id)
 	return PhaseArmed, nil
 }
 
@@ -1628,24 +1664,31 @@ func (e *Engine) armLocked(ctx context.Context) error {
 	// What the running base's layers are is written down before they are switched away from: a rollback
 	// (or a failed arm) switches them back from this record.
 	e.recordRunningLayers(ctx)
-	if err = e.switchLayers(ctx, staged); err != nil {
+	// Armed with phase staged is an intent, not a completed publication. Recovery can follow a boot
+	// into it or take back any entries published before the process stopped.
+	st.Armed = &staged
+	if err = e.save(); err != nil {
+		st.Armed = nil
 		return err
 	}
-	if err = e.cfg.Platform.Arm(ctx, rel); err != nil {
+	if err = e.switchLayers(ctx, staged); err == nil {
+		err = e.cfg.Platform.Arm(ctx, rel)
+	}
+	if err != nil {
 		if errors.Is(err, hostimage.ErrArmNotUndone) {
-			// A disk may boot the release although the arm failed: the record must say armed, so that the
-			// boot assessment is followed, and carries the failure, so that Cancel and Activate know to take
-			// the entry back first.
 			failure := refuse(500, "arm_incomplete", "arming failed on a boot disk and could not be undone; the release may start on the next restart")
-			st.Armed, st.Phase, st.Failure = &staged, PhaseArmed, failure
+			st.Phase, st.Failure = PhaseArmed, failure
 			_ = e.save()
 			return failure
 		}
+		st.Armed, st.Failure = nil, nil
 		e.restoreLayers(ctx, st.Current)
+		if saveErr := e.save(); saveErr != nil {
+			return saveErr
+		}
 		return err
 	}
-	st.Armed = &staged
-	st.Phase = PhaseArmed
+	st.Phase, st.Failure = PhaseArmed, nil
 	return e.save()
 }
 
@@ -1678,7 +1721,7 @@ func (e *Engine) disarmIncomplete(ctx context.Context) error {
 
 // scheduleReboot restarts the host after RebootDelay. A restart that fails is recorded as the failure of
 // the record (reboot_failed) while the release is still armed; Activate repeats it.
-func (e *Engine) scheduleReboot() {
+func (e *Engine) scheduleReboot(id string) {
 	if e.cfg.Reboot == nil {
 		return
 	}
@@ -1687,34 +1730,48 @@ func (e *Engine) scheduleReboot() {
 		defer e.wg.Done()
 		select {
 		case <-time.After(e.cfg.RebootDelay):
+			if e.enter(lockWait) != nil {
+				return
+			}
+			defer e.leave()
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.ctx.Err() != nil || e.load() != nil || !e.retryReboot(e.recorded(id)) {
+				return
+			}
+			b, err := e.cfg.Platform.Booted(e.ctx)
+			if err != nil || b.RootHash == e.st.Armed.RootHash {
+				return
+			}
 			if err := e.cfg.Reboot(e.ctx); err != nil && e.ctx.Err() == nil {
-				e.rebootFailed()
+				e.st.Failure = refuse(0, "reboot_failed", "the host could not be restarted to start the armed release; repeat activate or restart it")
+				_ = e.save()
 			}
 		case <-e.ctx.Done():
 		}
 	}()
 }
 
-// rebootFailed records that the restart of an armed release did not happen. It takes the update lock like
-// any other writer of the record.
-func (e *Engine) rebootFailed() {
-	if e.enter(lockWait) != nil {
-		return
+// retryReboot only retries the latest successful host arming operation for the release still waiting
+// to boot. A replay after boot, or of an older operation, must not restart the host.
+func (e *Engine) retryReboot(op Operation) bool {
+	if e.st.Phase != PhaseArmed || e.st.Armed == nil || op.Phase != PhaseArmed || op.Error != nil || op.Sequence != e.st.Armed.Sequence {
+		return false
 	}
-	defer e.leave()
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.load() != nil || e.st.Phase != PhaseArmed {
-		return
+	for i := len(e.st.Operations) - 1; i >= 0; i-- {
+		o := e.st.Operations[i].Op
+		if sideJob(o.Kind) || o.Kind == "cancel" || o.Phase != PhaseArmed || o.Error != nil {
+			continue
+		}
+		if o.ID != op.ID {
+			return false
+		}
+		break
 	}
-	e.st.Failure = refuse(0, "reboot_failed", "the host could not be restarted to start the armed release; repeat activate or restart it")
-	_ = e.save()
-}
-
-// retryReboot clears a recorded reboot_failed of a still armed release and reports whether the restart is to
-// be scheduled again. e.mu is held.
-func (e *Engine) retryReboot() bool {
-	if e.st.Phase != PhaseArmed || e.st.Failure == nil || e.st.Failure.Code != "reboot_failed" {
+	if e.st.Failure == nil {
+		return true
+	}
+	if e.st.Failure.Code != "reboot_failed" {
 		return false
 	}
 	e.st.Failure = nil
@@ -1733,7 +1790,9 @@ func (e *Engine) Activate(ctx context.Context, req ActionRequest) (Operation, bo
 			}
 		}
 		if e.st.Phase == PhaseArmed && e.st.Armed != nil {
-			e.retryReboot()
+			if e.st.Failure != nil && e.st.Failure.Code == "reboot_failed" {
+				e.st.Failure = nil
+			}
 			return PhaseArmed, nil
 		}
 		if err := e.armLocked(ctx); err != nil {
@@ -1828,9 +1887,8 @@ func (e *Engine) action(ctx context.Context, req ActionRequest, kind string, fn 
 		return Operation{}, false, err
 	}
 	if replay && !resume {
-		if op.Error == nil && e.retryReboot() {
-			// The restart this request led to failed: repeating the request restarts again.
-			e.scheduleReboot()
+		if e.retryReboot(op) {
+			e.scheduleReboot(op.ID)
 		}
 		if op.Error != nil {
 			// A failure that was kept on record (not a refusal) is still a failure when the request is
@@ -1839,16 +1897,31 @@ func (e *Engine) action(ctx context.Context, req ActionRequest, kind string, fn 
 		}
 		return op, true, nil
 	}
+	if resume && op.Sequence > 0 && ((e.st.Phase == PhaseBooted && e.st.Armed != nil && e.st.Armed.Sequence == op.Sequence) ||
+		(e.st.Phase == PhaseCommitted && e.st.Current != nil && e.st.Current.Sequence == op.Sequence)) {
+		e.finishLocked(op.ID, PhaseArmed, nil)
+		return e.recorded(op.ID), true, nil
+	}
 	e.reserve(op.ID, func() {})
 	e.mu.Unlock()
 	err = e.checkVMs(ctx, req.RunningVMs)
 	e.mu.Lock()
 	e.release(op.ID)
 	if err == nil {
+		if kind == "activate" && e.st.Staged != nil {
+			e.updateOp(op.ID, func(o *Operation) { o.Sequence = e.st.Staged.Sequence })
+			if err = e.save(); err != nil {
+				e.finishLocked(op.ID, "", err)
+				return Operation{}, false, err
+			}
+		}
 		var phase string
 		if phase, err = fn(ctx); err == nil {
+			if phase == PhaseArmed && e.st.Armed != nil {
+				e.updateOp(op.ID, func(o *Operation) { o.Sequence = e.st.Armed.Sequence })
+			}
 			e.finishLocked(op.ID, phase, nil)
-			e.scheduleReboot()
+			e.scheduleReboot(op.ID)
 			return e.recorded(op.ID), replay, nil
 		}
 	}
@@ -1924,6 +1997,12 @@ func (e *Engine) Cancel(ctx context.Context, req ActionRequest) (Operation, bool
 		e.mu.Unlock()
 		return Operation{}, false, refuse(400, "invalid_request", "request_id must be 8 to 64 letters, digits, - or _")
 	}
+	if e.active == nil {
+		if err = e.reconcile(ctx); err != nil {
+			e.mu.Unlock()
+			return Operation{}, false, err
+		}
+	}
 	if e.incompleteArm() {
 		// The arm failed on a disk and could not be undone: the release may still start. Cancel takes its
 		// entry back; while that fails, or once the release started, the release stays armed.
@@ -1996,6 +2075,13 @@ func (e *Engine) Cancel(ctx context.Context, req ActionRequest) (Operation, bool
 	}
 	defer e.mu.Unlock()
 	if e.st.Phase == PhaseStaged {
+		now := e.cfg.Now()
+		for i := range e.st.Operations {
+			o := &e.st.Operations[i].Op
+			if o.FinishedAt == nil && (o.Kind == "apply" || o.Kind == "import") && e.st.Staged != nil && o.Sequence == e.st.Staged.Sequence {
+				o.Phase, o.FinishedAt, o.Progress = "cancelled", &now, nil
+			}
+		}
 		e.st.Staged, e.st.Phase = nil, PhaseIdle
 		e.pruneLayers(ctx, e.st.Current, e.st.Previous)
 		e.removeStaging()

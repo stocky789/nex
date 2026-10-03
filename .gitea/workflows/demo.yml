@@ -11,14 +11,13 @@ concurrency:
   # Never cancel a live deploy or its rollback. PRs have separate ref groups.
   group: nex-demo-${{ github.ref }}
   cancel-in-progress: false
+defaults:
+  run:
+    # Heavy verification uses the same host-side mutex as image/release/phase1.
+    shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 jobs:
   demo:
     if: github.server_url != 'https://github.com' # github.com runs github.yml only
-    # Heavy verification shares the runner with phase1/release. Cancelling it is
-    # harmless: nothing is deployed until the separate deploy job below.
-    concurrency:
-      group: nex-shared-runner
-      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -64,8 +63,8 @@ jobs:
           .cache/demo-qa-venv/bin/python tests/integration/demo_browser.py \
             --binary .cache/nex-demo --ui-dir .cache/demo-web --docs-dir .cache/demo-docs --source-archive .cache/demo-source.tar.gz
   deploy:
-    # Separate concurrency group: phase1/release cancel-in-progress must never
-    # cancel a live deploy or its rollback. Re-running the same SHA is idempotent.
+    # The deployment group protects a live deploy and rollback from another demo run.
+    # Re-running the same SHA is idempotent.
     # Uses the Docker image built by the demo job on this runner's Docker daemon.
     needs: [demo]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.server_url != 'https://github.com'

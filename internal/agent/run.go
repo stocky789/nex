@@ -2744,7 +2744,7 @@ func completeManagedCommand(s *Store, active string, done managedCompletion, his
 		}
 		forgetDeletedVM(history, entry)
 	}
-	if done.background {
+	if done.background || entry.Command != nil && entry.Command.Kind == "pool-update" {
 		entry.Acknowledged = false
 	}
 	s.State.Journal[id] = entry
@@ -2821,11 +2821,16 @@ entries:
 		// A backup with an uncertain native outcome needs observation before any
 		// retry. Re-entering its worker can write the same VM or point twice.
 		snapshotHeal := entry.Status == "needs_attention" && snapshotCommand(entry.Command.Kind)
+		poolUpdateHeal := entry.Status == "needs_attention" && entry.Command.Kind == "pool-update" &&
+			entry.Command.Pool != nil && entry.Command.Pool.Action == "update-control"
+		if poolUpdateHeal && time.Now().Before(entry.ObservedAt.Add(poolUpdateTickInterval)) {
+			continue
+		}
 		if snapshotHeal {
 			if activeSnapshot != "" && id != activeSnapshot {
 				continue
 			}
-		} else if entry.Status != "pending" {
+		} else if entry.Status != "pending" && !poolUpdateHeal {
 			continue
 		}
 		if (snapshotCommand(entry.Command.Kind) || backupCommand(entry.Command.Kind)) && activeSnapshot != "" {

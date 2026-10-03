@@ -104,19 +104,24 @@ def check_tampered(vm, work, rel1, uki1):
 
 
 def secure_state(ctl):
-    rc, out = ctl.sh("bootctl status 2>&1 | grep -i 'secure boot'; cat /sys/kernel/security/lockdown 2>&1; "
-                     "dmesg | grep -i -m3 'secure boot\\|lockdown' | cut -c1-100")
-    return out.replace("\n", " | ")
+    rc, out = ctl.sh("bootctl status 2>&1")
+    text = out.replace("\n", " | ")
+    return text if rc == 0 else f"Secure Boot: unknown (bootctl exit {rc}) | {text}"
+
+
+def sb_state(st):
+    """Only unambiguous explicit bootctl observations count; diagnostics are not a verdict."""
+    states = re.findall(r"(?:^|\|)\s*secure boot:\s*([^\s|]+)", st.replace("\n", " | "), re.I)
+    values = {s.lower() for s in states}
+    return next(iter(values)) if len(values) == 1 and values <= {"enabled", "disabled"} else None
 
 
 def sb_enforcing(st):
-    """bootctl's own 'Secure Boot: enabled' line; empty output, 'disabled' and a bare lockdown/dmesg mention do not count."""
-    return re.search(r"secure boot:\s*enabled", st, re.I) is not None
+    return sb_state(st) == "enabled"
 
 
 def sb_off(st):
-    """Non-empty output that reports Secure Boot as not enabled (an empty or failed query proves nothing)."""
-    return bool(st.strip()) and not sb_enforcing(st)
+    return sb_state(st) == "disabled"
 
 
 def pcrs(ctl, label, log):
@@ -251,6 +256,8 @@ def main():
         vm.wait_ready(min(a.budget, 420))
         f3 = up.facts(vm.ctl)
         check(f3["build_id"] == "2026.10.1-1", "SB: rollback returns to release 1 under Secure Boot", f3["build_id"])
+        st3 = secure_state(vm.ctl)
+        check(sb_enforcing(st3), "SB: still enforcing after rollback to release 1", st3)
         p3 = pcrs(vm.ctl, "release 1 after rollback", log)
         info("PCR 11 across release 1 -> update -> release 2 -> rollback: "
              f"{p1.get('pcr11', '')[:16]} -> {p2.get('pcr11', '')[:16]} -> {p3.get('pcr11', '')[:16]}")

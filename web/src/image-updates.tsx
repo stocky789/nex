@@ -191,7 +191,8 @@ function ImageHost({ host, api, busy }: { host: Host; api: API; busy: boolean })
     {image?.failure && <Banner tone="bad" role="status">{image.failure.code === "boot_failed" ? "The new release failed its health check and the host returned to the previous release. " : ""}{fault(image.failure)}</Banner>}
     {image?.operation?.error && <Banner tone="warn" role="status">{fault(image.operation.error)}</Banner>}
     {error && <Banner tone="bad" role="alert">{error}</Banner>}
-    {task && <p className="small" role="status">Task <a className="task-link" href="#/tasks" title={`Task ${task.id}`}>{task.id}</a> {task.status}. The host reports the result below.</p>}
+    {task?.error && (task.status === "failed" || task.status === "needs_attention") && <Banner tone={task.status === "failed" ? "bad" : "warn"} role="alert">{task.error}</Banner>}
+    {task && <p className="small" role="status">Task <a className="task-link" href="#/tasks" title={`Task ${task.id}`}>{task.id}</a> {task.status}. Host image state is shown above.</p>}
     {connection !== "fresh" && <p className="note">This host is {connection}; actions are unavailable until it reconnects.</p>}
     <div className="actions">
       {button("check")}{button("apply", true)}{button("activate", true)}{button("rollback")}{button("cancel")}

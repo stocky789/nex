@@ -15,7 +15,7 @@ own release, package archive and download tree.
 |---|---|---|
 | Branch | `main` | `dev` |
 | Channel id (`channel=` in `/etc/nex/updates.conf`) | `stable` (the default) | `dev` |
-| Version | newest numbered CHANGELOG heading, e.g. `0.4.18` | pre-release of the next release, e.g. `0.4.19-dev.231` (Debian `0.4.19~dev.231`) |
+| Version | newest numbered CHANGELOG heading, e.g. `0.4.18` | pre-release of the next release, e.g. `0.4.19-dev.231` (Debian `0.4.19~~dev.231`) |
 | Forge release | `vX.Y.Z`, release | `vX.Y.Z-dev.N`, **pre-release**, newest 3 kept (as many as the download tree keeps, so every kept netinst ISO still works) |
 | Classic APT archive | `<site>/apt` (suite `nex`) | `<site>/apt/dev` (suite `nex`, own pool, newest 3 versions kept) |
 | Downloads | `<site>/downloads/<version>/`, `latest` | `<site>/downloads/dev/<version>/`, own `latest` |
@@ -31,13 +31,18 @@ host setting only picks the subtree. The image update tree already has one direc
 A development build is a pre-release of the release `main` will publish next, so it sorts below that release and
 above everything already released (dpkg and the image publisher's `sequence`-equals-label-order check both hold):
 
-- `next` is the newest CHANGELOG heading on `dev` when `main` has not published it yet (the owner cut it on `dev`),
-  otherwise that heading with the patch number raised by one.
-- version = `next` + `-dev.N`; Debian form `next~dev.N`. `N` is `git rev-list --count HEAD`, so it only grows and a rebuild
-  of one commit reproduces the same version, which the release job replaces rather than duplicates.
+- `next` is the numeric base of the newest CHANGELOG heading on `dev` when `main` has not published it yet
+  (the owner cut it on `dev`), otherwise that heading with the patch number raised by one.
+- version = `next` + `-dev.N`; Debian form `next~~dev.N`. The double tilde keeps development builds below
+  alpha, beta and release-candidate versions without changing their base when an alpha/rc heading is cut.
+  `N` is `git rev-list --count HEAD`, so it only grows and a rebuild of one commit reproduces the same
+  version, which the release job replaces rather than duplicates.
 - `main` having a newer heading than `dev` is refused ("merge `main` into `dev`"): a development build must never be
   numbered below a published stable release.
-- Release notes of a development build are the `[Unreleased]` section of `dev`.
+- If a newer `dev` heading has the same numeric base as a prerelease already published by `main`,
+  development numbering is refused until a heading for the next numeric release is cut: `~~dev.N`
+  cannot sort above that already published alpha/rc.
+- Release notes are `[Unreleased]`, preceded by the cut heading's entries when that heading is ahead of `main`.
 
 Switching a host from Development to Stable never downgrades it: apt does not install an older version by itself and
 the image engine refuses a `sequence` below the host's `rollback_floor`. The host stays put until Stable publishes
@@ -52,9 +57,13 @@ something newer. The guide says so next to the selector.
   channel's own `/downloads[/dev]/<version>` into the netinst ISO; checks reachability of the channel's URLs; deploys
   the static website only for `main`; creates the Gitea release, as a pre-release for `dev`, and prunes older
   development pre-releases.
-- One concurrency group still serialises every heavy job on the single runner, and a newer run cancels the one in
-  progress. A development merge can therefore cancel a `main` release still building; re-run `main`'s release if that
-  happens. Giving the groups separate cancel rules was left alone: it changes how the shared runner is protected.
+- The image, release, Phase 1, recovery-libvirt and demo workflows serialize their heavy **run steps**
+  with a shared-host `flock`, not a forge concurrency group that can replace a pending run or cancel
+  another workflow. Container jobs share `nex-ci-heavy-lock` on their Docker host; native jobs use
+  a local lock directory. Use one execution mode on the shared runner: native and container locks
+  are separate domains, and different Docker hosts do not share a volume. Checkout/setup actions
+  and waiting job containers can coexist; this is not FIFO or whole-job serialization.
+  Existing job timeouts still bound queue waiting. Workload termination precedes lock release.
 - `phase1.yml`, `image.yml`, `github.yml` also run on pushes to `dev`; pull requests already run for every base.
   `website.yml` stays `main` only. `installer.yml` and `documentation.yml` already run on every branch.
 - Owner actions the repository cannot perform: create `dev` from `main` and protect it like `main`; retire the stale

@@ -36,11 +36,10 @@ on:
     branches:
       - main
       - dev
-concurrency:
-  # Same group as Controller foundation: one act_runner cannot ISO-build and
-  # run Playwright labs at once (runs 4222+4223).
-  group: nex-shared-runner
-  cancel-in-progress: true
+defaults:
+  run:
+    # Host-side flock preserves every queued run, including on forges without queue:max.
+    shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 permissions:
   contents: write
 jobs:

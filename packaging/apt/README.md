@@ -26,6 +26,18 @@ sudo nex-apt-publish /path/to/nex-controller_….deb \
   /path/to/nex-core-local_….deb
 ```
 
+Re-run the updated bootstrap on an existing publishing host before publishing: the
+root-run helper is an installed copy, not the current repository checkout.
+The helper prepares package selection, indexes and signatures in staging. Package
+payloads use content-addressed directories beneath `pool/`, preserving old indexed
+bytes even when a package is rebuilt with the same filename/version. Old payloads
+are retired only after replacement metadata has been installed.
+
+Retry the same publication after an interruption. Metadata files are replaced
+individually, so clients can see transient metadata hash/signature mismatches until
+retry completes; this is not a collectively atomic archive cutover. A signed archive
+refuses publication without its usable signing key rather than becoming unsigned.
+
 In-product updates default to `https://nexvirtualization.com/apt` via
 `/etc/nex/updates.conf` (`repo_url=`) or `NEX_UPDATE_REPO`.
 
@@ -53,5 +65,5 @@ sudo nex-apt-publish --repo-root /srv/nex-apt/dev --keep 3 /path/to/nex-controll
 
 Hosts choose the channel in their update settings; a package-edition host records it as
 `repo_url=https://nexvirtualization.com/apt/dev` in `/etc/nex/updates.conf` (the archive root plus `/dev`). A
-development build is numbered `X.Y.Z~dev.N`, below the release it works toward, so switching a host back to
+development build is numbered `X.Y.Z~~dev.N`, below even the alpha/rc releases it works toward, so switching a host back to
 Stable offers nothing until Stable publishes a newer version.

@@ -245,8 +245,17 @@ func PoolUpdateHostStep(ctx context.Context, s *Store, step protocol.PoolUpdateS
 		}
 		return protocol.PoolUpdateStepResult{}
 	case "activate":
-		if running == step.Sequence || st.Phase == nexupdate.PhaseArmed {
+		if st.Phase == nexupdate.PhaseArmed {
+			if poolUpdateSlotSequence(st, "armed") != step.Sequence {
+				return protocol.PoolUpdateStepResult{Code: "sequence_mismatch", Message: "the armed release does not match the rollout"}
+			}
 			return protocol.PoolUpdateStepResult{Done: true}
+		}
+		if running == step.Sequence {
+			return protocol.PoolUpdateStepResult{Done: true}
+		}
+		if poolUpdateSlotSequence(st, "staged") != step.Sequence {
+			return protocol.PoolUpdateStepResult{Code: "sequence_mismatch", Message: "the staged or armed release does not match the rollout"}
 		}
 		// Guests were shut down by the rollout before this step; the engine's own refuse policy
 		// is the last guard, so a guest that appeared since blocks the reboot.

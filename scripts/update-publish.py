@@ -99,7 +99,7 @@ def public_raw(key):
 
 
 def sign_file(key, path):
-    """Write <path stem>.sig beside a metadata file; returns the signature bytes."""
+    """Return an Ed25519 detached signature for the file's exact bytes."""
     sig = subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", str(key), "-rawin", "-in", str(path)],
                          check=True, capture_output=True).stdout
     if len(sig) != 64:
@@ -108,8 +108,7 @@ def sign_file(key, path):
 
 
 def write_signed(key, base_dir, name, document, sig_name):
-    """Serialise a document with sorted keys, write it and its detached signature (document first would
-    expose a file with no signature, so both are renamed into place, signature last)."""
+    """Serialise and sign both files before installing the document, then its detached signature."""
     body = (json.dumps(document, indent=1, sort_keys=True) + "\n").encode()
     base_dir.mkdir(parents=True, exist_ok=True)
     target = base_dir / name
@@ -122,6 +121,32 @@ def write_signed(key, base_dir, name, document, sig_name):
     os.replace(tmp, target)
     os.replace(sig_tmp, sig_target)
     return body
+
+
+def ensure_manifest_signature(base, key, manifest):
+    """Keep a usable signature, or sign the immutable bytes before any channel exposes them."""
+    signature = manifest.with_name("manifest.sig")
+    trust_path = Path(base) / "trust.json"
+    if trust_path.is_file():
+        keys = json.loads(trust_path.read_text())["keys"]
+        usable = [entry["public_key"] for entry in keys if entry["role"] == "release"
+                  and not entry.get("revoked") and entry["not_after"] > stamp(now())]
+    else:
+        usable = [base64.b64encode(public_raw(key)).decode()]
+    if signature.is_file():
+        with tempfile.TemporaryDirectory() as scratch:
+            public = Path(scratch) / "key.der"
+            for encoded in usable:
+                public.write_bytes(bytes.fromhex("302a300506032b6570032100") + base64.b64decode(encoded))
+                if subprocess.run(
+                        ["openssl", "pkeyutl", "-verify", "-pubin", "-keyform", "DER", "-inkey", str(public),
+                         "-rawin", "-in", str(manifest), "-sigfile", str(signature)], capture_output=True).returncode == 0:
+                    return
+    if base64.b64encode(public_raw(key)).decode() not in usable:
+        raise PublishError("the signing key is not a usable release key of trust.json; cannot repair manifest.sig")
+    temporary = signature.with_name("manifest.sig.tmp")
+    temporary.write_bytes(sign_file(key, manifest))
+    os.replace(temporary, signature)
 
 
 def keygen(args):
@@ -485,6 +510,7 @@ def publish(args):
             for source, component in sources:
                 store_blob(args.base, source, component)
             body = published.read_bytes()
+            ensure_manifest_signature(args.base, key, published)
             print(f"release {label} (sequence {sequence}) is already published unchanged")
         else:
             for source, component in sources:
@@ -508,6 +534,7 @@ def promote(args):
     manifest = Path(args.base) / "releases" / str(args.sequence) / "manifest.json"
     if not manifest.is_file():
         raise PublishError(f"sequence {args.sequence} is not published in {args.base}")
+    ensure_manifest_signature(args.base, key, manifest)
     write_channel(args, key, args.sequence, manifest.read_bytes())
 
 

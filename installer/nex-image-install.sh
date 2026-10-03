@@ -188,7 +188,11 @@ verify_media_payloads() {
         for main in virtio-win.iso.gz controller.qcow2; do
             [ -f "$dir$main" ] || continue
             case $main in
-                *.gz) sum=$(gunzip -c "$dir$main" | sha256sum) ;;
+                *.gz)
+                    # A pipeline reports sha256sum's status even when gunzip rejects the trailer.
+                    gunzip -t "$dir$main" || die "Payload $main on the installation media has a damaged gzip stream. No disk has been changed."
+                    sum=$(gunzip -c "$dir$main" | sha256sum)
+                    ;;
                 *) sum=$(sha256sum < "$dir$main") ;;
             esac
             [ "${sum%% *}" = "$(basename "$dir")" ] || die "Payload $main on the installation media does not match its recorded SHA-256; the media is damaged. No disk has been changed."

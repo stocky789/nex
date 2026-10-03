@@ -253,7 +253,7 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 		case swapCheckpoint:
 			// The old image may be running again (libvirt autostarts it after a power loss): stop it so the
 			// checkpoint is taken from a quiescent disk.
-			if _, err = e.stopRestartedOld(ctx, j); err != nil {
+			if err = e.stopRestartedOld(ctx, j); err != nil {
 				return e.refuseRestartedOld(ctx, j, err)
 			}
 			if err = e.requireOff(ctx, j.VMID); err == nil {
@@ -268,18 +268,22 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 			j.Progress = 45
 			j, err = e.swapStep(j, swapDefine)
 		case swapDefine:
-			// The old image running again has written to the disk since the checkpoint was taken, and a
-			// rollback would lose that: stop it and take the checkpoint again.
-			stopped, serr := e.stopRestartedOld(ctx, j)
-			if serr != nil {
-				return e.refuseRestartedOld(ctx, j, serr)
-			}
-			if stopped {
-				j, err = e.swapStep(j, swapCheckpoint)
-				break
+			// An old image may have autostarted, written, and stopped again before this replay. Refresh
+			// its checkpoint while its definition still names the old image, never after defining the new one.
+			if err = e.stopRestartedOld(ctx, j); err != nil {
+				return e.refuseRestartedOld(ctx, j, err)
 			}
 			if err = e.requireOff(ctx, j.VMID); err == nil {
-				err = e.redefineSystem(ctx, j, s.Old, s.New)
+				if err = e.checkSystem(ctx, j, s.Old); err == nil {
+					if err = e.exclusiveDisk(ctx, j); err == nil {
+						err = reflinkCopy(ctx, j.Disk, s.Checkpoint)
+					}
+				} else {
+					err = e.checkSystem(ctx, j, s.New)
+				}
+				if err == nil {
+					err = e.redefineSystem(ctx, j, s.Old, s.New)
+				}
 			}
 			if err != nil {
 				j, err = fail(err)
@@ -312,35 +316,30 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 			j.Status, j.Stage, j.Progress, j.Error = "completed", swapCommitted, 100, ""
 			return j.Operation, e.save(j)
 		case swapRestore:
-			// The failed image may still be running on the data disk: stop it gracefully first. A new image
-			// that will not stop (one that never booted far enough has no guest agent) is forced off, because
-			// the checkpoint replaces everything it wrote; any other guest is never forced and the swap then
-			// needs an operator.
-			if err = e.swapShutdown(ctx, j.VMID); err != nil && ctx.Err() == nil && e.runsNewImage(ctx, j) {
-				err = e.forceOff(ctx, j.VMID)
-			}
-			if err != nil {
+			if err = e.restoreSwapData(ctx, j); err != nil {
 				return e.needsAttention(ctx, j, err)
-			}
-			// The new image may have changed the data disk if it booted, including a start the journal never
-			// saw: libvirt autostarts a persistent definition that names it.
-			if !s.Started {
-				if s.Started, err = e.namesSystem(ctx, j.VMID, s.New); err != nil {
-					return e.needsAttention(ctx, j, err)
-				}
-			}
-			if s.Started {
-				if err = e.exclusiveDisk(ctx, j); err == nil {
-					err = restoreCopy(ctx, s.Checkpoint, j.Disk)
-				}
-				if err != nil {
-					return e.needsAttention(ctx, j, err)
-				}
 			}
 			j, err = e.swapStep(j, swapRedefine)
 		case swapRedefine:
-			if err = e.requireOff(ctx, j.VMID); err == nil {
-				err = e.redefineSystem(ctx, j, s.New, s.Old)
+			// The failed image can autostart on the restored disk before this step runs. While its
+			// definition still names the new image, stop only that verified guest and restore again.
+			// If the old definition is already in place, do not undo writes from its restarted guest.
+			if err = e.checkSystem(ctx, j, s.Old); err != nil {
+				if err = e.checkSystem(ctx, j, s.New); err == nil {
+					var state string
+					if state, err = e.domState(ctx, j.VMID); err == nil && state != "shut off" {
+						err = e.runningSystem(ctx, j, s.New)
+					}
+				}
+				if err == nil {
+					err = e.restoreSwapData(ctx, j)
+				}
+				if err == nil {
+					err = e.requireOff(ctx, j.VMID)
+				}
+				if err == nil {
+					err = e.redefineSystem(ctx, j, s.New, s.Old)
+				}
 			}
 			if err != nil {
 				return e.needsAttention(ctx, j, err)
@@ -370,6 +369,33 @@ func (e *Engine) swapRun(ctx context.Context, j journal, req SwapRequest) (Opera
 	}
 }
 
+func (e *Engine) restoreSwapData(ctx context.Context, j journal) error {
+	s := j.Swap
+	// Only the failed new image with a checkpoint can be forced off. Its writes are replaced below.
+	if err := e.swapShutdown(ctx, j.VMID); err != nil {
+		if ctx.Err() != nil || !e.runsNewImage(ctx, j) {
+			return err
+		}
+		if err = e.forceOff(ctx, j.VMID); err != nil {
+			return err
+		}
+	}
+	// An unrecorded libvirt autostart can write before the journal records Started.
+	if !s.Started {
+		var err error
+		if s.Started, err = e.namesSystem(ctx, j.VMID, s.New); err != nil {
+			return err
+		}
+	}
+	if s.Started {
+		if err := e.exclusiveDisk(ctx, j); err != nil {
+			return err
+		}
+		return restoreCopy(ctx, s.Checkpoint, j.Disk)
+	}
+	return nil
+}
+
 // finishSwap records a terminal failure that changed nothing. The code stays in the journal so that a
 // replay answers as the first call did.
 func (e *Engine) finishSwap(j journal, code string, cause error) (Operation, error) {
@@ -384,15 +410,16 @@ func (e *Engine) finishSwap(j journal, code string, cause error) (Operation, err
 	return j.Operation, terminalError(j)
 }
 
-// needsAttention is the last resort: the Controller could not be brought back, so it is left stopped
-// (asked to shut down gracefully, never forced) and the operator recovers it with host-recovery.
+// needsAttention is the last resort: ask a still-owned Controller to stop gracefully, never force it,
+// and leave any guest whose ownership changed untouched for the operator.
 func (e *Engine) needsAttention(ctx context.Context, j journal, cause error) (Operation, error) {
 	// A cancelled context interrupted the restore (the service is stopping). Every restore step is
 	// idempotent, so the journal stays and repeating the request continues it.
 	if err := ctx.Err(); err != nil {
 		return j.Operation, err
 	}
-	if state, err := e.virsh(ctx, "domstate", j.VMID); err == nil && strings.TrimSpace(string(state)) == "running" {
+	if state, err := e.domState(ctx, j.VMID); err == nil && state == "running" &&
+		(e.runningSystem(ctx, j, j.Swap.Old) == nil || e.runningSystem(ctx, j, j.Swap.New) == nil) {
 		_, _ = e.virsh(ctx, "shutdown", j.VMID, "--mode", "agent")
 	}
 	j.Status = "needs_attention"
@@ -507,17 +534,15 @@ func (e *Engine) requireOff(ctx context.Context, id string) error {
 // stopRestartedOld stops, gracefully and never forced, the old image when it is running again between the
 // swap's shutdown and its redefinition: libvirt autostarts it after a power loss. Only a guest the
 // persistent definition and the running domain both say is the old image qualifies; anything else is left
-// to the step's own guards. It reports whether it stopped a guest.
-func (e *Engine) stopRestartedOld(ctx context.Context, j journal) (bool, error) {
-	s := j.Swap
+// to the step's own guards.
+func (e *Engine) stopRestartedOld(ctx context.Context, j journal) error {
 	if state, err := e.domState(ctx, j.VMID); err != nil || state == "shut off" {
-		return false, nil
+		return nil
 	}
-	b, err := e.virsh(ctx, "dumpxml", j.VMID, "--inactive")
-	if err != nil || !strings.Contains(string(b), s.Old) || strings.Contains(string(b), s.New) || e.runningSystem(ctx, j, s.Old) != nil {
-		return false, nil
+	if e.checkSystem(ctx, j, j.Swap.Old) != nil || e.runningSystem(ctx, j, j.Swap.Old) != nil {
+		return nil
 	}
-	return true, e.swapShutdown(ctx, j.VMID)
+	return e.swapShutdown(ctx, j.VMID)
 }
 
 // refuseRestartedOld ends a swap whose restarted old image would not stop. The definition still names
@@ -715,7 +740,7 @@ func (e *Engine) runningSystem(ctx context.Context, j journal, system string) er
 // filesystem can. The copy is read back against src before it is renamed into place.
 func reflinkCopy(ctx context.Context, src, dst string) error {
 	if sameContent(src, dst) == nil {
-		return nil // an earlier run of this step finished it: the VM was off the whole time
+		return nil // a quiescent disk already holds the complete copy
 	}
 	return copyVerified(ctx, src, dst)
 }
@@ -727,7 +752,7 @@ func restoreCopy(ctx context.Context, checkpoint, disk string) error {
 	if _, err := os.Stat(checkpoint); err != nil {
 		return fmt.Errorf("the data checkpoint is missing: %w", err)
 	}
-	return copyVerified(ctx, checkpoint, disk)
+	return reflinkCopy(ctx, checkpoint, disk)
 }
 
 // copyVerified copies src to dst through dst+".part": fsynced and compared with src before the rename,

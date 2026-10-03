@@ -5238,7 +5238,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.&quot;,
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, control_pending, authority_capacity, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5414,7 +5414,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed.&quot;,
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, control_pending, replica_pending, rollback_pending, authority_capacity, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable, abort_cleanup_pending, abort_not_pending, pool_unavailable, record_failed, unconfirmed. replica_pending and rollback_pending retain accepted identities; Core continues them automatically, and an exact-ID retry remains valid.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -9888,6 +9888,15 @@
     &quot;updated_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;controls&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateControlResult&quot;
+      }
     }
   },
   &quot;required&quot;: [
@@ -9902,6 +9911,98 @@
     &quot;created_at&quot;,
     &quot;updated_at&quot;
   ]
+}</pre></details>
+<details id="PoolUpdateControlResult"><summary>PoolUpdateControlResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Core-owned replicated control receipt retained across later rollouts. Exact request_id/normalized intent replay returns the original snapshot or error; snapshots omit controls. No rollout and no code means an unresolved outcome, continued by Core without Controller. replication_pending also blocks competing transitions until the terminal result is acknowledged. At most one unresolved/ACK-pending receipt exists; it names the current rollout. Terminal records have no reservation; rollback_started is valid only for an unresolved rollback_host.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateControlResult&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;request&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRequest&quot;
+    },
+    &quot;replication_pending&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The immutable terminal result awaits the existing required authority ACK; Core retries acknowledgement before admitting another transition.&quot;
+    },
+    &quot;reserved_result_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 1048576,
+      &quot;description&quot;: &quot;Reserved addressed-authority capacity for an unresolved result; included in all admission checks and released when its terminal snapshot/error is recorded.&quot;
+    },
+    &quot;rollback_started&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Durable rollback intent retaining the original host attempt/step identity; it does not prove a replica ACK or host dispatch. Transport loss is reconciled under that unchanged identity.&quot;
+    },
+    &quot;rollout&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRollout&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;code&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;request&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateRequest"><summary>PoolUpdateRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Core pool-update command input; control receipts retain the normalized rollout_id, control, force and rollback_host host_id.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;refuse&quot;,
+        &quot;shutdown&quot;,
+        &quot;evacuate&quot;
+      ]
+    },
+    &quot;dry_run&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;rollout_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;control&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;pause&quot;,
+        &quot;resume&quot;,
+        &quot;abort&quot;,
+        &quot;rollback_host&quot;
+      ]
+    },
+    &quot;force&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: []
 }</pre></details>
 <details id="PoolRolloutRequest"><summary>PoolRolloutRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -9937,7 +10038,7 @@
 <details id="PoolRolloutControl"><summary>PoolRolloutControl</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;Body of POST /api/local/v1/pool/updates/rollouts/{id}/control.&quot;,
+  &quot;description&quot;: &quot;Body of POST /api/local/v1/pool/updates/rollouts/{id}/control. Core durably binds request_id to normalized intent before acting and returns the original result/error on exact replay, even after later rollouts or master promotion; changed intent is request_conflict. Accepted replica_pending/rollback_pending controls continue on Core without another client request. Preserve their ID/body for replay. control_pending excludes competing transitions until outcome/result ACK is settled; authority_capacity refuses a new identity before persistence/effects, retaining all earlier replay records. Use a new ID after a terminal refusal or for a new action.&quot;,
   &quot;properties&quot;: {
     &quot;request_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,

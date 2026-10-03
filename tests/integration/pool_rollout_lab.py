@@ -193,8 +193,9 @@ def run_bmc(port):
     import http.server
     want = "Basic " + base64.b64encode(f"{BMC_USER}:{BMC_SECRET}".encode()).decode()
 
-    def pid(n):
-        return read_pidfile(path(f"h{n}/qemu.pid"), "qemu-system")
+    def host(n):
+        st = state()
+        return Host(st["hosts"][n - 1], st)
 
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -222,7 +223,9 @@ def run_bmc(port):
             n, parts = self.system()
             if n is None or len(parts) != 4:
                 return self.reply(404)
-            self.reply(200, {"Id": parts[3], "UUID": f"5e1ec7ed-1ab0-4000-8000-0000000000{n:02x}", "PowerState": "On" if pid(n) else "Off"})
+            target = host(n)
+            power = "On" if target.alive() else ("Unknown" if pidfile_in_use(f"{target.dir}/qemu.pid") else "Off")
+            self.reply(200, {"Id": parts[3], "UUID": f"5e1ec7ed-1ab0-4000-8000-0000000000{n:02x}", "PowerState": power})
 
         def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -231,9 +234,12 @@ def run_bmc(port):
             n, parts = self.system()
             if n is None or parts[4:] != ["Actions", "ComputerSystem.Reset"]:
                 return self.reply(404)
-            p = pid(n)
-            if p and kill_qemu(path(f"h{n}/qemu.pid")):
+            target = host(n)
+            p = target.pid()
+            if p and kill_qemu(f"{target.dir}/qemu.pid", target.qemu_cmd()):
                 sys.stderr.write(f"ForceOff sys-{n}: killed QEMU {p}\n")
+            elif pidfile_in_use(f"{target.dir}/qemu.pid"):
+                return self.reply(409, {"error": "QEMU ownership is unproven; no power cut confirmed"})
             self.reply(204)
 
     bdir = path("bmc")
@@ -252,8 +258,8 @@ def start_bmc(st):
         subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-days", "2",
                         "-subj", "/CN=nexlab-bmc", "-keyout", f"{bdir}/tls.key", "-out", f"{bdir}/tls.crt"], check=True, capture_output=True)
     p = spawn([sys.executable, os.path.abspath(__file__), "bmc-serve", str(BMC_PORT)], path("bmc.log"))
-    st["pids"].append(p.pid)
-    st["bmc_pid"] = p.pid
+    st["pids"].append(p)
+    st["bmc_pid"] = p
     save(st)
     for _ in range(50):
         try:
@@ -267,7 +273,7 @@ def start_bmc(st):
 def cmd_fence(a):
     """Start the lab BMC and record a Redfish fence profile for every host through the Controller (the product's route)."""
     st = state()
-    if not st.get("bmc_pid"):
+    if not is_ours(st.get("bmc_pid")):
         start_bmc(st)
     c = ctrl_api(st)
     c.login()
@@ -381,7 +387,7 @@ class Host:
     def qemu_cmd(self):
         h, d = self.h, self.dir
         n = h["n"]
-        return ["nice", "-n", "19", "ionice", "-c3", "qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-machine", "q35",
+        return ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-machine", "q35",
                 "-m", str(h.get("mem", 2048)), "-smp", "2", "-display", "none", "-monitor", "none",
                 "-uuid", f"5e1ec7ed-1ab0-4000-8000-0000000000{n:02x}",
                 "-serial", f"file:{d}/console.log", "-serial", f"unix:{d}/ctl.sock,server=on,wait=off",
@@ -398,11 +404,20 @@ class Host:
 
     def start(self):
         d = self.dir
-        for stale in (f"{d}/ctl.sock", f"{d}/qmp.sock"):
+        cmd = self.qemu_cmd()
+        if self.alive():
+            raise RuntimeError(f"{d}: QEMU is already running")
+        if pidfile_in_use(f"{d}/qemu.pid"):
+            raise RuntimeError(f"{d}: pidfile names an unowned live process; no VM started")
+        for stale in (f"{d}/ctl.sock", f"{d}/qmp.sock", f"{d}/qemu.pid"):
             if os.path.exists(stale):
                 os.unlink(stale)
         with open(f"{d}/qemu.err", "ab") as err:
-            subprocess.Popen(self.qemu_cmd(), stdin=subprocess.DEVNULL, stdout=err, stderr=err, start_new_session=True)
+            p = subprocess.Popen(["nice", "-n", "19", "ionice", "-c3", *cmd],
+                                 stdin=subprocess.DEVNULL, stdout=err, stderr=err, start_new_session=True)
+        identity = capture_process(p.pid, cmd)
+        with open(f"{d}/qemu.pid.identity.json", "w") as f:
+            json.dump(identity, f)
         self.ctl = None
 
     def shell(self):
@@ -418,7 +433,7 @@ class Host:
             return ""
 
     def pid(self):
-        return read_pidfile(f"{self.dir}/qemu.pid", "qemu-system")
+        return read_pidfile(f"{self.dir}/qemu.pid", self.qemu_cmd())
 
     def alive(self):
         return self.pid() is not None
@@ -465,7 +480,8 @@ nex-hostimage install --layout single --disks $l --image-dir /rel --etc-seed /se
 
 def spawn(args, log, **kw):
     with open(log, "ab") as f:
-        return subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=f, stderr=f, start_new_session=True, **kw)
+        p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=f, stderr=f, start_new_session=True, **kw)
+    return capture_process(p.pid, args)
 
 
 def cmd_up(a):
@@ -583,9 +599,11 @@ def cmd_login(a):
 def start_services(st):
     pub = path("pub")
     p = spawn([sys.executable, os.path.abspath(__file__), "serve", pub, str(st["http_port"])], path("http.log"))
-    st["pids"].append(p.pid)
+    st["pids"].append(p)
+    save(st)
     p = spawn([sys.executable, os.path.abspath(__file__), "hub", path("hub.sock")], path("hub.log"))
-    st["pids"].append(p.pid)
+    st["pids"].append(p)
+    save(st)
     for _ in range(50):
         if os.path.exists(path("hub.sock")):
             break
@@ -598,7 +616,8 @@ def start_controller(st):
                "-tls-cert", f"{cdir}/tls.crt", "-tls-key", f"{cdir}/tls.key", "-admin-password-file", f"{cdir}/admin.pw",
                "-ui-dir", f"{cdir}/ui", "-docs-dir", os.path.join(REPO, "docs/api"),
                "-source-archive", source_archive()], path("controller.log"))
-    st["controller_pid"] = p.pid
+    st["controller_pid"] = p
+    save(st)
     for _ in range(50):
         try:
             socket.create_connection(("127.0.0.1", CTRL_PORT), 1).close()
@@ -616,52 +635,119 @@ def source_archive():
     return os.path.join(LAB, "nex-source.tar.gz")
 
 
-def is_ours(pid, want):
-    """True when /proc/<pid>/cmdline still names the process we started (a recorded pid may have been reused)."""
-    if not pid:
+def process_identity(pid):
+    with open(f"/proc/{pid}/stat") as f:
+        start = int(f.read().rsplit(")", 1)[1].split()[19])
+    with open("/proc/sys/kernel/random/boot_id") as f:
+        boot = f.read().strip()
+    with open(f"/proc/{pid}/cmdline", "rb") as f:
+        argv = [os.fsdecode(a) for a in f.read().rstrip(b"\0").split(b"\0")]
+    exe = os.readlink(f"/proc/{pid}/exe")
+    with open(f"/proc/{pid}/stat") as f:
+        if start != int(f.read().rsplit(")", 1)[1].split()[19]):
+            raise ProcessLookupError("process changed while capturing identity")
+    return {"pid": pid, "start_time": start, "boot_id": boot, "exe": exe, "argv": argv}
+
+
+def capture_process(pid, argv):
+    """Capture the launched instance only after exec reaches its exact expected command."""
+    exe = os.path.realpath(shutil.which(argv[0]) or argv[0])
+    for _ in range(200):
+        try:
+            identity = process_identity(pid)
+            if identity["exe"] == exe and identity["argv"] == argv:
+                return identity
+        except (OSError, ValueError, IndexError):
+            pass
+        time.sleep(0.01)
+    raise RuntimeError(f"process {pid} did not reach the expected lab command")
+
+
+def is_ours(identity):
+    """PID, boot, start tick, executable and complete lab-specific argv must still match."""
+    if not isinstance(identity, dict) or not isinstance(identity.get("pid"), int) or identity["pid"] <= 0:
         return False
     try:
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            return want in f.read().decode(errors="replace")
-    except OSError:
+        return process_identity(identity["pid"]) == identity
+    except (OSError, ValueError, IndexError):
         return False
 
 
-def read_pidfile(file, want):
-    """The pid in a pidfile when it is still the process `want`, else None."""
+def pidfile_identity(file, argv):
     try:
         with open(file) as f:
             pid = int(f.read())
+        with open(file + ".identity.json") as f:
+            identity = json.load(f)
+        if isinstance(identity, dict) and identity.get("pid") == pid and identity.get("argv") == argv and is_ours(identity):
+            return identity
     except (OSError, ValueError):
-        return None
-    return pid if is_ours(pid, want) else None
-
-
-def kill_pid(pid, want, sig=signal.SIGKILL):
-    """SIGKILL `pid` only when its cmdline contains `want`; False when it is gone or no longer ours."""
-    if not is_ours(pid, want):
-        return False
-    try:
-        os.kill(pid, sig)
-    except (ProcessLookupError, PermissionError):
-        return False
-    return True
-
-
-def kill_qemu(pidfile):
-    """Power-cut the QEMU named by a pidfile, then delete the pidfile. False when there was no live QEMU."""
-    pid = read_pidfile(pidfile, "qemu-system")
-    ok = kill_pid(pid, "qemu-system")
-    try:
-        os.unlink(pidfile)
-    except OSError:
         pass
+    return None
+
+
+def read_pidfile(file, argv):
+    identity = pidfile_identity(file, argv)
+    return identity["pid"] if identity else None
+
+
+def kill_pid(identity, sig=signal.SIGKILL):
+    """Open the pidfd before checking identity; signal that same instance, never a reused PID."""
+    if not isinstance(identity, dict) or not isinstance(identity.get("pid"), int) or identity["pid"] <= 0:
+        return False
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        return False
+    try:
+        fd = os.pidfd_open(identity["pid"])
+    except OSError:
+        return False
+    try:
+        if not is_ours(identity):
+            return False
+        signal.pidfd_send_signal(fd, sig)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def process_record_in_use(record):
+    pid = record.get("pid") if isinstance(record, dict) else record
+    return isinstance(pid, int) and pid > 0 and os.path.exists(f"/proc/{pid}")
+
+
+def pidfile_in_use(file):
+    """A live PID blocks replacing an unverified record; it never grants signal ownership."""
+    try:
+        with open(file) as f:
+            pid = int(f.read())
+        return pid > 0 and os.path.exists(f"/proc/{pid}")
+    except (OSError, ValueError):
+        return False
+
+
+def kill_qemu(pidfile, argv):
+    identity = pidfile_identity(pidfile, argv)
+    ok = kill_pid(identity)
+    if identity and not ok:
+        return False
+    if not identity and pidfile_in_use(pidfile):
+        return False
+    for file in (pidfile, pidfile + ".identity.json"):
+        try:
+            os.unlink(file)
+        except OSError:
+            pass
     return ok
 
 
 def cmd_resume(a):
     """Start the services and the three VMs again from the disks `up` made (after `down`, or a killed scope)."""
     st = state()
+    if any(process_record_in_use(p) for p in [*st.get("pids", []), st.get("controller_pid"), st.get("bmc_pid")]) or any(
+            pidfile_in_use(path(f"h{h['n']}/qemu.pid")) for h in st["hosts"]):
+        sys.exit("lab processes are still running or ownership is unproven; no resume changes made")
     had_bmc = st.pop("bmc_pid", None)
     st["pids"] = []
     start_services(st)
@@ -832,7 +918,8 @@ def cmd_boot(a):
 def cmd_cut(a):
     """Power cut: kill -9 host N's QEMU, as the lab management controller does on a ForceOff."""
     st = state()
-    if not kill_qemu(path(f"h{a.n}/qemu.pid")):
+    host = Host(st["hosts"][a.n - 1], st)
+    if not kill_qemu(f"{host.dir}/qemu.pid", host.qemu_cmd()):
         sys.exit(f"host {a.n}: no running QEMU to cut")
     print(time.strftime("%H:%M:%S"), f"host {a.n}: power cut")
 
@@ -905,7 +992,8 @@ def cmd_rollout(a):
             last = line
         stage = " ".join(cur.get("stage", []))
         if a.kill_controller and not killed and ("b:soak" in stage or "a:drain" in stage):
-            kill_pid(st["controller_pid"], "nex-controller")
+            if not kill_pid(st["controller_pid"]):
+                sys.exit("Controller ownership is unproven; no signal sent")
             killed = time.time()
             print(time.strftime("%H:%M:%S"), "CONTROLLER KILLED", flush=True)
         if killed and not st.get("ctrl_restarted") and time.time() > killed + 25:
@@ -914,7 +1002,9 @@ def cmd_rollout(a):
             save(st)
             print(time.strftime("%H:%M:%S"), "CONTROLLER RESTARTED (same data directory)", flush=True)
         if a.cut_master_at and a.cut_master_at in stage.split():
-            kill_qemu(path("h1/qemu.pid"))
+            host = Host(st["hosts"][0], st)
+            if not kill_qemu(f"{host.dir}/qemu.pid", host.qemu_cmd()):
+                sys.exit("master QEMU ownership is unproven; no power cut performed")
             print(time.strftime("%H:%M:%S"), f"MASTER VM POWER CUT (kill -9 QEMU) at {a.cut_master_at}", flush=True)
             return
         state_ = cur.get("state", "")
@@ -955,11 +1045,12 @@ def cmd_down(a):
         st = state()
     except OSError:
         st = {"pids": []}
-    for n in (1, 2, 3):
-        kill_qemu(path(f"h{n}/qemu.pid"))
-    for pid in st.get("pids", []):
-        kill_pid(pid, "pool_rollout_lab.py")
-    kill_pid(st.get("controller_pid", 0), "nex-controller")
+    for h in st.get("hosts", HOSTS):
+        host = Host(h, st)
+        kill_qemu(f"{host.dir}/qemu.pid", host.qemu_cmd())
+    for identity in st.get("pids", []):
+        kill_pid(identity)
+    kill_pid(st.get("controller_pid"))
     time.sleep(1)
     out = subprocess.run(["pgrep", "-af", "qemu-system|nex-controller|pool_rollout_lab.py (serve|hub)|nex-pool-lab"], capture_output=True, text=True).stdout
     left = [l for l in out.splitlines() if "pgrep" not in l and str(os.getpid()) != l.split()[0]]

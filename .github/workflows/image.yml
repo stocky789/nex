@@ -21,10 +21,10 @@ on:
       - 'tests/integration/controller_image_boot.py'
       - '.gitea/workflows/image.yml'
       - '.github/workflows/image.yml'
-concurrency:
-  # Same shared act_runner as Controller foundation, Release and Recovery libvirt.
-  group: ${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}
-  cancel-in-progress: true
+defaults:
+  run:
+    # Host-side flock preserves every queued run, including on forges without queue:max.
+    shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 permissions:
   contents: read
 jobs:

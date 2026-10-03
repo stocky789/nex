@@ -29,11 +29,12 @@ been walked through on a running Controller, a host or a VM: only automated hand
   Core and Controller use plain `apt-get install` through their respective privileged paths, so
   an appliance with only its bundled binary can receive its first package. Running the matching
   command yourself does the same thing.
-- A host installed with the read-only root (new installs; see
-  [Install Nex Core](install-nex-core.md)) mounts `/` read-only. **Update** makes it writable
-  only while apt runs and mounts it read-only again afterwards, so nothing changes for you. If
-  you run `apt` yourself on such a host, open the same window around it as root, and close it
-  when it finishes (`findmnt -no OPTIONS /` shows `ro` again):
+- A classic host with a separate `/var` entry in `/etc/fstab` adopts the read-only root
+  layout at its first boot after installing a build that includes it, even if the host was
+  installed earlier; see [Install Nex Core](install-nex-core.md).
+  **Update** opens a writable window when needed and restores the original root mount
+  state afterwards. Before running `apt` yourself, check `findmnt -no OPTIONS /`.
+  If it reports `ro`, open the same window as root and close it when the command finishes:
 
   ```sh
   mount -o remount,rw /
@@ -41,7 +42,7 @@ been walked through on a running Controller, a host or a VM: only automated hand
   mount -o remount,ro /
   ```
 
-  Hosts installed before this layout have a writable root and need no window.
+  A host without a separate `/var` keeps its writable root and needs no window.
 
 ## Steps
 
@@ -83,13 +84,23 @@ Requires an image-edition host that is freshly connected and whose Nex Core and 
 action appears as the task's error, for example `update_in_progress: another update operation is running`; the host keeps
 running. Nothing is stored by the Controller: replace the Controller and the same state appears from the host's next report.
 
+If activation was interrupted, preserve the original request ID and action fields. Recovery
+requires an exact retry **against the host-local API**, for example
+`POST /api/local/v1/updates/activate` with the same `request_id` and `running_vms`, using a
+host-local root session, or the host's update CLI. Replaying the Controller API only returns
+its stored task; it does not dispatch the request to Core again. Core's exact retry resumes
+an armed request without rewriting its slot and can reschedule an interrupted delayed reboot;
+once the target booted, it does not reboot again. A cancelled interrupted staged download
+leaves the host ready for another update. `arm_incomplete` means not every partially published
+boot entry could be removed: inspect the host's state and recovery error before retrying.
+
 Updating several hosts as a pool, one at a time with members before the master, is described in [update a pool](update-a-pool.md) (unverified).
 
 ## Update channels
 
 Nex is published on two channels. **Stable**, the default, follows the `main` branch. **Development** follows the `dev` branch:
 every change merged for the next stable release is published as a pre-release numbered just below that release (for example
-`0.4.19~dev.231`), so it can be rough. Use Development on disposable hosts that should test early builds. A host installed from
+`0.4.19~~dev.231`), so it can be rough. Use Development on disposable hosts that should test early builds. A host installed from
 a development ISO starts on Development.
 
 An image-edition host follows one channel from one update server. Both are host settings
@@ -118,6 +129,9 @@ been walked through in a browser or on a running host (see [Verification](#verif
 ## Troubleshooting
 
 - Repo errors appear beside the version fields; a failed package-index refresh now says so directly. Fix connectivity or `repo_url` and check again.
+- **An image update task failed or needs attention:** the host card shows its recorded error
+  beside the task link. Open the task for details and check the running/staged image state
+  before retrying; a failed check does not mean the host has no newer release.
 - **Upgrade order for 0.4.19 (hard cutover):** update the Controller first, then update **and
   restart** Nex Core on every host in the same window. An upgraded Controller refuses a Core
   master that still runs 0.4.18 with `invalid JSON request: unknown field <name>; upgrade or
@@ -206,15 +220,18 @@ labeled simulation. The binary-only appliance helper regression is covered in a 
 test; no rebuilt package, published artifact, browser walkthrough or on-host upgrade is claimed.
 See the [single Nex Core version checks](../qa/single-nex-core-version.md).
 
-Image-edition hosts: the Controller routes, the acknowledgement that withholds `inventory.image` from an older Controller, the
-relay through the embedded agent into the host's engine and the Host images panel are covered by automated tests only
-(`go test ./internal/controller ./internal/agent ./internal/localcore`, `web/src/image-updates.test.mjs`, see
-[Phase I-3c results](../qa/image/phase3-controller.md)). No browser walkthrough on a running Controller and no update on a
-running image host through the Controller was done; the steps above are therefore unverified. The host engine itself was
-driven in a virtual machine through its command-line tool, not through these routes
-([Phase I-3b results](../qa/image/phase3-boot.md)).
+Image-edition hosts: automated tests cover the Controller routes, acknowledgement that withholds
+`inventory.image` from an older Controller, relay into the host engine and Host images panel
+(`go test ./internal/controller ./internal/agent ./internal/localcore`, `web/src/image-updates.test.mjs`;
+see [Phase I-3c results](../qa/image/phase3-controller.md)). The review-fix batch also exercised
+terminal task failures, attention and recovery in Chromium with the actual panel/styles and a
+**simulated API**, not a running Controller/host:
+[review-fix verification](../qa/2026-10-03-immutable-review-fixes.md).
+The full image update through Controller remains unverified. Historical engine proof used a VM's
+command-line tool, not these routes ([Phase I-3b results](../qa/image/phase3-boot.md)).
 
 Update channels: the package edition's channel setting (archive subtree, host-local route, refusals) and the channel picker's
 request and rendering are covered by automated tests only (`go test ./internal/nexupdate ./internal/localcore`,
-`web/src/channel.test.mjs`, `web/src/image-updates.test.mjs`). No browser walkthrough, no host switched between channels and no
-published development archive were exercised; the release side is in [publish a release](publish-a-release.md#release-channels).
+`web/src/channel.test.mjs`, `web/src/image-updates.test.mjs`). No channel-changing browser walkthrough,
+host channel switch or published development archive was exercised; the release side is in
+[publish a release](publish-a-release.md#release-channels).

@@ -4,7 +4,7 @@
 // Run with: node src/image-updates.test.mjs
 import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
-import { createElement } from "react";
+import React, { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const { ImageUpdates, imageActions, imageHosts, submitImageAction, submitImageSettings, imagePhaseLabel, imageSnapshot, reportStamp, stillFollowing } =
@@ -120,3 +120,95 @@ assert.match(devHTML, /<option value="stable">Stable<\/option>/);
 assert.match(renderToStaticMarkup(createElement(ImageUpdates, { hosts: [{ ...onDev, connection: "stale" }], api, busy: false })), /<select disabled=""/);
 const downloadingHost = host("image-host", { capabilities: ["image-update-v1"], inventory: { image: image({ phase: "downloading", operation: { id: "req-apply-0001", kind: "apply", phase: "downloading", started_at: "2026-10-02T00:00:00Z" } }) } });
 assert.match(renderToStaticMarkup(createElement(ImageUpdates, { hosts: [downloadingHost], api, busy: false })), /<select disabled=""/, "no channel change during an update operation");
+
+// Follow accepted tasks through the panel's real handlers and polling, then use the same static
+// render harness as the host-report tests. Hook dispatching matches backup-repositories.test.mjs.
+function imagePanel(reportedHost, taskAPI) {
+  const slots = [], effects = [], timers = new Map();
+  const internals = React.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  const original = { document: globalThis.document, setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval, setTimeout: globalThis.setTimeout };
+  globalThis.document = { visibilityState: "visible" };
+  globalThis.setInterval = fn => { const id = timers.size + 1; timers.set(id, fn); return id; };
+  globalThis.clearInterval = id => timers.delete(id);
+  globalThis.setTimeout = () => 0;
+  const panel = ImageUpdates({ hosts: [reportedHost], api: taskAPI, busy: false }).props.children[0][0];
+  let cursor = 0, tree;
+  const dispatcher = {
+    useState(initial) {
+      const i = cursor++;
+      slots[i] ??= { value: typeof initial === "function" ? initial() : initial };
+      return [slots[i].value, next => { slots[i].value = typeof next === "function" ? next(slots[i].value) : next; }];
+    },
+    useRef(initial) { const i = cursor++; slots[i] ??= { current: initial }; return slots[i]; },
+    useEffect(fn, deps) {
+      const i = cursor++, old = slots[i];
+      if (!old || deps.some((value, index) => !Object.is(value, old.deps[index]))) {
+        effects.push(() => { old?.cleanup?.(); slots[i] = { deps, cleanup: fn() }; });
+      }
+    },
+  };
+  const render = () => {
+    cursor = 0;
+    const previous = internals.H;
+    internals.H = dispatcher;
+    try { tree = panel.type(panel.props); } finally { internals.H = previous; }
+    effects.splice(0).forEach(fn => fn());
+    return tree;
+  };
+  const nodes = value => {
+    if (Array.isArray(value)) return value.flatMap(nodes);
+    if (!value || typeof value !== "object" || !value.props) return [];
+    return [value, ...nodes(value.props.children)];
+  };
+  const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); render(); };
+  render();
+  return {
+    html: () => renderToStaticMarkup(render()),
+    async check() { nodes(render()).find(n => n.type === "button" && n.props.children === "Check").props.onClick(); await settle(); },
+    async poll() { for (const fn of [...timers.values()]) fn(); await settle(); },
+    close() {
+      for (const slot of slots) slot?.cleanup?.();
+      if (original.document === undefined) delete globalThis.document;
+      else globalThis.document = original.document;
+      globalThis.setInterval = original.setInterval;
+      globalThis.clearInterval = original.clearInterval;
+      globalThis.setTimeout = original.setTimeout;
+    },
+  };
+}
+
+// Review 27: refusals and dispatch failures can finish a task without creating a host operation.
+for (const [status, message, tone] of [
+  ["failed", "check_throttled: wait 60 seconds before checking again", "bad"],
+  ["needs_attention", "Host did not receive the command; reconnect and retry the same request", "warn"],
+]) {
+  let current = { id: "image-task-1", status: "queued" };
+  const panel = imagePanel(reported, async (path, method) => {
+    if (method === "POST") return { operation: current };
+    if (path === "operations") return [current];
+    return { host_id: reported.id, connection: "fresh", supported: true, image: reported.inventory.image };
+  });
+  try {
+    await panel.check();
+    current = { id: "image-task-1", status, error: message };
+    await panel.poll();
+    const failedHTML = panel.html();
+    assert.ok(failedHTML.includes(`<p class="banner ${tone}" role="alert">${message}</p>`), `${status} task exposes its literal actionable error before any host operation exists`);
+    assert.match(failedHTML, /href="#\/tasks" title="Task image-task-1">image-task-1<\/a>/, "the failed task stays linked");
+    assert.ok(failedHTML.includes(`${status}.`), "the task retains its reported terminal status");
+    assert.match(failedHTML, /2026\.10\.2 \(sequence 2, slot a\)/, "task failure does not hide the running image");
+    assert.doesNotMatch(failedHTML, /Last operation/, "the host has reported no operation");
+
+    current = { id: "image-task-2", status: "queued" };
+    await panel.check();
+    assert.ok(!panel.html().includes(message), "a new accepted task replaces the obsolete failure");
+    current = { id: "image-task-2", status: "succeeded" };
+    await panel.poll();
+    const successHTML = panel.html();
+    assert.match(successHTML, /href="#\/tasks" title="Task image-task-2">image-task-2<\/a> succeeded/);
+    assert.ok(!successHTML.includes(message), "a successful task has no obsolete failure");
+    assert.doesNotMatch(successHTML, /class="banner (?:bad|warn)" role="alert"/);
+  } finally {
+    panel.close();
+  }
+}

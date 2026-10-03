@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -30,6 +31,7 @@ type fakeUpdateHost struct {
 	guests      map[string]bool // vm id -> running
 	starts      map[string]int  // vm id -> number of start requests that really started it
 	activations map[string]int  // step id -> times the engine armed
+	rollbacks   map[string]int  // rollback identities that actually armed the previous slot
 	downFor     int             // status/step calls that still fail while the host reboots
 	bootsTo     uint64          // release the host comes back on
 	bootFails   bool            // never comes back
@@ -63,10 +65,12 @@ type fakeUpdatePool struct {
 	hosts  map[string]*fakeUpdateHost
 	mu     sync.Mutex
 	// downNow is the set of hosts that are rebooting right now.
-	maxDown        int
-	maxMaintenance int
-	crashAfterStep func(host, action string) // called after a step returns, to simulate a crash
-	witness        bool                      // a qdevice witness votes in the pool's Corosync
+	maxDown           int
+	maxMaintenance    int
+	activationOrder   []string
+	crashAfterStep    func(host, action string) // called after a step returns, to simulate a crash
+	witness           bool                      // a qdevice witness votes in the pool's Corosync
+	loseRollbackReply bool
 }
 
 func (p *fakeUpdatePool) host(id string) *fakeUpdateHost { return p.hosts[id] }
@@ -262,6 +266,7 @@ func (p *fakeUpdatePool) Step(_ context.Context, member protocol.PoolMember, ste
 				p.t.Fatalf("activate on %s leaves %d live votes of the %d needed", h.id, q.TotalVotes-1, q.Quorum)
 			}
 			h.downFor = 2
+			p.activationOrder = append(p.activationOrder, h.id)
 			h.phase = "armed"
 			h.sequence = h.bootsTo
 			h.staged = false
@@ -275,10 +280,17 @@ func (p *fakeUpdatePool) Step(_ context.Context, member protocol.PoolMember, ste
 			res = protocol.PoolUpdateStepResult{}
 		}
 	case "rollback":
-		h.sequence, h.phase, h.downFor = h.sequence-1, "rolled_back", 1
+		if h.rollbacks[step.StepID] == 0 {
+			h.sequence, h.phase, h.downFor = h.sequence-1, "rolled_back", 1
+			h.rollbacks[step.StepID]++
+		}
 	}
 	if p.crashAfterStep != nil {
 		p.crashAfterStep(h.id, step.Action)
+	}
+	if step.Action == "rollback" && p.loseRollbackReply {
+		p.loseRollbackReply = false
+		return protocol.PoolUpdateStepResult{}, errors.New("rollback reply lost after delivery")
 	}
 	return res, nil
 }
@@ -314,6 +326,7 @@ type updateLab struct {
 	// in-memory state is thrown away between steps.
 	restartCoordinator bool
 	c                  *poolUpdateCoordinator
+	controlRequests    int
 }
 
 // newUpdateLab builds a pool master with n hosts (master-1 plus members) with addresses so the
@@ -332,7 +345,7 @@ func newUpdateLab(t *testing.T, n int) *updateLab {
 		member.PeerOrigin = fmt.Sprintf("https://192.0.2.%d:8443", i)
 		members = append(members, member)
 		pool.hosts[id] = &fakeUpdateHost{id: id, sequence: 1, phase: "committed", guests: map[string]bool{}, starts: map[string]int{},
-			activations: map[string]int{}, stageSeen: map[string]bool{}, stageFailed: map[string]string{}, failedOps: map[string]bool{},
+			activations: map[string]int{}, rollbacks: map[string]int{}, stageSeen: map[string]bool{}, stageFailed: map[string]string{}, failedOps: map[string]bool{},
 			bootsTo: 2, state: 2, channel: "stable", free: 1 << 40, capability: true,
 			target: protocol.PoolUpdateTarget{Sequence: 2, StateFormat: 2, MixedPool: true, RequiredBytes: 1 << 20}}
 	}
@@ -366,6 +379,11 @@ func (l *updateLab) coordinator() *poolUpdateCoordinator {
 func (l *updateLab) start(id, vms string) error {
 	_, _, err := l.coordinator().Start(context.Background(), id, protocol.PoolUpdateRequest{Sequence: 2, RunningVMs: vms})
 	return err
+}
+
+func (l *updateLab) nextControlID() string {
+	l.controlRequests++
+	return fmt.Sprintf("control-%d", l.controlRequests)
 }
 
 func (l *updateLab) rollout() *protocol.PoolUpdateRollout {
@@ -602,7 +620,7 @@ func TestRefusePolicyWaitsThenPausesNamingTheGuest(t *testing.T) {
 	}
 	// The operator stops the guest and resumes: the rollout completes.
 	lab.pool.host("member-3").guests["vm-busy"] = false
-	if _, err := lab.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: "refuse", Control: "resume"}); err != nil {
+	if _, err := lab.c.Control(context.Background(), lab.nextControlID(), protocol.PoolUpdateRequest{RolloutID: "refuse", Control: "resume"}); err != nil {
 		t.Fatal(err)
 	}
 	if r = lab.run(400, ended); r.State != protocol.PoolUpdateFinalized {
@@ -800,7 +818,7 @@ func TestControlsPauseResumeAbortRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctl := func(control, host string) (*protocol.PoolUpdateRollout, error) {
-		return lab.c.Control(ctx, protocol.PoolUpdateRequest{RolloutID: "c", Control: control, HostID: host})
+		return lab.c.Control(ctx, lab.nextControlID(), protocol.PoolUpdateRequest{RolloutID: "c", Control: control, HostID: host})
 	}
 	// pause takes effect between hosts, not in the middle of one.
 	if r, err := ctl("pause", ""); err != nil || r.State != protocol.PoolUpdatePaused || r.Pause.Code != protocol.PoolUpdatePausedByOperator {
@@ -840,7 +858,7 @@ func TestControlsPauseResumeAbortRollback(t *testing.T) {
 	if _, err := ctl("resume", ""); refusalCode(err) != "rollout_finished" {
 		t.Fatalf("resume after abort: %v", err)
 	}
-	if _, err := lab.c.Control(ctx, protocol.PoolUpdateRequest{RolloutID: "nope", Control: "pause"}); refusalCode(err) != "rollout_not_found" {
+	if _, err := lab.c.Control(ctx, lab.nextControlID(), protocol.PoolUpdateRequest{RolloutID: "nope", Control: "pause"}); refusalCode(err) != "rollout_not_found" {
 		t.Fatalf("unknown rollout: %v", err)
 	}
 	// After an abort the pool can roll out again.
@@ -1040,7 +1058,7 @@ func TestGatesAreRunAgainBeforeMaintenanceAndBeforeActivate(t *testing.T) {
 		if r.Pause.Code != protocol.PoolUpdateQuorumMargin || r.Hosts[0].Stage != stageStaged {
 			t.Fatalf("pause = %+v hosts = %+v", r.Pause, r.Hosts)
 		}
-		if _, err := lab.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: "gate-r", Control: "abort"}); err != nil {
+		if _, err := lab.c.Control(context.Background(), lab.nextControlID(), protocol.PoolUpdateRequest{RolloutID: "gate-r", Control: "abort"}); err != nil {
 			t.Fatal(err)
 		}
 		if m, _ := memberOf(lab.pool.master, "member-2"); m.Maintenance {
@@ -1072,14 +1090,14 @@ func TestResumeRunsTheGatesAgain(t *testing.T) {
 	lab.pool.host("member-3").guests["vm-busy"] = false
 	lab.pool.host("member-2").partitioned = true // updated earlier, ready in the records, not voting now
 	resume := protocol.PoolUpdateRequest{RolloutID: "resume-gate", Control: "resume"}
-	if _, err := lab.c.Control(context.Background(), resume); refusalCode(err) != protocol.PoolUpdateQuorumMargin {
+	if _, err := lab.c.Control(context.Background(), lab.nextControlID(), resume); refusalCode(err) != protocol.PoolUpdateQuorumMargin {
 		t.Fatalf("resume on a lost majority: %v", err)
 	}
 	if r := lab.rollout(); r.State != protocol.PoolUpdatePaused {
 		t.Fatalf("a refused resume changed the record: %+v", r)
 	}
 	lab.pool.host("member-2").partitioned = false
-	if _, err := lab.c.Control(context.Background(), resume); err != nil {
+	if _, err := lab.c.Control(context.Background(), lab.nextControlID(), resume); err != nil {
 		t.Fatal(err)
 	}
 	if r := lab.run(400, ended); r.State != protocol.PoolUpdateFinalized {
@@ -1153,7 +1171,7 @@ func TestResumeAfterRollbackStagesAgainUnderANewAttempt(t *testing.T) {
 	}
 	lab.run(400, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageDone })
 	ctl := func(control, host string) error {
-		_, err := lab.c.Control(ctx, protocol.PoolUpdateRequest{RolloutID: "restage-1", Control: control, HostID: host})
+		_, err := lab.c.Control(ctx, lab.nextControlID(), protocol.PoolUpdateRequest{RolloutID: "restage-1", Control: control, HostID: host})
 		return err
 	}
 	if err := ctl("pause", ""); err != nil {
@@ -1229,7 +1247,7 @@ func TestControllerFirstFailurePausesBeforeAnyHostAndResumeAsksAgain(t *testing.
 			t.Fatalf("%s went on with the release although the Controller swap failed", id)
 		}
 	}
-	if _, err := lab.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: "ctl-first-2", Control: "resume"}); err != nil {
+	if _, err := lab.c.Control(context.Background(), lab.nextControlID(), protocol.PoolUpdateRequest{RolloutID: "ctl-first-2", Control: "resume"}); err != nil {
 		t.Fatal(err)
 	}
 	r = lab.run(600, ended)
@@ -1271,7 +1289,7 @@ func (l *updateLab) editMembership(change func(*protocol.PoolMembership)) {
 
 func (l *updateLab) control(id, control, host string) (*protocol.PoolUpdateRollout, error) {
 	l.Helper()
-	return l.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: id, Control: control, HostID: host})
+	return l.c.Control(context.Background(), l.nextControlID(), protocol.PoolUpdateRequest{RolloutID: id, Control: control, HostID: host})
 }
 
 // A host that already runs and has committed the release (it joined on it, or an aborted rollout had
@@ -1507,7 +1525,7 @@ func aborted(r *protocol.PoolUpdateRollout) bool { return r.State == protocol.Po
 
 func (l *updateLab) forceAbort(id string) (*protocol.PoolUpdateRollout, error) {
 	l.Helper()
-	return l.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: id, Control: "abort", Force: true})
+	return l.c.Control(context.Background(), l.nextControlID(), protocol.PoolUpdateRequest{RolloutID: id, Control: "abort", Force: true})
 }
 
 // An abort that cannot confirm its cleanup does not end: the rollout stays paused
@@ -1604,7 +1622,7 @@ func TestForcedAbortAndWhatAPendingAbortRefuses(t *testing.T) {
 	if _, err := lab.forceAbort("force-abort"); refusalCode(err) != "abort_not_pending" {
 		t.Fatalf("force on a rollout that is not being aborted: %v", err)
 	}
-	if _, err := lab.c.Control(context.Background(), protocol.PoolUpdateRequest{RolloutID: "force-abort", Control: "pause", Force: true}); refusalCode(err) != "invalid_request" {
+	if _, err := lab.c.Control(context.Background(), lab.nextControlID(), protocol.PoolUpdateRequest{RolloutID: "force-abort", Control: "pause", Force: true}); refusalCode(err) != "invalid_request" {
 		t.Fatalf("force with another control: %v", err)
 	}
 	if r, err := lab.control("force-abort", "abort", ""); err != nil || r.Pause == nil || r.Pause.Code != protocol.PoolUpdateAbortCleanupPending {
@@ -1936,5 +1954,976 @@ func TestAReplicaPushThatFailsIsLoggedAndTheRolloutCarriesOn(t *testing.T) {
 				t.Fatalf("final = %+v pause %+v", r, r.Pause)
 			}
 		})
+	}
+}
+
+func TestStartReplayIncludesNormalizedRunningVMsPolicy(t *testing.T) {
+	for _, first := range []string{"", "refuse", "shutdown"} {
+		t.Run("policy_"+first, func(t *testing.T) {
+			lab := newUpdateLab(t, 3)
+			if err := lab.start("policy-replay", first); err != nil {
+				t.Fatal(err)
+			}
+			before := lab.rollout()
+			equivalent := "refuse"
+			changed := "shutdown"
+			if first == "refuse" {
+				equivalent = ""
+			} else if first == "shutdown" {
+				equivalent, changed = "shutdown", "refuse"
+			}
+			if err := lab.start("policy-replay", equivalent); err != nil {
+				t.Fatalf("equivalent replay: %v", err)
+			}
+			if err := lab.start("policy-replay", changed); refusalCode(err) != "request_conflict" {
+				t.Fatalf("changed shutdown intent accepted: %v", err)
+			}
+			if !reflect.DeepEqual(before, lab.rollout()) {
+				t.Fatal("replay changed the durable rollout")
+			}
+		})
+	}
+}
+
+func TestControlReplayDoesNotRepeatRollbackAfterResumeAndLaterRollout(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	ctx := context.Background()
+	if err := lab.start("control-replay", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(400, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageDone })
+	if _, err := lab.control("control-replay", "pause", ""); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.PoolUpdateRequest{RolloutID: "control-replay", Control: "rollback_host", HostID: "member-2"}
+	first, err := lab.c.Control(ctx, "rollback-replay", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lab.pool.tick()
+	if _, err = lab.control("control-replay", "resume", ""); err != nil {
+		t.Fatal(err)
+	}
+	if r := lab.run(600, ended); r.State != protocol.PoolUpdateFinalized {
+		t.Fatalf("resume ended at %+v", r)
+	}
+	lab.c = NewPoolUpdateCoordinator(lab.pool.master)
+	got, err := lab.c.Control(ctx, "rollback-replay", request)
+	if err != nil || !reflect.DeepEqual(got, first) {
+		t.Fatalf("replay after resume = %+v %v; want %+v", got, err, first)
+	}
+	for _, host := range lab.pool.hosts {
+		host.target.Sequence, host.bootsTo = 3, 3
+	}
+	if _, _, err = lab.c.Start(ctx, "later-rollout", protocol.PoolUpdateRequest{Sequence: 3}); err != nil {
+		t.Fatal(err)
+	}
+	latest := lab.rollout()
+	promoted := peerStore(t, "member-3", "pool-1")
+	if _, err = AdoptPoolUpdateOnPromotion(promoted, latest); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := Membership(lab.pool.master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenanceMembership(t, promoted, "member-3", membership.Members...)
+	lab.pool.master, lab.c = promoted, NewPoolUpdateCoordinator(promoted)
+	before := lab.rollout()
+	got, err = lab.c.Control(ctx, "rollback-replay", request)
+	if err != nil || !reflect.DeepEqual(got, first) {
+		t.Fatalf("replay after new rollout and promotion = %+v %v", got, err)
+	}
+	if !reflect.DeepEqual(before, lab.rollout()) || len(lab.pool.host("member-2").rollbacks) != 1 || lab.pool.host("member-2").sequence != 2 {
+		t.Fatal("delayed control changed current rollout or rolled the host back again")
+	}
+	for _, changed := range []protocol.PoolUpdateRequest{
+		{RolloutID: "later-rollout", Control: "rollback_host", HostID: "member-2"},
+		{RolloutID: "control-replay", Control: "rollback_host", HostID: "master-1"},
+		{RolloutID: "control-replay", Control: "resume"},
+	} {
+		if _, err = lab.c.Control(ctx, "rollback-replay", changed); refusalCode(err) != "request_conflict" {
+			t.Fatalf("changed intent accepted: %+v %v", changed, err)
+		}
+	}
+}
+
+func TestControlReplaysOriginalRefusalAfterStateChanges(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("refused-control", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.PoolUpdateRequest{RolloutID: "refused-control", Control: "rollback_host", HostID: "member-2"}
+	_, first := lab.c.Control(context.Background(), "refusal-replay", request)
+	if refusalCode(first) != "rollout_running" {
+		t.Fatalf("first refusal = %v", first)
+	}
+	if _, err := lab.control("refused-control", "pause", ""); err != nil {
+		t.Fatal(err)
+	}
+	lab.c = NewPoolUpdateCoordinator(lab.pool.master)
+	if _, err := lab.c.Control(context.Background(), "refusal-replay", request); err == nil || err.Error() != first.Error() {
+		t.Fatalf("refusal replay = %v; want %v", err, first)
+	}
+	request.Control, request.HostID = "resume", ""
+	if _, err := lab.c.Control(context.Background(), "refusal-replay", request); refusalCode(err) != "request_conflict" {
+		t.Fatalf("refused identity reused with changed intent: %v", err)
+	}
+}
+
+func TestPendingRollbackBlocksTransitionsAndRetriesTheSameHostOperation(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	ctx := context.Background()
+	if err := lab.start("pending-control", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(400, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageDone })
+	if _, err := lab.control("pending-control", "pause", ""); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.PoolUpdateRequest{RolloutID: "pending-control", Control: "rollback_host", HostID: "member-2"}
+	lab.pool.crashAfterStep = func(_, action string) {
+		if action == "rollback" {
+			panic("crash after rollback")
+		}
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("rollback did not reach the simulated crash")
+			}
+		}()
+		_, _ = lab.c.Control(ctx, "pending-rollback", request)
+	}()
+	lab.pool.crashAfterStep = nil
+	before := lab.rollout()
+	if _, err := lab.control("pending-control", "resume", ""); refusalCode(err) != "control_pending" {
+		t.Fatalf("resume overtook pending rollback: %v", err)
+	}
+	changed := request
+	changed.HostID = "master-1"
+	if _, err := lab.c.Control(ctx, "pending-rollback", changed); refusalCode(err) != "request_conflict" {
+		t.Fatalf("pending intent changed: %v", err)
+	}
+	if err := lab.c.Advance(ctx); refusalCode(err) != "rollback_pending" || !reflect.DeepEqual(before, lab.rollout()) {
+		t.Fatalf("Advance did not preserve ambiguous pending control: %v", err)
+	}
+	lab.pool.tick()
+	lab.c = NewPoolUpdateCoordinator(lab.pool.master)
+	result, err := lab.c.Control(ctx, "pending-rollback", request)
+	if err != nil || result.Pause == nil || result.Pause.Code != protocol.PoolUpdateRolledBack {
+		t.Fatalf("pending retry = %+v %v", result, err)
+	}
+	if len(lab.pool.host("member-2").rollbacks) != 1 || lab.pool.host("member-2").sequence != 1 {
+		t.Fatal("pending replay armed a second rollback")
+	}
+	if _, err = lab.control("pending-control", "resume", ""); err != nil {
+		t.Fatalf("completed pending control still blocks resume: %v", err)
+	}
+}
+
+func TestPromotedMasterUpdatesLastWithoutDisplacingAnActiveHost(t *testing.T) {
+	for _, tc := range []struct {
+		name, promote, stage string
+		want                 []string
+	}{
+		{"untouched_master", "member-2", stageStaged, []string{"member-3", "master-1", "member-2"}},
+		{"active_member", "member-3", stageDrain, []string{"member-2", "master-1", "member-3"}},
+		{"active_master_finishes_safely", "member-2", stageDrain, []string{"member-2", "member-3", "master-1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lab := newUpdateLab(t, 3)
+			lab.pool.host("member-2").guests["vm-active"] = true
+			// Keep member-2 first despite its guest, then test preservation of the active host.
+			lab.pool.host("member-3").guests["vm-other"] = true
+			if err := lab.start("promotion-order", "shutdown"); err != nil {
+				t.Fatal(err)
+			}
+			lab.run(100, func(r *protocol.PoolUpdateRollout) bool {
+				return r.Phase == "hosts" && r.Hosts[0].Stage == tc.stage
+			})
+			inherited := lab.rollout()
+			membership, err := Membership(lab.pool.master)
+			if err != nil {
+				t.Fatal(err)
+			}
+			promoted := peerStore(t, tc.promote, "pool-1")
+			if _, err = AdoptPoolUpdateOnPromotion(promoted, inherited); err != nil {
+				t.Fatal(err)
+			}
+			maintenanceMembership(t, promoted, tc.promote, membership.Members...)
+			lab.pool.master, lab.c = promoted, NewPoolUpdateCoordinator(promoted)
+			if tc.stage == stageDrain {
+				adopted := lab.rollout()
+				if adopted.Hosts[0].HostID != "member-2" || !reflect.DeepEqual(adopted.Hosts[0], inherited.Hosts[0]) {
+					t.Fatal("promotion displaced or rewrote the host already in maintenance")
+				}
+			}
+			if _, err = lab.control("promotion-order", "resume", ""); err != nil {
+				t.Fatal(err)
+			}
+			if r := lab.run(600, ended); r.State != protocol.PoolUpdateFinalized {
+				t.Fatalf("promoted rollout = %+v", r)
+			}
+			if !reflect.DeepEqual(lab.pool.activationOrder, tc.want) {
+				t.Fatalf("activation order = %v; want %v", lab.pool.activationOrder, tc.want)
+			}
+			for _, host := range lab.pool.hosts {
+				for vmID, running := range host.guests {
+					if !running || host.starts[vmID] != 1 {
+						t.Fatalf("promotion stranded or restarted guest twice: %s %s", host.id, vmID)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPendingControlStopsCoordinatorBeforeAnyHostTransition(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("pending-abort", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(50, func(r *protocol.PoolUpdateRollout) bool { return r.Phase == "hosts" })
+	r := lab.rollout()
+	r.Controls = append(r.Controls, protocol.PoolUpdateControlResult{RequestID: "interrupted-abort",
+		Request: protocol.PoolUpdateRequest{RolloutID: r.ID, Control: "abort"}})
+	if err := savePoolUpdate(lab.pool.master, r); err != nil {
+		t.Fatal(err)
+	}
+	lab.c = NewPoolUpdateCoordinator(lab.pool.master)
+	if err := lab.c.Advance(context.Background()); err != nil || lab.rollout().State != protocol.PoolUpdateAborted || len(lab.pool.activationOrder) != 0 {
+		t.Fatalf("coordinator did not complete accepted abort before advancing hosts: %v", err)
+	}
+	if _, err := lab.c.Control(context.Background(), "interrupted-abort", r.Controls[0].Request); err != nil {
+		t.Fatalf("accepted abort could not finish: %v", err)
+	}
+	if lab.rollout().State != protocol.PoolUpdateAborted {
+		t.Fatal("pending abort did not end the rollout")
+	}
+}
+
+func TestRollbackReplicationFailureRetainsSafeReplayAcrossPromotion(t *testing.T) {
+	for _, failure := range []string{"intent", "result"} {
+		t.Run(failure, func(t *testing.T) {
+			lab := newUpdateLab(t, 3)
+			ctx := context.Background()
+			if err := lab.start("replicated-control", "refuse"); err != nil {
+				t.Fatal(err)
+			}
+			lab.run(400, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageDone })
+			if _, err := lab.control("replicated-control", "pause", ""); err != nil {
+				t.Fatal(err)
+			}
+			request := protocol.PoolUpdateRequest{RolloutID: "replicated-control", Control: "rollback_host", HostID: "member-2"}
+			fail := true
+			var acknowledged *protocol.PoolUpdateRollout
+			pushPoolAuthorityReplicasAfterUpdate = func(context.Context, *Store, time.Duration) error {
+				r := lab.rollout()
+				control := r.Controls[len(r.Controls)-1]
+				pending := control.Rollout == nil && control.Code == ""
+				if fail && (failure == "intent" && pending || failure == "result" && !pending) {
+					return errors.New("replica delivery unavailable")
+				}
+				acknowledged = r
+				return nil
+			}
+			if _, err := lab.c.Control(ctx, "replicated-rollback", request); refusalCode(err) != "replica_pending" {
+				t.Fatalf("replication failure = %v", err)
+			}
+			host := lab.pool.host("member-2")
+			if failure == "intent" {
+				if len(host.rollbacks) != 0 {
+					t.Fatal("rollback ran before its intent was acknowledged")
+				}
+				if _, err := lab.control(request.RolloutID, "resume", ""); refusalCode(err) != "control_pending" {
+					t.Fatalf("resume overtook unacknowledged rollback: %v", err)
+				}
+			} else {
+				if acknowledged == nil || poolUpdatePendingControl(acknowledged) == nil || len(host.rollbacks) != 1 {
+					t.Fatal("result failure did not leave acknowledged pending intent and one rollback")
+				}
+				membership, err := Membership(lab.pool.master)
+				if err != nil {
+					t.Fatal(err)
+				}
+				promoted := peerStore(t, "member-3", "pool-1")
+				if _, err = AdoptPoolUpdateOnPromotion(promoted, acknowledged); err != nil {
+					t.Fatal(err)
+				}
+				maintenanceMembership(t, promoted, "member-3", membership.Members...)
+				lab.pool.master, lab.c = promoted, NewPoolUpdateCoordinator(promoted)
+				lab.pool.tick()
+			}
+			fail = false
+			if failure == "result" {
+				lab.pool.master.State.Journal = nil // The new master has none of the old command journal.
+				if err := lab.c.Advance(ctx); err != nil || poolUpdatePendingControl(lab.rollout()) != nil {
+					t.Fatalf("promoted Core needed old journal or Controller retry to finish accepted control: %v", err)
+				}
+			}
+			got, err := lab.c.Control(ctx, "replicated-rollback", request)
+			if err != nil || got.Pause == nil || got.Pause.Code != protocol.PoolUpdateRolledBack || len(host.rollbacks) != 1 || host.sequence != 1 {
+				t.Fatalf("replication retry = %+v %v; rollbacks %v sequence %d", got, err, host.rollbacks, host.sequence)
+			}
+			replay, err := lab.c.Control(ctx, "replicated-rollback", request)
+			if err != nil || !reflect.DeepEqual(got, replay) || len(host.rollbacks) != 1 {
+				t.Fatalf("settled control replay = %+v %v", replay, err)
+			}
+		})
+	}
+}
+
+func TestRelayedControlUsesStableRequestIdentity(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("relayed-control", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	cmd := protocol.Command{OperationID: "controller-operation-1", Kind: "pool-update",
+		Pool: &protocol.PoolCommand{RequestID: "relayed-pause", Action: "update-control",
+			Membership: protocol.PoolMembership{MasterHostID: "master-1"},
+			Update:     &protocol.PoolUpdateRequest{RolloutID: "relayed-control", Control: "pause"}}}
+	if result := ExecutePoolUpdate(context.Background(), lab.pool.master, cmd); result.Status != "succeeded" {
+		t.Fatalf("relayed pause = %+v", result)
+	}
+	if _, err := lab.control("relayed-control", "resume", ""); err != nil {
+		t.Fatal(err)
+	}
+	cmd.OperationID = "controller-operation-retry"
+	if result := ExecutePoolUpdate(context.Background(), lab.pool.master, cmd); result.Status != "succeeded" || lab.rollout().State != protocol.PoolUpdateRunning {
+		t.Fatalf("relayed retry applied pause again: %+v", result)
+	}
+	cmd.Pool.Update.Control = "abort"
+	if result := ExecutePoolUpdate(context.Background(), lab.pool.master, cmd); result.Status != "failed" || !strings.HasPrefix(result.Error, "request_conflict:") {
+		t.Fatalf("relayed identity accepted changed intent: %+v", result)
+	}
+}
+
+func TestCoreContinuesAmbiguousRollbackWithoutController(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	ctx := context.Background()
+	if err := lab.start("lost-rollback", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(400, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageDone })
+	if _, err := lab.control("lost-rollback", "pause", ""); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.PoolUpdateRequest{RolloutID: "lost-rollback", Control: "rollback_host", HostID: "member-2"}
+	lab.pool.loseRollbackReply = true
+	if _, err := lab.c.Control(ctx, "lost-response", request); refusalCode(err) != "rollback_pending" {
+		t.Fatalf("ambiguous rollback = %v", err)
+	}
+	if _, err := lab.control("lost-rollback", "resume", ""); refusalCode(err) != "control_pending" {
+		t.Fatalf("resume accepted while rollback outcome was unknown: %v", err)
+	}
+	if err := lab.c.Advance(ctx); refusalCode(err) != "rollback_pending" {
+		t.Fatalf("offline rollback outcome was settled: %v", err)
+	}
+	lab.pool.tick()
+	lab.c = NewPoolUpdateCoordinator(lab.pool.master)
+	if err := lab.c.Advance(ctx); err != nil {
+		t.Fatalf("Core continuation did not reconcile rollback: %v", err)
+	}
+	host := lab.pool.host("member-2")
+	if len(host.rollbacks) != 1 || host.sequence != 1 || poolUpdateHostRecord(lab.rollout(), host.id).Stage != stageRolledBack {
+		t.Fatal("continuation lost the rollback outcome or armed it twice")
+	}
+	first, err := lab.c.Control(ctx, "lost-response", request)
+	if err != nil || first.Pause == nil || first.Pause.Code != protocol.PoolUpdateRolledBack {
+		t.Fatalf("reconciled result replay = %+v %v", first, err)
+	}
+	if _, err = lab.control("lost-rollback", "resume", ""); err != nil {
+		t.Fatal(err)
+	}
+	if r := lab.run(600, ended); r.State != protocol.PoolUpdateFinalized {
+		t.Fatalf("resume skipped the rolled-back host: %+v", r)
+	}
+	replay, err := lab.c.Control(ctx, "lost-response", request)
+	if err != nil || !reflect.DeepEqual(replay, first) || len(host.rollbacks) != 1 {
+		t.Fatalf("original result changed after resumed update: %+v %v", replay, err)
+	}
+}
+
+func TestUnacknowledgedControlResultBlocksTransitionsUntilCoreAcknowledges(t *testing.T) {
+	for _, action := range []string{"abort", "rollback_host"} {
+		t.Run(action, func(t *testing.T) {
+			lab := newUpdateLab(t, 3)
+			ctx := context.Background()
+			if err := lab.start("unacked-result", "refuse"); err != nil {
+				t.Fatal(err)
+			}
+			request := protocol.PoolUpdateRequest{RolloutID: "unacked-result", Control: action}
+			if action == "rollback_host" {
+				lab.run(400, func(r *protocol.PoolUpdateRollout) bool { return r.Hosts[0].Stage == stageDone })
+				if _, err := lab.control(request.RolloutID, "pause", ""); err != nil {
+					t.Fatal(err)
+				}
+				request.HostID = "member-2"
+			}
+			fail := true
+			pushPoolAuthorityReplicasAfterUpdate = func(context.Context, *Store, time.Duration) error {
+				r := lab.rollout()
+				if fail && r.Controls[len(r.Controls)-1].Rollout != nil {
+					return errors.New("terminal replica reply unavailable")
+				}
+				return nil
+			}
+			if _, err := lab.c.Control(ctx, "unacked-control", request); refusalCode(err) != "replica_pending" {
+				t.Fatalf("failed result ACK = %v", err)
+			}
+			before := lab.rollout()
+			original := before.Controls[len(before.Controls)-1].Rollout
+			if _, err := lab.control(request.RolloutID, "resume", ""); refusalCode(err) != "control_pending" {
+				t.Fatalf("new control overtook unacknowledged terminal result: %v", err)
+			}
+			if _, _, err := lab.c.Start(ctx, "new-rollout", protocol.PoolUpdateRequest{Sequence: 2}); refusalCode(err) != "control_pending" {
+				t.Fatalf("new rollout overtook unacknowledged terminal result: %v", err)
+			}
+			if err := lab.c.Advance(ctx); refusalCode(err) != "replica_pending" || !reflect.DeepEqual(before, lab.rollout()) {
+				t.Fatalf("Advance changed unacknowledged result: %v", err)
+			}
+			fail = false
+			lab.c = NewPoolUpdateCoordinator(lab.pool.master)
+			if err := lab.c.Advance(ctx); err != nil || poolUpdatePendingControl(lab.rollout()) != nil {
+				t.Fatalf("Core did not finish result ACK: %v", err)
+			}
+			replay, err := lab.c.Control(ctx, "unacked-control", request)
+			if err != nil || !reflect.DeepEqual(replay, original) {
+				t.Fatalf("result changed during ACK recovery: %+v %v", replay, err)
+			}
+		})
+	}
+}
+
+func TestControlCapacityAdmissionPreservesAcceptedReplayHistory(t *testing.T) {
+	lab := newUpdateLab(t, 64)
+	ctx := context.Background()
+	if err := lab.start("large-history", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.rollout()
+	snapshot := *r
+	snapshot.Controls = nil
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := (protocol.PoolReplicaLimit - len(raw) - 16384) / (len(raw) + 256)
+	for i := range count {
+		r.Controls = append(r.Controls, protocol.PoolUpdateControlResult{
+			RequestID: fmt.Sprintf("retained-control-%03d", i),
+			Request:   protocol.PoolUpdateRequest{RolloutID: r.ID, Control: "pause"}, Rollout: &snapshot})
+	}
+	if err = savePoolUpdate(lab.pool.master, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = buildPoolAuthorityReplica(lab.pool.master); err != nil {
+		t.Fatalf("accepted history was not representable before admission: %v", err)
+	}
+	before := lab.rollout()
+	if _, err = lab.c.Control(ctx, "no-room-for-result", protocol.PoolUpdateRequest{RolloutID: r.ID, Control: "pause"}); refusalCode(err) != "authority_capacity" {
+		t.Fatalf("full terminal snapshot was not reserved: %v", err)
+	}
+	if !reflect.DeepEqual(before, lab.rollout()) {
+		t.Fatal("refused admission changed accepted history or left an impossible pending receipt")
+	}
+	replay, err := lab.c.Control(ctx, r.Controls[0].RequestID, r.Controls[0].Request)
+	if err != nil || !reflect.DeepEqual(replay, &snapshot) {
+		t.Fatalf("capacity refusal discarded an accepted replay: %v", err)
+	}
+}
+
+func TestPromotionPreservesMaintenanceBeforeCoordinatorStageWasSaved(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("maintenance-window", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	lab.run(50, func(r *protocol.PoolUpdateRollout) bool { return r.Phase == "hosts" })
+	if err := poolUpdateSetMaintenance(lab.pool.master, "member-2", true); err != nil {
+		t.Fatal(err)
+	}
+	inherited := lab.rollout()
+	membership, err := Membership(lab.pool.master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoted := peerStore(t, "member-2", "pool-1")
+	if _, err = AdoptPoolUpdateOnPromotion(promoted, inherited); err != nil {
+		t.Fatal(err)
+	}
+	maintenanceMembership(t, promoted, "member-2", membership.Members...)
+	lab.pool.master, lab.c = promoted, NewPoolUpdateCoordinator(promoted)
+	if _, err = lab.control(inherited.ID, "resume", ""); err != nil {
+		t.Fatalf("resume displaced a host with replicated maintenance: %v", err)
+	}
+	if r := lab.run(600, ended); r.State != protocol.PoolUpdateFinalized || lab.pool.activationOrder[0] != "member-2" {
+		t.Fatalf("maintenance crash recovery = %+v order %v", r, lab.pool.activationOrder)
+	}
+}
+
+func TestNewRolloutCapacityAdmissionPreservesCompletedControlHistory(t *testing.T) {
+	lab := newUpdateLab(t, 64)
+	ctx := context.Background()
+	if err := lab.start("previous-rollout", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.rollout()
+	snapshot := *r
+	snapshot.Controls = nil
+	r.State, r.Hosts = protocol.PoolUpdateAborted, nil
+	r.Controls = []protocol.PoolUpdateControlResult{{RequestID: "retained-large-result",
+		Request: protocol.PoolUpdateRequest{RolloutID: r.ID, Control: "pause"}, Rollout: &snapshot}}
+	if err := savePoolUpdate(lab.pool.master, r); err != nil {
+		t.Fatal(err)
+	}
+	replica, _, err := buildPoolAuthorityReplica(lab.pool.master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(replica)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Hosts = append([]protocol.PoolUpdateHost(nil), snapshot.Hosts...)
+	snapshot.Hosts[0].Error = strings.Repeat("x", protocol.PoolReplicaLimit-len(raw)-4096)
+	if err = savePoolUpdate(lab.pool.master, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = buildPoolAuthorityReplica(lab.pool.master); err != nil {
+		t.Fatalf("previous authority was not representable: %v", err)
+	}
+	before := lab.rollout()
+	if _, _, err = lab.c.Start(ctx, "would-exceed-authority", protocol.PoolUpdateRequest{Sequence: 2}); refusalCode(err) != "authority_capacity" {
+		t.Fatalf("new rollout did not admit its own full record: %v", err)
+	}
+	if !reflect.DeepEqual(before, lab.rollout()) {
+		t.Fatal("failed new-rollout admission replaced completed history")
+	}
+}
+
+func TestPendingResultReservationProtectsOtherAuthorityAdmission(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("reserved-result", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	replica, _, err := buildPoolAuthorityReplica(lab.pool.master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica.UpdateRollout.Controls = []protocol.PoolUpdateControlResult{{RequestID: "reserved-abort",
+		Request: protocol.PoolUpdateRequest{RolloutID: replica.UpdateRollout.ID, Control: "abort"}, ReservedResultBytes: 32768}}
+	raw, err := json.Marshal(replica)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica.VMs = json.RawMessage(`{"vm-capacity":{"description":"` + strings.Repeat("x", protocol.PoolReplicaLimit-len(raw)-16384) + `"}}`)
+	peer, err := loadPoolPeer(lab.pool.master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = poolAuthorityReplicaFitsAddressedBodies(lab.pool.master, replica, peer.CAKeyPEM); err == nil {
+		t.Fatal("another authority write consumed the accepted control's terminal-result room")
+	}
+	replica.UpdateRollout.Controls[0].ReservedResultBytes = 0
+	if err = poolAuthorityReplicaFitsAddressedBodies(lab.pool.master, replica, peer.CAKeyPEM); err != nil {
+		t.Fatalf("test authority did not fit without the reservation: %v", err)
+	}
+	for _, invalid := range []int{-1, protocol.PoolReplicaLimit + 1, int(^uint(0) >> 1)} {
+		replica.UpdateRollout.Controls[0].ReservedResultBytes = invalid
+		if err = poolAuthorityReplicaFitsAddressedBodies(lab.pool.master, replica, peer.CAKeyPEM); err == nil {
+			t.Fatalf("invalid/overflowing reservation admitted: %d", invalid)
+		}
+	}
+}
+
+func updateSnapshotCapacityFixture(t *testing.T, snapshotFirst bool) (*updateLab, poolVMRequest, protocol.PoolUpdateRequest) {
+	t.Helper()
+	lab := newUpdateLab(t, 3)
+	if err := lab.start("capacity-race", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	s := lab.pool.master
+	spec := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)
+	if err := poolVMLocal(s, spec.ID, "define", nil, true, &spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	snapshotRequest := poolVMRequest{VMID: spec.ID, Action: "snapshot-reserve", OperationID: "capacity-snapshot",
+		VM: &spec, Snapshot: &protocol.VMSnapshotRequest{Name: "capacity-point", Description: strings.Repeat("d", 512)},
+		SnapshotCreatedAt: lab.clock, IntentSHA256: strings.Repeat("a", 64), OwnerOperationOrder: 1}
+	if snapshotFirst {
+		if err := reserveUpdateCapacitySnapshot(s, snapshotRequest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := lab.rollout()
+	history := *r
+	history.Controls = nil
+	history.Hosts = append([]protocol.PoolUpdateHost(nil), r.Hosts...)
+	r.Controls = []protocol.PoolUpdateControlResult{{RequestID: "retained-capacity-result",
+		Request: protocol.PoolUpdateRequest{RolloutID: r.ID, Control: "pause"}, Rollout: &history}}
+	request := protocol.PoolUpdateRequest{RolloutID: r.ID, Control: "abort"}
+	membership, err := Membership(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := poolUpdateResultReservation(r, membership, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prospective := *r
+	prospective.Controls = append(append([]protocol.PoolUpdateControlResult(nil), r.Controls...),
+		protocol.PoolUpdateControlResult{RequestID: "capacity-control", Request: request, ReservedResultBytes: reserved})
+	replica, _, err := buildPoolAuthorityReplica(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica.UpdateRollout = &prospective
+	padUpdateCapacityHistory(t, s, &history, replica)
+	if err = savePoolUpdate(s, r); err != nil {
+		t.Fatal(err)
+	}
+	return lab, snapshotRequest, request
+}
+
+func reserveUpdateCapacitySnapshot(s *Store, request poolVMRequest) error {
+	poolVMMu.Lock()
+	defer poolVMMu.Unlock()
+	_, err := reservePoolVMSnapshotLocked(s, request.VM.HostID, request)
+	return err
+}
+
+func TestConcurrentControlAndSnapshotCapacityAdmissionsCannotBothEnlargeAuthority(t *testing.T) {
+	lab, snapshotRequest, request := updateSnapshotCapacityFixture(t, false)
+	s := lab.pool.master
+	originalProjection := poolUpdateAuthorityProjection
+	originalPush := pushPoolAuthorityReplicasAfterUpdate
+	t.Cleanup(func() {
+		poolUpdateAuthorityProjection = originalProjection
+		pushPoolAuthorityReplicasAfterUpdate = originalPush
+	})
+	projected, releaseProjection := make(chan struct{}), make(chan struct{})
+	poolUpdateAuthorityProjection = func(store *Store, vms json.RawMessage) (protocol.PoolAuthorityReplica, string, error) {
+		replica, digest, err := originalProjection(store, vms)
+		close(projected)
+		<-releaseProjection
+		return replica, digest, err
+	}
+	pushPoolAuthorityReplicasAfterUpdate = func(context.Context, *Store, time.Duration) error {
+		return errors.New("replica acknowledgement unavailable")
+	}
+	controlDone := make(chan error, 1)
+	go func() {
+		_, err := lab.c.Control(context.Background(), "capacity-control", request)
+		controlDone <- err
+	}()
+	<-projected
+	snapshotDone := make(chan error, 1)
+	go func() { snapshotDone <- reserveUpdateCapacitySnapshot(s, snapshotRequest) }()
+	var snapshotErr error
+	snapshotFinished := false
+	select {
+	case snapshotErr = <-snapshotDone:
+		snapshotFinished = true
+	case <-time.After(time.Second):
+		// The control has not published its reservation yet. A serialized VM
+		// admission waits until that publication rather than using the old budget.
+	}
+	close(releaseProjection)
+	controlErr := <-controlDone
+	if !snapshotFinished {
+		snapshotErr = <-snapshotDone
+	}
+	if refusalCode(controlErr) != "replica_pending" {
+		t.Fatalf("accepted control did not retain its unresolved receipt: %v", controlErr)
+	}
+	if snapshotErr == nil || !strings.Contains(snapshotErr.Error(), "limit") {
+		t.Fatalf("competing snapshot consumed the accepted control's result capacity: %v", snapshotErr)
+	}
+	poolUpdateAuthorityProjection = originalProjection
+	pushPoolAuthorityReplicasAfterUpdate = func(context.Context, *Store, time.Duration) error { return nil }
+	result, err := lab.c.Control(context.Background(), "capacity-control", request)
+	if err != nil || result.State != protocol.PoolUpdateAborted {
+		t.Fatalf("accepted pending control could not record its terminal outcome: %+v (%v)", result, err)
+	}
+	replayed, err := lab.c.Control(context.Background(), "capacity-control", request)
+	if err != nil || !reflect.DeepEqual(replayed, result) {
+		t.Fatalf("terminal result did not survive competing snapshot refusal: %+v (%v)", replayed, err)
+	}
+	replica, _, err := buildPoolAuthorityReplica(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := loadPoolPeer(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = poolAuthorityReplicaFitsAddressedBodies(s, replica, peer.CAKeyPEM); err != nil {
+		t.Fatalf("accepted result cannot be replicated: %v", err)
+	}
+}
+
+func TestControlCapacityRespectsAcceptedSnapshotTerminalHeadroom(t *testing.T) {
+	lab, snapshotRequest, request := updateSnapshotCapacityFixture(t, true)
+	s := lab.pool.master
+	before := lab.rollout()
+	if _, err := lab.c.Control(context.Background(), "capacity-control", request); refusalCode(err) != "authority_capacity" {
+		t.Fatalf("control consumed an already-accepted snapshot's terminal room: %v", err)
+	}
+	if !reflect.DeepEqual(before, lab.rollout()) {
+		t.Fatal("refused control changed accepted rollout history")
+	}
+	err := settleUpdateCapacitySnapshot(s, snapshotRequest.VMID, "completed")
+	if err != nil {
+		t.Fatalf("previously accepted snapshot could not settle after control refusal: %v", err)
+	}
+	catalog, err := ListPoolVMSnapshots(context.Background(), s, snapshotRequest.VMID)
+	if err != nil || len(catalog) != 1 || catalog[0].ID != snapshotRequest.OperationID {
+		t.Fatalf("settled snapshot was not visible to its consumer: %+v (%v)", catalog, err)
+	}
+}
+
+func padUpdateCapacityHistory(t *testing.T, s *Store, history *protocol.PoolUpdateRollout, replica protocol.PoolAuthorityReplica) {
+	t.Helper()
+	peer, err := loadPoolPeer(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Either tested enlargement fits alone, but there is no unclaimed room for
+	// a competing enlargement or an outcome larger than this exact projection.
+	low, high := 0, protocol.PoolReplicaLimit
+	for low < high {
+		mid := low + (high-low+1)/2
+		history.Hosts[0].Error = strings.Repeat("x", mid)
+		replica.Sections, err = replica.SectionDigests()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if poolAuthorityReplicaFitsAddressedBodies(s, replica, peer.CAKeyPEM) == nil {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	if low < 8 {
+		t.Fatal("capacity fixture has no accepted-history room")
+	}
+	history.Hosts[0].Error = strings.Repeat("x", low-8)
+}
+
+func settleUpdateCapacitySnapshot(s *Store, vmID, outcome string) error {
+	poolVMMu.Lock()
+	defer poolVMMu.Unlock()
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	peer, err := loadPoolPeer(s)
+	if err != nil {
+		return err
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		return err
+	}
+	record := state.VMs[vmID]
+	evidence := protocol.PoolVMRecoveryEvidence{Reservation: *record.PendingRecovery, Outcome: outcome,
+		JournalSHA256: strings.Repeat("b", 64), Snapshot: record.PendingSnapshot}
+	return settlePoolVMSnapshotStateLocked(s, &state, peer.Membership, record.HostID, evidence)
+}
+
+func TestControlCapacityDoesNotSpendPendingSnapshotDeleteSpace(t *testing.T) {
+	lab, snapshotRequest, request := updateSnapshotCapacityFixture(t, false)
+	s := lab.pool.master
+	if err := reserveUpdateCapacitySnapshot(s, snapshotRequest); err != nil {
+		t.Fatal(err)
+	}
+	if err := settleUpdateCapacitySnapshot(s, snapshotRequest.VMID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := ListPoolVMSnapshots(context.Background(), s, snapshotRequest.VMID)
+	if err != nil || len(catalog) != 1 {
+		t.Fatalf("initial accepted snapshot missing: %+v (%v)", catalog, err)
+	}
+	deleteRequest := snapshotRequest
+	deleteRequest.OperationID, deleteRequest.RecoveryKind = "capacity-delete", "snapshot-delete"
+	deleteRequest.OwnerOperationOrder = 2
+	deleteRequest.Snapshot = &protocol.VMSnapshotRequest{SnapshotID: catalog[0].ID, Target: &catalog[0]}
+	if err = reserveUpdateCapacitySnapshot(s, deleteRequest); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.rollout()
+	membership, err := Membership(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := poolUpdateResultReservation(r, membership, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prospective := *r
+	prospective.Controls = append(append([]protocol.PoolUpdateControlResult(nil), r.Controls...),
+		protocol.PoolUpdateControlResult{RequestID: "capacity-control", Request: request, ReservedResultBytes: reserved})
+	replica, _, err := buildPoolAuthorityReplica(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica.VMs = completedUpdateCapacityVMs(t, state)
+	replica.UpdateRollout = &prospective
+	// A completed deletion would make room, but it has not happened and may
+	// report a definitive no-effects failure instead.
+	padUpdateCapacityHistory(t, s, r.Controls[0].Rollout, replica)
+	if err = savePoolUpdate(s, r); err != nil {
+		t.Fatal(err)
+	}
+	before := lab.rollout()
+	pushes := 0
+	originalPush := pushPoolAuthorityReplicasAfterUpdate
+	pushPoolAuthorityReplicasAfterUpdate = func(context.Context, *Store, time.Duration) error {
+		pushes++
+		return errors.New("replica acknowledgement unavailable")
+	}
+	t.Cleanup(func() { pushPoolAuthorityReplicasAfterUpdate = originalPush })
+	if _, err = lab.c.Control(context.Background(), "capacity-control", request); refusalCode(err) != "authority_capacity" {
+		t.Fatalf("control spent space from an uncompleted snapshot deletion: %v", err)
+	}
+	if pushes != 0 || !reflect.DeepEqual(before, lab.rollout()) {
+		t.Fatal("refused control published history or attempted replica/effect work")
+	}
+	if err = settleUpdateCapacitySnapshot(s, snapshotRequest.VMID, "failed-before-effects"); err != nil {
+		t.Fatalf("accepted deletion could not preserve its no-effects outcome: %v", err)
+	}
+	after, err := ListPoolVMSnapshots(context.Background(), s, snapshotRequest.VMID)
+	if err != nil || !reflect.DeepEqual(after, catalog) {
+		t.Fatalf("failed deletion did not retain its original catalog: %+v (%v)", after, err)
+	}
+}
+
+func completedUpdateCapacityVMs(t *testing.T, state poolVMState) json.RawMessage {
+	t.Helper()
+	completed := make(map[string]poolVMRecord, len(state.VMs))
+	for id, record := range state.VMs {
+		if record.PendingRecovery != nil {
+			evidence := protocol.PoolVMRecoveryEvidence{Reservation: *record.PendingRecovery, Outcome: "completed",
+				JournalSHA256: strings.Repeat("c", 64), Snapshot: record.PendingSnapshot, ResultSpec: record.PendingRecoveryResultSpec}
+			if err := settlePoolVMRecovery(&record, record.HostID, evidence); err != nil {
+				t.Fatal(err)
+			}
+		}
+		completed[id] = record
+	}
+	raw, err := json.Marshal(completed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestNewRolloutCapacityDoesNotNetIndependentSnapshotCreateAndDelete(t *testing.T) {
+	lab := newUpdateLab(t, 16)
+	s := lab.pool.master
+	if err := lab.start("previous-capacity-rollout", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	createSpec := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)
+	if err := poolVMLocal(s, createSpec.ID, "define", nil, true, &createSpec, nil); err != nil {
+		t.Fatal(err)
+	}
+	deleteSpec := *poolVMTestSpec("22222222-2222-4222-8222-222222222222", "member-2")
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteRecord := poolVMRecord{PoolID: s.State.PoolID, VMID: deleteSpec.ID, HostID: deleteSpec.HostID,
+		Epoch: 1, State: "stopped", Spec: deleteSpec}
+	original, err := poolVMRecoveryReservationFor(deleteRecord, "retained-delete-target", "snapshot-create", strings.Repeat("a", 64), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := snapshotDescriptorForTest(original, "retained-point", strings.Repeat("d", 512))
+	deleteRecord.Snapshots = []protocol.PoolVMSnapshot{target}
+	state.VMs[deleteSpec.ID] = deleteRecord
+	if err = savePoolVMs(s, state); err != nil {
+		t.Fatal(err)
+	}
+	createRequest := poolVMRequest{VMID: createSpec.ID, Action: "snapshot-reserve", OperationID: "independent-create",
+		VM: &createSpec, Snapshot: &protocol.VMSnapshotRequest{Name: "new-point", Description: strings.Repeat("d", 512)},
+		SnapshotCreatedAt: lab.clock, IntentSHA256: strings.Repeat("b", 64), OwnerOperationOrder: 1}
+	deleteRequest := poolVMRequest{VMID: deleteSpec.ID, Action: "snapshot-reserve", RecoveryKind: "snapshot-delete",
+		OperationID: "independent-delete", VM: &deleteSpec,
+		Snapshot:     &protocol.VMSnapshotRequest{SnapshotID: target.ID, Target: &target},
+		IntentSHA256: strings.Repeat("c", 64), OwnerOperationOrder: 2}
+	if err = reserveUpdateCapacitySnapshot(s, createRequest); err != nil {
+		t.Fatal(err)
+	}
+	if err = reserveUpdateCapacitySnapshot(s, deleteRequest); err != nil {
+		t.Fatal(err)
+	}
+	r := lab.rollout()
+	history := *r
+	history.Controls = nil
+	history.Hosts = append([]protocol.PoolUpdateHost(nil), r.Hosts...)
+	r.Controls = []protocol.PoolUpdateControlResult{{RequestID: "retained-mixed-result",
+		Request: protocol.PoolUpdateRequest{RolloutID: r.ID, Control: "pause"}, Rollout: &history}}
+	next := *r
+	next.ID = strings.Repeat("n", 128)
+	next.Hosts = append([]protocol.PoolUpdateHost(nil), r.Hosts...)
+	r.State, r.Phase, r.Hosts = protocol.PoolUpdateAborted, "finalize", nil
+	replica, _, err := buildPoolAuthorityReplica(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The aggregate completed endpoint allows the deletion to cancel creation
+	// growth. Real members can finish in the opposite order, or never delete.
+	replica.VMs = completedUpdateCapacityVMs(t, state)
+	replica.UpdateRollout = &next
+	padUpdateCapacityHistory(t, s, &history, replica)
+	if err = savePoolUpdate(s, r); err != nil {
+		t.Fatal(err)
+	}
+	if err = poolVMRecoverySettlementHeadroom(s, state); err != nil {
+		t.Fatalf("fixture consumed previously accepted snapshot room before new-rollout admission: %v", err)
+	}
+	before := lab.rollout()
+	if _, _, err = lab.c.Start(context.Background(), next.ID, protocol.PoolUpdateRequest{Sequence: 2, RunningVMs: "refuse"}); refusalCode(err) != "authority_capacity" {
+		t.Fatalf("new rollout netted one member's possible deletion against another's promised creation: %v", err)
+	}
+	if !reflect.DeepEqual(before, lab.rollout()) {
+		t.Fatal("refused new rollout changed accepted history")
+	}
+	if err = settleUpdateCapacitySnapshot(s, createSpec.ID, "completed"); err != nil {
+		t.Fatalf("create-first settlement lost its promised room: %v", err)
+	}
+	if err = settleUpdateCapacitySnapshot(s, deleteSpec.ID, "failed-before-effects"); err != nil {
+		t.Fatalf("failed deletion could not retain its catalog and receipt: %v", err)
+	}
+	created, err := ListPoolVMSnapshots(context.Background(), s, createSpec.ID)
+	if err != nil || len(created) != 1 || created[0].ID != createRequest.OperationID {
+		t.Fatalf("completed creation was not visible: %+v (%v)", created, err)
+	}
+	retained, err := ListPoolVMSnapshots(context.Background(), s, deleteSpec.ID)
+	if err != nil || !reflect.DeepEqual(retained, []protocol.PoolVMSnapshot{target}) {
+		t.Fatalf("no-effects deletion failed to retain its catalog: %+v (%v)", retained, err)
+	}
+	replayed, err := lab.c.Control(context.Background(), r.Controls[0].RequestID, r.Controls[0].Request)
+	if err != nil || !reflect.DeepEqual(replayed, &history) {
+		t.Fatalf("refused rollout or independent settlements changed an accepted control replay: %+v (%v)", replayed, err)
+	}
+	replica, _, err = buildPoolAuthorityReplica(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := loadPoolPeer(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = poolAuthorityReplicaFitsAddressedBodies(s, replica, peer.CAKeyPEM); err != nil {
+		t.Fatalf("independently settled outcomes cannot be replicated: %v", err)
 	}
 }

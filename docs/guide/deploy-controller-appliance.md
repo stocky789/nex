@@ -158,9 +158,10 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
   disk's allocated size free; free that space and repeat with a new request ID. After `controller_shutdown_failed` the guest may still power
   off by itself, because a graceful request cannot be withdrawn: check the Controller's state and start it with **Start** in **Virtual
   machines**. If power was lost in the middle of a swap and the host rebooted, libvirt may have started the previous image again; repeating
-  the same request stops it gracefully (never forced), takes the data checkpoint again so nothing it wrote is lost, and carries on. If it
-  will not stop, the request ends with `controller_shutdown_failed` and the Controller keeps running the previous image. Unverified: none of
-  these was exercised on a real host.
+  the same request stops it gracefully (never forced), refreshes the checkpoint even if it already stopped after writing, and carries on.
+  During interrupted rollback, Core also stops a proven failed new image that autostarted and restores the checkpoint again; once the old
+  image was redefined, its later writes are kept. If the old image will not stop, the request ends with `controller_shutdown_failed`.
+  Unverified on a real host: these boundaries are covered by simulated hypervisor checks only.
 - **Invalid signature or incompatible appliance:** use the matching trusted package and
   release key. Do not replace the trusted key with one supplied by an untrusted image.
 - **Stale observations or expired login:** reconnect/sign in again. Security builds expire
@@ -226,6 +227,10 @@ with the same care as host root.
    exports consistent state and transfers it to a mode-0600 file. Controller remains
    stopped after success. A failure before the stop may leave it running; inspect actual state.
    An interrupted command may leave a partial file; it is not a valid recovery copy.
+   After a failed two-disk image swap, the helper also accepts the replacement image proven by
+   that appliance's matching durable swap journal. Keep the journal and deployment record intact;
+   an unrelated image or changed disk layout remains refused. The guest agent must be reachable,
+   and the helper does not start a stopped VM for you.
 
 2. Transfer the archive through a protected channel to storage outside the hosting server
    and encrypt it at rest. For example, use your independently verified recovery storage SSH
@@ -374,6 +379,9 @@ Recorded checks and their limits:
 - [Desktop rebuild](../qa/controller-desktop-rebuild/checks.md),
   [deployment usability](../qa/appliance/deployment-usability.md),
   [root login](../qa/appliance/root-auth.md) and [console URL](../qa/appliance/console-url.md).
+- [Immutable review-fix checks](../qa/2026-10-03-immutable-review-fixes.md) — interrupted rollback,
+  autostart and checkpoint behavior with fake libvirt/real scratch files; recovery provenance
+  checks with fixture domains. This is not a newly executed appliance/lab restore.
 
 A live appliance console login after deploy is not recorded. Physical hardware, physical-LAN
 behavior and redistribution clearance are not established.

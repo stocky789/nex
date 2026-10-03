@@ -85,6 +85,17 @@ _nex_prefill() {
     fi
     return 0
 }
+_nex_selectable() {
+    _nex_choices=$(_nex_field "$1" 4)
+    if [ "$_nex_choices" = '${choices}' ]; then
+        eval "_nex_choices=\${_nex_s_$(_nex_mangle "$1.choices")-}"
+    fi
+    printf '%s\n' "$_nex_choices" | awk -v answer="$2" '
+        BEGIN { FS = ", *"; found = 0 }
+        { for (i = 1; i <= NF; i++) if ($i == answer) found = 1 }
+        END { exit !found }'
+}
+
 
 db_x_loadtemplatefile() { _nex_say "LOAD $1 $2"; }
 db_capb() { _nex_say "CAPB $*"; }
@@ -121,6 +132,11 @@ db_go() {
         '<DEFAULT>') _nex_prefill "$_nex_current" ;;
         *) RET=$_nex_answer ;;
     esac
+    if [ "$(_nex_field "$_nex_current" 2)" = select ] &&
+       ! _nex_selectable "$_nex_current" "$RET"; then
+        _nex_say "INVALID $_nex_current $RET"
+        exit 96
+    fi
     _nex_store "$_nex_current" "$RET"
     _nex_say "ANSWER $_nex_current $RET"
     return 0
@@ -1051,7 +1067,7 @@ def scenario_management_not_first_nic(shell, root):
         'nex-installer/timezone-area <DEFAULT>',
         'nex-installer/password nexcore-test-pw',
         'nex-installer/password-again nexcore-test-pw',
-        'nex-installer/management eth1 - 52:54:00:aa:bb:02 - link detected',
+        'nex-installer/management eth1 - 52:54:00:aa:bb:02 - no link',
         'nex-installer/other-adapters false',
         'nex-installer/mode <DEFAULT>',   # eth1 only; eth0 is skipped
         'nex-installer/vlan <DEFAULT>',
@@ -1146,6 +1162,144 @@ def scenario_abandoned_setup_leaves_no_handoff(shell, root):
     assert session.config is None, session.config
     return None
 
+def image_fixture(root, repair=True, netinst=False):
+    build_fixture(root)
+    write(root / 'cdrom/nex/edition', 'image\n')
+    write(root / 'proc/cmdline', '')
+    probe = ('printf "%s\\n" "disks=/dev/sda,/dev/sdg"\n' if repair else
+             'exit 1\n')
+    executable(root / 'cdrom/nex/nex-image-install.sh',
+               '#!/bin/sh\n[ "$1" = probe ] || exit 99\n' + probe)
+    if netinst:
+        write(root / 'cdrom/nex/payloads.tsv', '')
+
+
+def assert_repair_handoff(session):
+    assert session.result.returncode == 0, session.explain()
+    assert session.config.startswith('[Install]\nmode=repair\n'), session.config
+    assert 'disk=/dev/sda;/dev/sdg;\n' in session.config, session.config
+    assert session.subst('nex-installer/repair-confirm', 'disk') == '/dev/sda, /dev/sdg'
+    assert len(session.lines('VALIDATE')) == 1, session.explain()
+
+
+def scenario_image_action_keeps_nic_choices(shell, root):
+    """Both NIC choices remain selectable after the independent image action."""
+    image_fixture(root)
+    script(root, ['nex-installer/action <DEFAULT>'] + DEFAULT_SCRIPT[:6] + [
+        'nex-installer/other-adapters true',
+        'nex-installer/mode dhcp',
+        'nex-installer/vlan <DEFAULT>',
+        'nex-installer/mode static',
+        'nex-installer/vlan <DEFAULT>',
+        'nex-installer/address 192.0.2.20/24',
+    ] + DEFAULT_SCRIPT[9:])
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert session.asked() == ['nex-installer/action'] + DEFAULT_ORDER[:7] + [
+        'nex-installer/mode', 'nex-installer/vlan',
+        'nex-installer/mode', 'nex-installer/vlan', 'nex-installer/address',
+    ] + DEFAULT_ORDER[9:], (session.asked(), session.explain())
+    assert re.search(r'\[NIC:eth0\]\nmac=.*\nmode=dhcp\n', session.config), session.config
+    assert re.search(r'\[NIC:eth1\]\nmac=.*\nmode=static\naddress=192.0.2.20/24\n',
+                     session.config), session.config
+    assert '[Install]' not in session.config, session.config
+    decoded = decode(session.config_path)
+    if decoded is None:
+        return 'no C compiler with glib-2.0; the handoff was not validated'
+    assert decoded['validate'] == 'VALID', decoded
+    return None
+
+
+def scenario_offline_repair_confirm_back_to_erase(shell, root):
+    """Go Back and No both leave offline Repair for the navigable action choice."""
+    for answer in ('<BACK>', 'false'):
+        case = root / ('back' if answer == '<BACK>' else 'no')
+        image_fixture(case)
+        script(case, [
+            'nex-installer/action Repair image',
+            'nex-installer/repair-confirm ' + answer,
+            'nex-installer/action Erase and install',
+        ] + DEFAULT_SCRIPT)
+        session = run(case, shell)
+        assert session.result.returncode == 0, session.explain()
+        assert session.asked() == [
+            'nex-installer/action', 'nex-installer/repair-confirm', 'nex-installer/action',
+        ] + DEFAULT_ORDER, (session.asked(), session.explain())
+        assert session.config == DEFAULT_CONFIG, (session.config, session.explain())
+        assert len(session.lines('VALIDATE')) == 1, session.explain()
+    return None
+
+
+def scenario_install_back_to_offline_repair(shell, root):
+    """Back from install's first page rebuilds the shorter offline Repair path."""
+    image_fixture(root)
+    script(root, [
+        'nex-installer/action <DEFAULT>',
+        'nex-installer/hostname <BACK>',
+        'nex-installer/action Repair image',
+        'nex-installer/repair-confirm true',
+    ])
+    session = run(root, shell)
+    assert session.asked() == [
+        'nex-installer/action', 'nex-installer/hostname', 'nex-installer/action',
+        'nex-installer/repair-confirm',
+    ], (session.asked(), session.explain())
+    assert_repair_handoff(session)
+    return None
+
+
+def scenario_netinst_repair_navigation(shell, root):
+    """Repair's network questions navigate back to action, then rebuild install."""
+    image_fixture(root, netinst=True)
+    network = DEFAULT_SCRIPT[5:10]
+    script(root, [
+        'nex-installer/action Repair image',
+    ] + network + [
+        'nex-installer/repair-confirm <BACK>',
+        'nex-installer/dns <BACK>',
+        'nex-installer/mode <BACK>',
+        'nex-installer/other-adapters <BACK>',
+        'nex-installer/management <BACK>',
+        'nex-installer/action Erase and install',
+    ] + DEFAULT_SCRIPT)
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert session.asked() == ['nex-installer/action'] + DEFAULT_ORDER[5:10] + [
+        'nex-installer/repair-confirm', 'nex-installer/dns', 'nex-installer/mode',
+        'nex-installer/other-adapters', 'nex-installer/management', 'nex-installer/action',
+    ] + DEFAULT_ORDER, (session.asked(), session.explain())
+    assert OFFLINE not in session.subst('nex-installer/management', 'choices')
+    assert session.config == DEFAULT_CONFIG, (session.config, session.explain())
+    return None
+
+
+def scenario_netinst_repair_handoff(shell, root):
+    """A net install Repair collects networking but keeps the original disk set."""
+    image_fixture(root, netinst=True)
+    script(root, ['nex-installer/action Repair image'] + DEFAULT_SCRIPT[5:10] + [
+        'nex-installer/repair-confirm true',
+    ])
+    session = run(root, shell)
+    assert session.asked() == ['nex-installer/action'] + DEFAULT_ORDER[5:10] + [
+        'nex-installer/repair-confirm',
+    ], (session.asked(), session.explain())
+    assert_repair_handoff(session)
+    assert 'management=eth0\n' in session.config, session.config
+    assert re.search(r'\[NIC:eth0\]\nmac=.*\nmode=dhcp\n', session.config), session.config
+    return None
+
+
+def scenario_image_without_repair_available(shell, root):
+    """Image media without an existing data volume goes straight to installation."""
+    image_fixture(root, repair=False)
+    script(root, DEFAULT_SCRIPT)
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert session.asked() == DEFAULT_ORDER, (session.asked(), session.explain())
+    assert session.config == DEFAULT_CONFIG, (session.config, session.explain())
+    return None
+
+
 
 def scenario_templates_exist():
     """Every template the wizard asks for is defined in the templates file."""
@@ -1171,6 +1325,12 @@ SHELL_SCENARIOS = [
     scenario_default_answers,
     scenario_navigation_and_handoff,
     scenario_erase_summary,
+    scenario_image_action_keeps_nic_choices,
+    scenario_offline_repair_confirm_back_to_erase,
+    scenario_install_back_to_offline_repair,
+    scenario_netinst_repair_navigation,
+    scenario_netinst_repair_handoff,
+    scenario_image_without_repair_available,
     scenario_sysfs_values_trimmed,
     scenario_mirror_selection,
     scenario_mirror_capacity_mismatch,

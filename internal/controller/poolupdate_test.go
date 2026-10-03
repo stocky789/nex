@@ -131,3 +131,78 @@ func TestPoolUpdateProjectsTheMastersRecord(t *testing.T) {
 	}
 	l.a.call("GET", "/api/v1/pools/no-such-pool/updates", nil, nil, 404)
 }
+
+func TestPoolControlOperationReconcilesAuthenticatedCoreRecovery(t *testing.T) {
+	for _, terminal := range []string{"succeeded", "failed"} {
+		t.Run(terminal, func(t *testing.T) {
+			l := newRolloutLab(t)
+			path := l.updatesPath("/rollouts/roll-1/control")
+			body := map[string]any{"request_id": "recover-control", "action": "abort"}
+			var accepted struct {
+				Operation protocol.Operation `json:"operation"`
+			}
+			read(t, l.a.call("POST", path, body, nil, 202), &accepted)
+			if commands := l.send(&l.master, nil).Commands; len(commands) != 1 || commands[0].OperationID != accepted.Operation.ID {
+				t.Fatalf("control was not delivered: %+v", commands)
+			}
+			l.send(&l.master, func(report *protocol.ReportRequest) {
+				report.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "needs_attention",
+					Error: "replica_pending: Core is awaiting acknowledgement", ObservedAt: time.Now().UTC()}}
+			})
+			replayedOperation := func() protocol.Operation {
+				var response struct {
+					Operation protocol.Operation `json:"operation"`
+				}
+				read(t, l.a.call("POST", path, body, nil, 200), &response)
+				return response.Operation
+			}
+			replay := replayedOperation()
+			if replay.ID != accepted.Operation.ID || replay.Status != "needs_attention" {
+				t.Fatalf("same-ID request lost unresolved Core operation: %+v", replay)
+			}
+			l.a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: protocol.Version,
+				Sequence: l.member.seq + 1, Results: []protocol.Result{{OperationID: accepted.Operation.ID,
+					Status: terminal, ObservedAt: time.Now().UTC()}}}, l.member.cert, 400)
+			errorText := ""
+			if terminal == "failed" {
+				errorText = "rollback_failed: definite host refusal"
+			}
+			l.send(&l.master, func(report *protocol.ReportRequest) {
+				report.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: terminal,
+					Error: errorText, ObservedAt: time.Now().UTC()}}
+			})
+			replay = replayedOperation()
+			if replay.ID != accepted.Operation.ID || replay.Status != terminal || replay.Error != errorText {
+				t.Fatalf("Core recovery did not settle original operation: %+v", replay)
+			}
+			l.send(&l.master, func(report *protocol.ReportRequest) {
+				report.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "failed",
+					Error: "late unrelated error", ObservedAt: time.Now().UTC()}}
+			})
+			replay = replayedOperation()
+			if replay.Status != terminal || replay.Error != errorText {
+				t.Fatal("a terminal control outcome changed after later results")
+			}
+		})
+	}
+}
+
+func TestPoolUpdateRecoveryDoesNotReopenNonControlCommands(t *testing.T) {
+	l := newRolloutLab(t)
+	path := l.updatesPath("/rollouts")
+	body := map[string]any{"request_id": "not-control", "sequence": 7}
+	var accepted struct {
+		Operation protocol.Operation `json:"operation"`
+	}
+	read(t, l.a.call("POST", path, body, nil, 202), &accepted)
+	l.send(&l.master, nil)
+	for _, status := range []string{"needs_attention", "succeeded"} {
+		l.send(&l.master, func(report *protocol.ReportRequest) {
+			report.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: status, ObservedAt: time.Now().UTC()}}
+		})
+	}
+	read(t, l.a.call("POST", path, body, nil, 200), &accepted)
+	if accepted.Operation.Status != "needs_attention" {
+		t.Fatal("control recovery permission reopened a different pool update command")
+	}
+}

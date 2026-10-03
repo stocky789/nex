@@ -135,3 +135,45 @@ func TestPoolRolloutControlCarriesForce(t *testing.T) {
 		t.Fatalf("force with pause = %d %v", code, body)
 	}
 }
+
+func TestPoolRolloutControlReplaysOriginalResponseAndRejectsChangedIntent(t *testing.T) {
+	s, _ := testService(t)
+	cookie, csrf := loginLocal(t, s)
+	enrolledPoolMaster(t, s)
+	record := `{"id":"replay-rollout","pool_id":"pool-1","sequence":2,"running_vms":"refuse","state":"running","phase":"hosts","membership_generation":1,"hosts":[],"created_at":"2026-10-02T09:00:00Z","updated_at":"2026-10-02T09:00:00Z"}`
+	recordPath := filepath.Join(s.cfg.AgentStateDir, "pool-update.json")
+	if err := os.WriteFile(recordPath, []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/api/local/v1/pool/updates/rollouts/replay-rollout/control"
+	pause := map[string]any{"request_id": "pause-replay", "action": "pause"}
+	first := callLocal(s, http.MethodPost, path, pause, cookie, csrf, "https://core.test")
+	if first.Code != http.StatusOK {
+		t.Fatalf("pause = %d %s", first.Code, first.Body)
+	}
+	if code, body := post(s, path, map[string]any{"request_id": "resume-new", "action": "resume"}, cookie, csrf); code != http.StatusOK {
+		t.Fatalf("resume = %d %v", code, body)
+	}
+	before, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An irrelevant host on pause is normalized away; the original response, not current
+	// running state, must be returned without pausing the resumed rollout again.
+	pause["host_id"] = "unused-host"
+	replay := callLocal(s, http.MethodPost, path, pause, cookie, csrf, "https://core.test")
+	if replay.Code != http.StatusOK || replay.Body.String() != first.Body.String() {
+		t.Fatalf("pause replay = %d %s; want %s", replay.Code, replay.Body, first.Body)
+	}
+	if code, body := post(s, path, map[string]any{"request_id": "pause-replay", "action": "resume"}, cookie, csrf); code != http.StatusConflict || body["code"] != "request_conflict" {
+		t.Fatalf("changed intent = %d %v", code, body)
+	}
+	after, err := os.ReadFile(recordPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("replay/conflict mutated current rollout: %v", err)
+	}
+	if code, body := post(s, "/api/local/v1/pool/updates/rollouts/another-rollout/control",
+		map[string]any{"request_id": "pause-replay", "action": "pause"}, cookie, csrf); code != http.StatusConflict || body["code"] != "request_conflict" {
+		t.Fatalf("identity reused on another rollout = %d %v", code, body)
+	}
+}

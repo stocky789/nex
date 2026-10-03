@@ -145,7 +145,7 @@ def run_installer(work, iso, disks, ctl, vars_file, budget=480, kill_on=None, la
                 stop(proc)
                 state = "killed"
                 break
-            if re.search(r"LAB-VALIDATE-REFUSED|installs on UEFI firmware only|No disk has been changed|which holds a selected disk", text):
+            if re.search(r"LAB-VALIDATE-REFUSED|installs on UEFI firmware only|No disk has been changed|Could not stop .*which holds a selected disk", text):
                 state = "refused"
                 break
             if proc.poll() is not None:

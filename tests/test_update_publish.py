@@ -164,6 +164,96 @@ class UpdatePublishTests(unittest.TestCase):
         self.assertEqual(pointer["manifest_sha256"], hashlib.sha256(manifest).hexdigest())
         self.assertEqual((self.base / "releases/1/manifest.json").read_bytes(), manifest)
 
+    def test_retry_restores_manifest_signature_after_document_rename_without_rewriting_it(self):
+        release = fake_release(self.tmp / "rel", "1.0", 1)
+        argv = ["publish", "--base", str(self.base), "--release-dir", str(release),
+                "--release-key", str(self.keys / "release.key"), "--source", str(self.source),
+                "--compliance", str(self.compliance), "--channel", "dev"]
+        manifest = self.base / "releases/1/manifest.json"
+        signature = manifest.with_name("manifest.sig")
+        replace = update_publish.os.replace
+
+        def interrupt_signature(source, target):
+            if Path(target) == signature:
+                raise OSError("interrupted before signature rename")
+            return replace(source, target)
+
+        with unittest.mock.patch.object(update_publish.os, "replace", side_effect=interrupt_signature):
+            with self.assertRaisesRegex(OSError, "interrupted before signature rename"):
+                run(*argv)
+        original = manifest.read_bytes()
+        self.assertFalse(signature.exists())
+        self.assertFalse((self.base / "dev/channel.json").exists())
+        later = update_publish.now() + update_publish.datetime.timedelta(days=1)
+        with unittest.mock.patch.object(update_publish, "now", return_value=later):
+            code, _, err = run(*argv)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(manifest.read_bytes(), original)
+        self.assertTrue(self.verify(self.keys / "release.key", manifest, signature))
+        pointer = json.loads((self.base / "dev/channel.json").read_text())
+        self.assertEqual(pointer["manifest_sha256"], hashlib.sha256(original).hexdigest())
+
+    def test_retry_repairs_invalid_signature_without_changing_committed_manifest_or_pointer(self):
+        self.assertEqual(self.publish_with("1.0", 1)[0], 0)
+        manifest = self.base / "releases/1/manifest.json"
+        signature = manifest.with_name("manifest.sig")
+        pointer = self.base / "dev/channel.json"
+        original, channel = manifest.read_bytes(), pointer.read_bytes()
+        signature.write_bytes(b"not a signature")
+        code, _, err = self.publish_with("1.0", 1)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(manifest.read_bytes(), original)
+        self.assertEqual(pointer.read_bytes(), channel)
+        self.assertTrue(self.verify(self.keys / "release.key", manifest, signature))
+
+    def test_retry_preserves_signature_from_usable_overlapping_release_key(self):
+        self.assertEqual(self.trust()[0], 0)
+        self.assertEqual(self.publish_with("1.0", 1)[0], 0)
+        manifest = self.base / "releases/1/manifest.json"
+        signature = manifest.with_name("manifest.sig")
+        original = signature.read_bytes()
+        new_keys = self.tmp / "keys2"
+        self.assertEqual(run("keygen", "--out", str(new_keys))[0], 0)
+        self.assertEqual(self.trust("--sign-with", str(self.keys / "root.key"), keys=new_keys)[0], 0)
+        code, _, err = run("publish", "--base", str(self.base), "--release-dir", str(self.tmp / "rel-1-1.0"),
+                           "--release-key", str(new_keys / "release.key"), "--source", str(self.source),
+                           "--compliance", str(self.compliance), "--channel", "dev")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(signature.read_bytes(), original)
+        self.assertTrue(self.verify(self.keys / "release.key", manifest, signature))
+
+    def test_missing_signature_cannot_be_repaired_by_an_untrusted_release_key(self):
+        self.assertEqual(self.trust()[0], 0)
+        self.assertEqual(self.publish_with("1.0", 1)[0], 0)
+        manifest = self.base / "releases/1/manifest.json"
+        original = manifest.read_bytes()
+        manifest.with_name("manifest.sig").unlink()
+        shutil.rmtree(self.base / "dev")
+        new_keys = self.tmp / "keys2"
+        self.assertEqual(run("keygen", "--out", str(new_keys))[0], 0)
+        code, _, err = run("publish", "--base", str(self.base), "--release-dir", str(self.tmp / "rel-1-1.0"),
+                           "--release-key", str(new_keys / "release.key"), "--source", str(self.source),
+                           "--compliance", str(self.compliance), "--channel", "dev")
+        self.assertEqual(code, 1)
+        self.assertIn("usable release key", err)
+        self.assertEqual(manifest.read_bytes(), original)
+        self.assertFalse(manifest.with_name("manifest.sig").exists())
+        self.assertFalse((self.base / "dev/channel.json").exists())
+
+    def test_promote_restores_missing_manifest_signature_before_exposing_channel(self):
+        self.assertEqual(self.publish_with("1.0", 1)[0], 0)
+        manifest = self.base / "releases/1/manifest.json"
+        signature = manifest.with_name("manifest.sig")
+        original = manifest.read_bytes()
+        signature.unlink()
+        code, _, err = run("promote", "--base", str(self.base), "--channel", "stable", "--sequence", "1",
+                           "--release-key", str(self.keys / "release.key"))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(manifest.read_bytes(), original)
+        self.assertTrue(self.verify(self.keys / "release.key", manifest, signature))
+        pointer = json.loads((self.base / "stable/channel.json").read_text())
+        self.assertEqual(pointer["manifest_sha256"], hashlib.sha256(original).hexdigest())
+
     def test_promote_re_signs_only_the_channel(self):
         self.assertEqual(self.publish("1.0", 1)[0], 0)
         self.assertEqual(self.publish("1.1", 2)[0], 0)

@@ -15,7 +15,7 @@ pkg=/build/package
 install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/nex/appliance" "$pkg/usr/share/doc/nex-core-local" "$pkg/etc/libvirt/hooks/qemu.d" "$pkg/usr/share/nex/core-local"
 install -d "$pkg/usr/share/keyrings"
 install -d "$pkg/etc/pam.d" "$pkg/etc/nex" "$pkg/etc/modules-load.d"
-# A development build (version X.Y.Z~dev.N) installs hosts on the development channel: the dev subtree of the archive.
+# A development build (version X.Y.Z~~dev.N) installs hosts on the development channel: the dev subtree of the archive.
 repo_url=https://nexvirtualization.com/apt
 case "$NEX_VERSION" in *~dev.*) repo_url=$repo_url/dev ;; esac
 if [ "$edition" = classic ]; then

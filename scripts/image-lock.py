@@ -115,6 +115,8 @@ def main(argv):
         have, want = wanted.get(name), locked.get(name)
         if have is None or want is None or have[0] != want[0]:
             problems.append(f"{name}: lock has {want and want[0]}, build has {have and have[0]}")
+        elif "origin=nex" in want[1] and name not in debs:
+            problems.append(f"{name}: the locked Nex .deb is missing")
         elif name in debs and have[1] != want[1]:
             problems.append(f"{name}: lock has {want[1]}, the .deb has {have[1]}")
     if problems:

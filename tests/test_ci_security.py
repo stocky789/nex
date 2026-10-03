@@ -71,10 +71,6 @@ class BrowserArtifactTests(unittest.TestCase):
                 smoke = workflow.index('iso_url_browser.py')
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
-                self.assertIn('cancel-in-progress: true', workflow)
-                group = ("${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}"
-                         if provider == '.github' else 'nex-shared-runner')
-                self.assertIn(f'  group: {group}\n', workflow)
                 # Browser lane must be first and must not wait on Go.
                 browser_job = workflow.index('\n  controller-browser:')
                 go_job = workflow.index('\n  go:')
@@ -85,12 +81,12 @@ class BrowserArtifactTests(unittest.TestCase):
                 self.assertNotIn('schedule:', workflow)
 
     def test_phase1_runs_once_per_pull_request_commit(self):
-        # BUG-0412: push and pull_request share the cancelling nex-shared-runner group,
-        # so a '**' push trigger made the two runs of one commit cancel each other.
+        # Integration pushes are covered directly; feature branch pushes are
+        # covered by pull_request, so one commit does not schedule duplicate labs.
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
-                triggers = workflow[workflow.index('\non:\n'):workflow.index('\nconcurrency:')]
+                triggers = workflow[workflow.index('\non:\n'):workflow.index('\ndefaults:')]
                 uncommented = '\n'.join(line for line in triggers.splitlines() if not line.lstrip().startswith('#'))
                 # main (stable) and dev (development) are the integration branches; feature
                 # branches are covered by their pull request.
@@ -100,20 +96,9 @@ class BrowserArtifactTests(unittest.TestCase):
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 workflow = (ROOT / provider / 'workflows/release.yml').read_text()
-                triggers = workflow[workflow.index('\non:\n'):workflow.index('\nconcurrency:')]
+                triggers = workflow[workflow.index('\non:\n'):workflow.index('\ndefaults:')]
                 uncommented = '\n'.join(line for line in triggers.splitlines() if not line.lstrip().startswith('#'))
                 self.assertEqual(uncommented.split(), 'on: push: branches: - main - dev'.split())
-
-    def test_release_shares_the_shared_runner_concurrency_group(self):
-        # Release ISO builds and Controller foundation browser labs must not
-        # overlap on the single Gitea act_runner (runs 4222+4223).
-        for provider in PROVIDERS:
-            with self.subTest(provider=provider):
-                release = (ROOT / provider / 'workflows/release.yml').read_text()
-                group = ("${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}"
-                         if provider == '.github' else 'nex-shared-runner')
-                self.assertIn(f'  group: {group}\n', release)
-                self.assertIn('cancel-in-progress: true', release)
 
     def test_forge_release_only_attaches_isos_and_checksums(self):
         for provider in PROVIDERS:
@@ -273,7 +258,7 @@ class ReleaseChannelTests(unittest.TestCase):
         for provider in PROVIDERS:
             for branch, expected in (
                     ('main', 'tag=v0.4.18\nversion=0.4.18\nchannel=stable\napt_path=apt\ndownloads_path=downloads\n'),
-                    ('dev', 'tag=v0.4.19-dev.2\nversion=0.4.19~dev.2\nchannel=dev\napt_path=apt/dev\ndownloads_path=downloads/dev\n')):
+                    ('dev', 'tag=v0.4.19-dev.2\nversion=0.4.19~~dev.2\nchannel=dev\napt_path=apt/dev\ndownloads_path=downloads/dev\n')):
                 with self.subTest(provider=provider, branch=branch), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     self.checkout(root)
@@ -301,7 +286,7 @@ class ReleaseChannelTests(unittest.TestCase):
         for provider in PROVIDERS:
             for channel, version, flags in (
                     ('stable', '0.4.18', ("nex-apt-publish '", "release-publish.py' --iso")),
-                    ('dev', '0.4.19~dev.7', ("nex-apt-publish --repo-root /srv/nex-apt/dev --keep 3 '",
+                    ('dev', '0.4.19~~dev.7', ("nex-apt-publish --repo-root /srv/nex-apt/dev --keep 3 '",
                                              "release-publish.py' --root /srv/nex-downloads/dev --iso"))):
                 with self.subTest(provider=provider, channel=channel), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
@@ -328,7 +313,7 @@ class ReleaseChannelTests(unittest.TestCase):
         for provider in PROVIDERS:
             for channel, tag, version, name in (
                     ('stable', 'v0.4.18', '0.4.18', 'Nex Core 0.4.18'),
-                    ('dev', 'v0.4.19-dev.7', '0.4.19~dev.7', 'Nex Core 0.4.19~dev.7 (development)')):
+                    ('dev', 'v0.4.19-dev.7', '0.4.19~~dev.7', 'Nex Core 0.4.19~~dev.7 (development)')):
                 with self.subTest(provider=provider, channel=channel), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     # python3 records its arguments and then runs the real script, which stops after parsing
@@ -391,9 +376,6 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
             with self.subTest(provider=provider):
                 path = ROOT / provider / 'workflows/image.yml'
                 text = path.read_text()
-                group = ("${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}"
-                         if provider == '.github' else 'nex-shared-runner')
-                self.assertIn(f'  group: {group}\n', text)
                 jobs = dict(self.jobs(path))
                 self.assertEqual(list(jobs), ['image-layout', 'image-build-boot', 'controller-image', 'image-repro'])
                 previous = None

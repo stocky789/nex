@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Behaviour of installer/nex-image-install.sh that must hold before any disk is written."""
+import gzip
+import hashlib
 import os
 import re
 import subprocess
@@ -144,6 +146,39 @@ class ImageInstallerTests(unittest.TestCase):
         self.assertIn('does not match its recorded SHA-256', result.stderr)
         self.assertNotIn('nex-hostimage install', ' '.join(self.calls()))
         self.assertFalse([c for c in self.calls() if c.startswith('mdadm')])
+
+    def test_corrupt_gzip_trailer_is_refused_before_array_stop_or_disk_write(self):
+        self.stage_install()
+        data = b'VirtIO ISO fixture\n' * 1024
+        payload = self.media / 'payload' / hashlib.sha256(data).hexdigest()
+        payload.mkdir(parents=True)
+        compressed = gzip.compress(data, mtime=0)
+        for damage in ('crc', 'size', 'truncated'):
+            with self.subTest(damage=damage):
+                damaged = bytearray(compressed)
+                if damage == 'truncated':
+                    del damaged[-4:]
+                else:
+                    damaged[-8 if damage == 'crc' else -4] ^= 1
+                (payload / 'virtio-win.iso.gz').write_bytes(damaged)
+                self.log.unlink(missing_ok=True)
+                result = self.run_script('install')
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('No disk has been changed', result.stderr)
+                self.assertEqual(self.calls(), [f'nex-hostimage verify {self.media}/image'])
+
+    def test_valid_gzip_payload_installs_and_copies_the_expanded_bytes(self):
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        data = b'VirtIO ISO fixture\n' * 1024
+        digest = hashlib.sha256(data).hexdigest()
+        payload = self.media / 'payload' / digest
+        payload.mkdir(parents=True)
+        (payload / 'virtio-win.iso.gz').write_bytes(gzip.compress(data, mtime=0))
+        result = self.run_script('install')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        copied = Path(self.env['NEX_IMAGE_WORK']) / 'data/lib/nex/payload' / digest / 'virtio-win.iso'
+        self.assertEqual(copied.read_bytes(), data)
+        self.assertTrue(any(c.startswith('nex-hostimage install ') for c in self.calls()))
 
     def test_install_stops_only_the_arrays_on_the_selected_disks_and_assembles_only_its_own(self):
         self.stage_install('raid1', '/dev/sda,/dev/sdb')

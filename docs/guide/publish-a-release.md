@@ -34,7 +34,7 @@ Nex Controller and in the Nex Core host settings; see [software updates](softwar
 
 | | Stable (`main`) | Development (`dev`) |
 | --- | --- | --- |
-| Version | the newest `CHANGELOG.md` heading, `0.4.18` | a pre-release of the next release, `0.4.19-dev.231` (Debian `0.4.19~dev.231`) |
+| Version | the newest `CHANGELOG.md` heading, `0.4.18` | a pre-release of the next release, `0.4.19-dev.231` (Debian `0.4.19~~dev.231`) |
 | Forge release | `v0.4.18`, a release | `v0.4.19-dev.231`, a **pre-release**; the newest three stay |
 | APT archive | `<site>/apt/` | `<site>/apt/dev/`: its own pool and indexes, newest three versions kept |
 | Downloads | `<site>/downloads/<version>/` and `latest` | `<site>/downloads/dev/<version>/` and its own `latest` |
@@ -49,12 +49,19 @@ heading; once `main` publishes it they number the next patch release. A `main` t
 `dev` stops the run with "merge main into dev first", because such a build would sort below a
 stable release.
 
+Development builds use the heading's numeric base, not its alpha/rc suffix. `~~dev.N` sorts
+below that base's alpha, beta and release candidates; counters such as 999 and 1000 remain
+numerically ordered. If `main` already published a prerelease with that same base, a newer
+alpha/rc heading on `dev` is not enough: cut a heading for the next numeric release before
+building development packages.
+
 The development archive and downloads sit under the stable ones on the same host, behind the same
 signing key and web server, so the web server needs no change and the first development release
 creates `/srv/nex-apt/dev` and `/srv/nex-downloads/dev`. The root-run `nex-apt-publish` is the copy
-that `packaging/apt/bootstrap.sh` installed, and development publishing needs its `--keep` option:
-re-run the bootstrap on the website host once before the first push to `dev` (stable publishing keeps
-working with the old copy). A netinst ISO fetches its payloads from its own channel's tree.
+that `packaging/apt/bootstrap.sh` installed. Re-run the updated bootstrap on an existing publishing
+host before publishing, so its installed helper has both channel retention and interrupted-publication
+fixes; changing the repository checkout does not replace that root-run copy. A netinst ISO fetches
+its payloads from its own channel's tree.
 
 ## Prerequisites
 
@@ -76,6 +83,11 @@ working with the old copy). A netinst ISO fetches its payloads from its own chan
   changes; remove it with `docker volume rm nex-build-cache` on the runner host to reclaim
   the space or to force every input to be fetched again. The pinned Debian cloud image is
   restored from the forge's cache server the same way.
+- Heavy run steps on the shared Linux runner require `/proc`, Bash, `flock` and `setsid`. Container jobs also
+  need Docker access and an inspectable current job image containing `sh`, `flock` and `cat`;
+  their helper shares the `nex-ci-heavy-lock` volume on that Docker host. Native jobs use a
+  local lock directory instead. Do not mix native and container jobs on a single shared heavy
+  runner and assume those separate locks serialize each other.
 - `CHANGELOG.md` has a `## [X.Y.Z]` or `## [X.Y.Z-preN]` section for the version being released and it is the
   newest version heading. Day-to-day work lives under `[Unreleased]`; before tagging, move those
   entries under the version heading and leave `[Unreleased]` empty (blockquote guidance may remain).
@@ -194,9 +206,24 @@ and the final check verifies the development URLs, not the stable ones.
 - **"nex-apt-publish: error: unrecognized arguments: --keep 3"** on a development run — the helper
   installed on the website host predates channels. Re-run `packaging/apt/bootstrap.sh` there (see
   [Release channels](#release-channels)); nothing was published, so re-run the workflow afterwards.
-- **A development merge cancelled a stable release still building** — both channels share one
-  concurrency group on the single runner, and a newer run cancels the one in progress. Re-run
-  the Release workflow on `main`.
+- **A heavy run is waiting for another workflow** — heavy steps wait on the shared-host lock
+  rather than cancelling another workflow. Checkout/setup actions and waiting containers can
+  coexist; queue waiting counts toward the existing job timeout. Check the running workload
+  and execution-mode prerequisites, not a forge concurrency group's pending-run replacement.
+- **APT publication failed or was interrupted** — retry the same publication with the updated
+  installed helper. Indexing and signing happen in staging; old indexed package bytes remain
+  until replacement metadata has been installed. Rebuilt packages of the same version have
+  content-addressed pool paths, so new bytes cannot overwrite an old index's payload.
+  Metadata files are replaced individually: interruption can temporarily cause metadata
+  hash/signature mismatches until retry completes. This is not a collectively atomic archive
+  cutover. A previously signed archive refuses publication without a usable signing key.
+- **An image publication reused a manifest but its signature is missing or unusable** — retry
+  with a configured usable release key authorized by the trust document. The publisher repairs
+  the signature over the original immutable manifest bytes before exposing a channel pointer;
+  do not edit the manifest to force a new signature.
+- **An older republished development release disappears** — forge and download retention keep
+  the newest versions by Debian version order, not by upload time. Republishing an old version
+  does not make it `latest` or exempt it from retention.
 - **"CHANGELOG.md has no version headings"** — the changelog lost its `## [X.Y.Z]` headings;
   restore the newest version's section.
 - **"declares <version>, expected <version>"** — a package was built at a different version
@@ -272,3 +299,7 @@ The download-page regression checks cover generated installer/source
 links, hidden package names, retained-version backfill, and nginx HTML delivery while
 exact package URLs remain reachable. The live website and forge release require a new
 owner-published run and separate inspection.
+
+The immutable review-fix batch is covered by [review-fix verification](../qa/2026-10-03-immutable-review-fixes.md).
+Local fixtures and native command checks do not establish a live forge queue, Docker-host volume
+locking, hosted publication or exact-artifact release certification.

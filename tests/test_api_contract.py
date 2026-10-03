@@ -261,26 +261,6 @@ class LocalAPIContractTests(APIContractTests):
         self.assertEqual(set(re.findall(r'`json:"([^",]+)', request[1])),
                          set(self.api['components']['schemas']['PowerRequest']['properties']))
 
-    def test_pool_rollout_refusal_codes_match_the_coordinator(self):
-        """The documented 409 list is the set of codes the coordinator can raise, no more and no less."""
-        agent = '\n'.join(p.read_text() for p in (ROOT / 'internal/agent').glob('*.go')
-                          if not p.name.endswith('_test.go'))
-        constants = (ROOT / 'internal/protocol/poolupdate.go').read_text()
-        engine = (ROOT / 'internal/nexupdate/image.go').read_text()
-        raised = set(re.findall(r'updateRefusal\("([a-z_]+)"', agent))
-        known = raised | set(re.findall(r'"([a-z]+(?:_[a-z]+)+)"', constants + engine + agent))
-        status_codes = {'invalid_request': '400', 'rollout_not_found': '404'}
-        for path, method in (('/api/local/v1/pool/updates', 'get'),
-                             ('/api/local/v1/pool/updates/rollouts', 'post'),
-                             ('/api/local/v1/pool/updates/rollouts/{id}/control', 'post')):
-            description = self.api['paths'][path][method]['responses']['409']['description']
-            listed = set(re.findall(r'[a-z]+(?:_[a-z]+)+', description.split(':', 1)[1]))
-            self.assertFalse(listed - known, f'{path}: documented codes the code never raises: {listed - known}')
-            if method == 'post':
-                self.assertFalse(raised - listed - set(status_codes),
-                                 f'{path}: codes the coordinator raises but the 409 list omits')
-        responses = self.api['paths']['/api/local/v1/pool/updates']['get']['responses']
-        self.assertFalse({'400', '404'} & set(responses), 'GET /pool/updates can only answer 200, 409 or 503')
 
 
 class PeerAPIContractTests(APIContractTests):

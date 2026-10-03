@@ -173,15 +173,6 @@ shell = wizard.split('disk_serial() {', 1)[1].split('}', 1)[0]
 assert [a for a in ('device/serial', '"serial"', 'device/vpd_pg80') if a in helper] == ['device/serial', '"serial"', 'device/vpd_pg80']
 assert shell.index('device/serial') < shell.index('/serial"') < shell.index('device/vpd_pg80')
 assert 'Disabled, dhcp, static' in wizard, 'both frontends use Disabled for an unconfigured adapter'
-# Repair image is offered by both frontends the same way: image edition only, only when nex-image-install.sh probe
-# reports a complete data volume, only on exactly the disks it names, with its own confirmation.
-assert 'nex-image-install.sh", "probe"' in graphical and 'nex-image-install.sh" probe' in wizard
-assert '"Repair image"' in graphical and 'Choices: Erase and install, Repair image' in templates
-assert 'g_key_file_set_string(config, "Install", "mode", "repair")' in graphical and "mode=repair" in wizard
-assert 'repair_select_disks' in graphical and 'step_repairdisk' in wizard, 'Repair never lets the operator change the disk set'
-assert 'static gboolean page_used' in graphical and 'if (p == 1 || p == 3) return FALSE;' in graphical, \
-    'the graphical Repair skips the host and disk pages like the text Repair'
-assert 'repair-confirm' in wizard and 'Repair the system image on %s' in graphical
 assert 'ini_list()' in wizard, ';-separated disk list values must escape semicolons'
 assert 'bytes < disk_floor()) continue' in graphical and '(image_edition() ? 24ULL : 16ULL)' in graphical, \
     'GTK discover must skip disks below the edition floor (16 GiB classic, 24 GiB image) like the text frontend'

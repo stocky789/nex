@@ -40,6 +40,27 @@ means the gate's items were observed in that environment, not that the phase is 
 | **I-5 / I-5a** Secure Boot / TPM, Core in the image | **Partly done** | I-5a ([phase5-core-image.md](../qa/image/phase5-core-image.md)): an image that contains `nex-core-local`, booted once in QEMU/KVM. Secure Boot and TPM posture were exercised only virtually (OVMF variables, `swtpm`) in [phase6-lab1.md](../qa/image/phase6-lab1.md). The Controller guest image and its UKI are unsigned; its domain pins UEFI with Secure Boot off. No physical Secure Boot or TPM result exists. |
 | **I-6** Local labs | **Partly done** | [phase6-lab1.md](../qa/image/phase6-lab1.md) and [phase6-lab2.md](../qa/image/phase6-lab2.md) (installer and boot scenarios), [phase6-lab3.md](../qa/image/phase6-lab3.md) and [phase6-lab4.md](../qa/image/phase6-lab4.md) (pool rollout). Simulation only; each record lists its own "Not run" items. |
 
+### Review corrections (2026-10-03)
+
+The immutable-branch review's 34 findings are corrected across arm/reboot recovery, offline
+preflight, Controller replacement, pool-control replay, release publication, installer navigation
+and lab evidence. [Verification](../qa/2026-10-03-immutable-review-fixes.md) records the actual
+automated/native scratch/simulated browser checks and limits; no phase status or physical,
+firmware, live-forge or redistribution gate is promoted by this work.
+
+**API impact: changed contract.** Existing pool update commands, inventory and the signed
+`update_rollout` section carry normalized control receipts, pending-result/reservation/rollback
+state and the documented retry/admission errors. Execution and durable state remain on Core:
+the master's `pool-update.json` and members' signed `pool-replica.json` carry the same history
+through existing adoption. A fresh Controller obtains `Inventory.managed.update_rollout` over
+the authenticated host API. No Controller-owned pool state or new endpoint is added; the
+coordinated Core version requirement and old-master task-display limit are documented in
+[API.md](../API.md) and the [pool update guide](../guide/update-a-pool.md).
+
+**Guide impact: updated.** Installation/repair, update/retry, appliance recovery and publication
+instructions now describe the checked boundaries. The source-only lab fixes do not imply a
+new successful boot, restore or security observation.
+
 Cross-cutting items:
 
 - **CI:** `.github/workflows/image.yml` and `.gitea/workflows/image.yml` exist (forge-only jobs: layout tests, host image build and boot,

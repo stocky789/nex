@@ -185,6 +185,15 @@ fi
 
 # ------------------------------------------------------------------------- steps
 
+step_action() {
+    db_subst nex-installer/action found "$found_disks"
+    ask nex-installer/action || exit 1
+    case $RET in
+        'Repair image') v_mode=repair ;;
+        *) v_mode=install ;;
+    esac
+}
+
 step_hostname() {
     db_set nex-installer/hostname "$(getv v_hostname)"
     ask nex-installer/hostname || return 1
@@ -581,26 +590,28 @@ v_mode=install
 found_disks=
 if [ "$image_edition" = yes ] && probe=$(sh "$ROOT/cdrom/nex/nex-image-install.sh" probe 2>/dev/null); then
     found_disks=$(printf '%s\n' "$probe" | sed -n 's/^disks=//p')
-    db_subst nex-installer/mode found "$found_disks"
-    ask nex-installer/mode || exit 1
-    case $RET in Repair*) v_mode=repair ;; esac
 fi
 
-steps="hostname keymap tzarea tzzone password management other"
-for nic in $nics; do steps="$steps nic:$nic"; done
-steps="$steps dns disk erase validate"
-# Repair keeps the host's identity, account and data volume, so it asks only what the
-# download needs (net installer) and then for the confirmation.
-if [ "$v_mode" = repair ]; then
-    steps="repairdisk"
-    if [ -f "$ROOT/cdrom/nex/payloads.tsv" ]; then
-        steps="management other"
+build_steps() {
+    steps=
+    [ -z "$found_disks" ] || steps=action
+    # Repair keeps the host's identity, account and data volume, so it asks only
+    # what the download needs (net installer) and then for the confirmation.
+    if [ "$v_mode" = repair ]; then
+        if [ -f "$ROOT/cdrom/nex/payloads.tsv" ]; then
+            steps="$steps management other"
+            for nic in $nics; do steps="$steps nic:$nic"; done
+            steps="$steps dns"
+        fi
+        steps="$steps repairdisk repairconfirm validate"
+    else
+        steps="$steps hostname keymap tzarea tzzone password management other"
         for nic in $nics; do steps="$steps nic:$nic"; done
-        steps="$steps dns repairdisk"
+        steps="$steps dns disk erase validate"
     fi
-    steps="$steps repairconfirm validate"
-fi
+}
 
+build_steps
 set -- $steps
 total=$#
 index=1
@@ -612,7 +623,13 @@ while [ "$index" -le "$total" ]; do
         *) "step_$step" ;;
     esac
     case $? in
-        0) direction=1 ;;
+        0)
+            direction=1
+            if [ "$step" = action ]; then
+                build_steps
+                set -- $steps
+                total=$#
+            fi ;;
         "$SKIP") ;;
         *) direction=-1 ;;
     esac

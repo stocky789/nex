@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 )
 
@@ -26,8 +28,12 @@ const (
 
 // mountBase is where transient mounts of the installer and the slot writer live; tests replace it.
 var (
-	mountBase = "/run/nex"
-	mdDevDir  = "/dev/md"
+	mountBase      = "/run/nex"
+	mdDevDir       = "/dev/md"
+	mountInfoPath  = "/proc/self/mountinfo"
+	swapsPath      = "/proc/swaps"
+	installRelease = ReadRelease
+	installDisk    = OpenDisk
 )
 
 func mdDevice() string { return filepath.Join(mdDevDir, DataMDName) }
@@ -96,23 +102,28 @@ func (w *Writer) open(o Options) (*Release, []*Disk, error) {
 	if err := ValidateLayout(o.Layout, len(o.Disks)); err != nil {
 		return nil, nil, err
 	}
-	seen := map[string]bool{}
-	for _, p := range o.Disks {
-		if seen[p] {
-			return nil, nil, fmt.Errorf("disk %s is listed twice", p)
-		}
-		seen[p] = true
-	}
 	w.logf("verifying the release in %s", o.ImageDir)
-	rel, err := ReadRelease(o.ImageDir)
+	rel, err := installRelease(o.ImageDir)
 	if err != nil {
 		return nil, nil, err
 	}
 	var disks []*Disk
 	for _, p := range o.Disks {
-		d, err := OpenDisk(p, true)
+		d, err := installDisk(p, true)
 		if err == nil {
-			_, err = Plan(d.Size, o.Layout)
+			var plan []Planned
+			plan, err = Plan(d.Size, o.Layout)
+			if err == nil && (rel.Manifest.Files["root.erofs"].Size > plan[1].Size ||
+				rel.Manifest.Files["root.verity"].Size > plan[2].Size) {
+				err = fmt.Errorf("release (%d + %d bytes) does not fit slot a (%d + %d bytes)",
+					rel.Manifest.Files["root.erofs"].Size, rel.Manifest.Files["root.verity"].Size,
+					plan[1].Size, plan[2].Size)
+			}
+			for _, prior := range disks {
+				if err == nil && sameDisk(prior, d) {
+					err = fmt.Errorf("disk %s is listed twice (also %s)", p, prior.Path)
+				}
+			}
 		}
 		if err != nil {
 			closeAll(disks)
@@ -123,7 +134,98 @@ func (w *Writer) open(o Options) (*Release, []*Disk, error) {
 		}
 		disks = append(disks, d)
 	}
+	if err = validateOffline(disks); err != nil {
+		closeAll(disks)
+		return nil, nil, err
+	}
 	return rel, disks, nil
+}
+
+// validateOffline observes kernel identities, not mount source names (which may be aliases,
+// UUIDs or /dev/root). Any holder means the disk is in use, even if that holder is not mounted.
+func validateOffline(disks []*Disk) error {
+	devices := map[string]string{}
+	for _, d := range disks {
+		if !d.block {
+			continue
+		}
+		nodes := []string{d.sysPath}
+		children, err := os.ReadDir(d.sysPath)
+		if err != nil {
+			return fmt.Errorf("%s: inspect disk: %w", d.Path, err)
+		}
+		for _, child := range children {
+			if !child.IsDir() {
+				continue
+			}
+			node := filepath.Join(d.sysPath, child.Name())
+			if _, err := os.Stat(filepath.Join(node, "partition")); err == nil {
+				nodes = append(nodes, node)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("%s: inspect partition: %w", d.Path, err)
+			}
+		}
+		for _, node := range nodes {
+			dev, err := os.ReadFile(filepath.Join(node, "dev"))
+			if err != nil {
+				return fmt.Errorf("%s: inspect device identity: %w", d.Path, err)
+			}
+			devices[strings.TrimSpace(string(dev))] = d.Path
+			holders, err := os.ReadDir(filepath.Join(node, "holders"))
+			if err != nil {
+				return fmt.Errorf("%s: inspect holders: %w", d.Path, err)
+			}
+			if len(holders) != 0 {
+				return fmt.Errorf("%s: in use by holder %s", d.Path, holders[0].Name())
+			}
+		}
+	}
+	if len(devices) == 0 {
+		return nil
+	}
+	mounts, err := os.ReadFile(mountInfoPath)
+	if err != nil {
+		return fmt.Errorf("inspect mounts: %w", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(mounts)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			return errors.New("cannot inspect malformed mountinfo")
+		}
+		if disk := devices[fields[2]]; disk != "" {
+			return fmt.Errorf("%s: in use by mount %s", disk, fields[4])
+		}
+	}
+	swaps, err := os.ReadFile(swapsPath)
+	if err != nil {
+		return fmt.Errorf("inspect swap: %w", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(swaps)), "\n")[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			return errors.New("cannot inspect malformed swaps")
+		}
+		path := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(fields[0])
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("inspect swap %s: %w", path, err)
+		}
+		st, err := diskFileInfo(f)
+		f.Close()
+		if err != nil {
+			return fmt.Errorf("inspect swap %s: %w", path, err)
+		}
+		if st.Mode()&os.ModeDevice != 0 && st.Mode()&os.ModeCharDevice == 0 {
+			if stat, ok := st.Sys().(*syscall.Stat_t); ok {
+				if disk := devices[deviceNumber(stat.Rdev)]; disk != "" {
+					return fmt.Errorf("%s: in use by swap %s", disk, path)
+				}
+			} else {
+				return fmt.Errorf("inspect swap %s: no block device identity", path)
+			}
+		}
+	}
+	return nil
 }
 
 func closeAll(disks []*Disk) {

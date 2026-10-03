@@ -81,12 +81,29 @@ instead of finalizing it.
   installed on this release) counts as running it.
 - **`master_changed`:** the pool master changed during the rollout. The new master pauses the rollout; review the pool, then resume
   or abort.
+  Resume preserves any host already in progress and puts the new master last among the
+  remaining unfinished hosts.
 - **`controller_needs_attention`:** the Controller could not be restored automatically and was left stopped: the previous image was
   never forced off, and a new image is forced off only when it never became ready (and then only during the rollback). Recover it
   from the host with the [host recovery export](recover-without-controller.md) and
   [deploy a replacement](deploy-controller-appliance.md) if needed; the rollout stays paused.
 - **A host does not return:** nothing is restarted elsewhere and no guest is assumed stopped. Recover the host from its console;
   its boot entry has three tries and then falls back by itself.
+- **Lost control reply:** through Controller, retry the original API request ID/body to replay
+  its existing task; refresh the rollout view for current progress. A host-local Core retry with
+  the original control ID/body returns its recorded result without a second rollback, including
+  after a later rollout or master promotion. A deliberate new action or retry after a terminal
+  refusal needs a new ID.
+- **`replica_pending`, `rollback_pending` or `control_pending`:** preserve the accepted ID/body,
+  restore member connectivity and use compatible Core builds. Core continues the pending control
+  and its result acknowledgement automatically, even with Controller disconnected; another
+  control or rollout cannot overtake it. An exact-ID retry remains safe.
+- **Old task still needs attention after master promotion:** the old task belongs to its originally
+  assigned Core and may not settle if that host never reports again. Read the current master's
+  rollout/control result instead; that Core finishes accepted work without the old journal.
+- **`authority_capacity`:** the new control/rollout was refused before it was recorded or acted on.
+  Core preserves all earlier replay records and the existing authority limit; retrying a new ID
+  does not create more room or permit dropping that history.
 
 ## Verification
 
@@ -99,3 +116,8 @@ and a browser walkthrough).
 The recovery behaviour described above (abort that stays open until clean-up is confirmed and its forced end, bounded retries of guest
 steps, skipping hosts already on the release, step timeouts, the watchdog teardown wait on pools of four or five hosts) was added after
 review and is covered by fake-peer unit tests only; it has not been run on a real pool.
+
+The review-fix batch exercises pending-control recovery, strict result acknowledgement, capacity
+admission and maintenance-preserving promotion with disposable fake peers and native Go state
+files; see [review-fix verification](../qa/2026-10-03-immutable-review-fixes.md). It does not establish
+a real multi-host rollout or appliance swap.

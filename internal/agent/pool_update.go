@@ -76,14 +76,16 @@ var (
 
 	pushPoolAuthorityReplicasAfterUpdate = PushPoolAuthorityReplicas
 
-	poolUpdateStepTimeout   = 6 * time.Hour
-	poolUpdateBootDeadline  = 30 * time.Minute
-	poolUpdateMinSoak       = 60 * time.Second
-	poolUpdateMaintenance   = poolUpdateSetMaintenance
-	poolUpdateNow           = func() time.Time { return time.Now().UTC() }
-	poolUpdatePeerFactory   = func(s *Store) poolUpdatePeers { return livePoolUpdatePeers{s} }
-	poolUpdateTickInterval  = 5 * time.Second
-	poolUpdateReplicaPushTO = 10 * time.Second
+	poolUpdateStepTimeout  = 6 * time.Hour
+	poolUpdateBootDeadline = 30 * time.Minute
+	poolUpdateMinSoak      = 60 * time.Second
+	poolUpdateMaintenance  = poolUpdateSetMaintenance
+	poolUpdateNow          = func() time.Time { return time.Now().UTC() }
+	poolUpdatePeerFactory  = func(s *Store) poolUpdatePeers { return livePoolUpdatePeers{s} }
+	// Admission projection seam lets tests overlap competing authority writes.
+	poolUpdateAuthorityProjection = buildPoolAuthorityReplicaWithVMs
+	poolUpdateTickInterval        = 5 * time.Second
+	poolUpdateReplicaPushTO       = 10 * time.Second
 	// poolUpdateRetryPause is how long a guest step that the host reported as failed waits before
 	// the coordinator asks again under a new step identity.
 	poolUpdateRetryPause = 15 * time.Second
@@ -216,10 +218,13 @@ func (c *poolUpdateCoordinator) Start(ctx context.Context, requestID string, req
 		return nil, nil, updateRefusal("pool_unavailable", "%s", err.Error())
 	}
 	if existing != nil && existing.ID == requestID && !req.DryRun {
-		if existing.Sequence != req.Sequence {
+		if existing.Sequence != req.Sequence || poolUpdateVMsPolicy(protocol.PoolUpdateRequest{RunningVMs: existing.RunningVMs}) != poolUpdateVMsPolicy(req) {
 			return nil, nil, updateRefusal("request_conflict", "this request_id started a different rollout")
 		}
 		return existing, nil, nil
+	}
+	if poolUpdatePendingControl(existing) != nil {
+		return nil, nil, updateRefusal("control_pending", "retry the pending rollout control before starting another rollout")
 	}
 	membership, err := c.masterMembership()
 	if err != nil {
@@ -233,6 +238,9 @@ func (c *poolUpdateCoordinator) Start(ctx context.Context, requestID string, req
 	r := &protocol.PoolUpdateRollout{ID: requestID, PoolID: membership.PoolID, Sequence: req.Sequence,
 		RunningVMs: poolUpdateVMsPolicy(req), State: protocol.PoolUpdateRunning, Phase: "staging",
 		MembershipGeneration: membership.Generation, CreatedAt: now, UpdatedAt: now}
+	if existing != nil {
+		r.Controls = existing.Controls
+	}
 	// A host that already runs the release (a member that joined on it, a host an aborted rollout
 	// had already updated) has nothing left to do; it stays in the record so finalize reads it.
 	for _, id := range plan.Current {
@@ -241,8 +249,8 @@ func (c *poolUpdateCoordinator) Start(ctx context.Context, requestID string, req
 	for _, id := range plan.Order {
 		r.Hosts = append(r.Hosts, protocol.PoolUpdateHost{HostID: id, Stage: stagePending})
 	}
-	if err = savePoolUpdate(c.s, r); err != nil {
-		return nil, nil, updateRefusal("record_failed", "the rollout could not be recorded durably")
+	if err = savePoolUpdateAdmitted(c.s, r); err != nil {
+		return nil, nil, err
 	}
 	c.pushReplica(ctx)
 	return r, plan, nil
@@ -379,21 +387,220 @@ func (c *poolUpdateCoordinator) preflight(ctx context.Context, membership protoc
 	return plan, nil
 }
 
-// Control applies pause, resume, abort or rollback_host to a rollout.
-func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUpdateRequest) (*protocol.PoolUpdateRollout, error) {
+// Control durably binds a request identity before applying pause, resume, abort or rollback_host.
+// Its result is retained across rollouts and promotion, and returned before inspecting live state.
+func (c *poolUpdateCoordinator) Control(ctx context.Context, requestID string, req protocol.PoolUpdateRequest) (*protocol.PoolUpdateRollout, error) {
 	poolUpdateMu.Lock()
 	defer poolUpdateMu.Unlock()
+	if requestID == "" || len(requestID) > 128 {
+		return nil, updateRefusal("invalid_request", "a rollout control needs a request_id of at most 128 characters")
+	}
 	if err := req.Valid("update-control"); err != nil {
 		return nil, updateRefusal("invalid_request", "%s", err.Error())
 	}
+	req = poolUpdateControlIntent(req)
 	membership, err := c.masterMembership()
 	if err != nil {
 		return nil, err
 	}
 	r, err := LoadPoolUpdate(c.s)
-	if err != nil || r == nil || r.ID != req.RolloutID {
-		return nil, updateRefusal("rollout_not_found", "no such rollout")
+	if err != nil {
+		return nil, updateRefusal("pool_unavailable", "%s", err.Error())
 	}
+	var receipt *protocol.PoolUpdateControlResult
+	if r != nil {
+		for i := range r.Controls {
+			if r.Controls[i].RequestID == requestID {
+				receipt = &r.Controls[i]
+				break
+			}
+		}
+	}
+	if receipt != nil {
+		if receipt.Request != req {
+			return nil, updateRefusal("request_conflict", "this request_id names a different rollout control")
+		}
+	} else {
+		if r == nil || r.ID != req.RolloutID {
+			return nil, updateRefusal("rollout_not_found", "no such rollout")
+		}
+		if poolUpdatePendingControl(r) != nil {
+			return nil, updateRefusal("control_pending", "retry the pending rollout control before sending another control")
+		}
+		r.Controls = append(r.Controls, protocol.PoolUpdateControlResult{RequestID: requestID, Request: req})
+		receipt = &r.Controls[len(r.Controls)-1]
+		reserve, reserveErr := poolUpdateResultReservation(r, membership, req)
+		if reserveErr != nil {
+			return nil, reserveErr
+		}
+		receipt.ReservedResultBytes = reserve
+		if err = savePoolUpdateAdmitted(c.s, r); err != nil {
+			return nil, err
+		}
+		c.pushReplica(ctx)
+	}
+	return c.continueControl(ctx, r, membership, receipt)
+}
+
+func (c *poolUpdateCoordinator) continueControl(ctx context.Context, r *protocol.PoolUpdateRollout, membership protocol.PoolMembership, receipt *protocol.PoolUpdateControlResult) (*protocol.PoolUpdateRollout, error) {
+	if receipt.Rollout == nil && receipt.Code == "" {
+		result, controlErr := c.control(ctx, r, membership, receipt)
+		if controlErr != nil {
+			var refusal *PoolUpdateError
+			if !errors.As(controlErr, &refusal) || refusal.Code == "replica_pending" || refusal.Code == "rollback_pending" {
+				return nil, controlErr
+			}
+			receipt.Code, receipt.Message = resultError(refusal.Code), resultError(refusal.Message)
+		} else {
+			snapshot := *result
+			snapshot.Controls = nil
+			receipt.Rollout = &snapshot
+		}
+		receipt.ReservedResultBytes = 0
+		receipt.RollbackStarted = false
+		receipt.ReplicationPending = receipt.Request.Control == "abort" || receipt.Request.Control == "rollback_host"
+		if err := savePoolUpdate(c.s, r); err != nil {
+			return nil, updateRefusal("record_failed", "the rollout control result could not be recorded durably")
+		}
+		if !receipt.ReplicationPending {
+			c.pushReplica(ctx)
+		}
+	}
+	if receipt.ReplicationPending {
+		if err := c.replicate(ctx); err != nil {
+			return nil, updateRefusal("replica_pending", "Core is waiting for acknowledgement of this rollout control result")
+		}
+		receipt.ReplicationPending = false
+		if err := savePoolUpdate(c.s, r); err != nil {
+			return nil, updateRefusal("record_failed", "the rollout control acknowledgement could not be recorded durably")
+		}
+	}
+	if receipt.Code != "" {
+		return nil, updateRefusal(receipt.Code, "%s", receipt.Message)
+	}
+	return receipt.Rollout, nil
+}
+
+func poolUpdateControlIntent(req protocol.PoolUpdateRequest) protocol.PoolUpdateRequest {
+	intent := protocol.PoolUpdateRequest{RolloutID: req.RolloutID, Control: req.Control, Force: req.Force}
+	if req.Control == "rollback_host" {
+		intent.HostID = req.HostID
+	}
+	return intent
+}
+
+func poolUpdatePendingControl(r *protocol.PoolUpdateRollout) *protocol.PoolUpdateControlResult {
+	if r != nil {
+		for i := range r.Controls {
+			control := &r.Controls[i]
+			if control.Rollout == nil && control.Code == "" || control.ReplicationPending {
+				return control
+			}
+		}
+	}
+	return nil
+}
+
+// Reserve the full terminal snapshot and the possible growth of the live record. Error text
+// uses the same 4096-byte bound as managed results, with worst-case JSON escaping.
+func poolUpdateResultReservation(r *protocol.PoolUpdateRollout, membership protocol.PoolMembership, req protocol.PoolUpdateRequest) (int, error) {
+	snapshot := *r
+	snapshot.Controls = nil
+	before, err := json.Marshal(snapshot)
+	if err != nil {
+		return 0, updateRefusal("record_failed", "the rollout result reservation could not be encoded")
+	}
+	snapshot.Hosts = append([]protocol.PoolUpdateHost(nil), r.Hosts...)
+	maxTime := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	snapshot.UpdatedAt = maxTime
+	maxAttempt := int(^uint(0) >> 1)
+	var ids []string
+	for i := range snapshot.Hosts {
+		host := &snapshot.Hosts[i]
+		ids = append(ids, host.HostID)
+		host.StepStartedAt, host.DeadlineAt = maxTime, maxTime
+		host.Attempt = maxAttempt
+		switch req.Control {
+		case "abort":
+			member, ok := poolMemberByID(membership, host.HostID)
+			if poolUpdateOwes(host, member, ok) {
+				host.Error += strings.Join(host.StoppedByUpdate, ", ") + strings.Repeat("\x00", 4096) + strings.Repeat("x", 256)
+			}
+		case "rollback_host":
+			if host.HostID == req.HostID {
+				host.Stage = stageRolledBack
+				host.Error += "rolled back by the operator"
+			}
+		}
+	}
+	snapshot.State = protocol.PoolUpdateFinalized
+	snapshot.Pause = &protocol.PoolUpdatePause{Code: strings.Repeat("x", 64),
+		Message: strings.Join(ids, ", ") + strings.Repeat("x", 512)}
+	if r.Controller != nil {
+		controller := *r.Controller
+		controller.StartedAt, controller.Attempt = maxTime, maxAttempt
+		snapshot.Controller = &controller
+	}
+	after, err := json.Marshal(snapshot)
+	if err != nil {
+		return 0, updateRefusal("record_failed", "the rollout result reservation could not be encoded")
+	}
+	if len(before) > protocol.PoolReplicaLimit || len(after) > protocol.PoolReplicaLimit {
+		return 0, updateRefusal("authority_capacity", "the rollout control has no room for its durable terminal result")
+	}
+	reserved := len(after) + max(0, len(after)-len(before)) + 2*6*4096 + 512
+	if reserved > protocol.PoolReplicaLimit {
+		return 0, updateRefusal("authority_capacity", "the rollout control has no room for its durable terminal result")
+	}
+	return reserved, nil
+}
+
+// savePoolUpdateAdmitted publishes the reservation under the same VM authority lock
+// used by snapshot admission and settlement. Callers already hold poolUpdateMu;
+// release poolVMMu before any peer RPC or rollout effects.
+func savePoolUpdateAdmitted(s *Store, r *protocol.PoolUpdateRollout) error {
+	poolVMMu.Lock()
+	defer poolVMMu.Unlock()
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		return updateRefusal("pool_unavailable", "the pool VM authority cannot be read for update admission")
+	}
+	vmSection, err := poolVMRecoverySettlementProjection(state)
+	if err != nil {
+		return updateRefusal("authority_capacity", "the pool's accepted snapshot results cannot fit in the update authority")
+	}
+	if vmSection == nil {
+		vmSection, err = json.Marshal(state.VMs)
+		if err != nil {
+			return updateRefusal("record_failed", "the pool VM authority could not be encoded")
+		}
+	}
+	replica, _, err := poolUpdateAuthorityProjection(s, vmSection)
+	if err != nil {
+		return updateRefusal("pool_unavailable", "the pool authority cannot be read for update admission")
+	}
+	replica.UpdateRollout = r
+	if replica.Sections, err = replica.SectionDigests(); err != nil {
+		return updateRefusal("record_failed", "the rollout authority could not be encoded")
+	}
+	poolPeerMu.Lock()
+	peer, err := loadPoolPeer(s)
+	poolPeerMu.Unlock()
+	if err != nil {
+		return updateRefusal("pool_unavailable", "the pool authority is unavailable for update admission")
+	}
+	if err = poolAuthorityReplicaFitsAddressedBodies(s, replica, peer.CAKeyPEM); err != nil {
+		return updateRefusal("authority_capacity", "the rollout record and reserved terminal result exceed the pool authority limit")
+	}
+	if err = savePoolUpdate(s, r); err != nil {
+		return updateRefusal("record_failed", "the rollout record could not be recorded durably")
+	}
+	return nil
+}
+
+func (c *poolUpdateCoordinator) control(ctx context.Context, r *protocol.PoolUpdateRollout, membership protocol.PoolMembership, receipt *protocol.PoolUpdateControlResult) (*protocol.PoolUpdateRollout, error) {
+	var err error
+	req := receipt.Request
 	now := poolUpdateNow()
 	switch req.Control {
 	case "pause":
@@ -422,6 +629,7 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 				return nil, updateRefusal(protocol.PoolUpdateMembershipChanged, "host %s is no longer a ready member; review the pool first", host.HostID)
 			}
 		}
+		poolUpdateOrderHosts(r, membership.MasterHostID, membership.Members)
 		// The gates a host passed before the pause are not remembered: the pool may have changed
 		// while it waited, so the host that is next is gated again as at its first entry.
 		if next := poolUpdateNextHost(r); next != nil && poolUpdateBeforeReboot(next.Stage) {
@@ -473,6 +681,9 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 		default:
 			// An abort that cannot confirm its cleanup stays open (and is retried) instead of ending
 			// with guests nobody owes a restart.
+			if err = c.replicate(ctx); err != nil {
+				return nil, updateRefusal("replica_pending", "retry this request_id after the rollout control record is acknowledged by the pool's members")
+			}
 			c.finishAbort(ctx, r, now, true)
 		}
 	case "rollback_host":
@@ -493,24 +704,31 @@ func (c *poolUpdateCoordinator) Control(ctx context.Context, req protocol.PoolUp
 		// The rollback arms the earlier slot and reboots the host: that is a host leaving service
 		// like any other, so the same gates apply.
 		if err = c.gate(ctx, membership, req.HostID); err != nil {
+			if receipt.RollbackStarted {
+				return nil, updateRefusal("rollback_pending", "Core is waiting to reconcile the rollback of host %s safely", req.HostID)
+			}
 			return nil, err
 		}
-		res, stepErr := c.peers.Step(ctx, member, protocol.PoolUpdateStep{RolloutID: r.ID, StepID: poolUpdateStepID(r.ID, req.HostID, stageRolledBack, host.Attempt), Action: "rollback", Sequence: r.Sequence})
-		if stepErr != nil || res.Code != "" {
-			message := "the host could not be reached"
-			if res.Code != "" {
-				message = res.Code + ": " + res.Message
+		if !receipt.RollbackStarted {
+			receipt.RollbackStarted = true
+			if err = savePoolUpdate(c.s, r); err != nil {
+				return nil, updateRefusal("record_failed", "the rollback intent could not be recorded durably")
 			}
-			return nil, updateRefusal("rollback_failed", "host %s: %s", req.HostID, message)
+		}
+		if err = c.replicate(ctx); err != nil {
+			return nil, updateRefusal("replica_pending", "retry this request_id after the rollout control record is acknowledged by the pool's members")
+		}
+		res, stepErr := c.peers.Step(ctx, member, protocol.PoolUpdateStep{RolloutID: r.ID, StepID: poolUpdateStepID(r.ID, req.HostID, stageRolledBack, host.Attempt), Action: "rollback", Sequence: r.Sequence})
+		if stepErr != nil {
+			return nil, updateRefusal("rollback_pending", "Core is reconciling the rollback of host %s", req.HostID)
+		}
+		if res.Code != "" {
+			return nil, updateRefusal("rollback_failed", "host %s: %s: %s", req.HostID, res.Code, res.Message)
 		}
 		host.Stage, host.Error = stageRolledBack, "rolled back by the operator"
 		poolUpdatePause(r, protocol.PoolUpdateRolledBack, "host "+req.HostID+" was rolled back; resume to stage it again or abort")
 	}
 	r.UpdatedAt = now
-	if err = savePoolUpdate(c.s, r); err != nil {
-		return nil, updateRefusal("record_failed", "the rollout could not be recorded durably")
-	}
-	c.pushReplica(ctx)
 	return r, nil
 }
 
@@ -577,7 +795,7 @@ func (c *poolUpdateCoordinator) abortCleanup(ctx context.Context, r *protocol.Po
 			if reason == "" {
 				host.StoppedByUpdate = nil
 			} else {
-				owed = append(owed, "guests "+strings.Join(host.StoppedByUpdate, ", ")+" were stopped by the rollout and are not running again ("+reason+"); start them by hand")
+				owed = append(owed, "guests "+strings.Join(host.StoppedByUpdate, ", ")+" were stopped by the rollout and are not running again ("+resultError(reason)+"); start them by hand")
 				if journaled {
 					// The engine replays a failed start under the same operation ID.
 					host.Attempt++
@@ -683,6 +901,32 @@ func poolUpdateNextHost(r *protocol.PoolUpdateRollout) *protocol.PoolUpdateHost 
 	return nil
 }
 
+// Keep an in-flight host first until it is put back in service. Only untouched unfinished
+// hosts can move around it; the current master's turn comes after all other such hosts.
+func poolUpdateOrderHosts(r *protocol.PoolUpdateRollout, masterID string, members []protocol.PoolMember) {
+	start := 0
+	for i := range r.Hosts {
+		for _, member := range members {
+			if member.HostID == r.Hosts[i].HostID && member.Maintenance {
+				start = i + 1
+			}
+		}
+		switch r.Hosts[i].Stage {
+		case stagePending, stageStaged, stageDone:
+		default:
+			start = i + 1
+		}
+	}
+	for i := start; i < len(r.Hosts); i++ {
+		if r.Hosts[i].HostID == masterID && r.Hosts[i].Stage != stageDone {
+			master := r.Hosts[i]
+			copy(r.Hosts[i:], r.Hosts[i+1:])
+			r.Hosts[len(r.Hosts)-1] = master
+			return
+		}
+	}
+}
+
 // poolUpdateBeforeReboot is true for the stages that have not yet armed the host's next boot,
 // the ones that take a host out of service and so need the gates.
 func poolUpdateBeforeReboot(stage string) bool {
@@ -750,7 +994,7 @@ func (c *poolUpdateCoordinator) Advance(ctx context.Context) error {
 	defer poolUpdateMu.Unlock()
 	r, err := LoadPoolUpdate(c.s)
 	aborting := poolUpdateAborting(r)
-	if err != nil || r == nil || r.State != protocol.PoolUpdateRunning && !aborting {
+	if err != nil || r == nil {
 		return err
 	}
 	membership, err := c.masterMembership()
@@ -761,6 +1005,13 @@ func (c *poolUpdateCoordinator) Advance(ctx context.Context) error {
 	}
 	pass, cancel := context.WithTimeout(ctx, poolUpdatePassTimeout)
 	defer cancel()
+	if receipt := poolUpdatePendingControl(r); receipt != nil {
+		_, err = c.continueControl(pass, r, membership, receipt)
+		return err
+	}
+	if r.State != protocol.PoolUpdateRunning && !aborting {
+		return nil
+	}
 	before, _ := json.Marshal(r)
 	progress := poolUpdateProgress(r)
 	switch {
@@ -814,6 +1065,7 @@ func (c *poolUpdateCoordinator) step(ctx context.Context, r *protocol.PoolUpdate
 		c.stageEverywhere(ctx, r, membership)
 		return
 	}
+	poolUpdateOrderHosts(r, membership.MasterHostID, membership.Members)
 	host := poolUpdateNextHost(r)
 	if host == nil {
 		c.finalize(ctx, r, membership)
@@ -1339,7 +1591,7 @@ func AdoptPoolUpdateOnPromotion(s *Store, inherited *protocol.PoolUpdateRollout)
 		if !poolUpdateAborting(&r) {
 			poolUpdatePause(&r, protocol.PoolUpdateMasterChanged, "the pool master changed during the rollout; resume or abort it")
 		}
-	case poolUpdateActive(local) && inherited != nil:
+	case inherited != nil && (poolUpdateActive(local) || len(inherited.Controls) != 0):
 		r = *inherited
 	case poolUpdateActive(local):
 		r = *local
@@ -1452,10 +1704,22 @@ func ExecutePoolUpdate(ctx context.Context, s *Store, cmd protocol.Command) prot
 	if v.Action == "update-rollout" {
 		_, _, err = c.Start(ctx, v.RequestID, *v.Update)
 	} else {
-		_, err = c.Control(ctx, *v.Update)
+		_, err = c.Control(ctx, v.RequestID, *v.Update)
 	}
 	if err != nil {
 		result.Error = err.Error()
+		if v.Action == "update-control" {
+			r, loadErr := LoadPoolUpdate(s)
+			if loadErr == nil && r != nil {
+				for _, receipt := range r.Controls {
+					if receipt.RequestID == v.RequestID && receipt.Request == poolUpdateControlIntent(*v.Update) &&
+						(receipt.Rollout == nil && receipt.Code == "" || receipt.ReplicationPending) {
+						result.Status = "needs_attention"
+						break
+					}
+				}
+			}
+		}
 		return result
 	}
 	result.Status = "succeeded"

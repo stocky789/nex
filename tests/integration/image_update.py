@@ -17,8 +17,9 @@ a local HTTP server that honours Range, installs release 1 on a fresh disk and d
   5. rollback to release 1
   6. power cuts (kill -9 / QMP quit) during the slot write, after it before arming, with a .efi.new on the ESP,
      after arming before the bless, and in the counted trial boot; plus CLI/service exclusion during an apply
-  7. state guard: release 1 (built with NEX_STATE_FORMAT=2, --rel1-state-format 2) over retained state that needs format 3:
-     engine refusal of the rollback, then release 1 armed by hand: its guard fails at boot (read live), fallback to release 2
+  7. optional state guard: only with --rel1-state-format 2 and an observed format-2 release 1 over state needing 3:
+     engine refusal, then release 1 armed by hand: its guard fails at boot (read live), fallback to release 2.
+     Format-3 release 1 skips this incompatible scenario explicitly; no downgrade coverage is claimed.
   8. in the same run: rollback, a failing check with fallback, and the happy path once more
   /etc and /var data are compared after every boot.
 
@@ -32,6 +33,7 @@ import http.server
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import socketserver
@@ -378,6 +380,92 @@ def boot_until(vm, budget, want, limit=8):
     return seen
 
 
+STATE_GUARD_METADATA = 'set -e; cat "$1"; printf "\\nNEX_LAB_RETAINED_ROOT\\n"; cat "$2"'
+
+
+def state_guard_images_match(rc, observed):
+    if rc != 0:
+        return False
+    roots = observed.split("\nNEX_LAB_RETAINED_ROOT\n")
+    if len(roots) != 2:
+        return False
+    for text, expected in zip(roots, ({"BUILD_ID": "2026.10.2-2", "NEX_STATE_FORMAT": "3"},
+                                     {"BUILD_ID": "2026.10.1-1", "NEX_STATE_FORMAT": "2"})):
+        fields = {}
+        for line in text.splitlines():
+            key, separator, value = line.strip().partition("=")
+            if separator and key in expected:
+                try:
+                    values = shlex.split(value, comments=True)
+                except ValueError:
+                    return False
+                if key in fields or len(values) != 1:
+                    return False
+                fields[key] = values[0]
+        if fields != expected:
+            return False
+    return True
+
+
+def prove_state_guard(vm, budget, same_data, rel1_state_format):
+    if rel1_state_format != 2:
+        info("SKIP section 7: release 1 is not selected as format 2; older-format refusal/fallback not covered")
+        return
+    ctl = vm.ctl
+    previous = next((s for s in status(ctl)["slots"] if s["sequence"] == 1 and s.get("slot") in ("a", "b")), None)
+    if previous is None:
+        sys.exit("section 7: cannot identify release 1's retained root; no downgrade proof attempted")
+    slot = previous["slot"]
+    rc, observed = ctl.sh(
+        "(set -eu; m=$(mktemp -d /run/nex-lab-state.XXXXXX); "
+        "trap 'umount \"$m\" 2>/dev/null || true; rmdir \"$m\"' EXIT; "
+        f"mount -t erofs -o ro /dev/disk/by-partlabel/nex-root-{slot} \"$m\"; "
+        f"sh -c {shlex.quote(STATE_GUARD_METADATA)} sh /usr/lib/os-release \"$m/usr/lib/os-release\"; )")
+    if not state_guard_images_match(rc, observed):
+        sys.exit(f"section 7: release 1 must actually read format 2 and release 2 format 3 "
+                 f"(observed {observed!r}, exit {rc}); no downgrade proof attempted")
+    ctl.sh("mkdir -p /var/lib/nex-core-agent && echo '{}' > /var/lib/nex-core-agent/zfs-pool.json; sync")
+    check(ctl.sh("nex-update state-guard")[0] == 0, "state guard: passes on release 2 (reads 3) over state that needs 3")
+    rc, txt = ctl.sh(f"nex-update rollback -request-id lab-roll2-{RUN} 2>&1 | tail -3")
+    check("state_format_downgrade" in txt, "state guard: the engine refuses rollback to release 1 (reads 2) over state that needs 3 (state_format_downgrade)", txt)
+    before = esp_ls(ctl)
+    # Leave time to read the guard live during the failed trial boot.
+    ctl.sh("mkdir -p /etc/systemd/system/nex-boot-check.service.d; "
+           "printf '[Service]\\nEnvironment=NEX_BOOT_CHECK_TRIES=2 NEX_BOOT_CHECK_WAIT=45\\n' > /etc/systemd/system/nex-boot-check.service.d/lab.conf; sync")
+    ctl.sh((ESP_MOUNT % "rw") + "cd $m/EFI/Linux && mv nex-core_2026.10.1_1.efi nex-core_2026.10.1_1+3.efi && "
+           "mv nex-core_2026.10.2_2.efi nex-core_2026.10.2_2+0-3.efi && cd / && sync" + ESP_DONE)
+    info(f"state-guard lab: ESP {before} -> {esp_ls(ctl)}")
+    vm.ctl.drain()
+    vm.ctl.send("systemctl reboot")
+    t0 = time.time()
+    first, builds = None, []
+    for _ in range(8):
+        vm.wait_ready(budget)
+        ctl = vm.ctl
+        b = ctl.sh(". /usr/lib/os-release; echo $BUILD_ID")[1]
+        builds.append(b)
+        if b == "2026.10.1-1" and first is None:
+            try:
+                first = ctl.sh("systemctl is-failed nex-state-guard.service; systemctl is-active libvirtd.service nex-core-local.service 2>&1 | tr '\\n' ' '; journalctl -b -u nex-state-guard --no-pager -o cat | tail -2", 25)[1]
+            except TimeoutError:
+                first = "UNREAD: the guest rebooted under the read"
+        if b == "2026.10.2-2":
+            break
+    info(f"state-guard boots: {builds} after {time.time() - t0:.0f}s; on release 1: {first!r}")
+    lines = (first or "").split("\n") + [""]
+    check(builds[:1] == ["2026.10.1-1"] and lines[0].strip() == "failed" and lines[1].split()[:1] not in ([], ["active"]),
+          "state guard (observed live): release 1 booted over newer state, its guard failed and libvirtd did not start", repr(first))
+    check(builds[-1] == "2026.10.2-2", "state guard: the counted boots ran out and the host is back on release 2 (reads 3)", str(builds))
+    time.sleep(20)
+    fs = facts(ctl)
+    info(f"state guard final: ESP {fs['uki']} phase {fs['status']['phase']} failure {fs['status'].get('failure')}")
+    check(ctl.sh("nex-update state-guard")[0] == 0, "state guard: release 2 reads the retained state")
+    same_data(fs, "state guard fallback")
+    rc, txt = ctl.sh("journalctl --no-pager -o cat -u nex-state-guard -u nex-boot-check 2>&1 | grep -c 'retained state needs a newer state_format'")
+    check(txt.strip().isdigit() and int(txt.strip()) >= 1, "state guard (from the journal, after the fact): nex-boot-check failed the boot on release 1 because of the retained-state guard", txt)
+    ctl.sh("rm -f /var/lib/nex-core-agent/zfs-pool.json /etc/systemd/system/nex-boot-check.service.d/lab.conf; sync")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rel1", required=True, help="release directory of sequence 1 (image/build.sh output, .../release)")
@@ -687,52 +775,9 @@ def main():
         check(fs["status"]["phase"] == "committed", "after the cuts: record committed", fs["status"]["phase"])
         same_data(fs, "after the power cuts")
 
-        # ---- 7. state guard: retained state newer than the image reads (release 1 reads format 2, release 2 reads 3)
-        ctl.sh("mkdir -p /var/lib/nex-core-agent && echo '{}' > /var/lib/nex-core-agent/zfs-pool.json; sync")
-        check(ctl.sh("nex-update state-guard")[0] == 0, "state guard: passes on release 2 (reads 3) over state that needs 3")
-        rc, txt = ctl.sh(f"nex-update rollback -request-id lab-roll2-{RUN} 2>&1 | tail -3")
-        check("state_format_downgrade" in txt, "state guard: the engine refuses rollback to release 1 (reads 2) over state that needs 3 (state_format_downgrade)", txt)
-        before = esp_ls(ctl)
-        # The boot check retries for NEX_BOOT_CHECK_WAIT seconds before it fails the counted boot and reboots; 45 s leaves the
-        # harness time to read the failed guard live on release 1 (3 s was shorter than the time to the control shell).
-        ctl.sh("mkdir -p /etc/systemd/system/nex-boot-check.service.d; "
-               "printf '[Service]\\nEnvironment=NEX_BOOT_CHECK_TRIES=2 NEX_BOOT_CHECK_WAIT=45\\n' > /etc/systemd/system/nex-boot-check.service.d/lab.conf; sync")
-        # What `rollback` would write, written by hand because the engine rightly refuses: release 1 armed, release 2 marked bad.
-        ctl.sh((ESP_MOUNT % "rw") + "cd $m/EFI/Linux && mv nex-core_2026.10.1_1.efi nex-core_2026.10.1_1+3.efi && "
-               "mv nex-core_2026.10.2_2.efi nex-core_2026.10.2_2+0-3.efi && cd / && sync" + ESP_DONE)
-        info(f"state-guard lab: ESP {before} -> {esp_ls(ctl)}")
-        vm.ctl.drain()
-        vm.ctl.send("systemctl reboot")
-        t0 = time.time()
-        first = None
-        builds = []
-        for _ in range(8):
-            vm.wait_ready(a.budget)
-            ctl = vm.ctl
-            b = ctl.sh(". /usr/lib/os-release; echo $BUILD_ID")[1]
-            builds.append(b)
-            if b == "2026.10.1-1" and first is None:
-                # Read at once: the boot check gives the boot NEX_BOOT_CHECK_WAIT seconds before it fails and reboots.
-                try:
-                    first = ctl.sh("systemctl is-failed nex-state-guard.service; systemctl is-active libvirtd.service nex-core-local.service 2>&1 | tr '\\n' ' '; journalctl -b -u nex-state-guard --no-pager -o cat | tail -2", 25)[1]
-                except TimeoutError:
-                    first = "UNREAD: the guest rebooted under the read"
-            if b == "2026.10.2-2":
-                break
-        info(f"state-guard boots: {builds} after {time.time() - t0:.0f}s; on release 1: {first!r}")
-        lines = (first or "").split("\n") + [""]
-        check(builds[:1] == ["2026.10.1-1"] and lines[0].strip() == "failed" and lines[1].split()[:1] not in ([], ["active"]),
-              "state guard (observed live): release 1 booted over newer state, its guard failed and libvirtd did not start", repr(first))
-        check(builds[-1] == "2026.10.2-2", "state guard: the counted boots ran out and the host is back on release 2 (reads 3)", str(builds))
-        time.sleep(20)
-        fs = facts(ctl)
-        info(f"state guard final: ESP {fs['uki']} phase {fs['status']['phase']} failure {fs['status'].get('failure')}")
-        check(ctl.sh("nex-update state-guard")[0] == 0, "state guard: release 2 reads the retained state")
-        same_data(fs, "state guard fallback")
-        # The same refusal as the journal of the earlier boots keeps it (read after the fact, from the persistent journal).
-        rc, txt = ctl.sh("journalctl --no-pager -o cat -u nex-state-guard -u nex-boot-check 2>&1 | grep -c 'retained state needs a newer state_format'")
-        check(txt.strip().isdigit() and int(txt.strip()) >= 1, "state guard (from the journal, after the fact): nex-boot-check failed the boot on release 1 because of the retained-state guard", txt)
-        ctl.sh("rm -f /var/lib/nex-core-agent/zfs-pool.json /etc/systemd/system/nex-boot-check.service.d/lab.conf; sync")
+        # ---- 7. optional older-format refusal and boot fallback (actual retained image checked first)
+        prove_state_guard(vm, a.budget, same_data, a.rel1_state_format)
+        ctl = vm.ctl
 
         # ---- 8. once more in the same run, from release 2 over the retained records of everything above:
         # rollback, then a failing boot check (fallback to release 1 after the counted boots), then the happy path.

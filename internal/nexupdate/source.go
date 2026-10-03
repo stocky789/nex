@@ -237,6 +237,7 @@ func fetchPart(ctx context.Context, src Source, name string, c Component, part s
 		have = 0
 		h.Reset()
 	}
+	resumed = have > 0
 	etagBytes, _ := os.ReadFile(part + ".etag")
 	if have < c.Bytes {
 		body, ranged, etag, err := src.Blob(ctx, name, have, strings.TrimSpace(string(etagBytes)))

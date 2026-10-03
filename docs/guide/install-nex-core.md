@@ -53,6 +53,12 @@ host described on this page and stay selectable.
   them; the network installer downloads them, and the system image, by SHA-256 from the address set when the
   installer was built.
 - **Repair image** keeps the data volume: see [Reinstall the system image and keep the data](reinstall-keeping-state.md).
+- **Offline whole disks only.** The disk writer rejects partitions, duplicate names for the same
+  disk, mounted disks or partitions, active swap and disks held by md/device-mapper. Boot the
+  installer and stop only arrays belonging to your selected targets before proceeding; never
+  install or repair onto the running host's disk. Device aliases resolve to the same kernel
+  disk, not a separate target. A verified image that exceeds a system slot is refused before
+  wiping or formatting.
 
 Secure Boot is supported but not required: with it off the host works, and its image checks are not
 tamper-proof against someone with disk access. Verification status: small lab ISOs of this layout were installed
@@ -305,8 +311,11 @@ it runs lives under `/var`, `/etc` and `/run`: `/etc` and `/root` are kept on `/
 (`/var/lib/nex/etc` and `/var/roothome`) and mounted over the read-only root at boot, so
 configuration, SSH host keys and root's files survive reboots as before. Installing or
 updating software opens a short writable window, which **Update** does for you; see
-[Software updates](software-updates.md). Hosts installed before this layout keep a writable
-root and are not converted.
+[Software updates](software-updates.md). After installing a build with this layout, an existing
+classic host with a separate `/var` entry in `/etc/fstab` adopts it at the next boot too:
+the first boot copies `/etc` and `/root` to `/var` before mounting them there. A host without
+a separate `/var` keeps its writable root. Check `findmnt -no OPTIONS /` rather than using
+the original installation date to decide whether a writable update window is needed.
 
 Fresh installs allow root password SSH on the management network. Check the installed
 host key fingerprint at its trusted console with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`,
@@ -460,5 +469,10 @@ hardware remain unverified.
 An earlier 0.2.8 build with unchanged installer code reached the final prompt, stayed open until
 **Restart now**, then rebooted naturally. The final SHA's unattended install, first boot and reboot
 passed; its completion screen was not visually inspected. See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
+
+[Immutable review-fix checks](../qa/2026-10-03-immutable-review-fixes.md) exercised all-target
+offline preflight with controlled block observations, actual scratch-file alias refusal, gzip
+integrity rejection and text-wizard Erase/Repair navigation through a simulated debconf frontend.
+These checks do not replace a new booted ISO, physical disk/network or firmware walkthrough.
 
 [Return to the guide](README.md)

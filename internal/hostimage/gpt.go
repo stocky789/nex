@@ -10,11 +10,14 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 	"unicode/utf16"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -34,6 +37,19 @@ var (
 
 	// ErrNoGPT means neither the primary nor the backup GPT is valid.
 	ErrNoGPT = errors.New("no valid GPT")
+
+	sysBlockDir       = "/sys/dev/block"
+	blockDevDir       = "/dev"
+	diskFileInfo      = (*os.File).Stat
+	blockDiskGeometry = func(f *os.File) (int64, int, error) {
+		var size uint64
+		var ss int32
+		err := ioctl(f.Fd(), blkGETSIZE64, unsafe.Pointer(&size))
+		if err == nil {
+			err = ioctl(f.Fd(), blkSSZGET, unsafe.Pointer(&ss))
+		}
+		return int64(size), int(ss), err
+	}
 )
 
 // GUID holds a GUID in on-disk (mixed-endian) byte order.
@@ -145,6 +161,8 @@ type Disk struct {
 	SectorSize int
 	Size       int64
 	block      bool
+	info       os.FileInfo
+	sysPath    string
 }
 
 // OpenDisk opens a block device or regular file and detects its geometry.
@@ -157,32 +175,58 @@ func OpenDisk(path string, write bool) (*Disk, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := f.Stat()
+	st, err := diskFileInfo(f)
 	if err != nil {
 		f.Close()
 		return nil, err
 	}
-	d := &Disk{Path: path, File: f, SectorSize: 512}
+	d := &Disk{Path: path, File: f, SectorSize: 512, info: st}
 	switch {
 	case st.Mode().IsRegular():
 		d.Size = st.Size()
 	case st.Mode()&os.ModeDevice != 0 && st.Mode()&os.ModeCharDevice == 0:
 		d.block = true
-		var size uint64
-		var ss int32
-		if err = ioctl(f.Fd(), blkGETSIZE64, unsafe.Pointer(&size)); err == nil {
-			err = ioctl(f.Fd(), blkSSZGET, unsafe.Pointer(&ss))
+		stat, ok := st.Sys().(*syscall.Stat_t)
+		if !ok {
+			f.Close()
+			return nil, fmt.Errorf("%s: no block device identity", path)
+		}
+		dev := deviceNumber(stat.Rdev)
+		d.sysPath, err = filepath.EvalSymlinks(filepath.Join(sysBlockDir, dev))
+		if err == nil {
+			if _, perr := os.Stat(filepath.Join(d.sysPath, "partition")); perr == nil {
+				err = errors.New("partition block nodes are not whole disks")
+			} else if !errors.Is(perr, os.ErrNotExist) {
+				err = perr
+			}
+		}
+		if err == nil {
+			d.Path = filepath.Join(blockDevDir, filepath.Base(d.sysPath))
+			d.Size, d.SectorSize, err = blockDiskGeometry(f)
 		}
 		if err != nil {
 			f.Close()
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		d.Size, d.SectorSize = int64(size), int(ss)
 	default:
 		f.Close()
 		return nil, fmt.Errorf("%s is neither a block device nor a regular file", path)
 	}
 	return d, nil
+}
+
+func deviceNumber(dev uint64) string {
+	return fmt.Sprintf("%d:%d", unix.Major(dev), unix.Minor(dev))
+}
+
+func sameDisk(a, b *Disk) bool {
+	if a.block != b.block {
+		return false
+	}
+	if a.block {
+		return a.info.Sys().(*syscall.Stat_t).Rdev == b.info.Sys().(*syscall.Stat_t).Rdev
+	}
+	return os.SameFile(a.info, b.info)
 }
 
 func (d *Disk) Close() error { return d.File.Close() }

@@ -652,8 +652,20 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		// Backup work, ZFS provision and promotion can settle after an earlier
 		// uncertain result. Their later result comes from the same authenticated
 		// Core and operation ID, after Core has reconciled its durable outcome.
+		poolUpdateRecovered := false
+		if kind == "pool-update" && status == "needs_attention" {
+			var raw string
+			var cmd protocol.Command
+			if commandErr := tx.QueryRow("SELECT command FROM managed_resources WHERE operation_id=? AND host_id=? AND kind='pool-update'", res.OperationID, host).Scan(&raw); commandErr != nil {
+				fail(w, 500, "pool update command lookup failed")
+				return
+			}
+			poolUpdateRecovered = json.Unmarshal([]byte(raw), &cmd) == nil && cmd.OperationID == res.OperationID &&
+				cmd.Kind == "pool-update" && cmd.Pool != nil && cmd.Pool.Action == "update-control" &&
+				cmd.Pool.Membership.MasterHostID == host && cmd.Pool.Valid() == nil
+		}
 		recovered := status == "needs_attention" && (res.Status == "succeeded" || res.Status == "failed") &&
-			(kind == "storage-zfs-provision" && res.Status == "succeeded" || (kind == "pool-promote" || kind == "pool-transfer") && res.Status == "succeeded" || backupOutcomeKind(kind))
+			(kind == "storage-zfs-provision" && res.Status == "succeeded" || (kind == "pool-promote" || kind == "pool-transfer") && res.Status == "succeeded" || backupOutcomeKind(kind) || poolUpdateRecovered)
 		if status == "dispatched" || recovered {
 			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=?", res.Status, res.Error, stamp(), res.OperationID); err != nil || c.audit(tx, "host:"+host, "operation."+res.Status, res.OperationID) != nil {
 				fail(w, 500, "result storage failed")

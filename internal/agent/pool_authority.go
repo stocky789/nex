@@ -327,8 +327,17 @@ func buildPoolAuthorityReplicaForMembership(s *Store, membership protocol.PoolMe
 // plaintext, so dummy base64 values preserve the real encoded size; the maximum
 // P-256 ASN.1 signature length leaves the check conservative.
 func poolAuthorityReplicaFitsAddressedBodies(s *Store, replica protocol.PoolAuthorityReplica, caKeyPEM string) error {
+	reserved := 0
+	if replica.UpdateRollout != nil {
+		for _, control := range replica.UpdateRollout.Controls {
+			if control.ReservedResultBytes < 0 || control.ReservedResultBytes > protocol.PoolReplicaLimit-reserved {
+				return errors.New("pool update result reservation exceeds the peer body limit")
+			}
+			reserved += control.ReservedResultBytes
+		}
+	}
 	baseBody, err := json.Marshal(replica)
-	if err != nil || len(baseBody) > protocol.PoolReplicaLimit {
+	if err != nil || len(baseBody) > protocol.PoolReplicaLimit-reserved {
 		return errors.New("pool authority replica would exceed the peer body limit")
 	}
 	material := poolFenceCredentialMaterial(s, replica.Membership)
@@ -379,7 +388,7 @@ func poolAuthorityReplicaFitsAddressedBodies(s *Store, replica protocol.PoolAuth
 		// P-256 ECDSA ASN.1 signatures are at most 72 bytes, or 96 base64 chars.
 		addressed.Signature = strings.Repeat("A", base64.StdEncoding.EncodedLen(72))
 		body, err := json.Marshal(addressed)
-		if err != nil || len(body) > protocol.PoolReplicaLimit {
+		if err != nil || len(body) > protocol.PoolReplicaLimit-reserved {
 			return errors.New("pool authority replica would exceed the peer body limit")
 		}
 	}

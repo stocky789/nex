@@ -167,10 +167,12 @@ image does not come back either, the VM stays stopped (`needs_attention`). A ser
 repeating the request resumes it. A guest that accepted the pre-swap shutdown request but had not stopped when the 10-minute wait ended
 fails the swap (`controller_shutdown_failed`, nothing changed); the request cannot be withdrawn, so the guest may still power off
 afterwards and is then started with Nex Core's local power control. If power is lost in the middle of a swap and libvirt autostarts the
-previous image again, repeating the request stops it gracefully (never forced), takes the data checkpoint again so nothing it wrote is lost,
-and carries on; if it will not stop the request ends with `controller_shutdown_failed` and it keeps running. `host-recovery export` and `restore` accept this layout: they check
-the read-only system disk and the data disk named in the deployment journal. `controller-recovery` inside the guest is unchanged, because
-it works on the same two paths.
+previous image again, repeating the request stops it gracefully (never forced), refreshes the data checkpoint even if the old guest
+already stopped after writing, and carries on. A proven failed new image that autostarted during rollback is stopped and the checkpoint
+restored again; after the old image has been redefined, its subsequent writes are preserved.
+`host-recovery export` and `restore` check both live and inactive definitions against the deployment and, for an alternate system image,
+a matching durable running/needs-attention swap journal. They require the owned data disk and approved read-only system image, and a
+reachable guest agent; they never start a stopped VM. `controller-recovery` works on the same two guest paths.
 
 What the profile no longer receives: the cloud-init bootstrap of `apply-update`, `nex-controller-update.path`/`.service` and
 `/etc/nex/updates.conf` (`appendUpdateBootstrap` is skipped when the deployment has a system image; `TestProfileSeedCarriesNoUpdateHelper`).

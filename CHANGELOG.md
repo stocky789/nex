@@ -8,7 +8,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > history; a section alone does not establish that a version was published. Nex remains
 > development software. Stable builds (from `main`) use the newest numbered changelog heading (`0.4.19` →
 > Debian `0.4.19`); development builds (from `dev`) are pre-releases of the next release (`0.4.20-dev.231` →
-> Debian `0.4.20~dev.231`) and ship the `[Unreleased]` entries. Entries under `[Unreleased]` do not change a stable build version.
+> Debian `0.4.20~~dev.231`) and ship the `[Unreleased]` entries. Entries under `[Unreleased]` do not change a stable build version.
 
 ## [Unreleased]
 
@@ -118,6 +118,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Image-edition updates retain their rollback image across interrupted arm publication, resume at the recorded phase, settle
+  cancelled work and recover delayed activation reboots without replaying an older image's reboot. Controller replacement
+  rollback refreshes the stopped old guest's checkpoint and handles replacement autostart safely.
+- Offline image installation and Repair image validate all selected whole disks, active users, aliases, slot capacity and gzip
+  integrity before destructive work. The text wizard keeps network/action choices separate and lets Back revisit Erase/Repair.
+- Pool update controls keep their original request outcomes on Core across retries and master adoption, recover accepted
+  pending work without Controller, preserve maintenance ordering and reserve replica space without losing accepted history.
+  Image-update panels show failed/attention task errors beside the host's reported image state.
+- Development packages use Debian `~~dev.N` ordering across alpha/rc cuts and version-based retention. Update publication
+  repairs missing signatures; APT preparation retains committed payload bytes through failed signing or same-version rebuilds.
+  Heavy forge steps wait on a shared-host lock rather than cancelling required runs.
+- Lab drivers bind termination to verified process instances, preserve ISO outputs and report unknown firmware or
+  incompatible state-format inputs honestly. ZFS signing bind sources resolve relative paths correctly.
+- These review fixes have automated, native scratch-command and simulated browser coverage, not new hardware, firmware or
+  live-forge certification; see the [verification and limits](docs/qa/2026-10-03-immutable-review-fixes.md).
 - The optional cluster layer now starts: it ships the state folders Corosync and Pacemaker need (`/var/lib/corosync`, `/var/lib/pacemaker`, the
   Pacemaker log folder) and the `hacluster` and `sanlock` accounts, which the layer build had lost. Before, Corosync stopped at start with "Cannot
   chdir to state directory" and Pacemaker with "Cluster user hacluster does not exist". Found by the three-host pool lab (virtual machines only,

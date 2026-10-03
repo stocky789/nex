@@ -182,6 +182,7 @@ func TestHostStepsMapOntoTheEngine(t *testing.T) {
 		t.Fatalf("activate = %+v %v", res, engine.calls)
 	}
 	engine.status.Phase, engine.calls = nexupdate.PhaseArmed, nil
+	engine.status.Slots[1].Role = "armed"
 	if res := PoolUpdateHostStep(ctx, s, step("activate")); !res.Done || len(engine.calls) != 0 {
 		t.Fatalf("a repeated activate re-armed: %+v %v", res, engine.calls)
 	}
@@ -397,5 +398,38 @@ func TestHostStatusFailsWhenTheControllerRecordCannotBeRead(t *testing.T) {
 	ApplianceJournalDir = filepath.Join(dir, "missing")
 	if got, err := PoolUpdateHostStatusFor(context.Background(), s); err != nil || got.ControllerVM {
 		t.Fatalf("a host that never deployed a Controller reports none: %+v %v", got, err)
+	}
+}
+
+func TestHostActivateRefusesADifferentStagedOrArmedSequence(t *testing.T) {
+	for _, phase := range []string{nexupdate.PhaseStaged, nexupdate.PhaseArmed} {
+		t.Run(phase, func(t *testing.T) {
+			s, engine, _ := hostStepLab(t)
+			role := "staged"
+			if phase == nexupdate.PhaseArmed {
+				role = "armed"
+			}
+			engine.status.Phase = phase
+			engine.status.Slots = []nexupdate.SlotStatus{{Role: "booted", Sequence: 1}, {Role: role, Sequence: 3}}
+			if phase == nexupdate.PhaseArmed {
+				engine.status.Slots[0].Sequence = 2
+			}
+			got := PoolUpdateHostStep(context.Background(), s, step("activate"))
+			if got.Done || got.Code != "sequence_mismatch" || len(engine.calls) != 0 {
+				t.Fatalf("activate mismatched %s = %+v calls %v", role, got, engine.calls)
+			}
+			engine.status.Slots[1].Sequence = 2
+			got = PoolUpdateHostStep(context.Background(), s, step("activate"))
+			if !got.Done || got.Code != "" {
+				t.Fatalf("activate matching %s = %+v", role, got)
+			}
+			wantCalls := 1
+			if phase == nexupdate.PhaseArmed {
+				wantCalls = 0
+			}
+			if len(engine.calls) != wantCalls {
+				t.Fatalf("activate matching %s calls %v", role, engine.calls)
+			}
+		})
 	}
 }

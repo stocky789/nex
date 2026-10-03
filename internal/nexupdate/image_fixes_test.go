@@ -934,3 +934,349 @@ func TestSpaceCheckCountsTheLayersThatAreStaged(t *testing.T) {
 	freeBytes = func(string) (uint64, error) { return uint64(2*slot) + spaceReserve + uint64(2*zfs.Bytes), nil }
 	r.mustApply("req-apply-0002", nil)
 }
+
+type snapshotArmPlatform struct {
+	Platform
+	beforeArm func()
+}
+
+func (p snapshotArmPlatform) Arm(ctx context.Context, rel *hostimage.Release) error {
+	p.beforeArm()
+	return p.Platform.Arm(ctx, rel)
+}
+
+// Restore the durable record observed just before Arm publishes its first boot entry, as a power
+// cut would. The disks may then hold none, some, or all of the entries, or already have booted them.
+func armPublicationSnapshot(t *testing.T, r *rig) {
+	t.Helper()
+	var snapshot []byte
+	r.cfg.Reboot = nil
+	r.cfg.Platform = snapshotArmPlatform{Platform: r.plat, beforeArm: func() {
+		var err error
+		snapshot, err = os.ReadFile(r.eng.statePath())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}}
+	r.restart()
+	if _, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"}); err != nil {
+		t.Fatal(err)
+	}
+	r.eng.Close()
+	if err := os.WriteFile(r.eng.statePath(), snapshot, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.cfg.Platform = r.plat
+	r.restart()
+}
+
+func TestInterruptedArmPublicationRetainsThePreviousReleaseAfterBoot(t *testing.T) {
+	for _, blessed := range []bool{false, true} {
+		t.Run(fmt.Sprint("blessed=", blessed), func(t *testing.T) {
+			r := newRig(t)
+			b := r.pub.release(2, "v2", true)
+			r.mustApply("req-apply-0001", nil)
+			armPublicationSnapshot(t, r)
+			r.plat.boot(Booted{RootHash: b.rootHash, Sequence: 2, Label: "v2"}, blessed)
+			st := r.status()
+			state := readUpdate(t, r.cfg.Dir)
+			if blessed {
+				if st.Phase != PhaseCommitted || state.Current.Sequence != 2 || state.Previous == nil || state.Previous.Sequence != 1 {
+					t.Fatalf("commit lost the previous release: %+v", st)
+				}
+			} else if st.Phase != PhaseBooted || state.Current.Sequence != 1 {
+				t.Fatalf("trial boot lost its rollback target: %+v", st)
+			}
+			if _, _, err := r.eng.Rollback(context.Background(), ActionRequest{RequestID: "req-rollback-01"}); err != nil {
+				t.Fatal(err)
+			}
+			if len(r.plat.rolled) != 1 || r.plat.rolled[0] != [2]int{2, 1} {
+				t.Fatalf("rollback did not return to the original image: %v", r.plat.rolled)
+			}
+		})
+	}
+}
+
+func TestInterruptedArmPublicationCleansUnbootedEntries(t *testing.T) {
+	for _, entries := range []int{0, 1, 2} {
+		t.Run(fmt.Sprint("entries=", entries), func(t *testing.T) {
+			r := newRig(t)
+			r.pub.release(2, "v2", true)
+			r.mustApply("req-apply-0001", nil)
+			armPublicationSnapshot(t, r)
+			r.plat.mu.Lock()
+			r.plat.entries = nil
+			for range entries {
+				r.plat.entries = append(r.plat.entries, hostimage.UKIEntry{Sequence: 2, Counted: true, Tries: 3})
+			}
+			r.plat.mu.Unlock()
+			if st := r.status(); st.Phase != PhaseStaged || st.Failure != nil {
+				t.Fatalf("unbooted publication was reported as complete: %+v", st)
+			}
+			if diskEntries, err := r.plat.Entries(context.Background()); err != nil || len(diskEntries) != 0 {
+				t.Fatalf("published entries were not taken back: %v %v", diskEntries, err)
+			}
+			if _, _, err := r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-001"}); err != nil {
+				t.Fatal(err)
+			}
+			if st := r.status(); st.Phase != PhaseIdle {
+				t.Fatalf("cleaned stage could not be cancelled: %+v", st)
+			}
+		})
+	}
+}
+
+func TestInterruptedArmPublicationReportsFailedCleanup(t *testing.T) {
+	r := newRig(t)
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	armPublicationSnapshot(t, r)
+	r.plat.disarmErr = errors.New("boot disk unavailable")
+	if st := r.status(); st.Phase != PhaseArmed || st.Failure == nil || st.Failure.Code != "arm_incomplete" {
+		t.Fatalf("unsafe publication was not reported: %+v", st)
+	}
+	_, _, err := r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-001"})
+	wantCode(t, err, "arm_incomplete")
+	r.plat.disarmErr = nil
+	if _, _, err := r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-002"}); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.status(); st.Phase != PhaseIdle {
+		t.Fatalf("repaired publication could not be cancelled: %+v", st)
+	}
+}
+
+func interruptOperation(t *testing.T, r *rig, id, phase string) {
+	t.Helper()
+	r.eng.Close()
+	if err := r.eng.enter(lockWait); err != nil {
+		t.Fatal(err)
+	}
+	r.eng.mu.Lock()
+	if err := r.eng.load(); err != nil {
+		t.Fatal(err)
+	}
+	r.eng.updateOp(id, func(o *Operation) {
+		o.FinishedAt, o.Phase = nil, phase
+	})
+	if err := r.eng.save(); err != nil {
+		t.Fatal(err)
+	}
+	r.eng.mu.Unlock()
+	r.eng.leave()
+	r.restart()
+}
+
+func TestInterruptedArmedApplyResumesOnlyCompletionAndReboot(t *testing.T) {
+	for _, boot := range []string{"not_booted", "trial", "committed"} {
+		t.Run(boot, func(t *testing.T) {
+			r := newRig(t)
+			b := r.pub.release(2, "v2", true)
+			r.cfg.RebootDelay = time.Hour
+			r.restart()
+			mod := func(a *ApplyRequest) { a.Activate = "reboot" }
+			r.mustApply("req-apply-0001", mod)
+			interruptOperation(t, r, "req-apply-0001", PhaseWriting)
+			if boot != "not_booted" {
+				r.plat.boot(Booted{RootHash: b.rootHash, Sequence: 2, Label: "v2"}, boot == "committed")
+			}
+			r.src.down = true // Completion must not depend on fetching or rewriting the armed image.
+			r.eng.cfg.RebootDelay = time.Millisecond
+			op, replayed, err := r.apply("req-apply-0001", mod)
+			if err != nil || !replayed || op.FinishedAt == nil || op.Phase != PhaseArmed {
+				t.Fatalf("armed replay did not finish at its boundary: %+v %v %v", op, replayed, err)
+			}
+			r.eng.wg.Wait()
+			if len(r.plat.staged) != 1 || len(r.plat.armed) != 1 {
+				t.Fatalf("replay rewrote or rearmed the slot: staged=%v armed=%v", r.plat.staged, r.plat.armed)
+			}
+			select {
+			case <-r.reboot:
+				if boot != "not_booted" {
+					t.Fatal("replayed apply restarted an already booted release")
+				}
+			default:
+				if boot == "not_booted" {
+					t.Fatal("replayed apply did not restart the still-armed release")
+				}
+			}
+			if boot != "committed" {
+				_, _, err = r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-001"})
+				wantCode(t, err, "already_armed")
+			}
+		})
+	}
+}
+
+func TestCancelStagedInterruptedOperationAllowsTheNextApply(t *testing.T) {
+	for _, kind := range []string{"apply", "import"} {
+		t.Run(kind, func(t *testing.T) {
+			r := newRig(t)
+			r.pub.release(2, "v2", true)
+			if kind == "import" {
+				r.cfg.InboxDir = r.pub.dir
+				r.restart()
+				if _, _, err := r.eng.Import(context.Background(), ImportRequest{RequestID: "req-stage-0001", Media: "inbox"}); err != nil {
+					t.Fatal(err)
+				}
+				if op := r.wait(); op.Error != nil {
+					t.Fatalf("import: %+v", op)
+				}
+			} else {
+				r.mustApply("req-stage-0001", nil)
+			}
+			interruptOperation(t, r, "req-stage-0001", PhaseWriting)
+			if _, _, err := r.eng.Cancel(context.Background(), ActionRequest{RequestID: "req-cancel-001"}); err != nil {
+				t.Fatal(err)
+			}
+			r.restart()
+			op, found, err := r.eng.Operation("req-stage-0001")
+			if err != nil || !found || op.Phase != "cancelled" || op.FinishedAt == nil || op.Progress != nil {
+				t.Fatalf("interrupted operation was not durably cancelled: %+v %v %v", op, found, err)
+			}
+			if _, err := os.Stat(r.eng.stagingDir(2)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("cancelled stage was retained: %v", err)
+			}
+			r.mustApply("req-apply-0002", nil)
+		})
+	}
+}
+
+func TestFinishedActivationReplayRecoversTheDelayedReboot(t *testing.T) {
+	for _, state := range []string{"still_armed", "trial", "committed", "newer_activation", "newer_release"} {
+		t.Run(state, func(t *testing.T) {
+			r := newRig(t)
+			b := r.pub.release(2, "v2", true)
+			r.mustApply("req-apply-0001", nil)
+			r.cfg.RebootDelay = time.Hour
+			r.restart()
+			req := ActionRequest{RequestID: "req-activate-01"}
+			if _, _, err := r.eng.Activate(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			r.restart() // Close cancelled the pending delay without recording reboot_failed.
+			switch state {
+			case "trial", "committed", "newer_release":
+				r.plat.boot(Booted{RootHash: b.rootHash, Sequence: 2, Label: "v2"}, state != "trial")
+				r.status()
+			case "newer_activation":
+				if _, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-02"}); err != nil {
+					t.Fatal(err)
+				}
+				r.restart()
+			}
+			if state == "newer_release" {
+				r.pub.serial = 2
+				r.pub.release(3, "v3", true)
+				r.mustApply("req-apply-0002", nil)
+				if _, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-02"}); err != nil {
+					t.Fatal(err)
+				}
+				r.restart()
+			}
+			r.eng.cfg.RebootDelay = time.Millisecond
+			op, replayed, err := r.eng.Activate(context.Background(), req)
+			if err != nil || !replayed || op.Phase != PhaseArmed {
+				t.Fatalf("activation replay: %+v %v %v", op, replayed, err)
+			}
+			r.eng.wg.Wait()
+			select {
+			case <-r.reboot:
+				if state != "still_armed" {
+					t.Fatal("old activation restarted an already booted or newer operation")
+				}
+			default:
+				if state == "still_armed" {
+					t.Fatal("activation replay lost the delayed reboot")
+				}
+			}
+		})
+	}
+}
+
+func TestInterruptedArmPublicationRestoresTheRunningLayers(t *testing.T) {
+	r := newLayerRig(t)
+	r.pub.addComponents(r.pub.layerComponent("nex-zfs", []byte("zfs-for-v2-2"), "v2-2", false))
+	r.pub.release(2, "v2", true)
+	r.mustApply("req-apply-0001", nil)
+	armPublicationSnapshot(t, r.rig)
+	if st := r.status(); st.Phase != PhaseStaged || st.Failure != nil {
+		t.Fatalf("interrupted publication was not recovered: %+v", st)
+	}
+	if enabled := r.enabled(); enabled.SHA256 != r.oldSHA || enabled.Base != "base-1" || !enabled.Enabled {
+		t.Fatalf("running layers were not restored: %+v", enabled)
+	}
+}
+
+func TestInterruptedActivationReplayAfterBootDoesNotRearmOrReboot(t *testing.T) {
+	for _, blessed := range []bool{false, true} {
+		t.Run(fmt.Sprint("blessed=", blessed), func(t *testing.T) {
+			r := newRig(t)
+			b := r.pub.release(2, "v2", true)
+			r.mustApply("req-apply-0001", nil)
+			armPublicationSnapshot(t, r)
+			r.plat.boot(Booted{RootHash: b.rootHash, Sequence: 2, Label: "v2"}, blessed)
+			r.eng.cfg.Reboot = func(context.Context) error { r.reboot <- struct{}{}; return nil }
+			op, replayed, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-01"})
+			if err != nil || !replayed || op.FinishedAt == nil || op.Phase != PhaseArmed {
+				t.Fatalf("booted interrupted activation did not finish: %+v %v %v", op, replayed, err)
+			}
+			r.eng.wg.Wait()
+			if len(r.plat.armed) != 1 {
+				t.Fatalf("replay rearmed a booted image: %v", r.plat.armed)
+			}
+			select {
+			case <-r.reboot:
+				t.Fatal("replayed activation restarted an already booted release")
+			default:
+			}
+		})
+	}
+}
+
+func TestFailedNonArmingRequestDoesNotSuppressThePreviousActivationReboot(t *testing.T) {
+	for _, retry := range []string{"delayed_callback", "exact_replay"} {
+		t.Run(retry, func(t *testing.T) {
+			r := newRig(t)
+			r.pub.release(2, "v2", true)
+			r.mustApply("req-apply-0001", nil)
+			r.cfg.RebootDelay = time.Hour
+			r.restart()
+			req := ActionRequest{RequestID: "req-activate-01"}
+			if _, _, err := r.eng.Activate(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			r.eng.cfg.RunningVMs = func(context.Context) ([]string, error) {
+				return nil, errors.New("VM inventory unavailable")
+			}
+			_, _, err := r.eng.Activate(context.Background(), ActionRequest{RequestID: "req-activate-02"})
+			wantCode(t, err, "vm_inventory_unavailable")
+			failed, found, err := r.eng.Operation("req-activate-02")
+			if err != nil || !found || failed.FinishedAt == nil || failed.Error == nil {
+				t.Fatalf("non-arming failure was not retained: %+v %v %v", failed, found, err)
+			}
+			r.eng.Close()
+			r.cfg.RebootDelay = time.Millisecond
+			r.restart()
+			if retry == "exact_replay" {
+				op, replayed, err := r.eng.Activate(context.Background(), req)
+				if err != nil || !replayed || op.Error != nil {
+					t.Fatalf("successful activation replay changed after a failed request: %+v %v %v", op, replayed, err)
+				}
+			} else {
+				// Fire A's delayed callback against the persisted B failure without timing a race
+				// between B's HTTP request and the original hour-long timer.
+				r.eng.scheduleReboot(req.RequestID)
+			}
+			r.eng.wg.Wait()
+			select {
+			case <-r.reboot:
+			default:
+				t.Fatal("a request that never armed suppressed the successful activation's reboot")
+			}
+			if st := r.status(); st.Phase != PhaseArmed || len(r.plat.armed) != 1 {
+				t.Fatalf("the retained activation changed: %+v armed=%v", st, r.plat.armed)
+			}
+		})
+	}
+}

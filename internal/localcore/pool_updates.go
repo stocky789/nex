@@ -151,7 +151,7 @@ func (s *Service) poolUpdateControl(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := poolRolloutControlContext(r)
 	defer cancel()
-	rollout, err := agent.NewPoolUpdateCoordinator(store).Control(ctx, protocol.PoolUpdateRequest{
+	rollout, err := agent.NewPoolUpdateCoordinator(store).Control(ctx, body.RequestID, protocol.PoolUpdateRequest{
 		RolloutID: r.PathValue("id"), Control: body.Action, HostID: body.HostID, Force: body.Force})
 	if err != nil {
 		poolUpdateRefused(w, err)

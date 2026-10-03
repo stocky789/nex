@@ -139,6 +139,23 @@ type PoolUpdateController struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// PoolUpdateControlResult binds a control identity to its normalized intent and original result.
+// A nil Rollout with no Code is pending; its exact retry completes the same control. Result
+// snapshots omit Controls so the durable, replicated history never recursively embeds itself.
+type PoolUpdateControlResult struct {
+	RequestID string             `json:"request_id"`
+	Request   PoolUpdateRequest  `json:"request"`
+	Rollout   *PoolUpdateRollout `json:"rollout,omitempty"`
+	Code      string             `json:"code,omitempty"`
+	Message   string             `json:"message,omitempty"`
+	// ReplicationPending keeps the terminal result immutable while its replica ACK is outstanding.
+	ReplicationPending bool `json:"replication_pending,omitempty"`
+	// ReservedResultBytes reserves addressed authority room until the terminal result is recorded.
+	ReservedResultBytes int `json:"reserved_result_bytes,omitempty"`
+	// RollbackStarted binds an uncertain transport outcome to the unchanged host attempt.
+	RollbackStarted bool `json:"rollback_started,omitempty"`
+}
+
 // PoolUpdateRollout is the pool master's durable rollout record (pool-update.json), replicated as
 // the authority section update_rollout. A promoted master finds it paused master_changed.
 type PoolUpdateRollout struct {
@@ -158,6 +175,8 @@ type PoolUpdateRollout struct {
 	FinalizedSequence uint64                `json:"finalized_sequence,omitempty"`
 	CreatedAt         time.Time             `json:"created_at"`
 	UpdatedAt         time.Time             `json:"updated_at"`
+	// Controls survive subsequent rollouts and promotion, so a delayed retry cannot act again.
+	Controls []PoolUpdateControlResult `json:"controls,omitempty"`
 }
 
 func (r PoolUpdateRollout) Valid() error {
@@ -168,6 +187,36 @@ func (r PoolUpdateRollout) Valid() error {
 	case PoolUpdateRunning, PoolUpdatePaused, PoolUpdateFinalized, PoolUpdateAborted:
 	default:
 		return errors.New("pool update rollout state is invalid")
+	}
+	seen := make(map[string]bool, len(r.Controls))
+	pending := false
+	for _, control := range r.Controls {
+		if control.RequestID == "" || len(control.RequestID) > 128 || seen[control.RequestID] || control.Request.Valid("update-control") != nil {
+			return errors.New("pool update control record is invalid")
+		}
+		seen[control.RequestID] = true
+		if control.ReservedResultBytes < 0 || control.ReservedResultBytes > PoolReplicaLimit ||
+			(control.Rollout != nil || control.Code != "") && control.ReservedResultBytes != 0 {
+			return errors.New("pool update control reservation is invalid")
+		}
+		if control.RollbackStarted && (control.Request.Control != "rollback_host" || control.Rollout != nil || control.Code != "") {
+			return errors.New("pool update rollback intent is invalid")
+		}
+		if control.ReplicationPending && (control.Request.Control != "abort" && control.Request.Control != "rollback_host" ||
+			control.Rollout == nil && control.Code == "") {
+			return errors.New("pool update result acknowledgement is invalid")
+		}
+		if control.Rollout == nil && control.Code == "" || control.ReplicationPending {
+			if pending || control.Request.RolloutID != r.ID || control.Rollout == nil && control.Code == "" && control.Message != "" {
+				return errors.New("pool update pending control is invalid")
+			}
+			pending = true
+		}
+		if control.Rollout != nil {
+			if len(control.Rollout.Controls) != 0 || control.Code != "" || control.Rollout.ID != control.Request.RolloutID || control.Rollout.Valid() != nil {
+				return errors.New("pool update control result is invalid")
+			}
+		}
 	}
 	return nil
 }

@@ -3,6 +3,7 @@
 import importlib.machinery
 import importlib.util
 import json
+import shutil
 import tempfile
 import threading
 import unittest
@@ -227,6 +228,7 @@ class FakeReleases(BaseHTTPRequestHandler):
         pass
 
 
+@unittest.skipUnless(shutil.which("dpkg"), "dpkg required for Debian version ordering")
 class PruneTests(unittest.TestCase):
     """Development builds keep only their newest releases; stable releases are never touched."""
 
@@ -246,20 +248,62 @@ class PruneTests(unittest.TestCase):
         self.pattern = gitea.re.compile(r"-dev\.[0-9]+$")
 
     def test_keeps_the_newest_builds_across_pages_and_never_stable_releases(self):
-        removed = gitea.prune(self.repo, "v0.4.19-dev.300", self.pattern, 5)
+        removed = gitea.prune(self.repo, self.pattern, 5)
         # The published build plus the four newest others stay; the other 50 go, release and tag.
         self.assertEqual(len(removed), 50)
         self.assertEqual(len(FakeReleases.deleted), 100)
         self.assertNotIn("v0.4.18", " ".join(FakeReleases.deleted))
         self.assertNotIn("/releases/1000", FakeReleases.deleted)
         kept = {r["tag_name"] for r in FakeReleases.releases} - set(removed)
-        self.assertEqual(len(kept), 5 + 1)  # five development builds and the stable release
-        self.assertIn("v0.4.18", kept)
-        self.assertIn("v0.4.19-dev.300", kept)
+        self.assertEqual(kept, {"v0.4.18"} | {f"v0.4.19-dev.{build}" for build in range(296, 301)})
 
     def test_nothing_is_removed_while_within_the_limit(self):
-        self.assertEqual(gitea.prune(self.repo, "v0.4.19-dev.300", self.pattern, 60), [])
+        self.assertEqual(gitea.prune(self.repo, self.pattern, 60), [])
         self.assertEqual(FakeReleases.deleted, [])
+
+    def test_recreated_old_release_retains_the_same_versions_and_netinst_urls_as_downloads(self):
+        download_spec = importlib.util.spec_from_file_location("release_publish", ROOT / "scripts/release-publish.py")
+        downloads = importlib.util.module_from_spec(download_spec)
+        download_spec.loader.exec_module(downloads)
+        versions = ["0.4.19~~dev.9", "0.4.19~~dev.99", "0.4.19~~dev.999",
+                    "0.4.19~~dev.1000", "0.4.20~~dev.1"]
+        tags = [f"v{version.replace('~~dev.', '-dev.')}" for version in versions]
+        stable = {"id": 99, "tag_name": "v0.4.18", "created_at": "2026-10-03T00:00:00Z"}
+        # Republishing an old build gives it the newest creation timestamp and puts it first.
+        releases = [{"id": index + 1, "tag_name": tag,
+                     "created_at": f"2026-10-0{index + 1}T00:00:00Z"}
+                    for index, tag in enumerate(tags)]
+        releases[0]["created_at"] = "2026-10-09T00:00:00Z"
+        FakeReleases.releases = [releases[0], stable, *reversed(releases[1:])]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for version, tag in zip(versions, tags):
+                release = root / version
+                release.mkdir()
+                (release / f"nex-core-{version}-amd64-netinst.iso").write_bytes(
+                    f"https://forge.example.net/o/r/releases/download/{tag}/payload.deb".encode())
+            downloads.prune(root, 3)
+            removed = gitea.prune(self.repo, self.pattern, 3)
+            retained_tags = {release["tag_name"] for release in releases} - set(removed)
+            retained_versions = {version.removeprefix("v").replace("-dev.", "~~dev.") for version in retained_tags}
+            self.assertEqual(retained_versions, set(downloads.existing_releases(root)))
+            self.assertEqual(retained_versions, set(versions[-3:]))
+            self.assertIn(tags[0], removed, "the build just recreated is still the oldest version")
+            self.assertNotIn("/tags/v0.4.18", FakeReleases.deleted)
+            for version in downloads.existing_releases(root):
+                url = (root / version / f"nex-core-{version}-amd64-netinst.iso").read_text()
+                tag = url.split("/download/", 1)[1].split("/", 1)[0]
+                self.assertIn(tag, retained_tags, "a kept netinst ISO must retain its forge payload URL")
+
+    def test_development_tags_sort_below_alpha_rc_and_final_of_the_same_base(self):
+        tags = ["v0.4.19-dev.1000", "v0.4.19-alpha1", "v0.4.19-rc10", "v0.4.19"]
+        FakeReleases.releases = [
+            {"id": index + 1, "tag_name": tag, "created_at": "2026-10-03T00:00:00Z"}
+            for index, tag in enumerate(tags)]
+        removed = gitea.prune(self.repo, gitea.re.compile(r"^v0\.4\.19(?:-|$)"), 3)
+        self.assertEqual(removed, ["v0.4.19-dev.1000"])
+        self.assertEqual(FakeReleases.deleted,
+                         ["/api/v1/repos/o/r/releases/1", "/api/v1/repos/o/r/tags/v0.4.19-dev.1000"])
 
 
 if __name__ == "__main__":

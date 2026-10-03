@@ -28077,6 +28077,15 @@
     &quot;updated_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;controls&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateControlResult&quot;
+      }
     }
   },
   &quot;required&quot;: [
@@ -28090,6 +28099,56 @@
     &quot;hosts&quot;,
     &quot;created_at&quot;,
     &quot;updated_at&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateControlResult"><summary>PoolUpdateControlResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Core-owned replicated control receipt retained across later rollouts. Exact request_id/normalized intent replay returns the original snapshot or error; snapshots omit controls. No rollout and no code means an unresolved outcome, continued by Core without Controller. replication_pending also blocks competing transitions until the terminal result is acknowledged. At most one unresolved/ACK-pending receipt exists; it names the current rollout. Terminal records have no reservation; rollback_started is valid only for an unresolved rollback_host.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateControlResult&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;request&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRequest&quot;
+    },
+    &quot;replication_pending&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The immutable terminal result awaits the existing required authority ACK; Core retries acknowledgement before admitting another transition.&quot;
+    },
+    &quot;reserved_result_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 1048576,
+      &quot;description&quot;: &quot;Reserved addressed-authority capacity for an unresolved result; included in all admission checks and released when its terminal snapshot/error is recorded.&quot;
+    },
+    &quot;rollback_started&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Durable rollback intent retaining the original host attempt/step identity; it does not prove a replica ACK or host dispatch. Transport loss is reconciled under that unchanged identity.&quot;
+    },
+    &quot;rollout&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRollout&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;code&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;request&quot;
   ]
 }</pre></details>
 <details id="PoolUpdateView"><summary>PoolUpdateView</summary><pre>{
@@ -28160,7 +28219,7 @@
 <details id="PoolUpdateControlRequest"><summary>PoolUpdateControlRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;additionalProperties&quot;: false,
-  &quot;description&quot;: &quot;Body of a rollout control. pause takes effect after the host being updated; resume re-checks the membership and clears the pause; abort leaves committed hosts as they are and puts back maintenance mode and stopped guests of a host that had not activated; rollback_host (rollout paused, host already activated) arms that host&#x27;s previous release.&quot;,
+  &quot;description&quot;: &quot;Body of a rollout control. pause takes effect between hosts; resume rechecks membership; abort restores maintenance and stopped guests before completing; rollback_host arms an activated host&#x27;s previous release while paused. Core durably binds request_id to normalized intent and replays its original result/error across rollouts and promotion; changed intent is request_conflict. A pending replica acknowledgement uses the same ID/body; a new action or retry after terminal refusal uses a new ID.&quot;,
   &quot;properties&quot;: {
     &quot;request_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,

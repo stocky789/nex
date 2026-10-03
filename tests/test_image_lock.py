@@ -60,6 +60,13 @@ class NexOriginLockTest(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'nex-core-local: lock has'):
             self.run_lock('check')
 
+    def test_full_check_requires_every_locked_nex_artifact(self):
+        self.run_lock('write')
+        (self.debs / 'nex-core-local.deb').unlink()
+        with self.assertRaisesRegex(SystemExit, r'nex-core-local: the locked Nex \.deb is missing'):
+            self.run_lock('check')
+        self.run_lock('check', '--snapshot-only')
+
     def test_check_refuses_a_build_that_installed_another_version_than_the_deb(self):
         self.make_deb('1.1')
         with self.assertRaisesRegex(SystemExit, r'the \.deb is 1\.1, the build installed 1\.0'):
