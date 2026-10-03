@@ -390,17 +390,25 @@ jobs:
           NEX_CHANNEL: ${{ steps.version.outputs.channel }}
         run: |
           set -euo pipefail
-          args=(--name "Nex Core $NEX_VERSION")
+          public_version=${NEX_TAG#v}
+          args=(--name "Nex Core $public_version")
           if [ "$NEX_CHANNEL" = dev ]; then
             # The tag carries -dev.N, so the forge lists it as a pre-release. Only the newest
             # builds stay, as many as the download tree keeps, so every kept netinst ISO still works.
             # The = form is required: argparse reads a separate value that starts with - as an option.
-            args=(--name "Nex Core $NEX_VERSION (development)" '--prune-tags=-dev\.[0-9]+$' --keep 3)
+            args=(--name "Nex Core $public_version (development)" '--prune-tags=-dev\.[0-9]+$' --keep 3)
           fi
+          # Keep Debian ordering in the build/download tree, not in forge display names.
+          mkdir -p .cache/release-assets
+          assets=()
+          for suffix in amd64.iso amd64-netinst.iso; do
+            name="nex-core-${public_version}-${suffix}"
+            asset=".cache/release-assets/$name"
+            ln -f "dist/nex-core-${NEX_VERSION}-${suffix}" "$asset"
+            read -r digest _ < "dist/nex-core-${NEX_VERSION}-${suffix}.sha256"
+            printf '%s  %s\n' "$digest" "$name" > "$asset.sha256"
+            assets+=("$asset" "$asset.sha256")
+          done
           python3 scripts/gitea-release.py \
             --tag "$NEX_TAG" --target "$GITHUB_SHA" \
-            "${args[@]}" --notes .cache/release-notes.md \
-            "dist/nex-core-${NEX_VERSION}-amd64.iso" \
-            "dist/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
-            "dist/nex-core-${NEX_VERSION}-amd64-netinst.iso" \
-            "dist/nex-core-${NEX_VERSION}-amd64-netinst.iso.sha256"
+            "${args[@]}" --notes .cache/release-notes.md "${assets[@]}"

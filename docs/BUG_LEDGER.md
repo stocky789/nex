@@ -12496,3 +12496,12 @@ of real storage or hardware certification.
 - Fix: scan/signal the complete verified setsid-owned session, retain the mutex until no non-zombie member remains, and reap direct work. Check leader/member identity before signalling; remove workload-side option overrides.
 - Regression: `test_job_control_profile_sigkill_reaps_work_before_unlocking_and_closes_stdio` with an unchanged real monitor-mode profile. Native instrumented before/after: different PGIDs/shared SID; before, live sleep/blocked waiter/open stdio; after, non-live descendant/waiter exit 0/closed stdio. Final focused command: `PYTHONPATH=tests python3 -m unittest tests.test_release_version tests.test_ci_serialization tests.test_ci_security`; results: [verification](qa/2026-10-03-immutable-review-fixes.md).
 - Avoid: weakening a realistic profile fixture to fit group-only cleanup or unlocking before all owned work is non-live.
+
+## BUG-1906 — Forge release titles and ISO names exposed Debian ordering syntax
+
+- Date: 2026-10-03.
+- Symptom: development release downloads were named with `~~dev.N`; prerelease titles also used Debian tildes.
+- Root cause: the forge publication step used the Debian package version for operator-facing names instead of the existing tag version.
+- Fix: use the tag version for the title and hard-linked forge ISO names; write matching sidecar filenames using the existing hashes. Keep package versions, website paths and netinst URLs unchanged.
+- Regression: `ReleaseChannelTests.test_forge_release_uses_readable_names_and_matching_checksums` failed for release-candidate/development fixtures in both workflow copies before the fix, then passed. `PYTHONPATH=tests python3 -m unittest test_ci_security test_release_version test_gitea_release` passed 52 tests; the workflow shell and real HTTP publisher ran against a simulated forge, and downloaded sidecars passed `sha256sum -c`. Forge CI already discovers `tests/test_*.py`; no hosted run or full ISO build is claimed.
+- Avoid: replacing Debian tildes globally (breaking upgrade ordering), or renaming ISO attachments without updating the checksum filenames.

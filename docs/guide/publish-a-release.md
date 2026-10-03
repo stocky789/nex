@@ -148,11 +148,18 @@ its payloads from its own channel's tree.
 ## Expected result
 
 The repository's **Releases** page shows `Nex Core X.Y.Z` at tag `vX.Y.Z` for a final release, or
-the Debian-form `Nex Core X.Y.Z~preN` at tag `vX.Y.Z-preN` for a prerelease. A `-preN` version is
-marked prerelease. The changelog section supplies the notes. The release includes:
+`Nex Core X.Y.Z-preN` at tag `vX.Y.Z-preN` for a prerelease. Development builds show
+`Nex Core X.Y.Z-dev.N (development)`. A suffixed version is marked prerelease.
+The changelog supplies the notes. The release includes:
 
-- `nex-core-<Debian-version>-amd64.iso` and its `.sha256` sidecar
-- `nex-core-<Debian-version>-amd64-netinst.iso` and its `.sha256` sidecar
+- `nex-core-<tag-version>-amd64.iso` and its `.sha256` sidecar
+- `nex-core-<tag-version>-amd64-netinst.iso` and its `.sha256` sidecar
+
+Forge titles and ISO filenames use readable hyphenated versions, for example
+`nex-core-0.4.20-dev.247-amd64.iso`, not Debian's `0.4.20~~dev.247`.
+The sidecars name the downloaded files, so `sha256sum -c <filename>.sha256` works.
+The website download tree and Debian packages retain their Debian-form versions;
+the forge ISOs contain identical bytes under the readable filenames.
 
 The versioned website download directory holds the matching source bundle,
 compliance manifests and hash-pinned netinst `.deb` files with checksums. Opening
@@ -303,3 +310,9 @@ owner-published run and separate inspection.
 The immutable review-fix batch is covered by [review-fix verification](../qa/2026-10-03-immutable-review-fixes.md).
 Local fixtures and native command checks do not establish a live forge queue, Docker-host volume
 locking, hosted publication or exact-artifact release certification.
+
+The readable forge-name fix was checked locally on 2026-10-03: both workflow copies published
+final, release-candidate and development fixtures through the real publisher to a simulated
+HTTP forge. Downloaded ISO bytes matched the inputs, and `sha256sum -c` accepted both ISO
+sidecars. The release/version/publication suites passed 52 tests. This is not a hosted
+release run or an ISO installation check; existing published releases are not renamed.

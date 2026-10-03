@@ -51,6 +51,22 @@ the source release identity only, without tagging, publishing or promoting branc
 Controller/Core or client-facing contract changes. **Guide impact: none** — documented publishing
 steps are unchanged. Both release workflow copies continue using the same version resolver.
 
+Forge naming correction (2026-10-03): release titles and attached ISO filenames use the
+tag version (`0.4.20-dev.247`), not Debian's `0.4.20~~dev.247`. The release step hard-links
+the built ISOs under those names and writes sidecars with matching filenames, reusing the
+already computed hashes. Build identities, package ordering, website download paths, netinst
+payload URLs and retention remain unchanged. Existing published releases are not renamed.
+**API impact: none** — this is forge presentation, with no Controller/Core or client-facing
+API change. **Guide impact: updated** — the publication guide distinguishes forge filenames
+from Debian-form website/package names. **State owner: none** — no new product state.
+
+Patch cutover (2026-10-03): project owner requested a version bump for the forge naming fix.
+The newest changelog heading is now **0.4.21**, containing that fix; Unreleased is empty.
+This changes source release numbering only, with no tag, push, publication or branch promotion.
+**API impact: none** — both release workflows still resolve the version from the changelog;
+no Controller/Core or client-facing contract changes. **Guide impact: none** — the documented
+publication steps are unchanged. **State owner: none** — no new product state.
+
 Switching a host from Development to Stable never downgrades it: apt does not install an older version by itself and
 the image engine refuses a `sequence` below the host's `rollback_floor`. The host stays put until Stable publishes
 something newer. The guide says so next to the selector.

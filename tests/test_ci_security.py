@@ -1,14 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Catch a missing runtime artifact before either runner starts browser QA."""
+import hashlib
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
+import threading
 import textwrap
 import unittest
+from http.server import ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+from test_gitea_release import FakeGitea
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVIDERS = ('.github', '.gitea')
@@ -99,20 +104,6 @@ class BrowserArtifactTests(unittest.TestCase):
                 triggers = workflow[workflow.index('\non:\n'):workflow.index('\ndefaults:')]
                 uncommented = '\n'.join(line for line in triggers.splitlines() if not line.lstrip().startswith('#'))
                 self.assertEqual(uncommented.split(), 'on: push: branches: - main - dev'.split())
-
-    def test_forge_release_only_attaches_isos_and_checksums(self):
-        for provider in PROVIDERS:
-            with self.subTest(provider=provider):
-                text = (ROOT / provider / 'workflows/release.yml').read_text()
-                create = text.split('- name: Create or replace the release\n', 1)[1]
-                step = create.split('\n      - name:', 1)[0]
-                self.assertIn('scripts/gitea-release.py', step)
-                self.assertEqual(step.count('"dist/nex-core-${NEX_VERSION}-'), 4)
-                self.assertIn('"dist/nex-core-${NEX_VERSION}-amd64.iso"', step)
-                self.assertIn('"dist/nex-core-${NEX_VERSION}-amd64.iso.sha256"', step)
-                self.assertIn('"dist/nex-core-${NEX_VERSION}-amd64-netinst.iso"', step)
-                self.assertIn('"dist/nex-core-${NEX_VERSION}-amd64-netinst.iso.sha256"', step)
-                self.assertNotIn('dist/netinst/*.deb', step)
 
 
 class ReleaseDeployCredentialTests(unittest.TestCase):
@@ -309,39 +300,66 @@ class ReleaseChannelTests(unittest.TestCase):
                     # Only the stable channel replaces the live pages.
                     self.assertEqual((root / 'website-deployed').exists(), channel == 'stable')
 
-    def test_development_builds_are_pruned_pre_releases_and_stable_releases_are_not(self):
+    def test_forge_release_uses_readable_names_and_matching_checksums(self):
+        server = ThreadingHTTPServer(('127.0.0.1', 0), FakeGitea)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
         for provider in PROVIDERS:
-            for channel, tag, version, name in (
-                    ('stable', 'v0.4.18', '0.4.18', 'Nex Core 0.4.18'),
-                    ('dev', 'v0.4.19-dev.7', '0.4.19~~dev.7', 'Nex Core 0.4.19~~dev.7 (development)')):
-                with self.subTest(provider=provider, channel=channel), tempfile.TemporaryDirectory() as tmp:
+            for channel, version, public in (
+                    ('stable', '0.4.18', '0.4.18'),
+                    ('stable', '0.4.19~rc1', '0.4.19-rc1'),
+                    ('dev', '0.4.20~~dev.247', '0.4.20-dev.247')):
+                with self.subTest(provider=provider, channel=channel, version=version), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
-                    # python3 records its arguments and then runs the real script, which stops after parsing
-                    # them (no forge to talk to): reaching its "required" message proves the arguments parse.
-                    (root / 'bin').mkdir()
-                    shim = root / 'bin/python3'
-                    shim.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{root}/python3.log"\nexec {sys.executable} "$@"\n')
-                    shim.chmod(0o755)
                     (root / 'scripts').mkdir()
                     shutil.copy(ROOT / 'scripts/gitea-release.py', root / 'scripts')
+                    (root / '.cache').mkdir()
+                    (root / '.cache/release-notes.md').write_text('Release notes.\n')
+                    (root / 'dist').mkdir()
+                    expected = {}
+                    for suffix in ('amd64.iso', 'amd64-netinst.iso'):
+                        data = f'ISO payload: {version} {suffix}'.encode()
+                        original = root / f'dist/nex-core-{version}-{suffix}'
+                        original.write_bytes(data)
+                        original.with_suffix('.iso.sha256').write_text(
+                            f'{hashlib.sha256(data).hexdigest()}  {original.name}\n')
+                        expected[f'nex-core-{public}-{suffix}'] = data
+                    FakeGitea.calls = []
+                    FakeGitea.state = {'release': None, 'tag_sha': None}
+                    FakeGitea.drop_uploads, FakeGitea.stored_size, FakeGitea.uploads = (), None, 0
+                    FakeGitea.reject_uploads = False
+                    FakeGitea.release_payload = None
                     result = self.run_step(provider, 'Create or replace the release', root, {
-                        'GITHUB_TOKEN': 'token', 'GITHUB_SHA': 'f' * 40, 'NEX_CHANNEL': channel, 'NEX_TAG': tag,
-                        'NEX_VERSION': version, 'GITHUB_API_URL': '', 'GITHUB_REPOSITORY': ''})
-                    self.assertEqual(result.returncode, 1, result.stderr)
-                    self.assertIn('GITHUB_API_URL, GITHUB_REPOSITORY and GITHUB_TOKEN are required', result.stderr)
-                    lines = (root / 'python3.log').read_text().splitlines()
-                    self.assertEqual(lines[0].split()[:5], ['scripts/gitea-release.py', '--tag', tag, '--target', 'f' * 40])
-                    self.assertIn(f'--name {name} ', lines[0] + ' ')
-                    if channel == 'stable':
-                        self.assertNotIn('--prune-tags', lines[0])
-                        continue
-                    words = lines[0].split()
-                    pattern = re.compile(next(word for word in words if word.startswith('--prune-tags=')).split('=', 1)[1])
-                    # Pruning may only ever select development builds; stable tags are safe.
-                    self.assertTrue(pattern.search('v0.4.19-dev.7'))
-                    for kept in ('v0.4.18', 'v0.5.0-rc1', 'v0.5.0'):
-                        self.assertFalse(pattern.search(kept), kept)
-                    self.assertEqual(words[words.index('--keep') + 1], '3')
+                        'GITHUB_TOKEN': 'token', 'GITHUB_SHA': 'f' * 40, 'NEX_CHANNEL': channel,
+                        'NEX_TAG': f'v{public}', 'NEX_VERSION': version,
+                        'GITHUB_API_URL': f'http://127.0.0.1:{server.server_port}/api/v1',
+                        'GITHUB_REPOSITORY': 'o/r'})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    release = FakeGitea.release_payload
+                    title = f'Nex Core {public}' + (' (development)' if channel == 'dev' else '')
+                    self.assertEqual(release['name'], title)
+                    self.assertEqual(release['tag_name'], f'v{public}')
+                    self.assertEqual(release['prerelease'], '-' in public)
+                    self.assertFalse(release['draft'])
+                    uploaded = {
+                        parse_qs(urlparse(call[1]).query)['name'][0]: call[2]
+                        for call in FakeGitea.calls if call[0] == 'POST' and '/assets?' in call[1]}
+                    self.assertEqual(set(uploaded), set(expected) | {name + '.sha256' for name in expected})
+                    downloaded = root / 'downloaded'
+                    downloaded.mkdir()
+                    for name, data in uploaded.items():
+                        (downloaded / name).write_bytes(data)
+                    for name, data in expected.items():
+                        self.assertEqual(uploaded[name], data)
+                        checked = subprocess.run(['sha256sum', '-c', name + '.sha256'],
+                                                 cwd=downloaded, capture_output=True, text=True)
+                        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+                    # Publication must not rename the build inputs or rewrite their Debian-form sidecars.
+                    for suffix in ('amd64.iso', 'amd64-netinst.iso'):
+                        original = root / f'dist/nex-core-{version}-{suffix}'
+                        self.assertEqual(original.read_bytes(), expected[f'nex-core-{public}-{suffix}'])
+                        self.assertIn(original.name, original.with_suffix('.iso.sha256').read_text())
 
 
 class GitHubMinuteBudgetTests(unittest.TestCase):
