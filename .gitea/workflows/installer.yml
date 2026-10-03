@@ -67,6 +67,7 @@ jobs:
           python3 tests/integration/installer-keyboard.py
           python3 tests/integration/installer-qol.py
           python3 tests/integration/installer-hostname.py
+          python3 tests/integration/installer-image-env.py
           python3 tests/integration/installer-link.py
           python3 tests/integration/installer-disk.py
 

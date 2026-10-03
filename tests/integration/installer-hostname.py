@@ -25,6 +25,8 @@ static char **disk_list(GKeyFile *config, const char *key, gsize *count) {
     return entries;
 }
 static void fail(const char *message) {g_error("%s",message);}
+static gboolean image_mode=FALSE;
+static gboolean image_edition(void) {return image_mode;} /* FALSE: classic answers; check_image() flips it */
 static void protected_write(const char *path,const char *text) {
     g_hash_table_replace(files,g_strdup(path),g_strdup(text));
 }
@@ -35,7 +37,7 @@ static int fake_chmod(const char *path,mode_t mode) {
 static void render(GKeyFile *config) {
     const char *hash="$6$test-only-hash";
     char *hostname=value(config,"hostname"),''' + render + r'''
-    g_string_free(seed,TRUE);g_string_free(targets,TRUE);g_string_free(members,TRUE);
+    g_string_free(seed,TRUE);g_string_free(targets,TRUE);g_string_free(members,TRUE);g_string_free(var_members,TRUE);
     g_strfreev(name_parts);g_free(hostname);g_free(zone);g_free(keymap);g_strfreev(disk);
 }
 static void check_hostname(const char *input,const char *shortname,const char *domain,const char *canonical) {
@@ -64,7 +66,7 @@ static void check_hostname(const char *input,const char *shortname,const char *d
     g_assert_nonnull(strstr(seed,expected));g_free(expected);
     g_key_file_free(config);
 }
-static void check_disks(const char **disks, gsize count, const char *targets, const char *members) {
+static void check_disks(const char **disks, gsize count, const char *targets, const char *members, const char *var_members) {
     GKeyFile *config=g_key_file_new();
     g_key_file_set_string(config,"Host","hostname","nexcore.example.test");
     g_key_file_set_string(config,"Host","timezone","UTC");
@@ -77,11 +79,15 @@ static void check_disks(const char **disks, gsize count, const char *targets, co
     if (count == 1) {
         g_assert(strstr(seed,"d-i partman-auto/method string regular\n"));
         g_assert(!strstr(seed,"partman-auto-raid"));
+        /* One disk: / and /var are separate ext4 filesystems, never one. */
+        g_assert(strstr(seed,"mountpoint{ / } . "));
+        g_assert(strstr(seed,"mountpoint{ /var } . "));
+        g_assert(!strstr(seed,"atomic"));
         char *boot=g_strdup_printf("d-i grub-installer/bootdev string %s\n",targets);
         g_assert_nonnull(strstr(seed,boot));g_free(boot);
     } else {
         g_assert(strstr(seed,"d-i partman-auto/method string raid\n"));
-        char *recipe=g_strdup_printf("d-i partman-auto-raid/recipe string 1 %u 0 ext4 / %s .\n",(unsigned)count,members);
+        char *recipe=g_strdup_printf("d-i partman-auto-raid/recipe string 1 %u 0 ext4 / %s . 1 %u 0 ext4 /var %s .\n",(unsigned)count,members,(unsigned)count,var_members);
         g_assert_nonnull(strstr(seed,recipe));g_free(recipe);
         g_assert(strstr(seed,"d-i partman-partitioning/default_label string gpt\n"));
         g_assert(strstr(seed,"d-i grub-installer/force-efi-extra-removable boolean true\n"));
@@ -90,6 +96,31 @@ static void check_disks(const char **disks, gsize count, const char *targets, co
         if (uefi) g_assert(strstr(seed,boot)==NULL); else g_assert_nonnull(strstr(seed,boot));
         g_free(boot);
     }
+    g_key_file_free(config);
+}
+/* The image edition has no partman or GRUB step, but Debian Installer still runs its keyboard, root account, clock and
+ * network-name steps before the hook that starts the image install. Without their answers it stops to ask the operator
+ * again (found in the first QEMU run of the image ISO: "Configure the keyboard" after the wizard). */
+static void check_image(void) {
+    GKeyFile *config=g_key_file_new();
+    const char *disks[]={"/dev/vda","/dev/vdb"};
+    g_key_file_set_string(config,"Host","hostname","nexcore.example.test");
+    g_key_file_set_string(config,"Host","timezone","Australia/Sydney");
+    g_key_file_set_string(config,"Host","keymap","gb");
+    g_key_file_set_string_list(config,"Host","disk",disks,2);
+    image_mode=TRUE;g_hash_table_remove_all(files);render(config);image_mode=FALSE;
+    const char *seed=g_hash_table_lookup(files,"/run/nex-installer/answers.cfg");
+    g_assert_nonnull(seed);
+    g_assert(strstr(seed,"d-i debian-installer/locale string en_US.UTF-8\n"));
+    g_assert(strstr(seed,"d-i keyboard-configuration/xkb-keymap select gb\n"));
+    g_assert(strstr(seed,"d-i time/zone string Australia/Sydney\n"));
+    g_assert(strstr(seed,"d-i clock-setup/utc boolean true\n"));
+    g_assert(strstr(seed,"d-i netcfg/get_hostname string nexcore\n"));
+    g_assert(strstr(seed,"d-i passwd/root-login boolean true\n"));
+    g_assert(strstr(seed,"d-i passwd/make-user boolean false\n"));
+    g_assert(strstr(seed,"d-i passwd/root-password-crypted password $6$test-only-hash\n"));
+    g_assert(!strstr(seed,"partman"));
+    g_assert(!strstr(seed,"grub-installer"));
     g_key_file_free(config);
 }
 int main(void) {
@@ -101,9 +132,10 @@ int main(void) {
     const char *one[]={"/dev/sda"};
     const char *two[]={"/dev/sda","/dev/nvme0n1"};
     const char *three[]={"/dev/sda","/dev/nvme0n1","/dev/vda"};
-    check_disks(one,1,"/dev/sda","/dev/sda3");
-    check_disks(two,2,"/dev/sda /dev/nvme0n1","/dev/sda3#/dev/nvme0n1p3");
-    check_disks(three,3,"/dev/sda /dev/nvme0n1 /dev/vda","/dev/sda3#/dev/nvme0n1p3#/dev/vda3");
+    check_disks(one,1,"/dev/sda","/dev/sda3","/dev/sda4");
+    check_disks(two,2,"/dev/sda /dev/nvme0n1","/dev/sda3#/dev/nvme0n1p3","/dev/sda4#/dev/nvme0n1p4");
+    check_disks(three,3,"/dev/sda /dev/nvme0n1 /dev/vda","/dev/sda3#/dev/nvme0n1p3#/dev/vda3","/dev/sda4#/dev/nvme0n1p4#/dev/vda4");
+    check_image();
     g_hash_table_destroy(files);return 0;
 }
 '''
@@ -115,4 +147,4 @@ with tempfile.TemporaryDirectory() as directory:
                     'installer/gui/nex-network.c', '-o', str(root / 'check'), *flags], check=True)
     subprocess.run([str(root / 'check')], check=True)
 print('PASS: actual hostname/domain preseed and target hostname/hosts generation (in-memory file boundary; no disk operations)')
-print('PASS: one-, two- and three-disk partman-auto disk/raid/bootdev lines from render()')
+print('PASS: one-, two- and three-disk partman-auto disk/raid(/ and /var)/bootdev lines from render()')

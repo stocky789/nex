@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/rootfs"
 )
 
 type systemDiskJournal struct {
@@ -50,17 +51,39 @@ var (
 	mdDiscoverDevice = DiscoverZFSDevices
 	mdReadArrays     = func() protocol.HardwareMDArrays { return ReadMDArrays("/") }
 	mdBootEFIRoot    = "/boot/efi"
+	mdOSReleasePath  = "/usr/lib/os-release"
 )
+
+// mdImageEdition reports a host running the immutable image (IMAGE_ID=nex-core in its static os-release).
+// Its disks carry A/B root and verity partitions next to the data mirror member; this flow replicates the
+// table and re-adds the mirror members only, so it must not run there until it also copies and verifies
+// the slots.
+func mdImageEdition() bool {
+	b, err := os.ReadFile(mdOSReleasePath)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if key, value, ok := strings.Cut(line, "="); ok && key == "IMAGE_ID" {
+			return strings.Trim(strings.TrimSpace(value), `"'`) == "nex-core"
+		}
+	}
+	return false
+}
 
 // espPartitionType is the GPT type GUID of an EFI System Partition, as lsblk reports it.
 const espPartitionType = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 
 // Replace rebuilds request.Array onto request.Device. A redelivered operation ID replays its
 // recorded outcome; an interrupted one resumes, and an array that already has the
-// replacement as a member is adopted rather than wiped again.
+// replacement as a member is adopted rather than wiped again. An image-edition host is refused
+// before anything is read or written (see mdImageEdition).
 func (r *SystemDiskReplacer) Replace(ctx context.Context, request protocol.SystemDiskReplaceRequest) error {
 	if err := request.Valid(); err != nil {
 		return err
+	}
+	if mdImageEdition() {
+		return errors.New("replacing a system disk is not available on the image edition yet: it rebuilds the data mirror but does not copy the root and verity slots to the replacement disk, so that disk could not boot the host; nothing was changed")
 	}
 	if err := os.MkdirAll(r.stateDir, 0700); err != nil {
 		return errors.New("Nex Core could not open its system disk replacement journal")
@@ -118,7 +141,7 @@ func (r *SystemDiskReplacer) rebuild(ctx context.Context, path string, journal *
 	journalAdopted := journal.Stage == "member-added" || journal.Stage == "bootable"
 	adopted := journalAdopted
 	replacement := filepath.Base(resolvedDevicePath(request.Device.ByID))
-	survivingDisk, memberPartition := "", 0
+	survivingDisk, memberPartition, holdsMember := "", 0, false
 	// A member whose disk the kernel no longer exposes is the failure being repaired: it is
 	// neither the replacement nor a disk to copy from, so it is passed over rather than
 	// turned into a refusal.
@@ -128,16 +151,19 @@ func (r *SystemDiskReplacer) rebuild(ctx context.Context, path string, journal *
 			continue
 		}
 		if disk == replacement {
-			if mdMemberFaulty(member) && !journalAdopted {
+			switch {
+			case mdMemberFaulty(member) && journalAdopted:
+				// The disk was added and then failed, or the rebuild onto it was lost: it is
+				// not repaired, so neither the bootloader step nor success may follow.
+				return fmt.Errorf("the replacement disk's member of %s has failed; choose a different replacement disk", array.Device)
+			case mdMemberFaulty(member):
 				return fmt.Errorf("%s still holds a faulty member of %s; choose a different replacement disk", request.Device.ByID, array.Device)
-			}
-			if mdMemberInSync(member) && !journalAdopted {
+			case mdMemberInSync(member) && !journalAdopted:
 				// The disk the operator picked is carrying the array's data, not failing:
 				// wiping it would destroy the mirror rather than repair it.
 				return fmt.Errorf("%s already holds a working member of %s", request.Device.ByID, array.Device)
-			}
-			if mdMemberAdoptable(member) || mdMemberInSync(member) {
-				adopted = true
+			case mdMemberAdoptable(member) || mdMemberInSync(member):
+				adopted, holdsMember = true, true
 			}
 			continue
 		}
@@ -147,6 +173,9 @@ func (r *SystemDiskReplacer) rebuild(ctx context.Context, path string, journal *
 	}
 	if survivingDisk == "" {
 		return fmt.Errorf("%s has no working member to copy from; restore this host instead", array.Device)
+	}
+	if journalAdopted && !holdsMember {
+		return fmt.Errorf("the replacement disk is no longer a member of %s; choose a different replacement disk", array.Device)
 	}
 	if !adopted && array.Degraded == 0 {
 		return fmt.Errorf("%s is not degraded, so there is no member to replace", array.Device)
@@ -175,6 +204,12 @@ func (r *SystemDiskReplacer) rebuild(ctx context.Context, path string, journal *
 			return err
 		}
 	}
+	// The other mirrors of this system disk are decided before anything is erased: a repair
+	// that cannot finish must refuse, not wipe the disk and leave /var unrepaired.
+	siblings, err := mdSiblings(arrays.Arrays, array, replacement, adopted)
+	if err != nil {
+		return err
+	}
 	newMember := fmt.Sprintf("%s-part%d", request.Device.ByID, memberPartition)
 	if !adopted {
 		journal.Stage = "wipe-started"
@@ -201,6 +236,12 @@ func (r *SystemDiskReplacer) rebuild(ctx context.Context, path string, journal *
 			return errors.New("the system disk replacement journal could not be written")
 		}
 	}
+	for _, sibling := range siblings {
+		member := fmt.Sprintf("%s-part%d", request.Device.ByID, sibling.partition)
+		if _, err := systemDiskRun(ctx, "mdadm", "--add", sibling.device, member); err != nil {
+			return fmt.Errorf("%s could not be added to %s", member, sibling.device)
+		}
+	}
 	// Making the disk bootable is repeated on a retry: every step of it is idempotent, and a
 	// disk the kernel is already rebuilding onto still has to be bootable.
 	if err := mdInstallBootloader(ctx, request.Device.ByID, survivingDisk); err != nil {
@@ -208,6 +249,63 @@ func (r *SystemDiskReplacer) rebuild(ctx context.Context, path string, journal *
 	}
 	journal.Stage = "bootable"
 	return nil
+}
+
+// mdSibling is another array of the same system disk and the partition number its members
+// have on every disk of the layout.
+type mdSibling struct {
+	device    string
+	partition int
+}
+
+// mdSiblings lists the other degraded RAID1 arrays on the requested array's disks that still
+// need the replacement's partition. The installer builds one array for / and one for /var from
+// the same disks, and a second request for this disk would find nothing blank to wipe, so one
+// operation repairs them all or refuses. Each sibling's partition number comes from its own
+// working member, on whichever disk that is, because every disk carries the same layout.
+// resuming says the replacement was already wiped, so a member of it there is the repair
+// under way rather than data about to be erased.
+func mdSiblings(arrays []protocol.MDArray, requested protocol.MDArray, replacement string, resuming bool) ([]mdSibling, error) {
+	onSystemDisk := map[string]bool{}
+	for _, member := range requested.Members {
+		if disk, _, err := mdMemberDisk(member.Name); err == nil && disk != replacement {
+			onSystemDisk[disk] = true
+		}
+	}
+	var siblings []mdSibling
+	for _, candidate := range arrays {
+		if candidate.Name == requested.Name || candidate.Level != "raid1" || candidate.Degraded == 0 {
+			continue
+		}
+		partition, related, held, heldFaulty := 0, false, false, false
+		for _, member := range candidate.Members {
+			disk, number, err := mdMemberDisk(member.Name)
+			switch {
+			case err != nil:
+			case disk == replacement:
+				// Sharing the replacement disk is relation enough: wiping it destroys that member.
+				related, held, heldFaulty = true, true, heldFaulty || mdMemberFaulty(member)
+			case onSystemDisk[disk]:
+				related = true
+				if mdMemberInSync(member) && partition == 0 {
+					partition = number
+				}
+			}
+		}
+		switch {
+		case !related:
+		case held && !resuming:
+			return nil, fmt.Errorf("the replacement disk already holds a member of %s; choose a different replacement disk", candidate.Device)
+		case heldFaulty:
+			return nil, fmt.Errorf("the replacement disk's member of %s has failed; choose a different replacement disk", candidate.Device)
+		case held:
+		case partition == 0:
+			return nil, fmt.Errorf("%s has no working member to copy from; restore this host instead", candidate.Device)
+		default:
+			siblings = append(siblings, mdSibling{candidate.Device, partition})
+		}
+	}
+	return siblings, nil
 }
 
 // mdMemberAdoptable reports a member the kernel is rebuilding onto (or holding as a spare),
@@ -240,6 +338,12 @@ func mdMemberFaulty(member protocol.MDMember) bool {
 // mechanisms maintain the same files.
 func mdInstallBootloader(ctx context.Context, disk, survivingDisk string) error {
 	if _, err := os.Stat(mdFirmwareEFI); err != nil {
+		// grub-install writes /boot/grub on the root file system, which is read-only.
+		restoreRoot, err := rootfs.OpenWritable(ctx, systemDiskRun)
+		if err != nil {
+			return errors.New("GRUB could not be installed to the replacement disk: " + err.Error())
+		}
+		defer restoreRoot()
 		if _, err := systemDiskRun(ctx, "grub-install", "--target=i386-pc", disk); err != nil {
 			return errors.New("GRUB could not be installed to the replacement disk")
 		}

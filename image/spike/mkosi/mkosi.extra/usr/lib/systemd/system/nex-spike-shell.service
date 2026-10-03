@@ -1,0 +1,13 @@
+[Unit]
+Description=Spike lab control shell on the second serial port
+After=local-fs.target
+
+[Service]
+ExecStart=/bin/bash --noediting --norc
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyS1
+TTYReset=yes
+Environment=HOME=/root TERM=dumb
+Restart=always

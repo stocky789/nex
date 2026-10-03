@@ -6,6 +6,7 @@ import base64
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -91,16 +92,50 @@ class Guest:
 def owned(uri, target, state, storage):
     if str(uuid.UUID(target)) != target:
         raise ValueError('select a canonical VM UUID')
-    disk = str(storage / target / 'controller.qcow2')
-    journals = [json.loads(p.read_text()) for p in state.glob('*.json')]
-    matches = [j for j in journals if j.get('vm_id') == target and j.get('kind') == 'deploy' and j.get('disk') == disk]
-    if len(matches) != 1:
+    journals = [(p.stem, json.loads(p.read_text())) for p in state.glob('*.json')]
+    matches = [j for _, j in journals if j.get('vm_id') == target and j.get('kind') == 'deploy']
+    # Single-disk appliance: controller.qcow2 is the only disk. Two-disk profile: a read-only system
+    # image (swapped by Nex Core) plus the persistent controller-data.qcow2 that holds the state exported here.
+    system = matches[0].get('system') if len(matches) == 1 else None
+    disk = str(storage / target / ('controller-data.qcow2' if system else 'controller.qcow2'))
+    if len(matches) != 1 or matches[0].get('disk') != disk or (system and str(Path(system).parent) != str(storage / target)):
         raise ValueError('VM lacks unique Nex deployment ownership')
+    systems = {system} if system else set()
+    # A failed restore can leave the verified new image defined while deployment still records the old
+    # one. Only a durable swap of this exact deployment may extend the owned read-only image set.
+    stages = {
+        'running': {'swap_define', 'swap_start', 'swap_probe', 'swap_commit', 'swap_restore',
+                    'swap_redefine', 'swap_restart', 'swap_reprobe'},
+        'needs_attention': {'swap_restore', 'swap_redefine', 'swap_restart', 'swap_reprobe'},
+    }
+    for operation_id, journal in journals:
+        swap = journal.get('swap')
+        if (not system or journal.get('kind') != 'swap' or not isinstance(swap, dict)
+                or journal.get('id') != operation_id or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', operation_id)
+                or journal.get('stage') not in stages.get(journal.get('status'), set())
+                or any(journal.get(key) != matches[0].get(key) for key in ('vm_id', 'name', 'disk', 'bridge', 'system'))):
+            continue
+        sequence, sha = swap.get('sequence'), swap.get('sha256')
+        if (type(sequence) is not int or sequence < 1 or not isinstance(sha, str)
+                or not re.fullmatch(r'[0-9a-f]{64}', sha)):
+            continue
+        new = str(storage / target / f'system-{sha}.img')
+        if (journal.get('digest') == f'swap:{sequence}:{sha}' and swap.get('old') == system
+                and swap.get('new') == new and new != system and swap.get('checkpoint') == disk + f'.pre-{sequence}'
+                and type(swap.get('started', False)) is bool):
+            systems.add(new)
     for flags in ((), ('--inactive',)):
         xml = ET.fromstring(virsh(uri, 'dumpxml', target, *flags))
         disks = xml.findall('./devices/disk[@device="disk"]')
-        if (xml.findtext('uuid') != target or xml.findtext('name') != matches[0]['name'] or len(disks) != 1
-                or disks[0].find('source').get('file') != disk or disks[0].find('readonly') is not None):
+        data = [d for d in disks if d.find('source').get('file') == disk]
+        others = [d for d in disks if d not in data]
+        if system:
+            system_ok = (len(others) == 1 and others[0].find('source').get('file') in systems
+                         and others[0].find('readonly') is not None)
+        else:
+            system_ok = not others
+        if (xml.findtext('uuid') != target or xml.findtext('name') != matches[0]['name'] or len(data) != 1
+                or data[0].find('readonly') is not None or not system_ok):
             raise ValueError('VM definition differs from owned appliance')
 
 

@@ -18,6 +18,10 @@ static GtkWidget *host, *network_hostname, *password, *repeat, *zone_entry, *key
 static gchar **timezones;
 static GtkWidget *network_intro, *nic_list, *nic_details, *mode, *address, *gateway, *vlan, *management, *dns;
 static GtkWidget *disk_list, *disk_summary, *review, *confirmation, *dhcp_retry;
+/* Repair image (image edition only): offered when nex-image-install.sh probe finds a complete data volume. */
+static GtkWidget *repair_box, *repair_combo, *repair_note;
+static gchar *repair_found;       /* comma list of the disks that hold the data volume, e.g. /dev/sda,/dev/sdb */
+static gboolean repair_chosen;
 static gboolean loading_nic;
 static guint dhcp_debounce, dhcp_children;
 static gint dhcp_link = -1;
@@ -60,6 +64,19 @@ static gchar *read_sys(const gchar *path)
     gchar *s = NULL;
     if (!g_file_get_contents(path, &s, NULL, NULL)) return g_strdup("");
     return g_strstrip(s);
+}
+/* The image edition needs room for two slots and a nex-data that holds a staged update,
+ * the payloads and the VM store; nex-config enforces the same floor. */
+static gboolean image_edition(void)
+{
+    gchar *edition = read_sys("/cdrom/nex/edition"), *cmdline = read_sys("/proc/cmdline");
+    gboolean image = !strcmp(edition, "image") && !strstr(cmdline, "nex.edition=classic");
+    g_free(edition); g_free(cmdline);
+    return image;
+}
+static guint64 disk_floor(void)
+{
+    return (image_edition() ? 24ULL : 16ULL) * 1024 * 1024 * 1024;
 }
 static gchar *property(const gchar *base, const gchar *name, const gchar *prop)
 {
@@ -298,7 +315,7 @@ static gboolean similar_disks(void)
         for (j = i + 1; j < disk_sizes->len; j++) {
             guint64 a = g_array_index(disk_sizes, guint64, i), b = g_array_index(disk_sizes, guint64, j);
             guint64 small = MIN(a, b), large = MAX(a, b);
-            if (small >= 16ULL * 1024 * 1024 * 1024 && large <= small + small / 10) return TRUE;
+            if (small >= disk_floor() && large <= small + small / 10) return TRUE;
         }
     return FALSE;
 }
@@ -500,8 +517,8 @@ static void discover(void)
         if (skip || installation_media(name)) continue;
         size = property("/sys/class/block", name, "size");
         bytes = g_ascii_strtoull(size, NULL, 10) * 512; g_free(size);
-        /* Same 16 GiB floor as the text frontend and nex-config: do not list undersized disks. */
-        if (!bytes || bytes < 16ULL * 1024 * 1024 * 1024) continue;
+        /* Same floor as the text frontend and nex-config: do not list undersized disks. */
+        if (!bytes || bytes < disk_floor()) continue;
         model = property("/sys/class/block", name, "device/model");
         serial = disk_serial(name);
         capacity = g_strdup_printf("%.1f GiB", bytes / (1024.0 * 1024 * 1024));
@@ -524,21 +541,99 @@ static void discover(void)
             gtk_list_store_set(GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list))), &iter, DISK_SELECTED, TRUE, -1);
     }
     disks_changed();
-    gtk_label_set_text(GTK_LABEL(network_intro), g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)
+    gtk_label_set_text(GTK_LABEL(network_intro), g_file_test("/cdrom/nex/payloads.tsv", G_FILE_TEST_EXISTS)
         ? "Choose an adapter to configure it. The net installer uses the management adapter to download software."
         : "Choose an adapter to configure it. Settings apply after installation.");
-    if (!nics->len) gtk_label_set_text(GTK_LABEL(nic_details), g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)
+    if (!nics->len) gtk_label_set_text(GTK_LABEL(nic_details), g_file_test("/cdrom/nex/payloads.tsv", G_FILE_TEST_EXISTS)
         ? "No physical network adapters detected.\nThe net installer requires networking; use the offline ISO."
         : "No physical network adapters detected.\nYou can install offline and configure networking locally later.");
     else { GtkTreePath *first = gtk_tree_path_new_first(); gtk_tree_selection_select_path(gtk_tree_view_get_selection(GTK_TREE_VIEW(nic_list)), first); gtk_tree_path_free(first); }
     gtk_widget_set_sensitive(mode, nics->len > 0);
     gtk_widget_set_sensitive(vlan, FALSE);
 }
+/* Offer Repair image only on image-edition media and only when a complete Nex Core data volume (a single
+ * nex-data or every member of a nex-data mirror) is on the disks, exactly as the text wizard does. */
+static void offer_repair(void)
+{
+    gchar *argv[] = { "sh", "/cdrom/nex/nex-image-install.sh", "probe", NULL }, *out = NULL, **lines;
+    gint status = 0; guint i;
+    if (!image_edition()) return;
+    if (!g_spawn_sync(NULL, argv, NULL, G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, &out, NULL, &status, NULL)
+        || !WIFEXITED(status) || WEXITSTATUS(status)) { g_free(out); return; }
+    lines = g_strsplit(out ? out : "", "\n", -1);
+    for (i = 0; lines[i]; i++)
+        if (g_str_has_prefix(lines[i], "disks=") && lines[i][6]) { g_free(repair_found); repair_found = g_strdup(lines[i] + 6); }
+    g_strfreev(lines); g_free(out);
+    if (!repair_found) return;
+    {
+        gchar *text = g_strdup_printf("A Nex Core data volume was found on %s.\nErase and install wipes the selected disks and installs a new system. Repair image rewrites only the system partitions and boot files of these disks and keeps the data volume: the host name, settings, virtual machines and payloads stay as they are.", repair_found);
+        gtk_label_set_text(GTK_LABEL(repair_note), text); g_free(text);
+    }
+    /* gtk_widget_show_all() returns at once for a widget marked no-show-all, even when called on that widget. */
+    gtk_widget_set_no_show_all(repair_box, FALSE);
+    gtk_widget_show_all(repair_box);
+}
+/* Repair names exactly the disks that hold the data volume; the operator can neither widen nor narrow that
+ * set (nex-image-install.sh refuses any other). Ticks those disks and nothing else. */
+static gboolean repair_select_disks(void)
+{
+    GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list));
+    GtkTreeIter iter; gboolean valid; guint wanted = 0, matched = 0, i;
+    gchar **found = g_strsplit(repair_found ? repair_found : "", ",", -1);
+    for (i = 0; found[i]; i++) if (*found[i]) wanted++;
+    for (valid = gtk_tree_model_get_iter_first(model, &iter); valid; valid = gtk_tree_model_iter_next(model, &iter)) {
+        gchar *name; gboolean hit = FALSE;
+        gtk_tree_model_get(model, &iter, DISK_NAME, &name, -1);
+        for (i = 0; found[i]; i++) if (!strcmp(found[i], name)) hit = TRUE;
+        if (hit) matched++;
+        gtk_list_store_set(GTK_LIST_STORE(model), &iter, DISK_SELECTED, hit, -1);
+        g_free(name);
+    }
+    if (!wanted || matched != wanted) {
+        gchar *text = g_strdup_printf("%s holds the Nex Core data but a disk is below the image edition's %u GiB minimum or is not eligible. Use Erase and install, or attach the original disks.", repair_found ? repair_found : "A disk", (guint)(disk_floor() >> 30));
+        message(text); g_free(text); g_strfreev(found);
+        for (valid = gtk_tree_model_get_iter_first(model, &iter); valid; valid = gtk_tree_model_iter_next(model, &iter))
+            gtk_list_store_set(GTK_LIST_STORE(model), &iter, DISK_SELECTED, FALSE, -1);
+        disks_changed();
+        return FALSE;
+    }
+    g_strfreev(found);
+    disks_changed();
+    return TRUE;
+}
+/* Called when leaving the welcome page: records the choice and, for Erase, restores the normal disk ticks. */
+static gboolean repair_apply_choice(void)
+{
+    gboolean now = repair_found && gtk_combo_box_get_active(GTK_COMBO_BOX(repair_combo)) == 1;
+    if (now) {
+        repair_chosen = TRUE;
+        return repair_select_disks();
+    }
+    if (repair_chosen) {
+        GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list)); GtkTreeIter iter;
+        gboolean valid;
+        for (valid = gtk_tree_model_get_iter_first(model, &iter); valid; valid = gtk_tree_model_iter_next(model, &iter))
+            gtk_list_store_set(GTK_LIST_STORE(model), &iter, DISK_SELECTED, disks->len == 1, -1);
+        disks_changed();
+    }
+    repair_chosen = FALSE;
+    g_key_file_remove_group(config, "Install", NULL);
+    return TRUE;
+}
+/* Repair keeps the host's identity, account, clock and data volume, so only a net installer's download
+ * needs the network page, and the fixed disk page and host page are skipped. */
+static gboolean page_used(gint p)
+{
+    if (!repair_chosen) return TRUE;
+    if (p == 1 || p == 3) return FALSE;
+    if (p == 2) return g_file_test("/cdrom/nex/payloads.tsv", G_FILE_TEST_EXISTS);
+    return TRUE;
+}
 static void prepare_done(GPid pid, gint status, gpointer unused)
 {
     (void)unused; g_spawn_close_pid(pid); preparing = FALSE;
     prepared = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    if (prepared) { gchar *detail = read_sys("/run/nex-installer/error"); discover(); message(detail); g_free(detail); gtk_button_set_label(GTK_BUTTON(next), "Begin setup"); }
+    if (prepared) { gchar *detail = read_sys("/run/nex-installer/error"); discover(); offer_repair(); message(detail); g_free(detail); gtk_button_set_label(GTK_BUTTON(next), "Begin setup"); }
     else { gchar *detail = read_sys("/run/nex-installer/error"); message(*detail ? detail : "Preparation failed. Retry to detect hardware again. Details are available in the installer log."); g_free(detail); gtk_button_set_label(GTK_BUTTON(next), "Retry preparation"); }
     gtk_widget_set_sensitive(next, TRUE);
 }
@@ -612,9 +707,29 @@ static void keyboard_changed(GtkComboBox *box, gpointer unused)
     gtk_entry_set_text(GTK_ENTRY(password),"");gtk_entry_set_text(GTK_ENTRY(repeat),"");
     message(keyboard_ready ? "" : "The selected keyboard layout could not be applied. Select a working layout before entering credentials.");
 }
+static gboolean collect_repair(void)
+{
+    GError *error = NULL; gint index;
+    save_nic();
+    g_key_file_set_string(config, "Install", "mode", "repair");
+    /* The data volume keeps the host's real values; nex-config skips these checks in Repair mode. */
+    g_key_file_set_string(config, "Host", "hostname", "nexcore");
+    g_key_file_set_string(config, "Host", "timezone", "UTC");
+    g_key_file_set_string(config, "Host", "keymap", "us");
+    g_key_file_set_string(config, "Host", "password", "");
+    index = gtk_combo_box_get_active(GTK_COMBO_BOX(management));
+    g_key_file_set_string(config, "Network", "management", index > 0 ? g_ptr_array_index(nics, index - 1) : "");
+    g_key_file_set_string(config, "Network", "dns", value(dns));
+    if (g_file_test("/cdrom/nex/payloads.tsv", G_FILE_TEST_EXISTS)) {
+        if (page >= 2 && index <= 0) { message("The net installer requires a management adapter and internet access. Select an adapter or use the offline ISO."); return FALSE; }
+        if (page >= 2 && !nex_network_validate(config, &error)) { message(error ? error->message : "Check the network settings."); g_clear_error(&error); return FALSE; }
+    }
+    return TRUE;
+}
 static gboolean collect(void)
 {
     GError *error = NULL; gint index;
+    if (repair_chosen) return collect_repair();
     save_nic();
     if (!keyboard_ready) { message("Select a working keyboard layout before continuing."); return FALSE; }
     gchar *normalized_hostname = nex_hostname_normalize(value(host));
@@ -632,7 +747,7 @@ static gboolean collect(void)
     index = gtk_combo_box_get_active(GTK_COMBO_BOX(management));
     g_key_file_set_string(config, "Network", "management", index > 0 ? g_ptr_array_index(nics, index - 1) : "");
     g_key_file_set_string(config, "Network", "dns", value(dns));
-    if (page >= 2 && index <= 0 && g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)) {
+    if (page >= 2 && index <= 0 && g_file_test("/cdrom/nex/payloads.tsv", G_FILE_TEST_EXISTS)) {
         message("The net installer requires a management adapter and internet access. Select an adapter or use the offline ISO."); return FALSE;
     }
     if (page >= 2 && !nex_network_validate(config, &error)) { message(error ? error->message : "Check the network settings."); g_clear_error(&error); return FALSE; }
@@ -640,10 +755,11 @@ static gboolean collect(void)
     if (!selected_disks) { message("Select the disk to erase and install Nex Core onto, or two or more disks for a mirror."); return FALSE; }
     {
         gsize count; gchar **sizes = g_key_file_get_string_list(config, "Host", "disk_size", &count, NULL);
+        static gchar floor_reason[48];
         guint64 smallest = 0; const gchar *reason = NULL;
         for (gsize i = 0; i < count; i++) {
             guint64 bytes = g_ascii_strtoull(sizes[i], NULL, 10);
-            if (bytes < 16ULL * 1024 * 1024 * 1024) reason = "Every disk must be at least 16 GiB.";
+            if (bytes < disk_floor()) { g_snprintf(floor_reason, sizeof floor_reason, "Every disk must be at least %u GiB.", (guint)(disk_floor() >> 30)); reason = floor_reason; }
             if (!smallest || bytes < smallest) smallest = bytes;
         }
         /* A mirror is only as large as its smallest member. */
@@ -655,10 +771,25 @@ static gboolean collect(void)
     }
     return TRUE;
 }
+static void show_repair_review(void)
+{
+    gchar **selection = g_key_file_get_string_list(config, "Host", "disk", NULL, NULL), *targets = g_strjoinv(" + ", selection), *label_text;
+    gchar *management_name = g_key_file_get_string(config, "Network", "management", NULL);
+    GString *s = g_string_new(NULL);
+    g_string_append_printf(s, "REPAIR IMAGE\n%s\nThe system image and boot partitions of every disk listed are rewritten. The Nex Core data volume is kept: host name, settings, virtual machines and payloads stay as they are.", targets);
+    if (g_file_test("/cdrom/nex/payloads.tsv", G_FILE_TEST_EXISTS))
+        g_string_append_printf(s, "\n\nNETWORK\nManagement: %s\nDNS: %s\nThe net installer downloads the system image over this adapter.", management_name && *management_name ? management_name : "Offline", *value(dns) ? value(dns) : "Automatic / none");
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(review)), s->str, -1); g_string_free(s, TRUE);
+    label_text = g_strdup_printf("_Repair the system image on %s (data volume kept)", targets);
+    gtk_button_set_label(GTK_BUTTON(confirmation), label_text);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(confirmation), FALSE);
+    g_free(label_text); g_free(management_name); g_free(targets); g_strfreev(selection);
+}
 static void show_review(void)
 {
     GString *s = g_string_new(NULL); guint i; gchar *group, *m, *a, *g, *management_name, *zone, *erase_label, *targets, *layout, **selection, **sizes;
     gsize count; guint64 capacity = 0;
+    if (repair_chosen) { g_string_free(s, TRUE); show_repair_review(); return; }
     zone = g_key_file_get_string(config, "Host", "timezone", NULL);
     management_name = g_key_file_get_string(config, "Network", "management", NULL);
     g_string_append_printf(s, "HOST\n%s   •   %s   •   Keyboard %s\nRoot password: set\n\nNETWORK\nManagement: %s\nDNS: %s\n", value(host), zone, keymaps[gtk_combo_box_get_active(GTK_COMBO_BOX(keymap))], management_name && *management_name ? management_name : "Offline", *value(dns) ? value(dns) : "Automatic / none");
@@ -706,7 +837,7 @@ static void install(void)
 {
     gchar *data, *stderr_text = NULL, *argv[] = { "/usr/lib/nex-installer/validate-config", "/run/nex-installer/config.ini", NULL };
     gsize length, written = 0; gint fd, status, sync_status, close_status; GError *error = NULL;
-    if (!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(confirmation))) { message("Confirm that all data on the selected disks can be erased."); return; }
+    if (!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(confirmation))) { message(repair_chosen ? "Confirm that the system image on these disks can be rewritten." : "Confirm that all data on the selected disks can be erased."); return; }
     if (!collect()) return;
     if (g_mkdir_with_parents("/run/nex-installer", 0700) < 0) { message("Cannot create protected installation settings."); return; }
     data = g_key_file_to_data(config, &length, NULL);
@@ -725,12 +856,14 @@ static void go(GtkButton *button, gpointer unused)
 {
     (void)unused;
     if (preparing) return;
-    if (GTK_WIDGET(button) == back) page--;
+    if (GTK_WIDGET(button) == back) { do page--; while (page > 0 && !page_used(page)); }
     else {
         if (!prepared) { prepare(); return; }
+        if (page == 0 && !repair_apply_choice()) return;
         if (page > 0 && !collect()) return;
         if (page == 4) { install(); return; }
-        page++; if (page == 4) show_review();
+        do page++; while (page < 4 && !page_used(page));
+        if (page == 4) show_review();
     }
     dhcp_changed(NULL, NULL);
     if (page != 1) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(show_password), FALSE);
@@ -747,7 +880,7 @@ static void go(GtkButton *button, gpointer unused)
     else if (page==3) gtk_widget_grab_focus(disk_list);
     else if (page==4) gtk_widget_grab_focus(confirmation);
     gtk_widget_set_sensitive(back, page > 0);
-    gtk_button_set_label(GTK_BUTTON(next), page != 4 ? "Continue" : selected_disks > 1 ? "Erase disks and install Nex Core" : "Erase disk and install Nex Core");
+    gtk_button_set_label(GTK_BUTTON(next), page != 4 ? "Continue" : repair_chosen ? "Repair image and keep data" : selected_disks > 1 ? "Erase disks and install Nex Core" : "Erase disk and install Nex Core");
 }
 static GtkWidget *page_box(void)
 {
@@ -814,6 +947,13 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 4);
     gtk_box_pack_start(GTK_BOX(box), label("Don't forget to deploy at least one Nex Controller for your\nenvironment, for central management of your hosts and VMs."), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), label("This installer sets up Nex Core and its local web UI.\nDeploy Nex Controller from that UI or separately."), FALSE, FALSE, 8);
+    /* Hidden until offer_repair() finds an existing Nex Core data volume on image-edition media. */
+    repair_box = gtk_vbox_new(FALSE, 4); gtk_widget_set_no_show_all(repair_box, TRUE);
+    repair_note = label(""); g_signal_connect(repair_note, "size-allocate", G_CALLBACK(wrap_label_allocate), NULL); repair_combo = gtk_combo_box_new_text();
+    gtk_combo_box_append_text(GTK_COMBO_BOX(repair_combo), "Erase and install"); gtk_combo_box_append_text(GTK_COMBO_BOX(repair_combo), "Repair image"); gtk_combo_box_set_active(GTK_COMBO_BOX(repair_combo), 0);
+    gtk_box_pack_start(GTK_BOX(repair_box), repair_note, FALSE, FALSE, 0);
+    field(repair_box, "_Action", repair_combo);
+    gtk_box_pack_start(GTK_BOX(box), repair_box, FALSE, FALSE, 8);
 
     box = page_box(); host = entry(); password = entry(); repeat = entry(); zone_entry = gtk_combo_box_new_text(); timezone_area = gtk_combo_box_new_text(); keymap = gtk_combo_box_new_text();
     gtk_entry_set_visibility(GTK_ENTRY(password), FALSE); gtk_entry_set_visibility(GTK_ENTRY(repeat), FALSE);

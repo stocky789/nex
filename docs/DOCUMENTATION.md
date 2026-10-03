@@ -14,7 +14,8 @@ record or QA report.
   not presented as available instructions.
 - `docs/qa/`: actual walkthrough/test results, version/environment, inspected captures, and limits.
 - `docs/BUG_LEDGER.md`: bug symptoms, root causes, fixes and regression evidence.
-- [Changelog](../CHANGELOG.md): short user-facing entries.
+- [Changelog](../CHANGELOG.md): short user-facing entries under `## [Unreleased]` until a release
+  is cut; do not invent numbered version headings for day-to-day work.
 - [Development](development.md): build and developer instructions, kept out of the operator guide.
 - `docs/changes/`: review records for material changes, tying files to guide/API applicability and evidence.
 
@@ -174,7 +175,7 @@ Range mode requires a clean checkout at the given head; ignored build/cache
 artifacts do not block it. For a PR use its merge base; CI selects ranges automatically.
 
 Forge CI runs the checker and its tests on every push and pull request; on github.com only
-`.github/workflows/github.yml` runs, on main pushes and pull requests. Pushes assess the net before/after diff; PRs assess merge-base-to-head. A new non-default
+`.github/workflows/github.yml` runs, on main and dev pushes and pull requests. Pushes assess the net before/after diff; PRs assess merge-base-to-head. A new non-default
 branch push is compared with its merge base against the fetched default branch (a missing default
 ref fails); a first default-branch push assesses the full tree. The baseline assessment covers only
 pre-gate files.

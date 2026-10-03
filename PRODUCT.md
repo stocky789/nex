@@ -15,7 +15,9 @@ build order and acceptance gates.
   own pool. VMs belong to pools with a separate host assignment, preserving identity
   across migration.
 - Keep running workloads and local recovery independent of Controller availability.
-- Build on Debian and established virtualization tools.
+- Build on Debian and established virtualization tools. Debian remains the source of packages; Nex hosts are
+  signed, read-only images assembled from them, not systems an administrator maintains with `apt`
+  (project owner decision, 2026-10-02; [plan](docs/plans/2026-10-01-immutable-nex-core.md)).
 - Plan Docker application management through Controller, with Docker Swarm inside
   Nex-managed VMs. This follows the VM foundation.
 

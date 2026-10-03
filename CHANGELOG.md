@@ -6,12 +6,180 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.19` →
-> Debian `0.4.19`).
+> development software. Stable builds (from `main`) use the newest numbered changelog heading (`0.4.20` →
+> Debian `0.4.20`); development builds (from `dev`) are pre-releases of the next release (`0.4.21-dev.231` →
+> Debian `0.4.21~~dev.231`) and ship the `[Unreleased]` entries. Entries under `[Unreleased]` do not change a stable build version.
 
 ## [Unreleased]
 
-> **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+> **Maintainers / agents:** Put every new user-facing entry here under the matching bucket
+> (**Major Feature**, **Minor Feature**, **Bug Fixes**, or **Miscellaneous**). Do **not**
+> create a new `## [x.y.z]` heading and do **not** append under a numbered version while
+> working. Numbered headings are created only when project owner cuts a release: move these
+> entries under that heading, leave `[Unreleased]` empty, then tag.
+
+## [0.4.20] — 2026-10-03
+
+### Minor Feature
+
+- Nex now has two release channels: **Stable**, built from the `main` branch, and **Development**, built from a new `dev` branch where
+  every change is staged before it reaches `main`. A merge to `dev` publishes a pre-release of the next stable release, with its own
+  installer ISOs, package archive and download page (the newest three builds are kept); it never touches the Stable archive,
+  downloads or website. Hosts choose their channel with an **Update channel** selector: under Settings → Updates for image-edition
+  hosts in Nex Controller, and on the Updates page of the Nex Core host-local page (a package-edition host keeps its channel as the
+  archive it reads). Development builds sort below the release they work toward, so moving a host back to Stable offers nothing
+  until Stable publishes something newer; a host installed from a development ISO starts on Development. Development work: tested
+  by automated checks and simulated runs only; no hosted release, browser walkthrough or host switch has been exercised.
+- A Nex Core host can now replace the system image of the Controller virtual appliance it runs, without in-guest package updates: it
+  shuts the Controller down gracefully (never forced), saves a copy of its data, starts the new image and waits up to ten minutes for it to
+  answer, and if it does not, puts the saved data and the old image back; if even that fails the Controller is left stopped and flagged for
+  attention. The swap survives a crash at any step and resumes from where it stopped. A pool update now swaps the Controller first, before
+  any host restarts, and Settings → Updates shows the pool rollout (what each host is doing, why it paused, pause, resume, abort and roll
+  back a host). Development work: tested only with a simulated hypervisor and simulated hosts; existing single-disk appliances keep their
+  package updater.
+- The Controller virtual appliance now has a second form: a read-only system image (verified at every read, UEFI-only, no package manager and
+  no in-guest updater) beside a persistent data disk that holds only the Controller's own state. `appliance/build.py --profile controller`
+  builds it from the same pinned Debian snapshot as the Core image and writes the release component entry for it; `core-local-setup
+  configure --controller-image-sha256` makes a Core host deploy it, and the swap above replaces it. Development work: booted once under
+  QEMU on a workstation (first start, restart on the same data disk, and a damaged image that must not start); Core has not deployed it
+  and no swap ran on it.
+- The image edition's update engine now carries optional feature layers (such as ZFS) with the system image
+  in one step: a layer built for another system image is refused, layers are downloaded and checked before
+  the unused slot is written, and the host's layer list only switches to the new versions when the update is
+  activated; the previous version's layers stay until the next update. A host's update source (channel and
+  server address, never a built-in one) can now be set and is reported to the Controller, updates can be
+  imported from offline media (a labelled drive or the host's inbox folder) through the same checks as a
+  download, and large extras such as the Controller image can be fetched on request. Development work: host
+  side and Controller relay only, no screen or guide page yet, tested only against simulated hosts.
+- Optional feature layers (such as ZFS) are now checked at every boot against the same trusted update keys
+  that authorize system updates, instead of a separate key file, so a revoked or expired release key also
+  stops its layers from being merged (development work, tested only against simulated hosts).
+- A pool can now update itself one host at a time, run by the pool master's Nex Core (development work, no
+  screen or guide page yet, and tested only against simulated hosts): it stages the new release on every
+  host, then updates members first and the master last, never taking a host down if the rest of the pool
+  would lose its majority, shutting guests down and restarting them on the same host only when you allow it,
+  and pausing for you if a host does not come back or falls back to the old release. Pause, resume, abort
+  and roll back one host are available, a new master finds an unfinished rollout paused, and no Controller
+  needs to stay connected.
+- Nex Core's own update engine for the image edition (development work, host side only): it checks signed
+  release information (expiry, replay and rollback protection), downloads a system image that can resume
+  after an interruption, writes it to the unused system slot on every disk without touching the next
+  boot, and only on **activate** makes it the next boot with three tries before the previous version
+  returns by itself. **Roll back** re-arms the previous version, and an update is refused when the
+  target could not read the host's stored storage data or could not assemble the data mirror. New
+  host-local calls `check`, `activate`, `rollback` and `cancel` exist. Pool rolling updates do not exist yet,
+  and nothing has been booted on real hardware.
+- The image edition's update is now tied into the boot: after the restart a health check decides
+  whether the new system image stays; if it fails, the host returns to the previous version by itself and
+  reports why. A new system image whose stored data it could not read also falls back instead of
+  starting. Release information can be signed and bundled for offline use with new publishing scripts, and
+  each image host now reports its running, staged and previous version to the Controller. Development
+  work, tried once in a virtual machine only: no hardware, Secure Boot or pool.
+- The image edition's update no longer lets a second `nex-update` command (for example a cancel) see an update that has just
+  finished or been refused as if it were still running: the record is saved before the host-wide update lock is handed on,
+  so the second command cannot cancel it, delete its staged files or collide with its last write.
+- You can now update a single image-edition host from the Controller's **Settings** → **Updates** page
+  (**Host images**): check for a release, download and stage it, reboot into it, roll back or cancel. The
+  host does the work itself and the page only shows what it reports, so replacing the Controller loses
+  nothing. Older Controllers never see the new information. Development work covered by automated tests
+  only; updating a whole pool, one host at a time, is not available yet.
+- Installation media can now carry an image edition: Nex Core installs as a read-only,
+  integrity-checked system image with two update slots per disk and its settings and data on a
+  separate volume, on UEFI hosts with disks of at least 24 GiB. A **Repair image** option reinstalls the
+  system image and keeps the data. The Classic edition stays selectable and is the way to install on legacy
+  BIOS hosts. This is development work: no installer ISO has been booted with it yet.
+- New Nex Core installs keep the system files read-only and put everything the host changes on
+  a separate `/var` volume (two mirrored volumes when you pick two or more disks). Settings,
+  SSH keys and root's files live on `/var` and survive reboots as before. Updates open a short
+  writable window while packages install and close it again. Hosts installed earlier are not
+  converted and keep their writable root.
+- Replacing a failed mirror disk now rebuilds every mirror on that disk in one operation.
+- Image-edition hosts can switch optional features, such as OpenZFS storage, on and off as separate signed layers
+  from the host's root shell (`nex-core-local layers`). Each layer is checked against the signed release before it
+  is merged, belongs to exactly one system image build, and cannot be switched off while in use. Development
+  only: tried in a disposable guest, not yet on an installed image or real hardware, and nothing places or
+  enables layers automatically yet.
+- Review fixes to the image edition's update work (development only, tested against simulated hosts): an update drive can no longer
+  hang the host's updater with a special file or a link pointing out of the bundle; each update server and channel keeps its own replay
+  history, so switching the update source, or importing another channel from a bundle, is no longer judged against the wrong one;
+  changing the update settings waits for a check in progress; a Controller swap now refuses a data disk another virtual machine
+  references, verifies and flushes its saved copy, and only counts the new Controller as ready once the virtual machine runs the
+  expected image; a pool rollout no longer skips the Controller step when a host cannot read its Controller record; and the rollout
+  panel ignores double clicks and out-of-date reads.
+- Second round of review fixes to the image edition (development only, simulated hosts; the changes to the early-boot recovery reboot have not been
+  booted). Updates: a release that is already staged is not staged again; an update that would not fit is refused with `insufficient_space` before
+  anything is downloaded; a half-finished arm is undone on every disk (or reported as `arm_incomplete` and taken back by cancel or activate), a failed
+  restart is recorded and repeated by activate, and a partly done rollback can be repeated; cancel no longer interrupts an activation; a host many trust
+  versions behind catches up through the published intermediate trust documents. Pool rollouts: hosts that already run the release no longer block a
+  new rollout, a rollout with an abort that cannot be confirmed stays open as `abort_cleanup_pending` until it is retried or forced, guest start and
+  shutdown failures pause with a clear reason after five minutes instead of retrying for six hours, and rolling back one host checks quorum first. A
+  Controller swap resumes cleanly when the old Controller restarted by itself. Replacing a system disk is refused on image-edition hosts, disabling a layer
+  whose metadata cannot be read is refused as in use, and a failed boot of a blessed release or Controller guest now reboots on a 60 second pace instead of
+  stopping at a shell. The release tooling refuses a trust version that is not the next one, an expired signer and a key removal that would orphan published
+  signatures, and development release notes include entries added after the version was cut.
+
+### Bug Fixes
+
+- Image-edition updates retain their rollback image across interrupted arm publication, resume at the recorded phase, settle
+  cancelled work and recover delayed activation reboots without replaying an older image's reboot. Controller replacement
+  rollback refreshes the stopped old guest's checkpoint and handles replacement autostart safely.
+- Offline image installation and Repair image validate all selected whole disks, active users, aliases, slot capacity and gzip
+  integrity before destructive work. The text wizard keeps network/action choices separate and lets Back revisit Erase/Repair.
+- Pool update controls keep their original request outcomes on Core across retries and master adoption, recover accepted
+  pending work without Controller, preserve maintenance ordering and reserve replica space without losing accepted history.
+  Image-update panels show failed/attention task errors beside the host's reported image state.
+- Development packages use Debian `~~dev.N` ordering across alpha/rc cuts and version-based retention. Update publication
+  repairs missing signatures; APT preparation retains committed payload bytes through failed signing or same-version rebuilds.
+  Heavy forge steps wait on a shared-host lock rather than cancelling required runs.
+- Lab drivers bind termination to verified process instances, preserve ISO outputs and report unknown firmware or
+  incompatible state-format inputs honestly. ZFS signing bind sources resolve relative paths correctly.
+- These review fixes have automated, native scratch-command and simulated browser coverage, not new hardware, firmware or
+  live-forge certification; see the [verification and limits](docs/qa/2026-10-03-immutable-review-fixes.md).
+- The optional cluster layer now starts: it ships the state folders Corosync and Pacemaker need (`/var/lib/corosync`, `/var/lib/pacemaker`, the
+  Pacemaker log folder) and the `hacluster` and `sanlock` accounts, which the layer build had lost. Before, Corosync stopped at start with "Cannot
+  chdir to state directory" and Pacemaker with "Cluster user hacluster does not exist". Found by the three-host pool lab (virtual machines only,
+  [record](docs/qa/image/phase6-lab3.md)).
+- An image-edition Nex Core host can now form its pool's Corosync cluster after the optional cluster layer is merged: Core refused Debian's own
+  `corosync.conf` (copied into `/etc` from the layer) as an administrator's file, because only the apt packaging scripts wrote the marker
+  that vouches for it, so no cluster formed. It now also accepts a file identical to the layer's read-only copy; an edited file is still
+  refused. Development work: found in a nested three-host lab (virtual machines only, [record](docs/qa/image/phase6-lab4.md)), covered by a
+  unit test; that lab's images predate the fix and ran with the marker written by hand.
+- Recording a management-controller (BMC) fence profile no longer rewrites the command the host's agent keeps in its journal, so the Controller
+  replaying that command after the host restarts no longer stops the agent with "controller reused command ID with different input" (a master
+  whose agent had stopped formed no cluster and ran no rollout).
+
+- A pool rollout on image hosts that have no cluster software (no `nex-cluster` layer) no longer stops at `quorum_margin` before the first host:
+  the master read the missing quorum tool as an unreadable quorum and refused, so a pool of three or more such hosts could not be updated. A
+  host with Corosync installed whose quorum cannot be read, and a pool with clustered storage, are still refused. Found by running the rollout on
+  three booted image hosts in a nested lab ([record](docs/qa/image/phase4-lab.md)).
+- The image edition's installer ([record](docs/qa/image/phase6-lab1.md), development only, found by installing the image ISO in a QEMU lab):
+  after the wizard, Debian Installer stopped to ask for the keyboard, root account, clock and host name again because the image-edition
+  answers kept only the language (Repair had the same problem); the installer used `mkfifo`, which its BusyBox does not have, so the install
+  progress was not shown; and the new data volume could be reported missing for a moment after the image was written, which stopped the
+  payload copy. The graphical wizard never showed its **Repair image** choice (a GTK `show_all` on a widget marked no-show-all does nothing),
+  and the note under it ran off the screen.
+- The image edition's root password now works where the installer says it does ([record](docs/qa/image/phase6-lab2.md), development only, found
+  in a QEMU lab): the image had no `login` program, so the console ended the sign-in before asking for the password, and SSH refused a
+  password for root (the classic edition's SSH policy was never carried over). The image now installs `login` and ships the same root SSH
+  policy; the root password from the installer was then shown to open a root shell on the serial console, over SSH and through the host's
+  local web API in a virtual machine.
+- Roll back during the first boot of an update: the Updates panel offers **Roll back** while a new release is on trial (phase **Booted**),
+  but the host refused it with `already_armed` and did nothing. It now returns to the release the update replaced, and a release that was
+  armed but has not started yet is still refused ([record](docs/qa/image/phase6-lab2.md); a unit test shows it, and a virtual Secure Boot
+  run rolled back during the trial boot and the virtual TPM's PCR 11 returned to the old release's value).
+
+### Miscellaneous
+
+- The host install no longer includes the guest-creation command-line tool, `sudo` or the
+  cluster witness server, none of which the host uses; this trims about 46 MiB of installed
+  packages. Guests are still created through Core, and the witness is still hosted by the Controller.
+- The `nex-core-local` package always carries the Controller appliance image again (the short-lived option to leave it out and
+  write it as a separate, content-addressed download was removed). Image-edition hosts take the Controller image from the release;
+  the payload folder `/var/lib/nex/payload/<digest>/` is now used only for that image, not as a fallback for the package's own copy.
+- Image edition (development work, tried only in a disposable guest): a new release that fails its start-up check now gets its
+  three tries before the host falls back to the previous release, instead of being given up after one boot; the boot partition is
+  no longer mounted automatically on the host (Core mounts it only while it works); and when two update tools touch the update
+  record at the same moment, the record is now written before the lock is handed over.
 
 ## [0.4.19] — 2026-10-02
 

@@ -95,21 +95,35 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(kept, ["0.1.6~alpha1", "0.1.6", "0.1.7"])
             self.assertEqual((root / "latest").resolve().name, "0.1.7")
 
-    def test_prerelease_sorts_below_its_release(self):
-        # Matches dpkg: 0.1.6~alpha1 is older than 0.1.6, so it is pruned first.
-        order = sorted(["0.1.6", "0.1.6~alpha1", "0.1.10", "0.1.9"],
-                       key=publish.debian_sort_key)
-        self.assertEqual(order, ["0.1.6~alpha1", "0.1.6", "0.1.9", "0.1.10"])
+    def test_retention_orders_development_and_prerelease_numbers_with_dpkg(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "downloads"
+            versions = ["0.1.6", "0.1.7~~dev.999", "0.1.7~~dev.1000",
+                        "0.1.7~alpha1", "0.1.7~rc9", "0.1.7~rc10", "0.1.7", "0.1.10"]
+            for version in reversed(versions):
+                publish_release(root, tmp, version, keep=len(versions))
+            self.assertEqual(publish.existing_releases(root), versions)
+            self.assertEqual((root / "latest").resolve().name, "0.1.10")
+            publish_release(root, tmp, "0.1.7~~dev.999", keep=3)
+            self.assertEqual(publish.existing_releases(root), ["0.1.7~rc10", "0.1.7", "0.1.10"])
+            self.assertEqual((root / "latest").resolve().name, "0.1.10")
+            self.assertFalse((root / "0.1.7~~dev.999").exists())
 
-    def test_dpkg_agrees_with_the_sort_order(self):
-        if not shutil.which("dpkg"):
-            self.skipTest("dpkg required to cross-check version ordering")
-        versions = ["0.1.6~alpha1", "0.1.6", "0.1.9", "0.1.10"]
-        for lower, higher in zip(versions, versions[1:]):
-            with self.subTest(lower=lower, higher=higher):
-                result = subprocess.run(["dpkg", "--compare-versions", lower, "lt", higher],
-                                        check=False)
-                self.assertEqual(result.returncode, 0, f"{lower} must sort below {higher}")
+    def test_the_development_root_keeps_its_own_latest_and_retention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stable, development = Path(tmp) / "downloads", Path(tmp) / "downloads" / "dev"
+            publish_release(stable, tmp, "0.1.6")
+            for build in (1, 2, 3):
+                publish_release(development, tmp, f"0.1.7~~dev.{build}", keep=2)
+            # Two builds survive, `latest` is the newest build, and the stable root is untouched
+            # even though the development tree sits inside it.
+            self.assertEqual(publish.existing_releases(development), ["0.1.7~~dev.2", "0.1.7~~dev.3"])
+            self.assertEqual((development / "latest").resolve().name, "0.1.7~~dev.3")
+            self.assertEqual(publish.existing_releases(stable), ["0.1.6"])
+            self.assertEqual((stable / "latest").resolve().name, "0.1.6")
+            page = (development / "0.1.7~~dev.3" / "index.html").read_text()
+            self.assertIn("Development channel build of the next release", page)
+            self.assertNotIn("Development channel", (stable / "0.1.6" / "index.html").read_text())
 
     def test_republishing_the_same_version_replaces_it_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:

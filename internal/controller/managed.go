@@ -220,6 +220,8 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"host_id": cmd.ManagementNetwork.HostID, "action": cmd.ManagementNetwork.Action, "operation": op}
 	case cmd.SystemDiskReplace != nil:
 		return map[string]any{"host_id": cmd.SystemDiskReplace.HostID, "array": cmd.SystemDiskReplace.Array, "operation": op}
+	case cmd.ImageUpdate != nil:
+		return map[string]any{"host_id": cmd.ImageUpdate.HostID, "action": cmd.ImageUpdate.Action, "operation": op}
 	case cmd.ZFSReplace != nil:
 		return map[string]any{"repository_id": cmd.ZFSReplace.RepositoryID, "host_id": cmd.ZFSReplace.HostID, "old_device": cmd.ZFSReplace.OldDevice, "operation": op}
 	case cmd.ZFSProvision != nil:
@@ -1203,7 +1205,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "vm-release-retained", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "vm-release-retained", "pool-join", "pool-maintenance", "pool-update", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false

@@ -819,7 +819,7 @@ func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protoc
 	poolVMMu.Lock()
 	poolPeerMu.Lock()
 	state, err = loadPoolPeer(s)
-	var rollbackResourceMutations func()
+	var rollbackResourceMutations, rollbackRollout func()
 	if err == nil {
 		state.CAKeyPEM, state.Membership = caKeyPEM, membership
 		state.AuthorityGeneration, state.AuthorityDigest = replica.Generation+1, ""
@@ -846,15 +846,19 @@ func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protoc
 			record.UpdatedAt = time.Now().UTC()
 			stored := *record
 			state.Transfer = &stored
-			// One atomic write makes this host the master: the CA key, the membership and the
-			// new generation land together or not at all.
-			if poolTransferFailSavePeerAfterVMAdopt != nil {
+			// A rollout the old master was running is inherited paused, never continued: an
+			// operator decides resume or abort. It is on this host's disk before the write that
+			// makes this host the master, so there is never a master without it.
+			rollbackRollout, err = AdoptPoolUpdateOnPromotion(s, replica.UpdateRollout)
+			if err == nil && poolTransferFailSavePeerAfterVMAdopt != nil {
 				err = poolTransferFailSavePeerAfterVMAdopt()
 			}
 			if err == nil {
 				rollbackResourceMutations, err = adoptPoolResourceMutations(s, replica.ResourceMutations)
 			}
 			if err == nil {
+				// One atomic write makes this host the master: the CA key, the membership and the
+				// new generation land together or not at all.
 				err = savePoolPeer(s, state)
 			}
 		}
@@ -868,6 +872,9 @@ func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protoc
 		observed, readErr := loadPoolPeer(s)
 		if readErr != nil || observed.BackupActiveRoot == backupRoot {
 			return nil, errors.New("the pool master change commit outcome is uncertain; reconcile the recorded transfer")
+		}
+		if rollbackRollout != nil {
+			rollbackRollout()
 		}
 		if rollbackResourceMutations != nil {
 			rollbackResourceMutations()

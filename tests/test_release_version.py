@@ -2,7 +2,6 @@
 """The release version must agree across the tag, CHANGELOG and Debian package."""
 import importlib.machinery
 import importlib.util
-import re
 import shutil
 import subprocess
 import unittest
@@ -19,7 +18,7 @@ CHANGELOG = """# Changelog
 
 ## [Unreleased]
 
-> **Maintainers:** Leave this section empty.
+> **Maintainers / agents:** Put new entries here until a release is cut.
 
 ## [0.1.6-alpha1] — 2026-09-10
 
@@ -76,8 +75,9 @@ class ResolveTests(unittest.TestCase):
                     release.resolve(tag, CHANGELOG)
 
     def test_unreleased_entries_block_the_release(self):
-        dirty = CHANGELOG.replace("> **Maintainers:** Leave this section empty.",
-                                  "- An entry someone forgot to move.")
+        dirty = CHANGELOG.replace(
+            "> **Maintainers / agents:** Put new entries here until a release is cut.",
+            "- An entry someone forgot to move.")
         with self.assertRaisesRegex(release.ReleaseVersionError, r"\[Unreleased\] still has entries"):
             release.resolve("v0.1.6-alpha1", dirty)
 
@@ -95,10 +95,137 @@ class ResolveTests(unittest.TestCase):
         # assert the property the test is named for instead: the file is ordered, and the
         # head of it is what release-version reports.
         self.assertEqual(versions[0], release.current(text)[0])
-        ordered = sorted(versions, key=lambda v: tuple(
-            int(part) if part.isdigit() else -1
-            for part in re.split(r"[.-]", v)), reverse=True)
-        self.assertEqual(versions, ordered)
+        for newer, older in zip(versions, versions[1:]):
+            self.assertFalse(release.newer_than(older, newer), f"{older} precedes {newer}")
+
+
+class DevelopmentBuildTests(unittest.TestCase):
+    """Builds of the dev branch are pre-releases of the release main publishes next."""
+
+    def dpkg_lt(self, lower, higher):
+        return subprocess.run(["dpkg", "--compare-versions", lower, "lt", higher],
+                              check=False).returncode == 0
+
+    def test_build_after_a_published_release_numbers_the_next_patch(self):
+        # dev's newest heading is already on main, so the build works toward 0.1.7.
+        version = release.dev_version(CHANGELOG, CHANGELOG, 231)
+        self.assertEqual(version, "0.1.7-dev.231")
+        self.assertEqual(release.debian_version(version), "0.1.7~~dev.231")
+        if not shutil.which("dpkg"):
+            self.skipTest("dpkg required to check Debian version ordering")
+        deb = release.debian_version(version)
+        self.assertTrue(self.dpkg_lt("0.1.6-alpha1".replace("-", "~"), deb), "above the published release")
+        self.assertTrue(self.dpkg_lt(deb, "0.1.7"), "below the release it works toward")
+        self.assertTrue(self.dpkg_lt(deb, release.debian_version("0.1.7-dev.1000")), "build numbers compare as numbers")
+
+    def test_heading_cut_on_dev_is_the_release_being_built(self):
+        cut = CHANGELOG.replace("## [0.1.6-alpha1]", "## [0.1.7] — 2026-09-11\n\n- Cut.\n\n## [0.1.6-alpha1]")
+        # main still stops at 0.1.6-alpha1: dev builds below 0.1.7 so the stable 0.1.7
+        # published at promotion sorts above every build made while it waited.
+        self.assertEqual(release.dev_version(cut, CHANGELOG, 5), "0.1.7-dev.5")
+
+    def test_main_ahead_of_dev_is_refused(self):
+        cut = CHANGELOG.replace("## [0.1.6-alpha1]", "## [0.1.7] — 2026-09-11\n\n- Cut.\n\n## [0.1.6-alpha1]")
+        with self.assertRaisesRegex(release.ReleaseVersionError, "merge main into dev"):
+            release.dev_version(CHANGELOG, cut, 5)
+
+    def test_development_builds_sort_below_next_stable_prereleases_for_any_counter(self):
+        if not shutil.which("dpkg"):
+            self.skipTest("dpkg required to check Debian version ordering")
+        stable = CHANGELOG.replace("0.1.6-alpha1", "0.2.0")
+        for build in (0, 1, 100, 999, 1000, 10 ** 100):
+            version = release.debian_version(release.dev_version(stable, stable, build))
+            with self.subTest(build=build):
+                self.assertTrue(self.dpkg_lt("0.2.0", version))
+            for prerelease in ("0", "alpha1", "alpha10", "beta1", "rc9", "rc10", "rc.10"):
+                with self.subTest(build=build, prerelease=prerelease):
+                    self.assertTrue(self.dpkg_lt(version, release.debian_version(f"0.2.1-{prerelease}")))
+
+    def test_cutting_alpha_rc_and_final_keeps_development_builds_monotonic(self):
+        if not shutil.which("dpkg"):
+            self.skipTest("dpkg required to check Debian version ordering")
+        stable = CHANGELOG.replace("0.1.6-alpha1", "0.2.0")
+        previous = release.debian_version(release.dev_version(stable, stable, 100))
+        for build, heading in enumerate(("0.2.1-alpha1", "0.2.1-rc9", "0.2.1-rc10", "0.2.1"), 101):
+            cut = stable.replace("## [0.2.0]", f"## [{heading}]\n\n- Cut.\n\n## [0.2.0]")
+            with self.subTest(heading=heading):
+                version = release.dev_version(cut, stable, build)
+                self.assertEqual(version, f"0.2.1-dev.{build}")
+                deb = release.debian_version(version)
+                self.assertTrue(self.dpkg_lt(previous, deb), "cutting a heading must not downgrade development")
+                self.assertTrue(self.dpkg_lt(deb, release.debian_version(heading)))
+                previous = deb
+
+    def test_publishing_a_prerelease_advances_development_to_the_next_patch(self):
+        if not shutil.which("dpkg"):
+            self.skipTest("dpkg required to check Debian version ordering")
+        for heading in ("0.2.1-alpha1", "0.2.1-rc10", "0.2.1"):
+            published = CHANGELOG.replace("0.1.6-alpha1", heading)
+            with self.subTest(heading=heading):
+                version = release.dev_version(published, published, 102)
+                self.assertEqual(version, "0.2.2-dev.102")
+                self.assertTrue(self.dpkg_lt(release.debian_version(heading), release.debian_version(version)))
+
+    def test_main_numerically_newer_prerelease_is_refused(self):
+        for lower, higher in (("rc9", "rc10"), ("rc.9", "rc.10"), ("alpha99", "alpha100")):
+            dev = CHANGELOG.replace("0.1.6-alpha1", f"0.2.0-{lower}")
+            main = CHANGELOG.replace("0.1.6-alpha1", f"0.2.0-{higher}")
+            with self.subTest(lower=lower, higher=higher):
+                with self.assertRaisesRegex(release.ReleaseVersionError, "merge main into dev"):
+                    release.dev_version(dev, main, 5)
+
+    def test_dev_numerically_newer_prerelease_notes_are_kept_but_same_base_build_is_refused(self):
+        for lower, higher in (("rc9", "rc10"), ("rc.9", "rc.10"), ("alpha99", "alpha100")):
+            main = CHANGELOG.replace("0.1.6-alpha1", f"0.2.0-{lower}")
+            dev = CHANGELOG.replace("0.1.6-alpha1", f"0.2.0-{higher}")
+            with self.subTest(lower=lower, higher=higher):
+                with self.assertRaisesRegex(release.ReleaseVersionError, "development version .* below main"):
+                    release.dev_version(dev, main, 6)
+                self.assertEqual(release.dev_notes(dev, main), "### Minor Feature\n\n- Something.\n")
+
+    def test_cli_accepts_zero_and_arbitrarily_large_build_counters(self):
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            changelog = Path(tmp) / "CHANGELOG.md"
+            changelog.write_text(CHANGELOG)
+            for build in (0, 10 ** 100):
+                with self.subTest(build=build):
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        result = release.main([
+                            "--current", "--channel", "dev", "--build", str(build),
+                            "--changelog", str(changelog), "--stable-changelog", str(changelog),
+                            "--format", "both"])
+                    self.assertEqual(result, 0)
+                    self.assertEqual(output.getvalue(), f"0.1.7-dev.{build} 0.1.7~~dev.{build}\n")
+
+    def test_notes_are_the_unreleased_entries_without_the_maintainer_block(self):
+        text = CHANGELOG.replace(
+            "> **Maintainers / agents:** Put new entries here until a release is cut.",
+            "> **Maintainers / agents:** Put new entries here until a release is cut.\n\n- Staged work.")
+        self.assertEqual(release.unreleased_notes(text), "- Staged work.\n")
+        self.assertEqual(release.unreleased_notes(CHANGELOG),
+                         "No changes since the last stable release.\n")
+
+    def test_notes_of_a_heading_cut_on_dev_are_that_headings_entries(self):
+        cut = CHANGELOG.replace("## [0.1.6-alpha1]", "## [0.1.7] — 2026-09-11\n\n- Cut entry.\n\n## [0.1.6-alpha1]")
+        self.assertEqual(release.dev_notes(cut, CHANGELOG), "- Cut entry.\n")
+        # Entries added to [Unreleased] after the cut ship in the same builds.
+        staged = cut.replace(
+            "> **Maintainers / agents:** Put new entries here until a release is cut.",
+            "> **Maintainers / agents:** Put new entries here until a release is cut.\n\n- Staged work.")
+        self.assertEqual(release.dev_notes(staged, CHANGELOG), "- Cut entry.\n\n- Staged work.\n")
+        # Once main has published the heading, only [Unreleased] is new.
+        self.assertEqual(release.dev_notes(CHANGELOG, CHANGELOG),
+                         "No changes since the last stable release.\n")
+
+    def test_cli_needs_the_build_number_and_the_stable_changelog(self):
+        import io
+        from contextlib import redirect_stderr
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            release.main(["--current", "--channel", "dev"])
 
 
 class CliTests(unittest.TestCase):

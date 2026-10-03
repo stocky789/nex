@@ -23,7 +23,9 @@ Known limits:
 
 - Only a RAID1 mirror is rebuilt this way, and one disk at a time; a mirror of three or more
   disks is rebuilt one replacement per run. Nex never builds a system mirror after installation;
-  the mirror is chosen when Nex Core is installed.
+  the mirror is chosen when Nex Core is installed. A host installed with the read-only root has two
+  mirrors, one for `/` and one for `/var`: one replacement run adds the new disk to both, so the
+  second mirror needs no separate request. This is covered by unit tests only, not a real rebuild.
 - The replacement disk must be at least as large as the remaining system disk, and must be a whole
   disk Nex Core reports as usable — not mounted, not in another array, not in a ZFS pool.
 - The mirror protects the host's own system disk. It is not a backup of your virtual machines,

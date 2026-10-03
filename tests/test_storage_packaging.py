@@ -18,13 +18,15 @@ CLIENTS = {"nfs-common", "libnfs-utils", "cifs-utils", "smbclient", "open-iscsi"
 CLUSTERED_GFS2 = {"corosync", "dlm-controld", "gfs2-utils", "pacemaker", "pacemaker-cli-utils", "pcs",
                   "fence-agents-redfish", "fence-agents-ipmilan", "fence-agents-virsh"}
 MATCHED_DLM_VERSION = "4.3.0-3+nex1"
-OPTIONAL_FENCING = {"sanlock", "python3-sanlock", "libvirt-daemon-plugin-sanlock", "corosync-qdevice", "corosync-qnetd"}
+OPTIONAL_FENCING = {"sanlock", "python3-sanlock", "libvirt-daemon-plugin-sanlock", "corosync-qdevice"}
 
 
 class StoragePackagingTests(unittest.TestCase):
     def test_optional_fencing_packages_are_iso_staged_and_not_deb_dependencies(self):
         installer = set((ROOT / "installer/packages.txt").read_text().split())
         self.assertTrue(OPTIONAL_FENCING <= installer)
+        # No host caller: guest creation goes through the Core API and qnetd is Controller-hosted.
+        self.assertFalse({"virtinst", "sudo", "corosync-qnetd"} & installer)
         core = (ROOT / "packaging/core-local/build-inside.sh").read_text()
         controller = (ROOT / "packaging/controller/build-inside.sh").read_text()
         for package in OPTIONAL_FENCING:
@@ -42,7 +44,8 @@ class StoragePackagingTests(unittest.TestCase):
         self.assertIn("appliance/package-service-policy.sh", installer_build)
         self.assertIn("libvirt-daemon-plugin-sanlock", (ROOT / "installer/packages.txt").read_text())
         late_install = (ROOT / "installer/late-install.sh").read_text()
-        self.assertLess(late_install.index("package-service-policy.sh disable"), late_install.index("package-service-policy.sh runtime-qnetd"))
+        # Hosts do not carry corosync-qnetd (the Controller hosts the witness).
+        self.assertNotIn("runtime-qnetd", late_install)
 
     def test_qnetd_package_path_is_persistently_redirected_to_runtime_nssdb(self):
         helper = ROOT / "appliance/package-service-policy.sh"
@@ -134,7 +137,7 @@ class StoragePackagingTests(unittest.TestCase):
                 rc.symlink_to(f"../init.d/{service}")
             disable_env = dict(env, ACTION_LOG=str(log), PATH=f"{commands}:{os.environ['PATH']}")
             subprocess.run(["sh", str(helper), "disable"], env=disable_env, check=True)
-            self.assertFalse(list((root / "etc").glob("rc[0-6S].d/S[0-9][0-9]*")))
+            self.assertEqual([p.name for p in (root / "etc").glob("rc[0-6S].d/S[0-9][0-9]*")], ["S20corosync-qnetd"])
             subprocess.run(["sh", str(helper), "disable", "qnetd"], env=disable_env, check=True)
             self.assertNotIn("start", log.read_text())
             self.assertNotIn("stop", log.read_text())
@@ -216,6 +219,28 @@ class StoragePackagingTests(unittest.TestCase):
             self.assertEqual(result.returncode, 17, result.stderr)
             self.assertEqual(policy.read_text(), "#!/bin/sh\nexit 42\n")
             self.assertFalse((root / "usr/sbin/.policy-rc.d.nex-package-save").exists())
+
+    def test_image_edition_depends_drop_every_layer_package_and_keep_host_tools(self):
+        build = (ROOT / "packaging/core-local/build-inside.sh").read_text()
+        start = build.index('cat > "$pkg/DEBIAN/control"')
+        end = build.index('chmod -R a+rX "$pkg/usr"')
+        with tempfile.TemporaryDirectory(prefix="nex-image-depends-") as directory:
+            fields = {}
+            for edition in ("classic", "image"):
+                pkg = Path(directory) / edition
+                (pkg / "DEBIAN").mkdir(parents=True)
+                script = f'set -eu\npkg={pkg}\nNEX_VERSION=1\nedition={edition}\n' + build[start:end]
+                subprocess.run(["bash", "-c", script], check=True)
+                fields[edition] = dict(line.split(": ", 1) for line in (pkg / "DEBIAN/control").read_text().splitlines()
+                                       if not line.startswith(" ") and ": " in line)
+        classic = {item.strip() for item in fields["classic"]["Depends"].split(",")}
+        image = {item.strip() for item in fields["image"]["Depends"].split(",")}
+        layers = CLUSTERED_GFS2 | {"cifs-utils", "smbclient", "sbd", "zfs-dkms", "zfsutils-linux", "linux-headers-amd64"}
+        self.assertTrue((CLUSTERED_GFS2 | {"cifs-utils", "smbclient", "sbd"}) <= classic)
+        self.assertFalse(layers & image, sorted(layers & image))
+        self.assertNotIn("Recommends", fields["image"])
+        self.assertIn("ipmitool", image)
+        self.assertEqual(classic - image, CLUSTERED_GFS2 | {"cifs-utils", "smbclient", "sbd"})
 
     def test_clustered_iscsi_ocf_probe_is_packaged_and_read_only(self):
         wrapper = ROOT / "packaging/cluster-storage/cluster-iscsi-session"

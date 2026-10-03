@@ -1,0 +1,71 @@
+{
+  "summary": "Phase I-3a host-side update engine of the immutable Nex Core plan: internal/nexupdate gains an image-edition engine (Ed25519 trust.json / channel.json / manifest verification with expiry, channel_serial replay protection and rollback floor, SHA-256 blobs with Range/If-Range resume, stage into the inactive slot of every disk through the hostimage slot writer, activate by renaming the UKI to +3 on every ESP, rollback, request_id idempotency, RequiredStateFormat ported from the retired storage-downgrade guard, and an md superblock generation gate for rollback across a kernel that stamps logical_block_size); internal/hostimage gains StageSlot, Arm, Rollback, Bless and boot-order helpers; the host-local routes GET/POST /api/local/v1/updates, check, apply, activate, rollback and cancel serve the image edition while the classic apt path stays, selected by an edition check. Controller routes, pool rollout, settings, media and UI are not part of this slice.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/qa/image/phase3-engine.md",
+    "internal/hostimage/esp.go",
+    "internal/hostimage/gpt.go",
+    "internal/hostimage/helpers_test.go",
+    "internal/hostimage/hostimage_test.go",
+    "internal/hostimage/testsupport.go",
+    "internal/hostimage/update.go",
+    "internal/hostimage/update_test.go",
+    "internal/localcore/service.go",
+    "internal/localcore/updates.go",
+    "internal/localcore/updates_image_test.go",
+    "internal/nexupdate/image.go",
+    "internal/nexupdate/image_disks_test.go",
+    "internal/nexupdate/image_fixes_test.go",
+    "internal/nexupdate/image_test.go",
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/platform.go",
+    "internal/nexupdate/source.go",
+    "internal/nexupdate/stateformat.go",
+    "internal/nexupdate/trust.go",
+    "internal/protocol/protocol.go",
+    "scripts/update-publish.py",
+    "tests/test_update_publish.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow can be walked through yet: the image edition has no released image, the Controller and web interface do not call the new host-local routes, and no update server publishes the new metadata. docs/guide/software-updates.md and publish-a-release.md are rewritten with the Controller/pool and publishing slices after a lab walkthrough; a page claims verification only after one.",
+    "pages": []
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Host-local GET /api/local/v1/updates and POST /api/local/v1/updates/apply answer differently on an image-edition host (ImageUpdateStatus, ImageUpdateOperation); new host-local POST updates/check, activate, rollback and cancel with stable refusal codes; additive Inventory.image (schemas ImageStatus, ImageRelease, ImageOperation, ImageError in docs/api/openapi.json) and capability image-update-v1 in internal/protocol (types only, no producer yet). The classic edition keeps its contract. Controller, pool, settings, media and operations routes of the plan are not implemented in this slice and are not documented as available.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-3 of a proposed, not yet authorized plan; development work validated by unit tests only, no published milestone changed."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core runs the engine and keeps the record; the Controller only asks and stores nothing about updates.",
+    "record": "Per-host /var/lib/nex/image/state.json, update subtree (channel_serial, rollback_floor, current/previous/staged/armed release records, last 20 operations with request digests), pinned trust in the verity root at /usr/share/nex/update/trust.json and rotated trust documents in /var/lib/nex/update/. The disks are the truth (slot partition GUIDs derived from the root hash, UKI names with boot counters on every ESP); a lost state.json is rebuilt from them. A fresh Controller will read the host's report through Inventory.image once the agent sends it (not wired in this slice)."
+  },
+  "verification": {
+    "method": "go test of ./internal/hostimage, ./internal/nexupdate, ./internal/localcore and ./internal/protocol with fake sources, file-backed disks and an ESP directory standing in for each mounted FAT file system; scripts/generate_api.py and --check; python3 tests/test_api_contract.py; scripts/check_docs.py --worktree; the repository privacy test. Simulation only: no VM, block device, systemd-boot, systemd-bless-boot, Secure Boot or TPM was involved, and the boot-order and counter logic are a re-implementation of the BLS boot-assessment description. Independent-review fixes (2026-10-02, see the review section of docs/qa/image/phase3-engine.md): immutable published sequences, final-lock revalidation, trust ratchet and fail-closed chain, rollback floor at arm and rollback, update lock shared by the service and nex-update, guest recheck before arming, zstd-compressed slot-image, backup-first synced GPT writes; each has a regression test that was seen to fail with the fix removed. Run package by package under CPU and memory limits; the VM proof of I-3b was not repeated.",
+    "evidence": [
+      "docs/qa/image/phase3-engine.md",
+      "internal/hostimage/update_test.go",
+      "internal/nexupdate/image_test.go",
+      "internal/nexupdate/image_disks_test.go",
+      "internal/localcore/updates_image_test.go",
+      "internal/nexupdate/image_fixes_test.go",
+      "tests/test_update_publish.py"
+    ]
+  }
+}

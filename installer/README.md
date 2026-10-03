@@ -157,12 +157,16 @@ choosing. Disks under 16 GiB are omitted from both lists, not offered and refuse
 A lone eligible disk is ticked for them; a mirror never is, but a tip offers it when two
 similar-sized disks are present. `nex-config` stays the authority: the summary repeats its rules,
 it does not replace them.
-One disk installs a whole-disk ext4 layout, unchanged. Two or more disks install an md RAID1
-mirror (metadata 1.2) of a single ext4 root: identical copies, not combined capacity. Every
+One disk installs a root file system, a separate `/var` file system and swap, all ext4 (partman
+recipe `nex-single`). Two or more disks install two md RAID1 mirrors (metadata 1.2), one ext4
+for `/` and one for `/var` (recipe `nex-mirror`): identical copies, not combined capacity. Every
 mirror disk gets the same GPT layout on either
-firmware - a 1 MiB BIOS boot partition, a 512 MiB ESP, then the array member as partition 3 - so
+firmware - a 1 MiB BIOS boot partition, a 512 MiB ESP, then the `/` member as partition 3 and the
+`/var` member as partition 4 - so
 the member index never depends on the firmware and `grub-install --target=i386-pc` has somewhere
 to embed. Every member must be within 10% of the smallest selected disk's capacity.
+The installed root is mounted read-only (`nex-root-ro.service`) and an initramfs script keeps
+`/etc` and `/root` on `/var`; see [Install Nex Core](../docs/guide/install-nex-core.md).
 The mirrored layout has no swap partition. GRUB is installed on every selected disk: legacy
 BIOS through `grub-installer/bootdev`, UEFI by writing the mounted ESP and copying it to the
 other members' ESPs, which Debian 13's `grub-efi-amd64` does not manage itself; an APT
@@ -233,8 +237,8 @@ virsh net-start default
 virsh net-autostart default
 ```
 
-Create a disposable Linux guest with `virt-install` using a separately supplied
-trusted guest ISO; verify guest networking and data persistence after guest and host
+Create a disposable Linux guest through the Core API (the host image ships no
+`virt-install`) using a separately supplied trusted guest ISO; verify guest networking and data persistence after guest and host
 reboots. Installing the host packages or seeing a boot menu does not prove this gate.
 On a nested host `/dev/kvm` must exist and permit accelerated guest operation.
 
@@ -250,3 +254,20 @@ from ISO inspection alone.
 - [Debian image verification](https://www.debian.org/CD/verify)
 - [Preseed from installation media](https://www.debian.org/releases/trixie/amd64/apbs02.en.html)
 - [Preseed advanced options](https://www.debian.org/releases/trixie/amd64/apbs05.en.html)
+
+## Image edition (development)
+
+`nex-image-install.sh` replaces partman, base-installer, GRUB and `late-install.sh` when the media's
+`/cdrom/nex/edition` says `image` (and the boot entry is not `nex.edition=classic`). `nex-config` validates the
+answers (24 GiB floor, UEFI only, explicit erase confirmation) and writes `layout=single|raid1`, the disk list
+and the `/etc` seed; `partman/init.d/00nex-recheck` hands the selected disks to the installer without clearing them.
+The installer first verifies the image (`nex-hostimage verify`) and the media payloads, then stops the md arrays that
+hold a selected disk and runs the static `nex-hostimage install|repair`, which wipes and lays out the disks. It
+assembles only this install's data mirror, never `mdadm --assemble --scan`. The serial boot entries run Debian's own
+questions and so install the Classic edition; on image media they are labelled that way. The `/etc/nex/core-release`
+stamp that `nex-core-local`'s `preinst` requires ships in the image (`image/mkosi.skeleton`), not from the installer.
+Build with
+`NEX_IMAGE_DIR=<release dir> NEX_HOSTIMAGE_BIN=<static binary> installer/build.sh`; set `NEX_NETINST_BASE_URL`
+(from CI configuration only, never committed) for the network ISO. Rows of `nex/payloads.tsv` are `image/<file>`
+(the release set), `payload/<sha256>/<file>` (Controller appliance, VirtIO ISO) and the classic `repo/` and
+`media/` rows. S7 result: [docs/qa/image/phase2-installer.md](../docs/qa/image/phase2-installer.md).

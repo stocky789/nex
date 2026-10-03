@@ -12136,3 +12136,363 @@ of real storage or hardware certification.
 - Fix: `releaseRetainedOriginals` checks pool and host and refuses while another change of the VM is pending or `needs_attention`; `poolVMDeleteMatchesOwner` restores the VM ID match.
 - Regression: `TestReleaseRetainedRefusesForeignRequestAndUnresolvedChange`: `go test ./internal/vmhost -run ReleaseRetained -count=1`.
 - Avoid: relying on the Controller's admission instead of the executing Core's own checks.
+
+
+## BUG-1867 — Recording a management controller stopped the agent at its next restart
+
+- Date: 2026-10-02.
+- Symptom: in the three-host pool lab, a master's embedded agent stopped at its first restart after a
+  fence profile was recorded, with "controller reused command ID with different input".
+- Root cause: `ExecutePoolFenceProfile` worked directly on the command's `PoolCommand`, which is the
+  same object the agent's journal holds for that operation. Pinning the management controller's
+  certificate rewrote the fence in place, so the Controller's replay of the same operation no
+  longer matched the journaled command byte for byte.
+- Fix: `ExecutePoolFenceProfile` works on a copy of the request; the journaled command is never
+  rewritten.
+- Regression: `TestRecordingAManagementControllerLeavesTheJournaledCommandUntouched`
+  (`internal/agent/pool_fence_replay_test.go`) marshals the command before and after execution and
+  requires the bytes to match; it passes after the fix. The failing-before run was not repeated
+  for this entry; the defect was observed in the lab (`docs/qa/image/phase6-lab3.md`).
+- Avoid: mutating a command's request in an executor; the agent journal compares replays against it.
+
+## BUG-1868 — Interrupted arm publication lost the rollback image
+
+- Date: 2026-10-03.
+- Symptom: a host could boot the published update after a crash without retaining its previous committed release.
+- Root cause: arm intent was persisted after layer/ESP publication rather than before it.
+- Fix: persist the existing armed record first; reconcile booted intent and undo unbooted publication without losing the previous release.
+- Regression: `TestInterruptedArmPublicationRetainsThePreviousReleaseAfterBoot` and cleanup/layer cases in `internal/nexupdate/image_fixes_test.go`; `go test ./internal/nexupdate -count=1`. Executed results and simulation limits: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: publishing bootable state before the durable record that explains it.
+
+## BUG-1869 — Armed apply replay restarted staging
+
+- Date: 2026-10-03.
+- Symptom: replaying an interrupted armed apply could download/stage again instead of finishing its existing operation.
+- Root cause: recovery treated every unfinished apply as an unfinished download.
+- Fix: resume at the recorded arm/reboot boundary and preserve post-boot completion.
+- Regression: `TestInterruptedArmedApplyResumesOnlyCompletionAndReboot` and `TestInterruptedActivationReplayAfterBootDoesNotRearmOrReboot`; `go test ./internal/nexupdate -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: inferring an operation's restart point from its kind instead of its durable phase.
+
+## BUG-1870 — Autostart invalidated an interrupted Controller rollback
+
+- Date: 2026-10-03.
+- Symptom: a failed replacement Controller could restart and modify its data after the first checkpoint restoration.
+- Root cause: rollback trusted the previous stopped-state observation while the new persistent domain remained selected.
+- Fix: verify the live owned layout, stop the selected replacement and restore again until the old persistent definition is restored; preserve later old-Controller writes afterward.
+- Regression: interrupted/autostart rollback cases in `internal/vmhost/appliance_swap_test.go`; `go test ./internal/vmhost -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: treating a completed restore as permanent while the failed guest can still autostart.
+
+## BUG-1871 — A stopped old Controller left a stale checkpoint
+
+- Date: 2026-10-03.
+- Symptom: writes made while the old Controller restarted and stopped could disappear on replacement rollback.
+- Root cause: checkpoint refresh depended on whether this invocation stopped the old domain.
+- Fix: refresh from the verified quiescent old domain before forward redefinition, regardless of which invocation stopped it.
+- Regression: checkpoint refresh/preservation cases in `internal/vmhost/appliance_swap_test.go`; `go test ./internal/vmhost -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: equating “already stopped” with “unchanged since the checkpoint”.
+
+## BUG-1872 — Offline install and repair accepted in-use disks
+
+- Date: 2026-10-03.
+- Symptom: a selected disk could be mounted, used as swap or held by an md/dm device when destructive work began.
+- Root cause: offline safety observations were incomplete and not validated for all targets first.
+- Fix: check mounts by device identity, swap and disk/partition holders before any write or runner call; unreadable observations fail closed.
+- Regression: `TestInstallAndRepairRefuseInUseDisksBeforeWriting` and all-target preflight cases; `go test ./internal/hostimage -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: validating one target immediately before erasing it while later targets remain unchecked.
+
+## BUG-1873 — Partition nodes were accepted as whole disks
+
+- Date: 2026-10-03.
+- Symptom: a partition alias could be selected for whole-disk GPT installation or repair.
+- Root cause: block identity was accepted without checking the kernel's partition marker.
+- Fix: reject partition block nodes before planning or writing.
+- Regression: `TestInstallAndRepairRefusePartitionAliasesBeforeWriting`; `go test ./internal/hostimage -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: assuming every block-device path names a whole disk.
+
+## BUG-1874 — Disk aliases bypassed deduplication and partition naming
+
+- Date: 2026-10-03.
+- Symptom: the same disk could be written twice, or an alias could produce incorrect partition paths.
+- Root cause: path strings were treated as device identity and kernel names.
+- Fix: deduplicate block rdev or regular-file device/inode identity and derive block partition nodes from the canonical kernel device.
+- Regression: `TestInstallAndRepairDeduplicateDeviceIdentityBeforeWriting` and `TestOfflineDiskAliasesUseKernelPartitionNodes`; `go test ./internal/hostimage -count=1`. Actual CLI install/repair alias refusal also preserved a scratch disk: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: canonicalizing only symlinks or appending partition suffixes to operator aliases.
+
+## BUG-1875 — Release capacity was checked after erasure
+
+- Date: 2026-10-03.
+- Symptom: an image too large for slot A could fail after a selected disk had been changed.
+- Root cause: verified root/hash-tree sizes were not compared with every planned slot before destructive work.
+- Fix: validate both component sizes against each target's plan before install or repair writes.
+- Regression: `TestInstallAndRepairCheckReleaseCapacityBeforeWriting` and the exact-capacity boundary; `go test ./internal/hostimage -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: using a write-time shortfall as the first capacity validation.
+
+## BUG-1876 — Installer action and NIC mode shared a debconf identifier
+
+- Date: 2026-10-03.
+- Symptom: choosing Erase/Repair could overwrite the stored network mode or its available choices.
+- Root cause: unrelated questions reused one debconf key.
+- Fix: use `nex-installer/action` for installation action and retain the NIC question's identity.
+- Regression: `image_action_keeps_nic_choices`; `python3 tests/integration/installer-text-wizard.py` and `sh installer/check.sh`. Native-sh results and ash limitation: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: reusing question identifiers because their current screens are mutually exclusive.
+
+## BUG-1877 — Heavy workflows cancelled one another
+
+- Date: 2026-10-03.
+- Symptom: a new development run could cancel a stable release or replace required pending checks.
+- Root cause: separate workflows shared a forge concurrency group with cancellation/replacement semantics.
+- Fix: serialize heavy run steps with a shared-host flock and independent workload supervisor; checkout-free aggregation uses native Bash. Stop/reap work before unlock, including ignored TERM, wrapper death and queued cancellation.
+- Regression: `python3 -m unittest tests.test_ci_serialization tests.test_ci_security tests.test_release_version`; `bash -n scripts/ci-heavy-step.sh`. Fifty-four checks and a separate real native mutex smoke passed: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: assuming cancel-in-progress false provides a lossless cross-workflow queue, or releasing a lock before its workload stops.
+
+## BUG-1878 — Prerelease cuts renumbered development builds backwards
+
+- Date: 2026-10-03.
+- Symptom: a development build could change base/sort order when an alpha/rc heading was cut.
+- Root cause: the heading's prerelease suffix became part of the development prefix.
+- Fix: use the numeric release base with Debian `~~dev.N`; refuse a base that cannot sort above main's published prerelease.
+- Regression: `python3 -m unittest tests.test_release_version`; actual CLI and native dpkg ordering/refusal smoke: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: numbering development builds from alpha/rc text or silently emitting an APT downgrade.
+
+## BUG-1879 — Lab termination trusted recycled or unverified PIDs
+
+- Date: 2026-10-03.
+- Symptom: stop/resume/BMC paths could signal an unrelated reused PID; wrapped QEMU argv could fail ownership matching.
+- Root cause: numeric PID records lacked process-instance identity, and wrapper argument slicing was incorrect.
+- Fix: bind PID/start-time/boot/executable/argv identity to a pidfd; fail closed on legacy live records before state/service changes; keep raw QEMU argv separate from launch wrappers.
+- Regression: native child/process ownership cases in `tests/test_lab_drivers.py`; `PYTHONPATH=tests python3 -m unittest tests.test_lab_drivers`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: checking a PID then issuing an unbound kill, or clearing a resume manifest before validating live ownership.
+
+## BUG-1880 — Cancelling staged work left an unfinished apply
+
+- Date: 2026-10-03.
+- Symptom: a cancelled staged release could retain a running journal entry and block the next apply/import.
+- Root cause: cancellation cleared staged state without finishing its matching operation.
+- Fix: finish the interrupted operation and staged-state cancellation in the same durable save.
+- Regression: `TestCancelStagedInterruptedOperationAllowsTheNextApply`; `go test ./internal/nexupdate -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: cleaning payload files without settling the operation that owns them.
+
+## BUG-1881 — Service restart lost a delayed activation reboot
+
+- Date: 2026-10-03.
+- Symptom: an armed successful activation could remain unrebooted after the service cancelled its timer; old retries could also affect a newer arm.
+- Root cause: a finished operation replay did not recover its timer, and latest-operation selection included non-arming failures.
+- Fix: bind successful arming to its sequence and recover only the still-current arm's reboot; failed non-arming requests do not supersede it.
+- Regression: `TestFinishedActivationReplayRecoversTheDelayedReboot` and `TestFailedNonArmingRequestDoesNotSuppressThePreviousActivationReboot`; `go test ./internal/nexupdate -count=1`. Results: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: treating every later request as a successful new arm or rebooting from an old completed request.
+
+## BUG-1882 — Rollout activation accepted a different staged sequence
+
+- Date: 2026-10-03.
+- Symptom: activation could use an armed/staged image different from the rollout's target, even when the currently booted image matched.
+- Root cause: the running sequence shortcut bypassed actual arm-sequence validation.
+- Fix: compare the staged/armed target before calling the host activation engine.
+- Regression: sequence-mismatch cases in `internal/agent/pool_update_host_test.go`; `go test ./internal/agent -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: using observed running state as proof of what the next boot will activate.
+
+## BUG-1883 — Rollout controls lacked durable replay outcomes
+
+- Date: 2026-10-03.
+- Symptom: a repeated control could act twice or return a later result; accepted pending controls could become stuck or admit competing work.
+- Root cause: only mutable rollout state survived, retryable transport/replica failures were journaled as terminal, and result presence did not prove its replica ACK.
+- Fix: retain Core-owned normalized receipts/original outcomes; continue pending controls on Core, preserve rollback step identity, gate on result ACK and narrowly reconcile the owning Core's existing Controller task.
+- Regression: exact replay, `TestCoreContinuesAmbiguousRollbackWithoutController`, `TestUnacknowledgedControlResultBlocksTransitionsUntilCoreAcknowledges`, managed-journal and authenticated Controller recovery cases; `go test ./internal/agent ./internal/controller ./internal/localcore ./internal/protocol -count=1`. Results and old-master audit-display limit: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: using Controller lifetime, the current mutable result or a failed HTTP reply as the only replay authority.
+
+## BUG-1884 — Promotion reordered an active or maintained host
+
+- Date: 2026-10-03.
+- Symptom: the promoted master could run too early, or inherited maintenance could leave resume unable to progress.
+- Root cause: ordering used stale/no membership and did not preserve the in-progress maintenance crash boundary.
+- Fix: order unfinished hosts against actual adopted membership on resume/stepping; preserve any active/maintained host and keep the new master last afterward.
+- Regression: promoted-master ordering and `TestPromotionPreservesMaintenanceBeforeCoordinatorStageWasSaved`; `go test ./internal/agent -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: reordering during adoption before verified membership maintenance is available.
+
+## BUG-1885 — Rollout start replay ignored VM policy
+
+- Date: 2026-10-03.
+- Symptom: a request ID reused with a changed shutdown policy could replay the original rollout instead of conflicting.
+- Root cause: replay intent comparison omitted `running_vms`.
+- Fix: compare normalized policy; omitted/default `refuse` is equivalent, but `shutdown` is different intent.
+- Regression: normalized start-policy replay cases in `internal/agent/pool_update_test.go`; `go test ./internal/agent -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: matching only sequence while ignoring a destructive-operation policy.
+
+## BUG-1886 — Recovery rejected a journaled failed-swap image
+
+- Date: 2026-10-03.
+- Symptom: manual recovery could not export a reachable Controller left on the failed replacement system image.
+- Root cause: recovery recognized only the deployment's original image path.
+- Fix: allow the alternate image only when live/inactive owned layouts and the durable swap/deployment identity, path and digest agree.
+- Regression: failed-swap recovery/provenance cases; `PYTHONPATH=tests python3 -m unittest tests.test_host_recovery`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: trusting an arbitrary alternate image or presenting a root-owned journal as protection against root forgery.
+
+## BUG-1887 — Manifest reuse exposed an unsigned update
+
+- Date: 2026-10-03.
+- Symptom: publication retry/promotion could expose an existing immutable manifest whose signature was missing or unusable.
+- Root cause: existing manifest bytes bypassed signature validation/repair.
+- Fix: verify or repair the signature over the original bytes using an authorized usable release key before channel publication.
+- Regression: manifest/signature recovery cases; `PYTHONPATH=tests python3 -m unittest tests.test_update_publish`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: assuming an immutable manifest file implies a usable detached signature.
+
+## BUG-1888 — Archive publication removed bytes still named by its index
+
+- Date: 2026-10-03.
+- Symptom: failed indexing/signing or interrupted same-version rebuild could leave committed metadata naming deleted or overwritten package bytes.
+- Root cause: live import/pruning preceded metadata preparation, and rebuilt filenames reused one mutable pool path.
+- Fix: prepare selection/index/signing in staging, use content-addressed payload paths, install replacement metadata before retirement and refuse unsigned downgrade of a signed archive.
+- Regression: failed preparation and `test_interruption_after_rebuilt_package_install_keeps_committed_package_bytes_usable`; `PYTHONPATH=tests python3 -m unittest tests.test_apt_publish`. Results and individually replaced metadata limitation: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: pruning or overwriting an old index's payload before replacement metadata exists.
+
+## BUG-1889 — Forge and download retention selected different releases
+
+- Date: 2026-10-03.
+- Symptom: republishing an old development version could displace a newer forge release while download retention kept the newer version.
+- Root cause: forge retention followed publication time and pinned the just-uploaded tag.
+- Fix: retain newest versions using native Debian ordering, matching download retention.
+- Regression: old-republication/version-retention cases; `PYTHONPATH=tests python3 -m unittest tests.test_gitea_release tests.test_release_publish`. Results: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: treating upload time as release version or exempting the current upload from retention.
+
+## BUG-1890 — Prerelease counters used non-Debian ordering
+
+- Date: 2026-10-03.
+- Symptom: counters such as 999/1000 or rc9/rc10 could select the wrong newest retained release.
+- Root cause: a homemade sort key approximated Debian version semantics.
+- Fix: use `dpkg --compare-versions` for release ordering and surface comparator failures.
+- Regression: mixed alpha/rc/development/final retention cases; `PYTHONPATH=tests python3 -m unittest tests.test_release_publish tests.test_release_version`. Actual dpkg ordering: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: lexical/padded-counter approximations of package-manager version ordering.
+
+## BUG-1891 — Full package-lock verification skipped a missing Nex artifact
+
+- Date: 2026-10-03.
+- Symptom: a full image lock check could pass without a required Nex-origin deb.
+- Root cause: missing local artifacts fell through a snapshot-only origin path.
+- Fix: require the selected Nex deb in full verification while keeping explicit snapshot-only checks exempt.
+- Regression: missing-artifact and snapshot-only cases; `PYTHONPATH=tests python3 -m unittest tests.test_image_lock`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: treating absence as permission to skip an origin's verification.
+
+## BUG-1892 — Installer erased disks before discovering corrupt gzip data
+
+- Date: 2026-10-03.
+- Symptom: a truncated or bad-CRC payload could fail after array stops or disk writes.
+- Root cause: decompression integrity was checked only while writing the payload.
+- Fix: run full gzip integrity validation before destructive installation work.
+- Regression: truncated/CRC/ISIZE payload rejection; `PYTHONPATH=tests python3 -m unittest tests.test_image_installer`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: using write-time decompression as the first payload-integrity check.
+
+## BUG-1893 — A corrupt full-length partial download never retried cleanly
+
+- Date: 2026-10-03.
+- Symptom: a resumed file at the expected length could fail its hash without fetching valid source bytes.
+- Root cause: the full-length partial path was not marked as a resumed attempt.
+- Fix: classify an existing normalized partial as resumed before conditional reads, enabling the existing single clean retry.
+- Regression: `TestFullLengthCorruptPartGetsOneCleanDownload`, including corrupt-source refusal; `go test ./internal/nexupdate -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: equating expected length with integrity or adding unlimited download retries.
+
+## BUG-1894 — Image-update tasks hid terminal errors
+
+- Date: 2026-10-03.
+- Symptom: a failed/attention check showed task status without its recorded error beside the host's image state.
+- Root cause: the panel surfaced query errors but not terminal operation errors.
+- Fix: render failed/attention task errors, retain the task link and clear the old error during a new action/success.
+- Regression: `node src/image-updates.test.mjs` from `web`; actual keyboard/light/dark Chromium interaction with a simulated API passed: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: interpreting a failed check as “no newer release” or hiding the host's unchanged running-image state.
+
+## BUG-1895 — Back navigation could not revisit Erase/Repair
+
+- Date: 2026-10-03.
+- Symptom: after selecting installation action, Back/No confirmation paths could trap the operator in that workflow.
+- Root cause: action selection was outside the navigable wizard sequence.
+- Fix: make action the first step when existing data offers Repair and rebuild subsequent steps when the choice changes.
+- Regression: offline-repair, install-back and netinst action-navigation scenarios; `python3 tests/integration/installer-text-wizard.py`. Results: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: implementing a destructive-choice screen as a one-time prelude.
+
+## BUG-1896 — Conversion guidance excluded existing separate-var hosts
+
+- Date: 2026-10-03.
+- Symptom: the guide implied only newly installed hosts acquired the classic read-only layout or its update window.
+- Root cause: instructions described installation age rather than the implemented separate `/var`/next-boot condition.
+- Fix: correct installation and update guidance for existing eligible hosts without changing Core behavior.
+- Regression: implementation/guide scope review and documentation gate; [review-fix verification](qa/2026-10-03-immutable-review-fixes.md). No newly booted conversion or hardware workflow is claimed.
+- Avoid: substituting a date/version heuristic for the actual conversion condition.
+
+## BUG-1897 — Installer lab treated normal array-stop progress as refusal
+
+- Date: 2026-10-03.
+- Symptom: a successful selected-array install could be classified as a safety refusal.
+- Root cause: output classification matched progress text as well as the explicit failure.
+- Fix: recognize the actual “Could not stop” refusal, not the normal “Stopping” message.
+- Regression: installer outcome cases; `PYTHONPATH=tests python3 -m unittest tests.test_image_installer_labs`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: deriving outcomes from broad substrings shared by progress and errors.
+
+## BUG-1898 — ISO lab cleanup could remove its requested output
+
+- Date: 2026-10-03.
+- Symptom: an output equal to, beneath or containing the disposable work directory could be removed during cleanup.
+- Root cause: output/work overlap was not checked before deleting the work tree.
+- Fix: reject canonical equal/ancestor/descendant overlap, including symlink and normalized-dot aliases, before cleanup or build.
+- Regression: `ISOOutputSafetyTests`; `PYTHONPATH=tests python3 -m unittest tests.test_image_installer_labs`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: validating a path only after destructive work-directory preparation.
+
+## BUG-1899 — State-format lab claimed an incompatible negative proof
+
+- Date: 2026-10-03.
+- Symptom: default format-3 images could be reported as proving refusal/fallback to an older format-2 image.
+- Root cause: supplied metadata was not checked before synthetic state writes, and a mock echoed a supposed success.
+- Fix: explicitly skip incompatible default inputs; read actual current/retained metadata as data and validate formats/labels before writes. Remove the fabricated proof.
+- Regression: executable metadata and write-boundary cases; `PYTHONPATH=tests python3 -m unittest tests.test_lab_drivers`. Actual full downgrade/fallback boot remains unrun: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: counting a skipped or mocked format observation as a booted downgrade proof.
+
+## BUG-1900 — Unknown Secure Boot observations counted as a pass
+
+- Date: 2026-10-03.
+- Symptom: missing, conflicting or failed bootctl observations could satisfy a Secure Boot lab assertion.
+- Root cause: absence of one string was interpreted as proof of the opposite firmware state.
+- Fix: require a successful query with one explicit unambiguous enabled/disabled observation; unknown stays unknown.
+- Regression: firmware-observation helper cases; `PYTHONPATH=tests python3 -m unittest tests.test_lab_drivers`. No new firmware proof: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: turning observation failure into a successful security verdict.
+
+## BUG-1901 — Relative ZFS signing inputs mounted the wrong paths
+
+- Date: 2026-10-03.
+- Symptom: Docker could receive the wrong signing key/certificate or output mount for relative arguments.
+- Root cause: bind source paths were not resolved against the caller's actual directory.
+- Fix: resolve readable signing material and the prepared output directory to canonical absolute paths.
+- Regression: selected signing bytes/output cases in `tests/test_image_composition.py`; `PYTHONPATH=tests python3 -m unittest tests.test_image_composition`. Results and mocked-Docker limit: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: relying on Docker's interpretation of relative bind sources.
+
+## BUG-1902 — Accepted controls could exceed replicated authority capacity
+
+- Date: 2026-10-03.
+- Symptom: accepted control history or concurrent VM recovery growth could make a pending/result replica unrepresentable and unrecoverable.
+- Root cause: receipt/result space was not reserved atomically with VM authority admission; aggregate terminal sizing incorrectly netted independent pending deletion shrinkage against creation growth.
+- Fix: reserve accepted result capacity, serialize coherent admission/publication under the existing authority lock order, and retain each pending VM's largest current/completed/failed-before-effects representation. Never evict accepted replay identities.
+- Regression: control/new-rollout admission, concurrent snapshot, pending-delete and mixed-owner create/delete settlement cases in `internal/agent/pool_update_test.go`; `go test ./internal/agent ./internal/localcore -count=1`. Results: [review-fix verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: spending space a pending deletion has not freed, or treating aggregate endpoints as a bound on every independent intermediate outcome.
+
+## BUG-1903 — Metadata probe leaked shell options, traps and its mount
+
+- Date: 2026-10-03.
+- Symptom: a failed probe terminated the serial control shell before its result marker; a successful probe left its retained root mounted and changed later cleanup.
+- Root cause: `set -eu` and EXIT trap ran directly in the persistent control shell.
+- Fix: isolate the complete mount/read/cleanup sequence in a subshell and keep metadata as data.
+- Regression: `UpdateStateGuardLabTests.test_metadata_probe_cleans_up_without_changing_the_control_shell` failed before the fix in both mount outcomes and passed afterward; `python3 -m unittest tests.test_lab_drivers.UpdateStateGuardLabTests tests.test_image_installer_labs.ISOOutputSafetyTests` passed five cases. Limits: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: installing process-wide shell state in a long-lived command transport.
+
+## BUG-1904 — Job-control profiles detached the CI launcher identity
+
+- Date: 2026-10-03.
+- Symptom: a monitored-shell CI step could return success without its workload's result, orphan work or leave its output open.
+- Root cause: `setsid` conditionally forks a process-group leader, so `$!` named a short-lived launcher rather than the owned supervisor/workload.
+- Fix: disable internal launcher job control before asynchronous `setsid` calls and use `setsid --wait`; keep bounded exit diagnostics.
+- Regression: `test_job_control_profile_preserves_workload_execution_and_failure_status` and cancellation profile case in `tests/test_ci_serialization.py`. Instrumented old source returned 0 instead of workload exit 7 and blocked a waiter; corrected launch behavior passed. The actual final native wrapper also ran the profile workload and returned 7 with its expected output. Exact results: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: assuming launcher PID equals session leader under arbitrary inherited shell options. The earlier empty-output combined-suite exit's cause was not established.
+
+## BUG-1905 — CI cleanup missed profile-enabled workload groups
+
+- Date: 2026-10-03.
+- Symptom: after wrapper death, ignored-TERM background work could keep the native flock/stdio open or survive a Docker-mode unlock.
+- Root cause: job control creates different process groups in one workload session; cleanup owned only the leader's group, and the previous profile test disabled job control inside the workload.
+- Fix: scan/signal the complete verified setsid-owned session, retain the mutex until no non-zombie member remains, and reap direct work. Check leader/member identity before signalling; remove workload-side option overrides.
+- Regression: `test_job_control_profile_sigkill_reaps_work_before_unlocking_and_closes_stdio` with an unchanged real monitor-mode profile. Native instrumented before/after: different PGIDs/shared SID; before, live sleep/blocked waiter/open stdio; after, non-live descendant/waiter exit 0/closed stdio. Final focused command: `PYTHONPATH=tests python3 -m unittest tests.test_release_version tests.test_ci_serialization tests.test_ci_security`; results: [verification](qa/2026-10-03-immutable-review-fixes.md).
+- Avoid: weakening a realistic profile fixture to fit group-only cleanup or unlocking before all owned work is non-live.

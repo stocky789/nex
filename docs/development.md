@@ -3,6 +3,22 @@
 These commands build and check development builds; they do not install or enable services.
 Operator setup is described in the [user guide](guide/README.md).
 
+## Branches and release channels
+
+Open pull requests against `dev`, the integration branch; `main` is promoted from it by the project
+owner. A merge to `dev` publishes a development pre-release (tag `vX.Y.Z-dev.N`, APT archive at `/apt/dev`,
+downloads at `/downloads/dev`) and a merge to `main` publishes the stable release. Preview the version a
+development build would get:
+
+```sh
+git show origin/main:CHANGELOG.md > /tmp/main-changelog.md
+python3 scripts/release-version.py --current --channel dev --build "$(git rev-list --count HEAD)" \
+  --stable-changelog /tmp/main-changelog.md --format both
+```
+
+See [Publish a Nex Core release](guide/publish-a-release.md#release-channels) and the
+[release channels plan](plans/2026-10-02-release-channels.md).
+
 ## Build and check
 
 Use the checksum-pinned Go 1.27.1 security-build toolchain with CGO enabled, a C compiler
@@ -50,6 +66,30 @@ The vendor tree retains the SQLite driver's C source and license; npm tarballs r
 upstream notices. This rebuild still needs the tools listed above and does not promise
 byte-identical output across toolchain versions. The dependency review is in
 [controller-dependencies.md](controller-dependencies.md).
+
+## Nex Core image (UEFI image edition)
+
+The image edition is built in a pinned Debian trixie container, so any workstation distribution works. Docker (or a
+compatible runtime) and Go are the host requirements; nothing is installed on the workstation. Outputs go to the
+gitignored `image/out/`.
+
+```
+image/build.sh all                       # base tree (mkosi), root.erofs + dm-verity hash tree, UKI, ESP tree, manifest
+NEX_LABEL=r1 NEX_SEQUENCE=1 image/build.sh all
+python3 scripts/image-lock.py write      # pin the resolved package closure as image/packages.lock
+python3 scripts/image-lock.py check      # drift gate against image/out/base.dpkg-list
+go test ./internal/hostimage/...         # layout, slot writer (S2 order), ESP converger, /etc seeding, install/repair
+tests/integration/image_boot.py --layout single   # installs image/out/release onto loop devices, boots under QEMU/OVMF
+tests/integration/image_boot.py --layout raid1    # same with two disks and the md RAID1 nex-data
+```
+
+`image/build.sh base` writes `image/out/base/` (the tree), `root.erofs`, `root.verity` and `roothash`; `release` adds
+`image/out/release/` (`manifest.json`, `nex-core_<label>_<sequence>.efi`, `esp/`), the directory
+`nex-hostimage install --image-dir` consumes. Packages come only from the snapshot named in `image/snapshot`;
+`image/base.packages` is the request, `image/denylist.txt` what must never appear, `image/packages.lock` the pinned result.
+The image carries no SSH host keys and an empty machine-id; `nex-firstboot.service` creates the keys on the host.
+`image/mkosi.images/` (layers) belongs to the layer build, see its own scripts. The private image-host address is
+supplied through configuration or CI secrets only, never committed.
 
 ## systemd examples
 

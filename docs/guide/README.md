@@ -6,8 +6,13 @@ the separate management service and web UI. An installed host reports one versio
 `Nex Core <version>`. Use disposable environments; each page states the build and
 verification limits that apply to its workflow.
 
-1. [Install Nex Core in a disposable VM](install-nex-core.md).
+1. [Install Nex Core in a disposable VM](install-nex-core.md)
+   (offline whole-disk safety checks; classic hosts with separate `/var` adopt the read-only layout at boot).
 2. [Verify the installed Nex Core host](verify-nex-core.md).
+   Image edition: [reinstall the system image and keep the data](reinstall-keeping-state.md)
+   (**Repair image**; text Back/No navigation, virtual-only verification).
+   Image edition: [check and switch optional host features](optional-host-features.md)
+   (feature layers such as OpenZFS, from the host's root shell; development, lab-simulated only).
 3. [Set up Nex Controller and enroll a host](manage-controller.md).
 4. [Navigate the Controller console](navigate-the-controller-console.md)
    (rail, scope menu, search, activity pill, lists with slide-over panels, Tasks, Events and
@@ -67,7 +72,10 @@ verification limits that apply to its workflow.
    (rebuild a host's mirrored system disk from its panel's **Storage** tab while the host keeps
    running).
 24. [Check and apply software updates](software-updates.md)
-   (Controller and host-local package updates from a configured repo).
+   (Controller and host-local package updates from a configured repo; image-edition hosts update
+   themselves from **Settings → Updates → Host images**, with task refusals and interruption-safe API retries;
+   [Roll back a host update](roll-back-a-host-update.md) returns one to its previous release;
+   [Update a pool](update-a-pool.md) runs a pool-wide rollout from **Settings → Updates → Pool rollout**, unverified).
 25. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 26. [Set up backup repositories](backup-repositories.md)

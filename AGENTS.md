@@ -80,6 +80,23 @@ assessing placement policies and application-catalogue proposals.
 - Keep every project plan under `docs/plans/`. Record scope changes and decisions in the relevant plan.
   Resolve material product changes with project owner; use judgment for routine implementation choices.
 
+## Branches and release channels
+
+Decision: project owner, 2026-10-02. Plan: [release channels](docs/plans/2026-10-02-release-channels.md).
+
+- `main` is the **stable** channel and `dev` is the **development** channel and the integration branch. Branch
+  feature, fix and documentation work from `dev` and open pull requests against `dev`. Only the project owner
+  promotes `dev` to `main`, by a reviewed pull request that also cuts the numbered CHANGELOG heading. A fix
+  that must reach `main` first is merged back into `dev` straight away, or the next development build is refused.
+- A merge to `main` releases a stable version; a merge to `dev` releases a development pre-release
+  (`X.Y.Z-dev.N`), each with its own APT archive subtree, download tree and forge release. Settings → Updates in
+  Nex Controller and the Nex Core host-local page offer **Stable** and **Development**; the channel is Core state
+  on each host (`channel=` in `/etc/nex/updates.conf` for the image edition, the archive `repo_url` it reads for the
+  package edition), never Controller data.
+- Changing version, release, APT, download or update-channel code also means `.gitea/workflows/` and
+  `.github/workflows/` in step, and running the release-channel tests (`tests/test_ci_security.py`,
+  `tests/test_release_version.py`).
+
 ## Communication
 
 Keep replies concise by default, using at most these three short fields:
@@ -129,6 +146,17 @@ option as approval. These instructions cannot enable a question UI the client la
   host distribution with KVM/QEMU, libvirt, and a local agent. Do not implement a new hypervisor.
 - Use Go for controller/agent, React and TypeScript for the UI, and Debian packages/systemd plus
   installer automation for delivery. Keep the Debian base intact; prefer existing platform capabilities.
+  **Decision: project owner, 2026-10-02 (plan options approved for the immutable Nex Core).** Debian remains the source
+  of every package, kernel, libvirt, QEMU and systemd binary, pinned to a dated snapshot of the Debian archive, and the
+  image tooling builds on Debian's own tools (mkosi, `systemd-boot`, `shim-signed`, `erofs-utils`, `cryptsetup`). What
+  changes is how a host holds them: the image edition is UEFI-only, and its host and Controller guest are signed
+  read-only images (erofs on dm-verity), not apt-managed systems. An image-edition host never runs `apt` or `dpkg`;
+  Core replaces whole images, and the Controller guest has no in-guest update helper. "Keep the Debian base intact" now
+  means: do not fork, patch or re-package Debian software to make it immutable, and do not replace Debian's init, kernel
+  or libvirt stack; compose the image from Debian packages and configure it through Debian's supported mechanisms
+  (units, drop-ins, presets, `/etc`). The classic apt-managed edition keeps working until the plan's phases retire it.
+  Releases carry one root signature (the update trust chain of `docs/plans/2026-10-01-immutable-nex-core.md`); there is
+  no remote publishing from agents.
 - Product hierarchy: **Sites → Pools (one master host + members) → Hosts → VMs**. Pool is the
   management grouping. Administrators never create pools: each enrolling host becomes the pool master
   of its own automatically created pool, named after its hostname; enrollment tokens bind to a site.
@@ -307,7 +335,7 @@ option as approval. These instructions cannot enable a question UI the client la
   with it. Hosted github.com minutes are paid for and the forge runs the full suite for free, so
   every job in `.github/workflows/` is skipped on github.com except the single cheap job in
   `.github/workflows/github.yml` (Go tests without `-race`, `generate_api.py --check`, the `tests/`
-  suite and the documentation gate, on main pushes and pull requests). Decision: project owner,
+  suite and the documentation gate, on main and dev pushes and pull requests). Decision: project owner,
   2026-09-21. Reuse an existing test suite when a workflow already runs it; otherwise update the
   workflow in the same change. The test must detect the original bug, pass with the fix, and fail CI
   if the bug returns. Record the test command and results in `docs/BUG_LEDGER.md`; missing runner
@@ -327,3 +355,12 @@ option as approval. These instructions cannot enable a question UI the client la
   and UI review pass. Record remaining work explicitly; do not mark partial work complete.
 - Update documentation in the same change as behavior. Keep changes coherent and commit messages
   imperative with an appropriate scope such as `controller:`, `agent:`, `ui:`, `installer:`, or `docs:`.
+- **Changelog (`CHANGELOG.md`):** After user-visible work, add a short operator-facing bullet under
+  `## [Unreleased]` in the matching bucket (**Major Feature**, **Minor Feature**, **Bug Fixes**,
+  or **Miscellaneous**). Create the bucket heading if it is missing. Never invent a new
+  `## [x.y.z]` / `## [x.y.z-preN]` heading, never bump or “open” a version, and never append under
+  an existing numbered section for day-to-day work. Numbered headings are release cutover only
+  (project owner moves Unreleased entries under a version, then tags). Stable builds keep using the newest
+  numbered heading until that cutover; development builds number a pre-release of the next release
+  from it and ship the `[Unreleased]` entries. Skip the changelog only for pure internal changes with no
+  operator-visible effect.

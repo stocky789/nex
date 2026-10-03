@@ -72,7 +72,7 @@ class NetinstNetwork(unittest.TestCase):
             resolver = root / 'resolv.conf'
             media = root / 'cdrom/nex'
             media.mkdir(parents=True)
-            (media / 'netinst.tsv').touch()
+            (media / 'payloads.tsv').touch()
             fetch = media / 'netinst-fetch.sh'
             fetch.write_text(f'#!/bin/sh\ntest "$(cat {resolver})" = "nameserver 192.0.2.53"\n')
             check = root / 'nex-config'
@@ -119,7 +119,7 @@ class NetinstNetwork(unittest.TestCase):
                 path.write_text(content)
                 path.chmod(0o700 if executable else 0o600)
                 return path
-            write('cdrom/nex/netinst.tsv', '')
+            write('cdrom/nex/payloads.tsv', '')
             write('usr/share/nex-installer/timezones', 'UTC\n')
             write('sys/class/net/eth0/address', '02:00:00:00:00:01\n')
             write('usr/lib/nex-installer/netinst-network',
@@ -158,7 +158,7 @@ class NetinstNetwork(unittest.TestCase):
             self.assertIn('sources are unavailable', result.stderr)
             self.assertFalse((state / 'answers.cfg').exists())
             self.assertNotIn('example-pass', result.stderr)
-            (root / 'cdrom/nex/netinst.tsv').unlink()
+            (root / 'cdrom/nex/payloads.tsv').unlink()
             (root / 'args').unlink()
             result = run('', 'disabled')
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -171,7 +171,7 @@ class NetinstNetwork(unittest.TestCase):
         self.assertIn('gtk_label_set_text(GTK_LABEL(network_intro)', discovery)
         self.assertIn('The net installer uses the management adapter to download software.', discovery)
         # Widgets exist before prepare mounts /cdrom; the marker is not readable yet.
-        self.assertNotIn('g_file_test("/cdrom/nex/netinst.tsv"', source[source.index('int main('):])
+        self.assertNotIn('g_file_test("/cdrom/nex/payloads.tsv"', source[source.index('int main('):])
 
     def test_preflight_precedes_destructive_operations(self):
         recheck = (ROOT / 'installer/gui/recheck.sh').read_text()

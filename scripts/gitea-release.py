@@ -7,12 +7,18 @@ and a tag that points at another commit is moved, so every push of the same
 CHANGELOG version republishes that version instead of failing or piling up
 duplicates. Assets stream from disk: a multi-gigabyte ISO is never read into memory.
 
+--prune-tags deletes the oldest releases (and their tags) whose tag matches a pattern once the
+release is published; the development channel uses it to keep only its newest builds.
+
 Reads GITHUB_API_URL, GITHUB_REPOSITORY and GITHUB_TOKEN as the runner sets them.
 """
 import argparse
+import functools
 import http.client
 import json
 import os
+import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -121,6 +127,39 @@ def publish(repo, tag, target, name, notes, assets):
         raise
 
 
+def prune(repo, pattern, keep):
+    """Delete releases and tags below the newest `keep` matching Debian versions.
+
+    Recreating an old build changes its creation time, not its place in retention. Downloads use
+    version order too, so every retained netinst ISO keeps the forge assets its URLs name.
+    """
+    found, page = [], 1
+    while True:
+        batch = repo.request("GET", f"/releases?limit=50&page={page}") or []
+        found += [r for r in batch if pattern.search(r["tag_name"])]
+        if len(batch) < 50:
+            break
+        page += 1
+    def by_version(left, right):
+        a, b = (release["tag_name"].removeprefix("v").replace("-dev.", "~~dev.").replace("-", "~")
+                for release in (left, right))
+        for operation, order in (("lt", -1), ("gt", 1)):
+            result = subprocess.run(["dpkg", "--compare-versions", a, operation, b], capture_output=True)
+            if result.returncode == 0:
+                return order
+            if result.returncode != 1:
+                raise GiteaError(f"cannot compare release versions {a} and {b}: {result.stderr.decode().strip()}")
+        return 0
+
+    found.sort(key=functools.cmp_to_key(by_version), reverse=True)
+    removed = []
+    for old in found[keep:]:
+        repo.request("DELETE", f"/releases/{old['id']}")
+        repo.request("DELETE", f"/tags/{old['tag_name']}")
+        removed.append(old["tag_name"])
+    return removed
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True, help="release tag, e.g. v0.1.6-alpha1")
@@ -129,19 +168,28 @@ def main(argv=None):
     parser.add_argument("--notes", type=Path, required=True, help="Markdown file used as the release body")
     parser.add_argument("--api-url", default=os.environ.get("GITHUB_API_URL"))
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
+    parser.add_argument("--prune-tags", type=re.compile, metavar="REGEX",
+                        help="afterwards delete the oldest releases whose tag matches, keeping --keep")
+    parser.add_argument("--keep", type=int, default=5, help="releases kept by --prune-tags (default 5)")
     parser.add_argument("assets", nargs="+", type=Path)
     args = parser.parse_args(argv)
     token = os.environ.get("GITHUB_TOKEN")
     if not (args.api_url and args.repository and token):
         print("gitea-release: GITHUB_API_URL, GITHUB_REPOSITORY and GITHUB_TOKEN are required", file=sys.stderr)
         return 1
+    if args.keep < 1:
+        parser.error("--keep must be at least 1")
     for asset in args.assets:
         if not asset.is_file():
             print(f"gitea-release: missing asset {asset}", file=sys.stderr)
             return 1
     try:
-        release = publish(Repo(args.api_url, args.repository, token), args.tag, args.target,
-                          args.name, args.notes.read_text(), args.assets)
+        repo = Repo(args.api_url, args.repository, token)
+        release = publish(repo, args.tag, args.target, args.name, args.notes.read_text(), args.assets)
+        if args.prune_tags:
+            removed = prune(repo, args.prune_tags, args.keep)
+            if removed:
+                print("pruned " + ", ".join(removed))
     except (GiteaError, OSError, http.client.HTTPException) as error:
         print(f"gitea-release: {error}", file=sys.stderr)
         return 1

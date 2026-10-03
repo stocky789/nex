@@ -1,0 +1,24 @@
+#!/bin/sh
+# systemd-bless-boot good|bad against the ESP the loader booted from. The image mounts no ESP at /boot or
+# /efi (Core mounts ESPs transiently under /run/nex/esp), so systemd-bless-boot cannot find it by itself:
+# this mounts that ESP for the call and unmounts it again. An ESP Core already has mounted is reused.
+set -eu
+cmd=${1:?usage: nex-bless-boot good|bad}
+efi=/sys/firmware/efi/efivars
+uuid=$(cat "$efi"/LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f 2> /dev/null | tail -c +5 | tr -d '\000' | tr 'A-F' 'a-f' || true)
+node=
+if [ -n "$uuid" ] && [ -e "/dev/disk/by-partuuid/$uuid" ]; then
+    node=$(readlink -f "/dev/disk/by-partuuid/$uuid")
+fi
+if [ -z "$node" ]; then
+    node=$(lsblk -rpno PATH,PARTTYPE | awk '$2=="c12a7328-f81f-11d2-ba4b-00a0c93ec93b"{print $1; exit}')
+fi
+[ -n "$node" ] || { echo "nex-bless-boot: no EFI system partition found" >&2; exit 1; }
+mp=$(findmnt -nro TARGET -S "$node" | head -n 1)
+if [ -z "$mp" ]; then
+    mp=/run/nex/esp/$(basename "$node")
+    mkdir -p "$mp"
+    mount -t vfat -o umask=0077,iocharset=ascii "$node" "$mp"
+    trap 'umount "$mp"' EXIT
+fi
+/usr/lib/systemd/systemd-bless-boot --path="$mp" "$cmd"

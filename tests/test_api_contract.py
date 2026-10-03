@@ -126,7 +126,7 @@ class APIContractTests(unittest.TestCase):
             fields = re.findall(r'\w+\s+([\w.*\[\]]+)\s+`json:"([^"]+)"[^`]*`', body)
             schema = schemas[name]
             self.assertEqual(set(schema['properties']), {tag.split(',')[0] for _, tag in fields}, name)
-            self.assertEqual(set(schema.get('x-go-emitted-fields', schema['required'])), {tag.split(',')[0] for _, tag in fields if 'omitempty' not in tag}, name)
+            self.assertEqual(set(schema.get('x-go-emitted-fields', schema['required'])), {tag.split(',')[0] for _, tag in fields if 'omitempty' not in tag and 'omitzero' not in tag}, name)
             for go_type, tag in fields:
                 check_type(go_type, schema['properties'][tag.split(',')[0]])
 
@@ -194,7 +194,7 @@ class APIContractTests(unittest.TestCase):
             self.assertTrue(fields, name)
             self.assertEqual(set(schema['properties']), {tag.split(',')[0] for _, tag in fields}, name)
             self.assertEqual(set(schema.get('x-go-emitted-fields', schema['required'])),
-                             {tag.split(',')[0] for _, tag in fields if 'omitempty' not in tag}, name)
+                             {tag.split(',')[0] for _, tag in fields if 'omitempty' not in tag and 'omitzero' not in tag}, name)
             for go_type, tag in fields:
                 prop = schema['properties'][tag.split(',')[0]]
                 if go_type == '[]string':
@@ -220,7 +220,7 @@ class LocalAPIContractTests(APIContractTests):
     def test_service_cli_flags_are_documented(self):
         source = (ROOT / 'cmd/nex-core-local/main.go').read_text()
         flags = set(re.findall(r'flag\.\w+Var\([^,]+,\s*"([^"]+)"', source))
-        documented = set(re.findall(r'`--?([a-z][a-z-]+)`', (ROOT / 'docs/API.md').read_text()))
+        documented = set(re.findall(r'`--?([a-z][a-z0-9-]+)`', (ROOT / 'docs/API.md').read_text()))
         self.assertTrue(flags)
         self.assertFalse(flags - documented, f'Undocumented local service flags: {flags - documented}')
 
@@ -260,6 +260,7 @@ class LocalAPIContractTests(APIContractTests):
         request = re.search(r'var v struct\s*{(.*?)}', body[0], re.S)
         self.assertEqual(set(re.findall(r'`json:"([^",]+)', request[1])),
                          set(self.api['components']['schemas']['PowerRequest']['properties']))
+
 
 
 class PeerAPIContractTests(APIContractTests):

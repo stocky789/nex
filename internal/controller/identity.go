@@ -563,6 +563,12 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			supported := true
 			out.DetectedOS = &supported
 		}
+		// The Controller decodes Inventory.image and relays update actions; it answers only a Core that
+		// offered the capability, so a strict older Core never sees the field.
+		if slices.Contains(v.Capabilities, protocol.ImageUpdateCapability) {
+			supported := true
+			out.ImageUpdate = &supported
+		}
 		if slices.Contains(v.Capabilities, protocol.ISODownloadProgressCapability) {
 			supported := true
 			out.ISODownloadProgress = &supported
@@ -646,8 +652,20 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		// Backup work, ZFS provision and promotion can settle after an earlier
 		// uncertain result. Their later result comes from the same authenticated
 		// Core and operation ID, after Core has reconciled its durable outcome.
+		poolUpdateRecovered := false
+		if kind == "pool-update" && status == "needs_attention" {
+			var raw string
+			var cmd protocol.Command
+			if commandErr := tx.QueryRow("SELECT command FROM managed_resources WHERE operation_id=? AND host_id=? AND kind='pool-update'", res.OperationID, host).Scan(&raw); commandErr != nil {
+				fail(w, 500, "pool update command lookup failed")
+				return
+			}
+			poolUpdateRecovered = json.Unmarshal([]byte(raw), &cmd) == nil && cmd.OperationID == res.OperationID &&
+				cmd.Kind == "pool-update" && cmd.Pool != nil && cmd.Pool.Action == "update-control" &&
+				cmd.Pool.Membership.MasterHostID == host && cmd.Pool.Valid() == nil
+		}
 		recovered := status == "needs_attention" && (res.Status == "succeeded" || res.Status == "failed") &&
-			(kind == "storage-zfs-provision" && res.Status == "succeeded" || (kind == "pool-promote" || kind == "pool-transfer") && res.Status == "succeeded" || backupOutcomeKind(kind))
+			(kind == "storage-zfs-provision" && res.Status == "succeeded" || (kind == "pool-promote" || kind == "pool-transfer") && res.Status == "succeeded" || backupOutcomeKind(kind) || poolUpdateRecovered)
 		if status == "dispatched" || recovered {
 			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=?", res.Status, res.Error, stamp(), res.OperationID); err != nil || c.audit(tx, "host:"+host, "operation."+res.Status, res.OperationID) != nil {
 				fail(w, 500, "result storage failed")
@@ -791,7 +809,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				// able to show them from the last report until the next one arrives.
 				// PeerOrigin is the host's own observation of its peer address, kept so the
 				// join dialog can offer it; the join records it durably on the master.
-				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, Join: merged.Managed.Join, Replica: merged.Managed.Replica, Transfer: merged.Managed.Transfer, Authority: merged.Managed.Authority, Promotion: merged.Managed.Promotion, Restricted: merged.Managed.Restricted, ZFSProvisions: merged.Managed.ZFSProvisions, PeerOrigin: merged.Managed.PeerOrigin,
+				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, UpdateRollout: merged.Managed.UpdateRollout, Join: merged.Managed.Join, Replica: merged.Managed.Replica, Transfer: merged.Managed.Transfer, Authority: merged.Managed.Authority, Promotion: merged.Managed.Promotion, Restricted: merged.Managed.Restricted, ZFSProvisions: merged.Managed.ZFSProvisions, PeerOrigin: merged.Managed.PeerOrigin,
 					PoolVMSnapshots: merged.Managed.PoolVMSnapshots, PoolVMSnapshotsReported: merged.Managed.PoolVMSnapshotsReported,
 					RecoveryReservations: merged.Managed.RecoveryReservations, RecoveryReservationsReported: merged.Managed.RecoveryReservationsReported,
 					BackupRepositories: merged.Managed.BackupRepositories, BackupRepositoriesReported: merged.Managed.BackupRepositoriesReported,

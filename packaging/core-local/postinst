@@ -141,6 +141,15 @@ RELEASE
         apparmor_parser -r "$apparmor_profile"
     fi
     deb-systemd-helper enable nex-core-local.service
+    # The initramfs script that persists /etc and /root on a read-only-root host only
+    # takes effect once an initramfs contains it. It acts on any host whose fstab has a
+    # /var entry, not only installer-laid ones: such a host moves /etc and /root onto /var
+    # and mounts / read-only from its next boot. nex-root-ro.service only acts where /etc
+    # and /var are mounts.
+    deb-systemd-helper enable nex-root-ro.service
+    if [ -z "$root" ]; then
+        dpkg-trigger update-initramfs
+    fi
     # libvirt discovers qemu.d hooks only when its daemon starts. Refresh an
     # already-running legacy daemon so the safety hook applies to later starts.
     # A libvirtd restart reconnects to running QEMU guests; it does not stop them.

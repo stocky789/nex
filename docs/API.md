@@ -1197,6 +1197,8 @@ the operator setup workflow belongs in the [user guide](guide/README.md).
 | `-pool-peer-listen` | TLS 1.3 Core-peer listener for one-use pool joins, default `:9444`; it uses the pool CA and peer identity held in the agent state directory. |
 | `-storage-dir`, `-bridge` | Selected local storage and existing management bridge; deployment never edits host networking. |
 | `-image`, `-manifest`, `-signature`, `-trusted-key` | Provisioned qcow2 image, signed manifest, detached Ed25519 signature and independently trusted raw public key. |
+| `-controller-system-image` | Controller system image: a signed `vm-image` release component staged under `/var/lib/nex/payload/<sha256>/`. With `-controller-system-image-sha256` it selects the two-disk read-only Controller profile and enables the `scope:"controller"` swap; without them the single-disk appliance deployment is unchanged. |
+| `-controller-system-image-sha256` | SHA-256 of that image from the signed release manifest. |
 | `-libvirt-uri` | Local connection, default `qemu:///system`; only this and `qemu:///session` are accepted. |
 | `-prepare-recovery-file` | Root-only manual replacement preparation using a private JSON file; see the command contract below. Runs without opening a listener. |
 | `-docs-dir` | Generated offline API reference directory, default `docs/api`; served at `/api/docs/`. |
@@ -5922,7 +5924,7 @@ repeat of a `request_id` replays that operation, and a different payload under t
 naming another device, or a host ID that is not an opaque ID (`system disk replacement requires
 a host`). `404` unknown host. `409` for a revoked host, a host that is not freshly
 connected, and an older Core: `replacing a system disk needs host-system-disk-replace-v1 on this
-host; upgrade Nex Core`. Core revalidates everything itself when it executes and reports a failed
+host; upgrade Nex Core`. An image-edition Core does not advertise `host-system-disk-replace-v1` (classic edition only until the root and verity slots can be copied to the replacement disk), and a command that reaches one anyway fails with `replacing a system disk is not available on the image edition yet: ... nothing was changed`. Core revalidates everything itself when it executes and reports a failed
 task with its own sentence: the arrays cannot be read (`Nex Core cannot read this host's RAID
 arrays`), the named array is missing (`this host has no array <mdN>`), the array is not degraded
 (`/dev/md0 is not degraded, so there is no member to replace`), it is not a RAID1 mirror, it has
@@ -5946,6 +5948,24 @@ absent or reports that it copied nothing, including the removable fallback path 
 seeds. The ESP is looked for only on the UEFI path. The kernel then rebuilds the mirror; the
 host and its VMs keep running throughout and nothing waits on the Controller.
 
+A host installed with a separate `/var` has two mirrors, one for `/` and one for `/var` over the
+same disks. Before it erases anything, Core finds every other degraded RAID1 array on the named
+array's disks and takes each one's partition number from that array's own working member, on
+whichever disk it is. It then adds the replacement's matching partition to each of them in the
+same operation: after the first array the replacement is no longer blank, so a second request for
+the same disk would have nothing to wipe. A healthy array is never changed. If such an array has
+no working member, or the replacement already holds a member of it, the operation is refused
+before the wipe (`<array> has no working member to copy from`, `the replacement disk already holds
+a member of <array>`). When an interrupted operation resumes, a replacement member that has failed
+or is gone is reported (`the replacement disk's member of <array> has failed`, `the replacement
+disk is no longer a member of <array>`) instead of being treated as repaired. On a host whose root
+file system is mounted read-only, the BIOS `grub-install` runs between `mount -o remount,rw /` and
+`mount -o remount,ro /`, which is also run when GRUB fails. The root's state is read, and both
+remounts run, in the system manager that runs the other commands, not in the agent's own sandbox,
+and one lock covers every such window on the host (a package install waits for it). This is an
+internal change: the request, result, capability and refusal list above are unchanged except for
+these added sentences (API impact: **existing contract**).
+
 **Retries and interruption.** The operation is journaled on the host under its state directory,
 keyed on the operation ID. A redelivered command replays its recorded outcome instead of acting
 again. An array that already has the replacement as a member is adopted: the disk is never wiped a
@@ -5963,6 +5983,55 @@ trees, and for the replacement's command sequence, every refusal above, the adop
 interrupted-wipe retry; Controller contract tests for the relay, the replay, the CSRF requirement,
 the old-Core refusal and invalid input; a UI check of the mirror states and the erase confirmation;
 and a [disposable-host run](qa/2026-09-22-system-disk-replace.md).
+
+## Optional feature layers (nex-core-local layers)
+
+API impact: **new contract**, on-host only: the root command `nex-core-local layers` and its
+[machine-readable command contract](api/local-openapi.json) (`x-commands` entry
+`nex-core-local layers`, schema `LayerInfo`). It adds no HTTP route, no report-protocol command,
+no `Inventory` field and no Controller behaviour; the Controller stores nothing about layers. State
+owner: **core**. A layer is an optional feature set (`nex-zfs`, `nex-cluster`) shipped as a signed
+systemd-sysext image that Core verifies and merges over `/usr`, so the base image stays small and a
+host that never uses a feature never carries it.
+
+| Subcommand | Behavior |
+|---|---|
+| `list` | One JSON array of `LayerInfo`, sorted by name: every layer the signed release manifest of the running base offers plus any layer recorded in `enabled.json`. It checks the store file's size, not its hash, so a status poll never reads the whole image. |
+| `ensure NAME` | Makes the layer enabled and merged, idempotently. Order is the journal: the store file is proven against the signed manifest first, then `enabled.json` records the wish, then the layer is linked and merged, then sysusers, tmpfiles and a udev reload run and the layer's units are enabled. A crash anywhere repeats to the same end. |
+| `disable NAME` | Refused with `in_use` while a kernel module of the layer has a reference count, one of its busy units is active, or one of its busy commands (for example an imported ZFS pool) reports something or fails to run, or when a merged layer's metadata cannot be read, parsed or names another layer. Otherwise it disables the layer's units and records the layer as not wanted. The merge ends at the next boot; Core never drops a layer under running services. Disabling a layer that is not enabled succeeds. |
+| `activate` | What `nex-layers.service` runs at boot. Re-hashes every enabled layer against the signed manifest and the running base build, links the good ones for systemd-sysext and removes the links of the rest, writes the volatile report `/run/nex/layers/status.json`, and **exits 0 even when a layer is refused**, so a bad layer never holds boot. After the merge the unit also runs `systemd-sysusers`, `systemd-tmpfiles --create` and `udevadm control --reload`, each non-fatal. |
+
+**State.** `/var/lib/nex/layers/enabled.json` (format `1`: per layer `enabled`, `sha256`,
+`base_build_id`, `changed`) is the host's record of what the operator wants. The store is
+`/var/lib/nex/layers/store/sha256-<hex>.raw`; one signed release manifest per base build is kept under
+`/var/lib/nex/layers/releases/<BUILD_ID>/`. All of it lives on the host's persistent data volume. A
+replacement Controller never needs it, and a rolled-back or reinstalled host reads it again from its own
+disk. `nex-layers.service` is conditional on `enabled.json` existing, so a host that never enabled a
+layer, including every Classic-edition host, does not run it.
+
+**Refusal: `layer-unavailable`.** Every operation that needs a layer reports the one stable code
+`layer-unavailable`, followed by the layer name and a reason (`layer-unavailable: NAME: REASON[: detail]`),
+so existing ZFS and cluster operations do not grow a new error per cause. Reasons:
+
+| Reason | Meaning |
+|---|---|
+| `not_in_store` | The layer file has not been placed on this host. |
+| `base_mismatch` | The layer was built for another base build. A layer is bound to exactly one base by `SYSEXT_LEVEL` equal to the base `BUILD_ID`, so a rolled-back base never merges the newer base's layer. |
+| `digest_mismatch` | The store file is not the signed bytes. The layer is left unmerged. |
+| `signature_invalid` | The stored release manifest is missing, or is not signed by a release key in the trust in force: the same `trust.json` chain the update engine verifies with (pinned `/usr/share/nex/update/trust.json` plus the adopted rotations). A revoked or expired release key, a key rotated out, or a broken trust chain refuses every layer. |
+| `unknown_layer` | The signed manifest has no such layer, or the name is not a valid layer name. |
+| `merge_failed` | systemd-sysext refused, the layer did not appear, or a unit of the layer could not be enabled. |
+| `reboot_required` | Enabled and verified, but a live merge was not possible (another layer owns the overlay and `/usr` is held open); the next boot merges it. |
+| `in_use` | `disable` was refused because something still uses the layer. |
+
+What is not covered: nothing yet calls `ensure` from the ZFS or cluster operations and no HTTP or
+report surface exposes `list`. Layers are part of the signed update manifest: the manifest's `layer`
+components are verified with the release and staged before the slot write
+(see [Phase I-3d](#image-edition-layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)
+and `scripts/update-publish.py --layer`). The remaining steps are in the
+[immutable Nex Core plan](plans/2026-10-01-immutable-nex-core.md). The lab evidence is in
+[the layers record](qa/image/phase2-layers.md): simulation only (QEMU/KVM, no Secure Boot, no physical
+hardware).
 
 ## Software updates
 
@@ -6012,6 +6081,394 @@ advance, because apt exits 0 when nothing needed upgrading.
 Packaged installs and current appliance images include the update helper so Controller VMs can
 upgrade in place. A published artifact that predates this helper correction is not changed by this
 source behavior; use the documented direct recovery until a rebuilt package is available.
+
+### Image edition: host-local update engine (Phase I-3a)
+
+API impact: **changed contract** — host-local `GET /api/local/v1/updates` and `POST /api/local/v1/updates/apply` answer
+differently on an image-edition host; **new contract** — host-local `POST /api/local/v1/updates/check`, `…/activate`,
+`…/rollback`, `…/cancel`; additive `Inventory.image` (booted, staged and previous release with slot letters, phase,
+`rollback_floor`, `state_format`, `secure_boot`, latest operation and failure) and the `image-update-v1` capability in the host
+report protocol. Image-edition hosts produce `Inventory.image` from the agent's `image` probe, which only reads the engine's
+`state.json` record, the kernel command line and the firmware `SecureBoot` variable; the Controller-side `image-update-v1`
+acknowledgement that withholds it from an older decoder is described under [Phase I-3c](#image-edition-controller-relay-for-one-host-phase-i-3c).
+The settings, media, import and component-fetch routes are in [Phase I-3d](#image-edition-layers-settings-offline-media-and-on-demand-payloads-phase-i-3d); the pool rollout routes are
+[Phase I-4a](#image-edition-pool-rollout-coordinator-phase-i-4a). The classic edition
+(apt, described above) keeps today's behaviour until it is retired; a host chooses once, at start, by its static os-release
+(`IMAGE_ID=nex-core` is the image edition). The media, import and fetch routes answer `409 unsupported_edition` on a classic host; its `PUT /api/local/v1/updates/settings` takes a channel ([Update channels](#update-channels)).
+Schemas `ImageUpdateStatus`, `ImageUpdateOperation`, `ImageUpdateApplyRequest`, `ImageUpdateActionRequest` and
+`UpdateRefusal` are in the generated host-local reference.
+
+Core fetches and verifies everything itself; installed hosts never run `apt`. The update base URL and channel are
+configuration only: `NEX_UPDATE_BASE_URL` / `NEX_UPDATE_CHANNEL`, else `base_url=` / `channel=` in `/etc/nex/updates.conf`; there is
+no built-in URL, and an unset one is `503 source_unconfigured`. The default channel is `stable`. Plain HTTP mirrors are fine:
+signatures carry integrity.
+
+Metadata, all Ed25519 with raw 64-byte signatures over the exact bytes and raw 32-byte keys (base64 inside `trust.json`):
+
+| File | Signed by | Host checks |
+|---|---|---|
+| `trust.json` + `trust.sig` | a root key of the trust in force | `version` only grows (`trust_replayed`), contains a usable root and release key; a newer document extends the pinned `/usr/share/nex/update/trust.json` chain and is kept in `/var/lib/nex/update/trust.<version>.json` (`trust_gap` if a version is missing). The update server keeps `trust.<version>.json` + `trust.<version>.sig` for every version beside the latest `trust.json`; a host behind by more than one version fetches the missing documents in order (at most 32 links), verifies the whole chain in memory with each link signed by the one before it, and writes nothing unless all verify. A missing link is `502 trust_gap`; an unsigned or forged link is `bad_signature`. The chain is re-verified link by link on every use, without asking whether the signing key is still inside its validity today; the newest adopted version is recorded and never goes back, so a chain that fails to verify or has lost documents is refused (`trust_invalid`) rather than replaced by an older trust |
+| `<channel>/channel.json` + `channel.sig` | a release key | `expires` (`channel_expired`), `channel_serial` not below the stored one of this update server and channel and, at the same serial, the same `manifest_sha256` (`channel_replayed`), `sequence` not below `max(stored rollback_floor, min_sequence)` (`below_rollback_floor`) |
+| `releases/<sequence>/manifest.json` + `manifest.sig` | a release key | SHA-256 equals the channel's `manifest_sha256` (`manifest_mismatch`), `architecture` `amd64`, `created` not later than the host clock (`clock_behind`), `compat.update_engine` not above this engine (`engine_too_old`), `min_from_sequence` (`bridge_required`), no required component of a kind this engine cannot install (`unsupported_component`; `slot-image`, `layer`, `source`, `compliance` and every `on_demand` component are fine), every `layer` built for this very release (`layer_base_mismatch`) |
+| `blobs/sha256-<hex>` | the manifest's `sha256` and `bytes` | HTTP `Range` + `If-Range` resume of a `.part` file; a wrong final hash discards the part (one clean retry when it was resumed) → `blob_mismatch` |
+
+A key past `not_after` or marked `revoked` no longer verifies new documents. Only a fully verified check updates the stored
+`channel_serial` and `rollback_floor`, and it re-judges the metadata against the record under the final lock, so two overlapping checks
+only ever raise them. The stored floor also binds `activate` and `rollback` (`below_rollback_floor`). `slot-image` is a zstd-compressed tar
+of the release directory (`root.erofs`, `root.verity`, `roothash`, the UKI, `esp/`, `manifest.json`; component `encoding` `tar+zstd`; its
+`sha256` and `bytes` cover the compressed bytes, so a resume continues the download as it is stored); after the blob hash matches it is
+decompressed while it is unpacked (regular files, clean relative names only; the whole zstd frame including its checksum must be read),
+authenticated again by the slot writer (every file hash, the root hash, the whole hash tree) and its root hash must equal the
+manifest's `verity_root_hash` (`roothash_mismatch`, `image_invalid`).
+
+`GET /api/local/v1/updates` returns `ImageUpdateStatus`: `running`, `slots` (role `booted`, `previous`, `staged` or `armed`, each
+with label, sequence and root hash), `channel`, `available` (only when newer than the booted version), `phase`
+(`idle`, `checking`, `downloading`, `writing`, `staged`, `armed`, `booted`, `committed`, `rolled_back`), `rollback_floor`,
+`channel_serial`, `state_format` and the latest `operation` and `failure`. It reconciles the record with the boot entries on the disks:
+an armed release whose UKI lost its counter is `committed` (the old version becomes `previous`); one whose entries all ran out of
+tries is `rolled_back` with `failure.code` `boot_failed`. While the phase is `armed`, `failure.code` can also be `reboot_failed` (the restart after arming failed), `arm_incomplete` (arming failed on a later disk and could not be undone, so the release is treated as armed) or `rollback_incomplete` (a rollback changed some disks and failed on another); each clears when the release boots, when the call is repeated successfully, or when the next reconcile finds the boot entry gone (the phase then returns to `staged`, or `idle` if no stage is recorded, with the running release's layers restored). State is `/var/lib/nex/image/state.json`, `update` subtree, Core-owned; the
+disks stay the truth and a lost file is rebuilt from them (the previous-version record is not: rollback then reports
+`nothing_to_roll_back`).
+
+| Route | Request → result |
+|---|---|
+| `POST /api/local/v1/updates/check` | refresh and verify metadata → `200` `ImageUpdateStatus`; `429 check_throttled` within 60 s of the last successful check (`Retry-After: 60`); `503 source_unreachable` / `source_unconfigured`; `502` for refused metadata |
+| `POST /api/local/v1/updates/apply` | `{request_id, sequence?, scope, activate, running_vms}` → `202` `ImageUpdateOperation`, background: check, download, write the inactive slot on every disk. `activate: stage_only` (default) never changes the next boot; `reboot` also arms and reboots. `scope: controller` swaps the Controller appliance's system image instead (see [Controller appliance swap](#image-edition-controller-appliance-swap-phase-i-4b)); it is `409 scope_unavailable` on a host with no appliance engine |
+| `POST /api/local/v1/updates/activate` | `{request_id, running_vms?}` → `202`; arms the staged release (its UKI `nex-core_<label>_<sequence>+3.efi` is written to a `.new` file, flushed and renamed on each ESP, beside the running version's) and reboots. The only call that arms. A failed arm on a later disk is undone on every disk reached and leaves the release `staged`; if the undo fails too, the call is `500 arm_incomplete`, the record stays `armed` and no reboot is scheduled. On an `armed` release that has not booted, activate no longer answers `409 nothing_staged`: it re-issues the reboot (a new `request_id`, or a replay whose reboot failed; reconcile never reboots on its own, so the running-VMs policy always applies), except after `arm_incomplete`, where it first tries to take the boot entry back from every disk (`500 arm_incomplete` if a disk cannot be cleaned) and then arms again |
+| `POST /api/local/v1/updates/rollback` | `{request_id, running_vms?}` → `202`; arms the retained previous version and reboots. During the trial boot of an update (phase `booted`) it arms the release that update replaced (the running one is marked exhausted, and once the replaced release is blessed the abandoned update is the retained previous); while an update is armed but has not booted yet it is `409 already_armed`. After a partial failure (`500 rollback_incomplete`) the record is `armed` on the previous release with its layers; repeating the call finishes the remaining disks. A rollback that failed before any disk changed stays `409 previous_unavailable` |
+| `POST /api/local/v1/updates/cancel` | `{request_id}` → `200`; stops a running apply or discards a staged release; `409 already_armed`, `409 write_in_progress`, `409 nothing_to_cancel`; `409 update_in_progress` while an activate or rollback is the running operation; in the `arm_incomplete` state cancel first tries to disarm every disk and then discards the stage as usual (`500 arm_incomplete` if a disk cannot be cleaned, `409 already_armed` if the release booted) |
+
+`request_id` (8–64 letters, digits, `-`, `_`) is the operation ID: an exact replay returns the original operation with `200`, an
+interrupted apply resumes when its `request_id` is repeated, a changed body is `409 request_conflict`, a second active operation is
+`409 update_in_progress` (an interrupted apply must be resumed or cancelled first; the same refusal when another process, such as
+`nex-update` on the host, holds the update lock `/var/lib/nex/image/update.lock`). Results are kept (last 20). `running_vms`
+`refuse` (default) refuses to reboot while virtual machines are running (`409 running_vms`); `shutdown` accepts their downtime; the guests are listed again right before an `apply` with `activate: reboot` arms the staged release.
+Apply, import and stage check free space before any download, on `/var/lib/nex/image`: about twice the slot image plus twice the required layers plus 64 MiB (an estimate, the manifest carries no extracted size), less what a resumed `.part` or finished blob already holds. Every layer that will be staged counts, including an `on_demand` layer the operator has enabled; a release with layers on a host with no layer store is refused `layers_unavailable` at this check, before any download. Too little is `409 insufficient_space` as the failed operation's error; a disk that fills during download, extraction or the slot write maps to the same code (it was `502 image_invalid` or `500 internal`). Repeating the `request_id` of an activate or rollback that failed with a non-4xx error returns that recorded error, not the old operation. Applying a release that is already staged does not stage it again. Pool rollout gates are not evaluated here; the pool coordinator calls the engine's own steps.
+
+Arm intent is durable before any bootable entry is published. The existing `armed` record with phase
+`staged` denotes interrupted publication: reconciliation preserves a target that booted, or removes
+its unbooted entries and restores the running layers. Failed cleanup reports `arm_incomplete`.
+An interrupted apply that already armed resumes completion, not staging. Cancelling an interrupted
+staged apply/import finishes that operation as well as discarding its stage. Exact activation or
+rollback replay reschedules a lost delayed reboot only while its own target is still the latest
+armed operation; it never re-arms or reboots a target that already booted.
+
+Refusals are `{ "code": "<stable code>", "error": "<one literal message>" }`; the host keeps running. Compatibility guards run at
+stage, activate and rollback: `state_format_downgrade` (the target's `state_format` is below `RequiredStateFormat`, the Go port of
+the retired storage guard: any ZFS record ⇒ 3, managed VM storage records ⇒ 2, unreadable ⇒ present), `state_format_too_old`, and
+the md superblock gate — `md_generation_unsafe` (an image that raises the manifest's `compat.md_generation` must set
+`compat.md_fallback_safe`, the publisher's assertion that the older kernel still assembles `nex-data`) and `md_generation_downgrade`
+(no stage or rollback to a lower generation than the running one unless the running one was published `md_fallback_safe`). The two
+`md_*` manifest fields are additive to the plan's `compat` list; see the
+[phase 2 build record](qa/image/phase2-build.md) defect 4 for why.
+
+### Image edition: Controller relay for one host (Phase I-3c)
+
+API impact: **new contract** — Controller `GET /api/v1/hosts/{id}/updates` and `POST /api/v1/hosts/{id}/updates/{action}`
+(`action` is `check`, `apply`, `activate`, `rollback` or `cancel`; the host-scoped `settings`, `media`, `import` and `fetch` are [Phase I-3d](#image-edition-layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)), the managed command `host-image-update` carrying
+`ImageUpdateRequest`, `ReportResponse.image_update` (the `image-update-v1` acknowledgement) and host-local
+`GET /api/local/v1/updates/operations/{id}`. **Changed behaviour, no new field:** `Inventory.image` (defined in
+[I-3a](#image-edition-host-local-update-engine-phase-i-3a)) is now withheld until the Controller acknowledges `image-update-v1`.
+Schemas `HostImageUpdateRequest`, `HostImageUpdateAccepted`, `HostImageUpdateView` and `ImageUpdateRequest` are in the generated
+Controller reference. `ReportResponse.controller` and `controller-epoch-v1` are **not** implemented. The Controller's own APT update
+routes (`GET /api/v1/updates`, `POST /api/v1/updates/apply`, above) are kept: they update the Controller package of a classic
+Controller, and the plan's appliance swap that retires them is a later slice.
+
+Where the work happens. The host's update engine (`internal/nexupdate.Engine`, inside `nex-core-local`) fetches, verifies, writes the
+unused slot, arms and rolls back, and keeps the record (`/var/lib/nex/image/state.json`); there is one engine and one writer per host.
+The embedded agent, which runs in the same process, relays the Controller's command to that engine, and its result says only whether
+the engine accepted the request: `succeeded`, or `failed` with the error `<code>: <message>` carrying the engine's stable code
+(`update_in_progress`, `nothing_staged`, `already_armed`, `state_format_downgrade`, …) or `unsupported_edition: …` on a host without an
+engine. Progress, the staged and previous releases, the rollback floor and the outcome come back in `Inventory.image`; a Controller that
+disappears mid-update changes nothing on the host, and a fresh Controller shows the same state from the next report. The Controller keeps
+only the task row it keeps for every host operation (`state.owner: core`).
+
+| Route | Request → result |
+|---|---|
+| `GET /api/v1/hosts/{id}/updates` | administrator session → `200` `{host_id, connection, supported, image?}`: the host's last reported `Inventory.image` unchanged; `supported:false` and no `image` for a classic host or a Core not yet acknowledged; `404` unknown host |
+| `POST /api/v1/hosts/{id}/updates/{action}` | `{request_id, sequence?, activate?, running_vms?}` (`sequence` and `activate` for `apply` and `import`; `running_vms` `refuse` (default) or `shutdown` for `apply`, `import`, `activate`, `rollback` and `cancel`; the I-3d actions take `channel`, `base_url`, `media` and `component`) → `202` `{host_id, action, operation}`; an exact replay of the same `request_id` is `200` with the original operation; a changed payload under the same `request_id` is `409`. Session, same-origin and `X-CSRF-Token` required. `409` for a revoked host, a host that is not freshly connected, or one that did not offer `image-update-v1` ("this host does not run the image edition or does not support image updates; upgrade Nex Core") |
+| `GET /api/local/v1/updates/operations/{id}` | host-local root session → `200` `ImageUpdateOperation` by the `request_id` that created it; `404 unknown_operation` after the last 20 age out; `409 unsupported_edition` on a classic host |
+
+Compatibility. An image-edition Core offers `image-update-v1` in every v2 report capability list only while its engine is running; a
+Controller answers `image_update: true` only to a Core that offered it, and the Core clears the acknowledgement on restart, disconnect
+or Controller replacement and then withholds `Inventory.image` again. The legacy v1 report never carries it. A strict older Controller
+therefore never sees `inventory.image` or a `host-image-update` command, and the Controller sends no update command to a host that
+did not offer the capability.
+
+### Image edition: layers, settings, offline media and on-demand payloads (Phase I-3d)
+
+API impact: **new contract** — host-local `PUT /api/local/v1/updates/settings`, `GET …/updates/media`, `POST …/updates/import`,
+`POST …/updates/components/{id}/fetch`; Controller relay of the same four through the existing
+`POST /api/v1/hosts/{id}/updates/{action}` (`action` `settings`, `media`, `import`, `fetch`; new optional body fields `channel`,
+`base_url`, `media`, `component`) and the same fields on the managed command payload `ImageUpdateRequest`; additive
+`Inventory.image.base_url` and `Inventory.image.media` (schemas `ImageMedia`, `ImageMediaChannel`) and, on `ImageUpdateStatus`
+(`GET /api/local/v1/updates`), `base_url` and `media`; additive manifest fields (`Component.name`; `requires_base` and
+`verity_root_hash` of a layer were already defined); `ImageUpdateOperation.kind` gains `import` and `fetch`, its phase `fetched`.
+Schemas `ImageUpdateSettings`, `ImageUpdateMedia`, `ImageUpdateImportRequest` and `ImageUpdateFetchRequest` are in the host-local
+reference. **State owner: Core.** Records, all host-local: `/etc/nex/updates.conf` (channel and base URL), the `update` subtree of
+`/var/lib/nex/image/state.json` (last media scan, staged release with its layer files), `/var/lib/nex/layers/store`,
+`/var/lib/nex/layers/enabled.json` and `/var/lib/nex/layers/releases/<BUILD_ID>/manifest.json{,.sig}`, `/var/lib/nex/payload/<sha256>/`.
+A fresh Controller recovers what it displays from `Inventory.image` (`channel`, `base_url`, `media`, `phase`); the Controller stores
+nothing, so replacing it loses nothing. Compatibility: the new fields are inside `Inventory.image`, which is already withheld until
+the Controller acknowledges `image-update-v1`; a Core that predates these actions answers the relayed command with a failed result
+(`unsupported_edition: …`), and a Controller that predates them never sends them.
+
+**Layers travel with their base.** A release's `layer` components (`id` `nex-<name>`, `requires_base`, optional `verity_root_hash`,
+`required`, `on_demand`) are verified with the manifest: a layer whose `requires_base` is not the release's `<label>-<sequence>`
+(the BUILD_ID the image states) refuses the whole release with `layer_base_mismatch` (502), and the layer store refuses it again before
+writing a byte. An apply, import or later stage downloads every layer that is not `on_demand`, plus each `on_demand` layer the
+operator has enabled on the host, hash-checks it with the same Range resume as the slot image, and places it in
+`/var/lib/nex/layers/store/sha256-<hex>.raw` together with the exact signed manifest bytes under
+`/var/lib/nex/layers/releases/<BUILD_ID>/` (what `nex-layers.service` verifies at the next boot) **before** the inactive slot is
+written, so a failed or interrupted layer download leaves the slot and the running host untouched (`blob_mismatch`,
+`source_unreachable`, `layer_invalid`). Stage changes nothing about the running host: `enabled.json` is rewritten only when the
+release is armed (`activate`, or `apply` with `activate: reboot`; `rollback` switches it back for the previous release), and then only
+for layers the operator enabled. The layers of the base before the running one stay until the next stage succeeds (rollback is open
+until then), cancelling a staged release prunes the staged release's layers, and nothing is removed when a retained manifest cannot be
+read. A release that carries layers on a host without a layer store is `409 layers_unavailable`.
+
+**Settings.** `PUT /api/local/v1/updates/settings` `{channel, base_url}` → `200` `{channel, base_url}`. `channel` is 1–32 lower-case
+letters, digits or `-`, starting with a letter (`400 invalid_channel`); `base_url` is empty (clears the source: there is no built-in
+default) or an `https` or explicit `http` URL without credentials, query or fragment, at most 2048 characters (`400 invalid_base_url`).
+Plain `http` is allowed because signatures and blob hashes carry integrity. The values are written to `/etc/nex/updates.conf` (other
+lines are kept) and take effect for the next check; the pointer history (`channel_serial`) belongs to the update server and channel it came
+from, so a changed source starts empty, an earlier source keeps its own and a bundle's other channels never share the configured one's,
+while the rollback floor is kept. `409 update_in_progress` while an operation or a check runs;
+`409 settings_overridden` while `NEX_UPDATE_BASE_URL` or `NEX_UPDATE_CHANNEL` fix them in the service environment.
+
+**Offline media.** `scripts/update-bundle.py` writes the online layout (`trust.json`, `<channel>/channel.json`,
+`releases/<sequence>/`, `blobs/`, `SHA256SUMS`) to media labelled `NEXUPDATE` or into `/var/lib/nex/image/inbox/` (the inbox itself, or
+one directory per bundle). `minimal` carries the slot image and the layers every update stages; `full` adds the source, compliance,
+on-demand layers and on-demand payloads. `GET /api/local/v1/updates/media` → `200` `{media: [ImageUpdateMedia]}` is read-only (ids
+`inbox`, `inbox/<name>`, `label`; nothing is mounted; channels come from the unverified `channel.json`) and is remembered in the
+engine's record for `Inventory.image.media`. `POST /api/local/v1/updates/import` `{request_id, media, channel?, sequence?, activate?,
+running_vms?}` is an apply whose source is the bundle: the same `fetchMetadata` path checks trust (a rotation in the bundle is adopted
+as online), the bundle's own signed `channel.json` and `expires` (`channel_expired`), `channel_serial` and the rollback floor
+(`channel_replayed`, `below_rollback_floor`), the manifest hash and signature, `created` against the host clock (`clock_behind`: a clock
+earlier than the release was made is refused; this applies to online checks too), then every blob hash, layers, slot write and verity.
+Unmounted `label` media is mounted read-only (`nosuid,nodev,noexec`) for the operation and released at its end. The channel is `channel`,
+else the host's channel if the bundle has it, else the bundle's only channel (`channel_ambiguous`, `channel_not_in_bundle`). Every file is
+opened inside the bundle without following a link out of it and without blocking: a FIFO, device or a link leaving the bundle is not a
+channel (listing) and is `metadata_invalid` (import), so a hostile drive cannot hold the update lock.
+Operation kind `import`; replay (`200`), conflict, interruption and resume by repeating the `request_id` are as for apply.
+
+**Publisher and `nex-update` CLI.** `scripts/update-publish.py trust` writes `trust.<version>.json/.sig` for every version and
+back-fills the previous one. `--version` is accepted only as the next version: the previous version plus one, or 1 on a first run (zero,
+a negative number, a gap or a replay is refused), and a signing root key whose `not_after` has passed is refused as a revoked or unknown
+one already was. `--sign-with` rotates the root and the previous keys are carried forward so the old release key overlaps; `--revoke`
+and `--drop-key` remove keys, and removing a release key that still verifies any published `*/channel.json` or
+`releases/*/manifest.json` under `--base` is refused (the files are listed) unless `--allow-orphaned-signatures` is given; a document no
+host could accept is refused. `publish` takes `--mixed-pool` / `--no-mixed-pool`, `--controller-first` (needs a `vm-image` payload) and
+`--min-controller-api-epoch`; the channel's `min_sequence` carries forward as the larger of the previous value and the flag. The floor is
+validated before any blob is stored (a floor above the new sequence is refused with nothing stored), and repeating a publish with a
+changed `--min-sequence` re-signs `channel.json` and raises `channel_serial` instead of reporting that the channel already points at the
+release. The release directory is checked before anything is signed: listed files, sizes and hashes, the three image files, exactly one
+UKI matching label and sequence, the roothash file; unlisted files are found by relative path (a nested `manifest.json` counts), any
+symlink in the tree is refused, and so is a listed file behind a symlinked directory. `scripts/image-lock.py check --snapshot-only`
+(run by `image/build.sh base`) exempts only the packages the lock records as Nex-built; `image/build.sh release` runs the full
+`check --debs` when `NEX_PACKAGE_DIRS` is set. On the host `nex-update apply`,
+`import` and `fetch` exit non-zero when the operation failed, was cancelled or interrupted, or is still running after `-wait`, and the
+refusal code leads the message; `nex-update settings` keeps `base_url` unless `-base-url` is given (an empty value clears it). A
+Controller-relayed command whose engine call does not answer in time: `check` (2 minutes) and `media` (5) fail with
+`internal: the update engine did not answer in time`. A state-changing action (`activate`, `rollback`, `apply`, `import`, `fetch`,
+`settings`, `cancel`) is never cancelled by the relay: after 5 minutes (or at worker shutdown) it reports `needs_attention` with
+`still_running: the update engine is still working on this action; check the update status`, which means the action may still
+complete; the engine's real outcome is in `Inventory.image`. `scripts/release-version.py --notes --channel dev` returns the cut heading's
+section plus any non-empty `[Unreleased]` body when a numbered heading is ahead of `main`'s published version.
+
+**On-demand payloads.** `POST /api/local/v1/updates/components/{id}/fetch` `{request_id, media?, channel?}` → `202` operation of kind
+`fetch`, phase `fetched`: one `on_demand` component of the release the source offers (a manifest component with `on_demand` and a
+`name`, for example the Controller image or the Windows driver ISO) is downloaded with the same checks to
+`/var/lib/nex/payload/<sha256>/<name>`, extending the installer's payload layout; a file already in place that hashes right is not
+downloaded again. `not_on_demand` (the slot image and layers come with a stage), `unknown_component`, `blob_mismatch`; the staged
+release's phase is not touched. The media, import and fetch routes answer `409 unsupported_edition` on a classic host (settings takes a
+channel there, see [Update channels](#update-channels)); all four need the root session and (for `PUT`
+and `POST`) the CSRF token, and refuse unknown JSON fields.
+
+### Update channels
+
+Nex ships on two channels: **stable**, built from `main`, and **development**, built from `dev` as pre-releases of the next stable release
+([release channels plan](plans/2026-10-02-release-channels.md)). A host's channel is Core state in `/etc/nex/updates.conf`; the Controller
+reads it and keeps nothing.
+
+- **Image edition** (unchanged contract): `channel` is set by `PUT /api/local/v1/updates/settings` `{channel, base_url}` and relayed by
+  `POST /api/v1/hosts/{id}/updates/settings`; it is reported in `Inventory.image.channel`. The update tree holds one directory per channel
+  (`<base>/<channel>/channel.json`). Core rewrites `channel` and `base_url` together, so a caller changing only the channel sends the host's
+  current `base_url` back (the Controller UI does).
+- **Package edition** (changed contract): the same route takes `{channel}` with `stable` or `dev` and answers `200` `{channel, base_url: ""}`.
+  The channel is the archive the host reads: `repo_url` in `/etc/nex/updates.conf` becomes the archive root for `stable` and `<root>/dev` for
+  `dev` (other lines are kept; the next check refreshes the package index from the new archive). `GET /api/local/v1/updates` reports the
+  active `channel` (`UpdateStatus.channel`, host-local only). Refusals: `400 invalid_channel` (anything but `stable` or `dev`),
+  `400 invalid_base_url` (a package host has no `base_url`), `409 settings_overridden` while `NEX_UPDATE_REPO` fixes the archive. The
+  Controller does not relay it: `POST /api/v1/hosts/{id}/updates/settings` still answers `409` for a package host, and the Controller's
+  own package source stays `repo_url`.
+- A pool rollout still refuses hosts on different channels (`channel_mismatch`). Switching a host from development back to stable offers
+  nothing until stable publishes a newer release than the host runs: apt does not downgrade by itself, and the image engine refuses a
+  `sequence` below the host's rollback floor.
+
+API impact: **changed contract** — host-local `PUT /api/local/v1/updates/settings` is now also answered by the package edition, and
+`GET /api/local/v1/updates` of a package host adds `channel` (`UpdateStatus`); no new route, no Controller route change, no managed command.
+Older Cores answer the package-edition `PUT` with `409 unsupported_edition`, and a client treats that as "channel not selectable". State
+owner: `core` — `repo_url` (package) or `channel` (image) in `/etc/nex/updates.conf` on each host; a fresh Controller reads the image
+edition's from `Inventory.image` and never needs the package edition's.
+
+### Image edition: pool rollout coordinator (Phase I-4a)
+
+API impact: **new contract** — host-local `GET /api/local/v1/pool/updates`, `POST …/pool/updates/rollouts`,
+`GET …/rollouts/{id}`, `POST …/rollouts/{id}/control` (pool master only); Controller `GET /api/v1/pools/{id}/updates`,
+`POST …/updates/check`, `POST …/updates/rollouts`, `POST …/updates/rollouts/{rollout_id}/control`; peer
+`POST /api/v1/pool/updates/step`, `GET /api/v1/pool/updates/status`, `GET /api/v1/pool/updates/blobs/{sha256}`; the managed command
+`pool-update` (`PoolCommand.action` `update-rollout` or `update-control`, additive `PoolCommand.update`); the capability
+`pool-update-rollout-v1`; additive `Inventory.managed.update_rollout`; and the authority-replica section `update_rollout`. Schemas
+`PoolUpdateRollout`, `PoolUpdateHost`, `PoolUpdatePause`, `PoolUpdateRequest`, `PoolUpdateStartRequest`, `PoolUpdateControlRequest`,
+`PoolUpdateView`, `PoolUpdateAccepted` (Controller), `PoolRolloutRequest`, `PoolRolloutControl`, `PoolRolloutResult` (host-local) and
+`PoolUpdateStep`, `PoolUpdateStepResult`, `PoolUpdateHostStatus`, `PoolUpdateTarget` (peer) are in the generated references.
+**Not in this slice:** `ReportResponse.controller` and `controller-epoch-v1`, `PUT …/updates/settings`, offline media and import
+(the settings, media and import routes are Phase I-3d; the appliance swap and the controller_first step are Phase I-4b below). The
+Controller's `api_epoch` is therefore always unknown, so a release whose manifest sets `min_controller_api_epoch` above 0 is refused
+`controller_unknown` until that report exists.
+
+Where the work happens. A rollout is one durable job on the pool master's Core: `pool-update.json` in the agent store beside
+`pool-peer.json`, written atomically before the coordinator acts, replicated to every member as the signed authority section
+`update_rollout` (declared only while a record exists, so a pool that never rolled out keeps the section layout older members verify; the
+content digest and signature cover it), and reported in `Inventory.managed.update_rollout` by the master only. The coordinator
+(`internal/agent/pool_update.go`) runs on the host's own tick; a Controller is never in its loop. Delete the Controller and a fresh one
+reads the same record from the master's next report (`state.owner: core`). Hosts' progress is each host's own `state.json`. A promoted
+master adopts an active rollout **paused** with `pause.code` `master_changed`, whatever it was doing; an operator decides `resume` or
+`abort`. A master that is not (or cannot prove it is) the pool master advances nothing.
+
+Preflight (also `dry_run:true`, which records nothing and returns the plan: `order` lists the hosts still to update and `current` the hosts that already run and committed the release, which the rollout records with stage `done` and does not touch; a host that runs the release in phase `armed` or `booted`, i.e. before it committed, is refused as `unconfirmed`; an idle, committed, staged or rolled-back-from host counts as current): the host is the writable pool master; no other rollout
+is `running` or `paused` (`rollout_in_progress`); HA is off (`ha_enabled`; there is no HA setting yet); `running_vms` is not `evacuate`
+(`evacuation_unavailable`); every non-ejected member is `ready` (`member_not_ready`) and not in maintenance (`host_busy`), answers
+(`host_unreachable`), advertises `pool-update-rollout-v1` (`upgrade_required`; also reported when the member's update routes answer 404, i.e. an older Core), follows the master's channel (`channel_mismatch`), runs no
+other update operation (`host_busy`), has verified the release (`release_unavailable`; the host's own check refuses with its stable code,
+so a release needing a bridge is `bridge_required`), would not lower `state_format` (`state_format_downgrade`), has the free space the
+required components need (`insufficient_space`), and a `mixed_pool:false` release is accepted only with `running_vms:"shutdown"`
+(`mixed_pool_requires_shutdown`: the plan's "forces `shutdown`" is a refusal here, so guest downtime is never implied); the Controller
+`api_epoch` check is `controller_unknown` or `controller_too_old` when the manifest sets a minimum. The request ID is the rollout ID.
+
+The coordinator then (1) asks every host to `stage` in the same pass (never arms the next boot), then (2) updates one host at a time,
+members by running-guest count then host ID, the master last. The host stages are `pending`, `staged`, `teardown`, `drain`, `activate`, `boot`, `confirm`, `release`, `restart`, `soak`, `done` and `rolled_back`; there is no separate `gate` or `maintenance` stage, the gate and the maintenance flip happen between `staged` and `teardown`. Per host: **gate** — every other member `ready`, none in maintenance, the
+remaining ready Corosync voters of the nodelist (witness included in a two-host pool) keep a majority since votes do not shrink when a
+host stops, clustered storage needs three voters (`quorum_margin`; a pool that forms no cluster has no quorum to lose), HA off, the
+host not busy; **maintenance** through the existing `pool-maintenance` command; **teardown** wait until the drained host's watchdog (and, where the pool no longer wants a cluster once the host is drained, every ready member's) stops feeding; **drain** by `running_vms` (`refuse`, the default, waits up to `step_timeout` (6 h) then pauses `running_vms` naming the
+guests; `shutdown` records the running guests as `stopped_by_update` on the host's record, then gracefully shuts down exactly those and
+waits for them to be off; nothing is ever force-stopped); **activate** (peer step, idempotent on its step ID; the host engine keeps its
+refuse policy as the last guard); **boot** wait `boot_deadline` (30 min) for the host to run the release, else pause
+`needs_attention` (nothing restarts elsewhere and no guest is assumed stopped); **confirm** the host committed the release and is a ready
+member; maintenance off; **restart** exactly the `stopped_by_update` guests on the same host through the normal start admission (one
+owner epoch, no duplicate writable execution), retried until `step_timeout`; **soak** `min_soak` (60 s). After the last host,
+**finalize** re-reads every host and only then sets `finalized_sequence` (the only point where that release may run irreversible state
+migrations). A host that fell back (`rolled_back`) or does not confirm pauses the rollout instead. A refusal code from a host's drain or restart step pauses the rollout `needs_attention` at once (`needs_attention` with code `vm_inventory_unavailable`, `vm_shutdown_failed` or `vm_start_failed` after the host has failed for 5 minutes in a row: libvirt may not be up yet right after a reboot, so failures are retried as a new attempt after a pause until then; the window starts at the host record's `retry_started_at`, and does not move `step_started_at`, so the six-hour `step_timeout` still fires), and `resume` moves any host whose record carries an `error` to a new attempt so the engine's stored failure is not replayed. Staging, an unreachable staged host and the confirm wait also end at the step timeout (`step_timeout`, or `unconfirmed` for confirm). `abort` puts back every started host (maintenance off, the guests the rollout stopped started again) and reads back that they run. If it cannot confirm that, the rollout stays `paused` with `pause.code` `abort_cleanup_pending`, each host's `error` names what is owed, and the coordinator retries the cleanup on every tick (30 minutes per host, then it stops and says so in `pause.message`); repeating `abort` retries at once. While it is pending, `resume` and `rollback_host` are refused `abort_cleanup_pending` and a new rollout is refused `rollout_in_progress`. `abort` with `force:true` ends it anyway: the rollout becomes `aborted` and any `stopped_by_update` guests and maintenance that remain stay recorded on the host for the operator (`force` is refused `abort_not_pending` unless an abort is pending, and `invalid_request` with any other action). The rollout becomes `aborted` by itself only when no started host is in maintenance or holds stopped guests. `rollback_host` runs the same quorum and readiness gate first (`quorum_margin`, `host_busy`). Each host record carries `attempt`
+(`PoolUpdateHost.attempt`, omitted while 0; `retry_started_at`, omitted while unset, is when the current run of guest-step failures began): how often the rollout has sent that host through staging again after a rollback. It is part
+of every `step_id`, so a repeated step in one attempt is a replay and the first step of a new attempt is not.
+
+| Route | Request → result |
+|---|---|
+| `GET /api/local/v1/pool/updates` | host-local root session → `200` `{rollout}` (`null` if none); `409 not_pool_master` on a member (or a plain `409` before the Core is enrolled); `503` when the rollout record cannot be read |
+| `POST /api/local/v1/pool/updates/rollouts` | `{request_id, sequence, running_vms?, dry_run?}` → `202` `{rollout}`, or `200` `{dry_run:true, plan:{sequence, order[], current[]?}}`; refusals `409 {code, error}`; `400 invalid_request` |
+| `GET /api/local/v1/pool/updates/rollouts/{id}` | `200` `{rollout}`; `404 rollout_not_found`; `409 not_pool_master` on a member |
+| `POST /api/local/v1/pool/updates/rollouts/{id}/control` | `{request_id, action: pause\|resume\|abort\|rollback_host, host_id?, force?}` (`force` only with `abort`; `request_id` required, 1 to 128 characters, else `400 invalid_request`) → `200` `{rollout}`; `pause` lands after the host being updated; `resume` re-checks membership, HA and readiness and starts fresh deadlines; `abort` keeps committed hosts and puts back maintenance and the stopped guests of every started host, staying `paused` `abort_cleanup_pending` until that is confirmed or forced; `rollback_host` needs a paused rollout and an activated host and arms its previous release |
+| `GET /api/v1/pools/{id}/updates` | administrator session → `200` `{pool_id, connection, supported, rollout?}`: the master's reported record unchanged; withheld until `image-update-v1` is acknowledged; `400` without a pool, `404` for an unknown pool or master. An unsupported pool is `supported:false`, not `409` |
+| `POST /api/v1/pools/{id}/updates/check` | `{request_id, sequence, running_vms?}` → `202`: relays `pool-update` with `dry_run`; the outcome is the operation's result |
+| `POST /api/v1/pools/{id}/updates/rollouts` | `{request_id, sequence, running_vms?}` → `202`; replay `200`; changed body `409` |
+| `POST /api/v1/pools/{id}/updates/rollouts/{rollout_id}/control` | `{request_id, action, host_id?}` → `202` |
+| `POST /api/v1/pool/updates/step` | peer, master only: `PoolUpdateStep{rollout_id, step_id, action: check\|stage\|controller\|drain\|activate\|confirm\|undrain\|rollback, sequence, vm_ids?}` → `PoolUpdateStepResult{done, code?, message?}`; `done:false` with no code means ask again with the same `step_id` |
+| `GET /api/v1/pool/updates/status` | peer, master only → `PoolUpdateHostStatus` (engine phase, running and staged release, verified target, free space, running guests, busy) |
+| `GET /api/v1/pool/updates/blobs/{sha256}` | peer, any ready member, served by the master only: `HEAD`/`GET` with `Range`; a staged file is served only when its content hashes to the requested digest; `206` for a range, `404` for an unknown or unverified blob (members treat it as the master lacking the blob), `405` for other methods, `409` when this host is not the master |
+
+Control identities are Core state, not Controller state: `PoolUpdateRollout.controls` in
+`pool-update.json` and the signed `update_rollout` replica stores normalized request intent
+and a pending receipt or the original result/error. Result snapshots omit nested controls.
+An exact control retry returns that original snapshot/error even after subsequent rollouts
+or promotion; refresh the GET view for current progress. Changed intent is `request_conflict`.
+A reused start ID also compares normalized `running_vms` (`refuse` equals the omitted default).
+`replica_pending` retains a destructive intent or a terminal result awaiting the existing strict
+authority acknowledgement. `replication_pending` marks the latter even though a result already
+exists; `control_pending` excludes competing controls/new rollouts until it is acknowledged.
+`rollback_started` preserves the original host attempt/step identity across an ambiguous rollback
+reply; transport loss returns `rollback_pending`, not a cached terminal refusal. Core's existing
+coordinator continues accepted pending controls before normal rollout stepping, including paused
+or aborted records, without another Controller request or an open browser. Exact-ID replay remains
+valid; a deliberate new attempt after a terminal refusal uses a new ID.
+
+The existing Core managed journal can report a recovered control result for the same Controller
+operation. Controller only settles a matching `needs_attention` control from its authenticated
+owning Core; terminal outcomes and non-control commands are not reopened. After promotion, an old
+Controller task can remain `needs_attention` if its originally assigned Core never reports again:
+the current master's rollout/control receipt, not that old audit-task status, is authoritative.
+The promoted Core completes the receipt without the old master's managed journal.
+
+Control history is retained, never silently evicted. New identity/new-rollout admission returns
+`authority_capacity` before persistence or effects if the prospective addressed authority and
+reserved terminal-result capacity exceed the existing 1 MiB limit. `reserved_result_bytes` is
+Core-owned, bounded to 0..1048576 and released when an unresolved result becomes a terminal
+snapshot/error; other authority admission must preserve that room. Older Core builds that drop
+receipt fields fail the signed section digest check before storage/ACK, rather than accepting
+reduced authority; update all participating Cores before these controls.
+Promotion keeps the newly serving master last among unfinished hosts, without abandoning an
+already-active host. Host activation refuses a staged/armed sequence different from the rollout.
+
+The Controller answers the three POST routes `409` ("upgrade Nex Core on `<host>`") unless the master and every non-ejected member
+advertise `pool-update-rollout-v1`, and also when the master is not fresh and active. `check` is the extra, dry-run route; the plan lists
+`step` actions `stage,drain,activate,confirm,undrain,rollback` and the coordinator additionally uses `check`. Members read blobs from the
+master's cache before their channel (`nexupdate.PeerFirstSource`, installed by `nex-core-local`); each blob is verified against the signed
+manifest again, so the master is untrusted for integrity. Metadata still comes from the channel: an air-gapped pool needs the offline
+import of a later slice for it. Core advertises `pool-update-rollout-v1` with `image-update-v1` (only while its engine is running), and
+`Inventory.managed.update_rollout` is withheld, like `Inventory.image`, until the Controller acknowledges `image-update-v1`. An older
+member whose replica verifier does not know the `update_rollout` section refuses a replica that carries one; a rollout is refused
+before it starts unless every member advertises the capability.
+
+### Image edition: Controller appliance swap and controller_first (Phase I-4b)
+
+API impact: **changed contract** — `POST /api/local/v1/updates/apply` with `scope:"controller"` (was `409 scope_unavailable`); additive
+operation kind `controller` and phase `swapping` in `ImageUpdateOperation`; peer `PoolUpdateStep.action` `controller`, additive
+`PoolUpdateHostStatus.controller_vm`, `PoolUpdateTarget.controller_image`; additive `PoolUpdateRollout.phase` value `controller` and
+`PoolUpdateRollout.controller` (`PoolUpdateController{stage, host_id, started_at, attempt, error}`). No Controller route changes: the
+rollout view reads `GET /api/v1/pools/{id}/updates` and relays the existing pool routes. State owner: **core**. The swap's record is the
+operation journal under `/var/lib/nex/core-local/vmhost/<request_id>.json` beside the deployment journal; the rollout's controller step
+is part of the master's `pool-update.json` (replica section `update_rollout`). A fresh Controller reads the rollout from
+`Inventory.managed.update_rollout`; the Controller keeps nothing.
+
+Deployment profile. A Controller deployed with `vmhost.Config.SystemImage` is the two-disk profile: UEFI guest, a read-only raw
+`system-<sha256>.img` (the verity system image) and a persistent `controller-data.qcow2` that holds only the Controller-scoped state
+recovery already enumerates (`/var/lib/nex-controller`, `/etc/nex-controller`). The VM UUID and management MAC never change. A
+single-disk qcow2 appliance cannot be swapped (`controller_not_profile`).
+
+Swap. `scope:"controller"` runs on the host that owns the Controller VM, one journaled operation under the request ID. (1) The
+release's `vm-image` component digest is the signed manifest's (the separate appliance signature check is not part of this path); the
+component is staged under `/var/lib/nex/payload/<sha256>/` and placed read-only beside the VM after its digest is checked again
+(`controller_digest_mismatch`; `controller_stage_failed` when the image cannot be placed beside the VM). (2) The guest agent shuts the Controller down gracefully and the swap waits for `shut off`; it is never
+forced (`controller_shutdown_failed`, nothing was changed; a guest that accepted the request but had not stopped in time may still power off later, and a guest already `in shutdown` is waited for, not asked again). Before anything is touched, and again before the checkpoint and before a
+restore replaces the data disk, no other libvirt domain, running or only defined, may reference `controller-data.qcow2` (directly or
+through a backing chain) and no hardlink may alias it: otherwise the swap is refused, or rolled back before the new image starts. (3)
+`controller-data.qcow2` is checkpointed with a `cp --reflink=auto` copy (`controller-data.qcow2.pre-<sequence>`; a full copy on a file system without reflinks such as ext4, in which case the swap is refused before anything is stopped, `controller_insufficient_storage`, unless twice the data disk's allocated size is free) that is fsynced, read back against
+the disk byte for byte and then renamed into place with its directory fsynced; a restore uses the same verified, durable copy. (4) The
+domain is redefined with the new system disk and started. Ready means the running domain is the owned layout booted from exactly the
+expected system image (the new one, or the old one after a rollback) and the Controller's readiness path (the pinned-certificate HTTPS
+request deployment uses) answers, for `controller_deadline` (10 minutes); the Controller reports no version of its own, so the image
+digest the domain boots is the identity checked. (5) Success commits and
+keeps the old image and the checkpoint until the next swap. Failure shuts the failed guest down gracefully (a new image whose guest agent never answers is forced off with `virsh destroy` after the graceful request is refused or times out; an old or other guest is never forced), restores the data
+checkpoint, redefines the old image, restarts and probes it: the operation then ends `controller_rolled_back`. If the old image is found running again at the checkpoint or define step (libvirt autostarted it after a power loss), repeating the request stops it gracefully (never forced), retakes the checkpoint from the quiescent disk and continues, so a new image that never ran is not reported as rolled back; if it will not stop, the request ends `controller_shutdown_failed` (`failed`, nothing changed, the old image keeps running); if that fails too the
+VM is left stopped, `controller_needs_attention`, and host-recovery export still applies. Every step observes the real domain and files
+first, so repeating the request ID after a crash resumes from the journal, and repeating a failed one answers with the code of the first refusal; a swap already running the release is a no-op. A second swap
+is `controller_swap_in_progress` while one is unfinished and an unfinished swap cannot be cancelled (`swap_in_progress`).
+
+At the forward redefine boundary, the old image's quiescent data refreshes the checkpoint even
+if an autostarted old guest already stopped before replay. During rollback, a persistent definition
+still naming the failed new image is stopped after ownership checks and the checkpoint is restored
+again; once the old image was redefined, its subsequent writes are preserved instead.
+Host recovery accepts only the deployment's image or an alternate read-only image proven by a
+matching durable running/needs-attention swap journal, in both live and inactive definitions.
+The helper still needs the guest agent; it does not start a stopped appliance. Root-owned journals,
+not a new signature scheme, are the recovery provenance boundary.
+
+controller_first. After staging everywhere and before any host goes into maintenance, the master's coordinator scans the hosts'
+`controller_vm` and, for a release that carries a Controller image (`controller_image`), asks the owning host for one `controller`
+step (`step_id` includes the swap `attempt`). A host that cannot be reached or cannot read its Controller record is retried, and pauses
+the rollout `step_timeout` if that lasts; the step is never skipped on a failed scan. A refusal pauses the rollout `needs_attention`
+with the code in `pause.message`; no host has been touched; `resume` asks for a new swap. A Controller outside the pool is updated first
+with `scope:"controller"` on its own host. A pool with no Controller appliance, or a release without a Controller image, skips the step.
 
 ## Source access and availability
 

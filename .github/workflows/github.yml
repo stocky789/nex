@@ -15,6 +15,7 @@ on:
   push:
     branches:
       - main
+      - dev
   pull_request:
 concurrency:
   group: github-checks-${{ github.ref }}

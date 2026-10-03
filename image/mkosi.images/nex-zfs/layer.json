@@ -1,0 +1,12 @@
+{
+  "name": "nex-zfs",
+  "units_enable": ["zfs-load-module.service", "zfs-import.target", "zfs-import-cache.service", "zfs-mount.service", "zfs-zed.service", "zfs-volume-wait.service", "zfs-volumes.target", "zfs.target"],
+  "units_never_enable": ["zfs-import-scan.service", "zfs-share.service"],
+  "provides": ["zfs"],
+  "modules": ["zfs"],
+  "busy_units": [],
+  "busy_commands": [["zpool", "list", "-H", "-o", "name"]],
+  "depmod": true,
+  "allow_var": [],
+  "allow_collisions": []
+}

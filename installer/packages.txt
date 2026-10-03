@@ -3,7 +3,6 @@ qemu-utils
 libvirt-daemon-system
 libvirt-clients
 libvirt-daemon-plugin-sanlock
-virtinst
 ovmf
 python3-virt-firmware
 swtpm
@@ -26,7 +25,6 @@ sanlock
 python3
 python3-sanlock
 corosync-qdevice
-corosync-qnetd
 dlm-controld
 gfs2-utils
 pacemaker
@@ -37,7 +35,6 @@ fence-agents-ipmilan
 fence-agents-virsh
 ipmitool
 sbd
-sudo
 ca-certificates
 ifupdown
 bridge-utils

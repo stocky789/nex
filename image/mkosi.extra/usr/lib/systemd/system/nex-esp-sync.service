@@ -1,0 +1,11 @@
+[Unit]
+Description=Converge the boot partitions of all disks
+After=systemd-bless-boot.service
+ConditionPathExists=/sys/firmware/efi
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nex-hostimage esp-sync
+
+[Install]
+WantedBy=multi-user.target

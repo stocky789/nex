@@ -22,6 +22,13 @@ TIMEZONES=$SHARE/timezones
 PREPARE=$ROOT/usr/lib/nex-installer/prepare
 VALIDATE=$ROOT/usr/lib/nex-installer/validate-config # nex-config, validate only
 MIN_SECTORS=33554432 # 16 GiB in 512-byte sectors, the same floor nex-config enforces
+# The image edition (selected by media, like nex-config) needs room for two slots and a nex-data that
+# holds a staged update, the payloads and the VM store.
+image_edition=no
+if [ "$(cat "$ROOT/cdrom/nex/edition" 2>/dev/null)" = image ] && ! grep -q 'nex.edition=classic' "$ROOT/proc/cmdline" 2>/dev/null; then
+    image_edition=yes
+    MIN_SECTORS=50331648 # 24 GiB
+fi
 OFFLINE='Offline (no management network)' # the graphical wizard's wording
 
 umask 077
@@ -125,7 +132,7 @@ for path in "$SYS"/class/net/*; do
     nics="$nics ${path##*/}"
 done
 # A host with no adapter installs offline, exactly as the graphical wizard does.
-if [ -z "$nics" ] && [ -f "$ROOT/cdrom/nex/netinst.tsv" ]; then
+if [ -z "$nics" ] && [ -f "$ROOT/cdrom/nex/payloads.tsv" ]; then
     fail_note nex-installer/failed "The net installer requires a network adapter and internet access. Use the offline ISO if networking is unavailable."
     exit 1
 fi
@@ -177,6 +184,15 @@ if [ -z "$disks" ]; then
 fi
 
 # ------------------------------------------------------------------------- steps
+
+step_action() {
+    db_subst nex-installer/action found "$found_disks"
+    ask nex-installer/action || exit 1
+    case $RET in
+        'Repair image') v_mode=repair ;;
+        *) v_mode=install ;;
+    esac
+}
 
 step_hostname() {
     db_set nex-installer/hostname "$(getv v_hostname)"
@@ -272,7 +288,7 @@ step_management() {
         if [ -z "$choices" ]; then choices=$entry; else choices="$choices, $entry"; fi
     done
     # Offline stays last so the highlighted default is the first adapter.
-    [ -f "$ROOT/cdrom/nex/netinst.tsv" ] || choices="$choices, $OFFLINE"
+    [ -f "$ROOT/cdrom/nex/payloads.tsv" ] || choices="$choices, $OFFLINE"
     db_subst nex-installer/management choices "$choices"
     ask nex-installer/management || return 1
     if [ "$RET" = "$OFFLINE" ]; then v_management=; else v_management=${RET%% *}; fi
@@ -488,6 +504,28 @@ step_validate() {
     return 1
 }
 
+# Repair names exactly the disks that hold the data volume; the wizard never lets the operator
+# widen or narrow that set, and nex-image-install.sh refuses any other.
+step_repairdisk() {
+    v_disks=$(printf '%s\n' "$found_disks" | tr ',' '\n' | sed 's|^/dev/||' | tr '\n' ' ')
+    for name in $v_disks; do
+        case " $disks " in *" $name "*) ;; *)
+            fail_note nex-installer/disk-error "$name holds the Nex Core data but is below the image edition's $((MIN_SECTORS / 2097152)) GiB minimum or is not eligible. Use Erase and install, or attach the original disks."
+            exit 1 ;;
+        esac
+    done
+    return "$SKIP"
+}
+
+step_repairconfirm() {
+    targets=
+    for name in $v_disks; do targets="${targets:+$targets, }/dev/$name"; done
+    db_subst nex-installer/repair-confirm disk "$targets"
+    db_set nex-installer/repair-confirm false
+    ask nex-installer/repair-confirm || return 1
+    [ "$RET" = true ] || return 1
+}
+
 # ------------------------------------------------------------------------ handoff
 
 # GKeyFile unescapes \\ and \s, so a value must be escaped before it is written.
@@ -498,6 +536,7 @@ ini_secret() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/ /\\s/g'; }
 
 write_config() {
     {
+        [ "$v_mode" != repair ] || printf '[Install]\nmode=repair\n\n'
         printf '[Host]\n'
         printf 'hostname=%s\n' "$(ini "$v_hostname")"
         printf 'timezone=%s\n' "$(ini "$v_timezone")"
@@ -544,11 +583,35 @@ v_management=
 v_other_adapters=false
 v_dns=
 v_disks=
+v_mode=install
 
-steps="hostname keymap tzarea tzzone password management other"
-for nic in $nics; do steps="$steps nic:$nic"; done
-steps="$steps dns disk erase validate"
+# Repair image is offered only on image-edition media and only when a complete Nex Core data
+# volume (a single nex-data or every member of a nex-data mirror) is on the disks.
+found_disks=
+if [ "$image_edition" = yes ] && probe=$(sh "$ROOT/cdrom/nex/nex-image-install.sh" probe 2>/dev/null); then
+    found_disks=$(printf '%s\n' "$probe" | sed -n 's/^disks=//p')
+fi
 
+build_steps() {
+    steps=
+    [ -z "$found_disks" ] || steps=action
+    # Repair keeps the host's identity, account and data volume, so it asks only
+    # what the download needs (net installer) and then for the confirmation.
+    if [ "$v_mode" = repair ]; then
+        if [ -f "$ROOT/cdrom/nex/payloads.tsv" ]; then
+            steps="$steps management other"
+            for nic in $nics; do steps="$steps nic:$nic"; done
+            steps="$steps dns"
+        fi
+        steps="$steps repairdisk repairconfirm validate"
+    else
+        steps="$steps hostname keymap tzarea tzzone password management other"
+        for nic in $nics; do steps="$steps nic:$nic"; done
+        steps="$steps dns disk erase validate"
+    fi
+}
+
+build_steps
 set -- $steps
 total=$#
 index=1
@@ -560,7 +623,13 @@ while [ "$index" -le "$total" ]; do
         *) "step_$step" ;;
     esac
     case $? in
-        0) direction=1 ;;
+        0)
+            direction=1
+            if [ "$step" = action ]; then
+                build_steps
+                set -- $steps
+                total=$#
+            fi ;;
         "$SKIP") ;;
         *) direction=-1 ;;
     esac

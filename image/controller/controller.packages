@@ -1,0 +1,33 @@
+# Packages of the Nex Controller guest image (one per line; '#' comments). Debian is the package source only;
+# the guest never runs apt or dpkg, and there is no in-guest update helper: Core replaces the whole system image.
+
+# What appliance/build-inside.sh installs into the single-disk appliance
+cloud-init
+qemu-guest-agent
+python3
+ca-certificates
+corosync-qnetd
+openssh-server
+openssl
+netplan.io
+
+# Base system and boot chain (UKI, systemd-boot) and kernel; no initramfs tooling is used in the guest
+systemd
+systemd-sysv
+udev
+dbus
+kmod
+iproute2
+passwd
+login
+e2fsprogs
+systemd-boot
+systemd-boot-efi
+systemd-boot-efi-amd64-signed
+linux-image-amd64
+
+# Name resolution and time. netplan renders DNS servers for networkd, which only systemd-resolved consumes (it is the
+# resolver behind /etc/resolv.conf), and the Controller's TLS validity and qnetd witness must not rest on the hypervisor
+# clock alone; the packages are separate in trixie and mkosi installs no recommends.
+systemd-resolved
+systemd-timesyncd

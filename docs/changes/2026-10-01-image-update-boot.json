@@ -1,0 +1,97 @@
+{
+  "summary": "Phase I-3b of the immutable Nex Core plan: the I-3a update engine is wired into the image and A/B rollback is proven in a QEMU/OVMF VM. nex-boot-check.service gates boot-complete.target through a static link (never behind chrony-wait, time-sync or network-online) and, on a failed counted boot, marks the entry bad and reboots; nex-state-guard.service blocks libvirtd and nex-core-local when the retained state_format exceeds the image's NEX_STATE_FORMAT; nex-update-reconcile.service folds each boot into the engine record; the trust.json anchor is pinned into the verity root by image/build.sh (NEX_UPDATE_TRUST); internal/nexupdate/cmd/nex-update drives the same engine from a shell; the agent's image probe produces Inventory.image (booted, staged and previous release with slots, phase, rollback_floor, state_format, additive secure_boot); scripts/update-publish.py and update-bundle.py sign trust.json, channel.json and manifest.json with an Ed25519 key supplied by path or environment (never in the repository, fail closed without it) and assert that sequence order equals dpkg --compare-versions order; tests/integration/image_update.py proves tampered-blob refusal, download resume over Range, a fault-injected failing boot check falling back to the previous slot (rolled_back, boot_failed), a successful update blessed by systemd-bless-boot, rollback, and /etc and /var surviving every boot, on a single-disk VM. The review follow-up also records the files this slice shipped without an assessment (nex-bless-boot, nex-esp-sync.service, nex-firstboot.service, the initrd units and the root SSH policy) and fixes: the initrd emergency and rescue reboot now goes through nex-initrd-reboot.service, which runs only while sd-boot reports a boot counter (LoaderBootCountPath), so a blessed entry no longer reboots forever and a counted boot still costs one try; nex-boot-check is bounded by elapsed time (NEX_BOOT_CHECK_BUDGET, 600 s) with a timeout on every command that can hang, well inside TimeoutStartSec; /root links to /var/roothome; the UKI os-release carries only the zero-padded sequence as IMAGE_VERSION/VERSION so sd-boot's version sort is the sequence order BootOrder models; nex-hostimage etc-audit requires --lower and fails when it is not a directory; WriteSlot's final check finds its partitions by entry number; the duplicated verity fixture builders are one.",
+  "paths": [
+    "cmd/nex-hostimage/main.go",
+    "cmd/nex-hostimage/main_test.go",
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/qa/image/phase3-boot.md",
+    "image/build.sh",
+    "image/initrd/etc/mdadm/mdadm.conf",
+    "image/initrd/usr/lib/systemd/system/emergency.service.d/10-nex-reboot.conf",
+    "image/initrd/usr/lib/systemd/system/nex-etc-overlay.service",
+    "image/initrd/usr/lib/systemd/system/nex-initrd-reboot.service",
+    "image/initrd/usr/lib/systemd/system/nex-md-reprobe@.service",
+    "image/initrd/usr/lib/systemd/system/rescue.service.d/10-nex-reboot.conf",
+    "image/initrd/usr/lib/udev/rules.d/65-nex-md-reprobe.rules",
+    "image/mkosi.conf",
+    "image/mkosi.extra/etc/fstab",
+    "image/mkosi.extra/etc/mdadm/mdadm.conf",
+    "image/mkosi.extra/etc/ssh/sshd_config.d/00-nex-core.conf",
+    "image/mkosi.extra/usr/lib/systemd/system-preset/10-nex.preset",
+    "image/mkosi.extra/usr/lib/systemd/system/boot-complete.target.requires/nex-boot-check.service",
+    "image/mkosi.extra/usr/lib/systemd/system/libvirtd.service.d/10-nex-state-guard.conf",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-boot-check.service",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-core-local.service.d/10-nex-state-guard.conf",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-esp-sync.service",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-firstboot.service",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-state-guard.service",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-update-reconcile.service",
+    "image/mkosi.extra/usr/lib/systemd/system/systemd-bless-boot.service.d/10-nex-esp.conf",
+    "image/mkosi.extra/usr/lib/tmpfiles.d/nex.conf",
+    "image/mkosi.extra/usr/libexec/nex/nex-bless-boot",
+    "image/mkosi.extra/usr/libexec/nex/nex-boot-check",
+    "image/mkosi.postinst.chroot",
+    "internal/agent/image_status.go",
+    "internal/agent/image_status_test.go",
+    "internal/agent/probes.go",
+    "internal/agent/run.go",
+    "internal/hostimage/esp.go",
+    "internal/hostimage/esp_test.go",
+    "internal/hostimage/etc.go",
+    "internal/hostimage/gpt.go",
+    "internal/hostimage/helpers_test.go",
+    "internal/hostimage/hostimage_test.go",
+    "internal/hostimage/install.go",
+    "internal/hostimage/layout.go",
+    "internal/hostimage/release.go",
+    "internal/hostimage/runner.go",
+    "internal/hostimage/slot.go",
+    "internal/hostimage/testsupport.go",
+    "internal/hostimage/update.go",
+    "internal/hostimage/update_test.go",
+    "internal/hostimage/verity.go",
+    "internal/nexupdate/cmd/nex-update/main.go",
+    "internal/nexupdate/image.go",
+    "internal/nexupdate/platform.go",
+    "internal/protocol/protocol.go",
+    "scripts/update-bundle.py",
+    "scripts/update-publish.py",
+    "tests/integration/image_update.py",
+    "tests/test_image_layout.py",
+    "tests/test_update_publish.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow can be walked through yet: there is no released image, update server or Controller route, the host-local update API is not served by an image host in the lab (nex-core-local is not in the image), and docs/guide/software-updates.md and publish-a-release.md are rewritten with the Controller and publishing slices. The lab proof is recorded in docs/qa/image/phase3-boot.md as simulation and is not presented as an operator walkthrough.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Inventory.image (defined in I-3a, capability image-update-v1) gains one additive optional field, secure_boot (schema ImageStatus in docs/api/openapi.json, section 'Image edition: host-local update engine' of docs/API.md), and image-edition hosts now produce it from the agent image probe; no route, request, response or refusal code changed. The Controller-side image-update-v1 acknowledgement that withholds the field from an older Controller is not implemented in this slice and is stated as such in docs/API.md.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-3 of a proposed, not yet authorized plan; development work validated in a virtual lab only, no published milestone changed."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core runs the update, the boot assessment and the rollback and reports the result; the Controller only displays Inventory.image and stores nothing about updates.",
+    "record": "The disks are the truth (slot partition GUIDs from the root hash, UKI names with boot counters on every ESP); the per-host cache is /var/lib/nex/image/state.json, update subtree, read by the agent probe and written only by the update engine; the pinned trust anchor is /usr/share/nex/update/trust.json in the verity root and rotations live in /var/lib/nex/update/. A fresh Controller recovers it through Inventory.image on the host's report (image-edition hosts, once it acknowledges image-update-v1). Also on the host: the ESPs of every disk are rewritten only by nex-hostimage esp-sync/Core (nex-bless-boot mounts the booted ESP transiently under /run/nex/esp and unmounts it, keeping no state); SSH host keys are generated by nex-firstboot.service into the /etc overlay upper on nex-data on the first boot of each host (the image carries none); root's home is /var/roothome on nex-data; the initrd units keep no state (the /etc overlay upper and work dirs live under /var/lib/nex/etc on nex-data). All of it is core-owned host state; the Controller stores none of it."
+  },
+  "verification": {
+    "method": "tests/integration/image_update.py on one QEMU/KVM + OVMF guest at a time (single disk, Secure Boot off) against a local Range-capable HTTP server: 32 checks passed in the final of seven runs (the first six failed on lab harness defects, listed in the QA record). Also python3 -m unittest tests.test_update_publish (6 tests), go test of ./internal/nexupdate/..., ./internal/protocol, ./internal/hostimage and the new agent mapping tests, scripts/generate_api.py --check, tests/test_api_contract.py, scripts/check_docs.py --worktree and the repository privacy test. Simulation only: no physical firmware, Secure Boot, TPM, mirror or power cut; the state guard's refuse path, the three-boot counter path and the host-local HTTP API on a guest were not run (see the QA record). Review follow-up checks: go test of ./internal/hostimage, ./cmd/nex-hostimage, ./internal/nexupdate and ./internal/localcore, python3 -m unittest tests.test_image_layout (the layout test now also pins the data partition number, the data label and the partition names against the installer script and lab scripts, runs nex-boot-check unprivileged with stubbed systemctl/findmnt to prove the time budget ends the loop, and checks the UKI sort key); the new etc-audit and WriteSlot-with-an-empty-GPT-entry tests fail without their fixes. The conditional initrd reboot, the /root link and the bounded boot check were not booted in a VM, so they are unverified on a real boot.",
+    "evidence": [
+      "docs/qa/image/phase3-boot.md",
+      "tests/integration/image_update.py",
+      "tests/test_update_publish.py",
+      "internal/agent/image_status_test.go"
+    ]
+  }
+}

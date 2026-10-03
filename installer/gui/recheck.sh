@@ -7,11 +7,13 @@ DEV=/dev
 MDSTAT=/proc/mdstat
 PARTMAN=/var/lib/partman
 # Also applies to the native serial installer, which configures networking via netcfg.
-if [ -f /cdrom/nex/netinst.tsv ]; then
+if [ -f /cdrom/nex/payloads.tsv ]; then
     # netcfg removes the live resolver after the Nex wizard's preflight.
     if [ -f /run/nex-installer/active ]; then
         install -m 644 /run/nex-installer/netinst-resolv.conf /etc/resolv.conf
     fi
+    # The image edition downloads other rows than the classic edition.
+    if [ -f /run/nex-installer/image.env ]; then NEX_NETINST_ROWS='image/ payload/'; export NEX_NETINST_ROWS; fi
     /bin/sh /cdrom/nex/netinst-fetch.sh --check || {
         echo 'Net installer sources are unavailable; check networking and retry before erasing disks.' >&2
         exit 1
@@ -19,6 +21,19 @@ if [ -f /cdrom/nex/netinst.tsv ]; then
 fi
 if [ -f /run/nex-installer/active ]; then
     /usr/bin/nex-config --recheck /run/nex-installer/config.ini
+    if [ -f /run/nex-installer/image.env ]; then
+        /bin/sh /cdrom/nex/nex-image-install.sh preflight
+    fi
+    # The image edition has no partman, base-installer or GRUB step, and nothing may be cleared
+    # here: the image installer verifies the image and payloads first, then stops only the arrays
+    # on the selected disks and lays them out. Repair keeps nex-data and refuses unless the
+    # selected disks are exactly the data disks. Neither returns (the host restarts).
+    if [ -f /run/nex-installer/image.env ]; then
+        if grep -qx 'mode=repair' /run/nex-installer/image.env; then
+            exec /bin/sh /cdrom/nex/nex-image-install.sh repair
+        fi
+        exec /bin/sh /cdrom/nex/nex-image-install.sh install
+    fi
     # The operator confirmed erasing these disks: one, or every member of the mirror.
     # A previous install's RAID membership or LVM makes partman-auto stop silently
     # ("No root file system", BUG-0413), and partman's own RAID removal zeroes every

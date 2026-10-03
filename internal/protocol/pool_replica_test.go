@@ -167,3 +167,61 @@ func TestPoolReplicaSigningBytesCoverTheEnvelope(t *testing.T) {
 		}
 	}
 }
+
+func TestPoolReplicaRejectsDroppedControlReplayHistory(t *testing.T) {
+	replica := replicaFixture(t)
+	result := &PoolUpdateRollout{ID: "rollout-1", PoolID: replica.PoolID, Sequence: 2,
+		RunningVMs: "refuse", State: PoolUpdatePaused, Phase: "hosts"}
+	rollout := *result
+	rollout.Controls = []PoolUpdateControlResult{{RequestID: "pause-1",
+		Request: PoolUpdateRequest{RolloutID: rollout.ID, Control: "pause"}, Rollout: result}}
+	replica.UpdateRollout = &rollout
+	var err error
+	if replica.Sections, err = replica.SectionDigests(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(replica)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var adopted PoolAuthorityReplica
+	if err = json.Unmarshal(raw, &adopted); err != nil || adopted.Valid() != nil {
+		t.Fatalf("receipt-bearing replica was not preserved: %v", err)
+	}
+	adopted.UpdateRollout.Controls = nil // An older typed decoder discards the unknown field.
+	if err = adopted.Valid(); err == nil {
+		t.Fatal("a replica with silently dropped replay receipts was accepted")
+	}
+}
+
+func TestPoolUpdateReplayRecordRejectsAmbiguousOrRecursiveResults(t *testing.T) {
+	base := PoolUpdateRollout{ID: "rollout-1", PoolID: "pool-1", Sequence: 2,
+		RunningVMs: "refuse", State: PoolUpdateRunning, Phase: "hosts"}
+	pending := PoolUpdateControlResult{RequestID: "control-1",
+		Request: PoolUpdateRequest{RolloutID: base.ID, Control: "abort"}}
+	for name, controls := range map[string][]PoolUpdateControlResult{
+		"duplicate_identity": {pending, pending},
+		"two_pending":        {pending, {RequestID: "control-2", Request: pending.Request}},
+		"other_rollout_pending": {{RequestID: pending.RequestID,
+			Request: PoolUpdateRequest{RolloutID: "another-rollout", Control: "abort"}}},
+		"result_and_error":     {{RequestID: pending.RequestID, Request: pending.Request, Rollout: &base, Code: "failed"}},
+		"negative_reservation": {{RequestID: pending.RequestID, Request: pending.Request, ReservedResultBytes: -1}},
+		"overflow_reservation": {{RequestID: pending.RequestID, Request: pending.Request, ReservedResultBytes: PoolReplicaLimit + 1}},
+		"terminal_reservation": {{RequestID: pending.RequestID, Request: pending.Request, Rollout: &base, ReservedResultBytes: 1}},
+		"ack_without_result":   {{RequestID: pending.RequestID, Request: pending.Request, ReplicationPending: true}},
+		"nonrollback_started":  {{RequestID: pending.RequestID, Request: pending.Request, RollbackStarted: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := base
+			r.Controls = controls
+			if err := r.Valid(); err == nil {
+				t.Fatal("ambiguous replay history accepted")
+			}
+		})
+	}
+	recursive := base
+	recursive.Controls = []PoolUpdateControlResult{{RequestID: pending.RequestID, Request: pending.Request, Rollout: &recursive}}
+	if err := recursive.Valid(); err == nil {
+		t.Fatal("recursive replay snapshot accepted")
+	}
+}

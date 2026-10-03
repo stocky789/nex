@@ -1,0 +1,68 @@
+{
+  "summary": "Phase I-1 of the immutable Nex Core plan: new classic installs get a separate /var (an md pair when mirrored), a read-only root, /etc and /root kept on /var by an initramfs script, and package installs inside a short remount window. System-disk replacement now repairs every degraded mirror on a disk, refuses a replacement whose member has failed, and shares one root-window lock with software updates. The same record covers the host package trim (virtinst, sudo and corosync-qnetd dropped from the host install) and its footprint measurement. Package trim paths: installer/packages.txt (the three packages removed), installer/late-install.sh (host no longer runs runtime-qnetd), appliance/package-service-policy.sh (host disable step no longer names the qnetd unit; the Controller appliance path keeps it), installer/check.sh and installer/README.md (virtinst no longer required; guest creation goes through Core), tests/integration/iso-smoke.py and tests/test_storage_packaging.py (package pins and policy assertions), scripts/measure-footprint.sh and docs/qa/2026-10-01-image-footprint.md (measurement and caller trace).",
+  "paths": [
+    "CHANGELOG.md",
+    "appliance/package-service-policy.sh",
+    "docs/API.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/replace-a-failed-system-disk.md",
+    "docs/guide/software-updates.md",
+    "docs/qa/2026-10-01-image-footprint.md",
+    "docs/qa/2026-10-01-readonly-classic.md",
+    "installer/README.md",
+    "installer/check.sh",
+    "installer/gui/nex-config.c",
+    "installer/late-install.sh",
+    "installer/packages.txt",
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/rootfs/rootfs.go",
+    "internal/rootfs/rootfs_test.go",
+    "internal/vmhost/md_replace.go",
+    "internal/vmhost/md_replace_test.go",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/initramfs-hook",
+    "packaging/core-local/initramfs-local-bottom",
+    "packaging/core-local/nex-root-ro.service",
+    "packaging/core-local/postinst",
+    "packaging/core-local/prerm",
+    "scripts/build-source.py",
+    "scripts/measure-footprint.sh",
+    "tests/integration/installer-hostname.py",
+    "tests/integration/iso-smoke.py",
+    "tests/integration/readonly_root.py",
+    "tests/test_storage_packaging.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The installed disk layout, the read-only root with /etc and /root on /var, the software-update window for manual apt use, and mirror-disk replacement now describe the new classic layout.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/replace-a-failed-system-disk.md",
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "host-system-disk-replace-v1 (POST /api/v1/hosts/{id}/system-disk) keeps its request, result, capability and refusals; Core now also adds the replacement's partitions to the other degraded mirror on the same disks and wraps BIOS grub-install in a root remount window. The update operations (GET and POST /api/local/v1/updates, POST /api/local/v1/updates/apply) are unchanged: the window is opened inside Core around apt-get install. The package trim removes host tools with no Core or Controller caller (guest creation still goes through Core) and changes no API.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-1 of a proposed, not yet authorized plan; no published milestone or roadmap item changes status."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Host-local only: the layout is the host's own disks and fstab, and /etc and /root now live on its /var. The package trim adds no state.",
+    "record": "The host's own /var filesystem (md1 when mirrored): /var/lib/nex/etc and /var/roothome, plus /etc/fstab and /etc/mdadm/mdadm.conf inside it. A fresh Controller recovers everything through the host APIs it already uses; no Controller data is added."
+  },
+  "verification": {
+    "method": "Go unit tests for internal/rootfs, internal/nexupdate and the system-disk replacement; installer/check.sh; the real handoff renderer in installer-hostname.py; and a simulated disposable QEMU host (stock Debian 13 userland, repository initramfs script, hook and unit; single disk, two-array mirror, degraded mirror and classic control) driven by readonly_root.py. A real Debian Installer run, the installed nex-core-local package, GRUB, UEFI and a real mirror rebuild were not run. The package trim was checked by static inspection and the footprint measurement; no ISO build or installation was run.",
+    "evidence": [
+      "docs/qa/2026-10-01-readonly-classic.md",
+      "docs/qa/2026-10-01-image-footprint.md"
+    ]
+  }
+}

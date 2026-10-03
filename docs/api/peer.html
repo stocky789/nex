@@ -46,6 +46,9 @@
 <li><a href="#peerReplaceZFSDisk">POST /api/v1/pool/zfs-provision/replace</a></li>
 <li><a href="#peerObserveZFSAccess">GET /api/v1/pool/zfs-provision/{repository_id}/access</a></li>
 <li><a href="#peerSubmitCatalogBoundRestore">POST /api/v1/pool/backup/restore</a></li>
+<li><a href="#peerPoolUpdateStep">POST /api/v1/pool/updates/step</a></li>
+<li><a href="#peerPoolUpdateStatus">GET /api/v1/pool/updates/status</a></li>
+<li><a href="#peerPoolUpdateBlob">GET /api/v1/pool/updates/blobs/{sha256}</a></li>
 <li><a href="#peerDeliverBackupCredential">POST /api/v1/pool/backup/credential</a></li>
 <li><a href="#peerForgetBackupRepository">POST /api/v1/pool/backup/forget</a></li>
 <li><a href="#peerListBackupRepositorySnapshots">GET /api/v1/pool/backup/retain</a></li>
@@ -2752,6 +2755,131 @@
     }
   }
 }</pre></details></section>
+<section id="peerPoolUpdateStep"><h2>POST <code>/api/v1/pool/updates/step</code></h2>
+<p>Run one rollout step on this host</p><p>Master-only (pinned mTLS from the pool master). Idempotent on step_id. This host&#x27;s own image engine does the work; the master reaches itself through the same code.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPoolUpdateStep&quot;,
+  &quot;summary&quot;: &quot;Run one rollout step on this host&quot;,
+  &quot;description&quot;: &quot;Master-only (pinned mTLS from the pool master). Idempotent on step_id. This host&#x27;s own image engine does the work; the master reaches itself through the same code.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 member&quot;,
+  &quot;parameters&quot;: [],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateStep&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;OK.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateStepResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;The step body could not be decoded.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Not an authorized pool peer.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerPoolUpdateStatus"><h2>GET <code>/api/v1/pool/updates/status</code></h2>
+<p>Read this host&#x27;s update status</p><p>Master-only. Read-only: engine phase, running and staged release, the verified target, free space, running guests and any local operation in flight.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPoolUpdateStatus&quot;,
+  &quot;summary&quot;: &quot;Read this host&#x27;s update status&quot;,
+  &quot;description&quot;: &quot;Master-only. Read-only: engine phase, running and staged release, the verified target, free space, running guests and any local operation in flight.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 member&quot;,
+  &quot;parameters&quot;: [],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;OK.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateHostStatus&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Not an authorized pool peer.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused: this host cannot report (it does not run the image edition).&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerPoolUpdateBlob"><h2>GET <code>/api/v1/pool/updates/blobs/{sha256}</code></h2>
+<p>Read a blob from the master&#x27;s update cache</p><p>Served by the pool master to any ready member (HEAD and GET, HTTP Range). Only a staged file whose content hashes to the requested SHA-256 is served; the member verifies the hash against the signed manifest again (the master is untrusted for integrity), so an air-gapped pool imports once.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPoolUpdateBlob&quot;,
+  &quot;summary&quot;: &quot;Read a blob from the master&#x27;s update cache&quot;,
+  &quot;description&quot;: &quot;Served by the pool master to any ready member (HEAD and GET, HTTP Range). Only a staged file whose content hashes to the requested SHA-256 is served; the member verifies the hash against the signed manifest again (the master is untrusted for integrity), so an air-gapped pool imports once.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolPeerCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: member \u2192 pool master&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;sha256&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+      },
+      &quot;description&quot;: &quot;Lower-case hex SHA-256 of the component.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The blob bytes; Range is honoured.&quot;
+    },
+    &quot;206&quot;: {
+      &quot;description&quot;: &quot;A range of the blob bytes.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Not an authorized pool peer.&quot;
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;No such blob, or it is not verified; the member treats this as the master lacking the blob.&quot;
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Only GET and HEAD are served.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused: this host is not the pool master.&quot;
+    }
+  }
+}</pre></details></section>
 <section id="peerDeliverBackupCredential"><h2>POST <code>/api/v1/pool/backup/credential</code></h2>
 <p>Deliver a scoped backup credential to a member</p><p>The authenticated current pool master sends a repository projection, bound receipt metadata and transient secret to a ready member over pinned peer mTLS. The member validates pool, repository, kind, receipt and current master, then writes a private local receipt before replying 204. Exact delivery retries are idempotent; conflicting material, or a different receipt for an existing repository ID, is refused. Body is limited to 128 KiB. Controller never transports this peer secret.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
@@ -4827,6 +4955,17 @@
         }
       ],
       &quot;description&quot;: &quot;Pool Corosync authentication key sealed for this member and replica generation; required when the pool forms its own cluster.&quot;
+    },
+    &quot;update_rollout&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRollout&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The master&#x27;s pool-update.json, declared as the section update_rollout only while a record exists (a pool that never rolled out keeps the older section layout). A promoted master adopts an active rollout paused master_changed.&quot;
     }
   },
   &quot;required&quot;: [
@@ -5460,6 +5599,17 @@
         &quot;type&quot;: &quot;string&quot;
       },
       &quot;description&quot;: &quot;The exact set of hosts the operator agreed to power off, as the verdict&#x27;s fence_host_ids named them. Core compares it against the set it computes again at run time and refuses the promotion if they differ, so the fence can never widen between the confirmation and the act.&quot;
+    },
+    &quot;update&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Request of the update-rollout and update-control actions.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9924,6 +10074,494 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.DetectedOS&quot;,
   &quot;description&quot;: &quot;Durable historical OS identity retained by Core. It does not establish current guest-agent availability or guest health.&quot;
+}</pre></details>
+<details id="PoolUpdateStep"><summary>PoolUpdateStep</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;One idempotent rollout step (peer step route). step_id is deterministic per (rollout, host, stage): a repeat is the same step and is answered from the host&#x27;s current state, never run twice. Actions: check (verify the release is offered), stage (stage only; never arms the next boot), drain (gracefully shut down exactly vm_ids), activate (arm and reboot; the engine keeps its refuse policy), confirm, undrain (start exactly vm_ids through master start admission) and rollback.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateStep&quot;,
+  &quot;properties&quot;: {
+    &quot;rollout_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;step_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;check&quot;,
+        &quot;stage&quot;,
+        &quot;controller&quot;,
+        &quot;drain&quot;,
+        &quot;activate&quot;,
+        &quot;confirm&quot;,
+        &quot;undrain&quot;,
+        &quot;rollback&quot;
+      ]
+    },
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;vm_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;rollout_id&quot;,
+    &quot;step_id&quot;,
+    &quot;action&quot;,
+    &quot;sequence&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateStepResult"><summary>PoolUpdateStepResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;done false with no code means still running: ask again with the same step_id. code is the host engine&#x27;s stable refusal code.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateStepResult&quot;,
+  &quot;properties&quot;: {
+    &quot;done&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;code&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;done&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateHostStatus"><summary>PoolUpdateHostStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;One host&#x27;s own read-only observation of its image engine and guests (peer status route).&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateHostStatus&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;capabilities&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    &quot;channel&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;phase&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;running_sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;staged_sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;state_format&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;free_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;target&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateTarget&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    &quot;busy&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;failure&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;controller_vm&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;This host runs a Controller appliance in the two-disk profile that it can swap.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;phase&quot;,
+    &quot;running_sequence&quot;,
+    &quot;state_format&quot;,
+    &quot;free_bytes&quot;,
+    &quot;observed_at&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateRollout"><summary>PoolUpdateRollout</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;The pool master&#x27;s durable rollout record (pool-update.json beside pool-peer.json), replicated as the optional authority-replica section update_rollout (declared only while a record exists). A promoted master finds an active rollout paused with pause.code master_changed and an operator decides resume or abort. Hosts&#x27; own progress is in each host&#x27;s state.json. Reported in Inventory.managed.update_rollout by the master only, withheld until the Controller acknowledges image-update-v1. id is the request_id that started it; finalized_sequence is set only once every host committed the release.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateRollout&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;running&quot;,
+        &quot;paused&quot;,
+        &quot;finalized&quot;,
+        &quot;aborted&quot;
+      ]
+    },
+    &quot;phase&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;staging&quot;,
+        &quot;hosts&quot;,
+        &quot;finalize&quot;
+      ],
+      &quot;description&quot;: &quot;staging, controller, hosts, finalize&quot;
+    },
+    &quot;pause&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdatePause&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;pause_requested&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;hosts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateHost&quot;
+      }
+    },
+    &quot;controller&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateController&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;finalized_sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;controls&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateControlResult&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;sequence&quot;,
+    &quot;running_vms&quot;,
+    &quot;state&quot;,
+    &quot;phase&quot;,
+    &quot;membership_generation&quot;,
+    &quot;hosts&quot;,
+    &quot;created_at&quot;,
+    &quot;updated_at&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateControlResult"><summary>PoolUpdateControlResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Core-owned replicated control receipt retained across later rollouts. Exact request_id/normalized intent replay returns the original snapshot or error; snapshots omit controls. No rollout and no code means an unresolved outcome, continued by Core without Controller. replication_pending also blocks competing transitions until the terminal result is acknowledged. At most one unresolved/ACK-pending receipt exists; it names the current rollout. Terminal records have no reservation; rollback_started is valid only for an unresolved rollback_host.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateControlResult&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;request&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRequest&quot;
+    },
+    &quot;replication_pending&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The immutable terminal result awaits the existing required authority ACK; Core retries acknowledgement before admitting another transition.&quot;
+    },
+    &quot;reserved_result_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 1048576,
+      &quot;description&quot;: &quot;Reserved addressed-authority capacity for an unresolved result; included in all admission checks and released when its terminal snapshot/error is recorded.&quot;
+    },
+    &quot;rollback_started&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Durable rollback intent retaining the original host attempt/step identity; it does not prove a replica ACK or host dispatch. Transport loss is reconciled under that unchanged identity.&quot;
+    },
+    &quot;rollout&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRollout&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;code&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;request&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateHost"><summary>PoolUpdateHost</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart. attempt counts how often the rollout has sent the host through staging again (a resume after a rollback); it is part of every step identity, so a new attempt is never a replay of the engine operations the earlier one left behind, and it is omitted while 0. retry_started_at is when the current run of guest shutdown or start failures began (omitted while unset).&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateHost&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;stopped_by_update&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    &quot;step_started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;deadline_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;soak_until&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;attempt&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;retry_started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When the current run of guest-step failures on this host began; omitted while unset. The failure window is judged from here, so step_started_at and the six-hour step timeout are not restarted by it.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;stage&quot;,
+    &quot;step_started_at&quot;,
+    &quot;deadline_at&quot;,
+    &quot;soak_until&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdatePause"><summary>PoolUpdatePause</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed, abort_cleanup_pending (an abort could not confirm that every started host was put back; resume and rollback_host are refused, abort retries or force ends it). needs_attention carries vm_inventory_unavailable, vm_shutdown_failed or vm_start_failed in its message after 5 minutes of failures.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdatePause&quot;,
+  &quot;properties&quot;: {
+    &quot;code&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;code&quot;,
+    &quot;message&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateTarget"><summary>PoolUpdateTarget</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;What a host verified about the release it was asked to install.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateTarget&quot;,
+  &quot;properties&quot;: {
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;state_format&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;min_controller_api_epoch&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;mixed_pool&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;required_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;controller_image&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The release is controller_first and carries a Controller image.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;sequence&quot;,
+    &quot;state_format&quot;,
+    &quot;min_controller_api_epoch&quot;,
+    &quot;mixed_pool&quot;,
+    &quot;required_bytes&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateRequest"><summary>PoolUpdateRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Request of the update-rollout and update-control pool commands. sequence and running_vms (refuse waits for every guest to stop then pauses naming them; shutdown gracefully shuts the host&#x27;s guests down, records stopped_by_update and restarts them on the same host through master start admission; evacuate is refused evacuation_unavailable) start a rollout; dry_run runs only the preflight; rollout_id, control (pause, resume, abort, rollback_host) and host_id address an existing one.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;refuse&quot;,
+        &quot;shutdown&quot;,
+        &quot;evacuate&quot;
+      ]
+    },
+    &quot;dry_run&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;rollout_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;control&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;pause&quot;,
+        &quot;resume&quot;,
+        &quot;abort&quot;,
+        &quot;rollback_host&quot;
+      ]
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;force&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Only with control abort: end a pending abort cleanup (abort_cleanup_pending) without confirming it. Refused abort_not_pending when no abort is pending.&quot;
+    }
+  },
+  &quot;required&quot;: []
+}</pre></details>
+<details id="PoolUpdateController"><summary>PoolUpdateController</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;The controller_first step of a rollout. stage scan looks for the host that runs the Controller VM, swap waits for that host&#x27;s journaled appliance swap, done means no Controller is left to update first. attempt is part of the swap&#x27;s step identity (a resume after a failed swap is a new swap) and is omitted while 0; error is the code: message of the last failed swap.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateController&quot;,
+  &quot;properties&quot;: {
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;attempt&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;stage&quot;,
+    &quot;started_at&quot;
+  ]
 }</pre></details>
 <details id="BackupS3Source"><summary>BackupS3Source</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,

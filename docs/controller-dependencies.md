@@ -13,6 +13,7 @@ inspected from the actual downloaded build dependencies on 2026-09-08.
 | Component | Pinned version | License and evidence |
 |---|---|---|
 | `github.com/mattn/go-sqlite3` | 1.14.32 | MIT; module `LICENSE`, also [upstream tagged license](https://github.com/mattn/go-sqlite3/blob/v1.14.32/LICENSE) |
+| `github.com/klauspost/compress` (`zstd`) | 1.18.0 | BSD-3-Clause (with Apache-2.0 and MIT parts); module `LICENSE`; shipped as `/usr/share/doc/nex-core-local/klauspost-compress-LICENSE` |
 | Embedded SQLite amalgamation | 3.50.4 | Public-domain statement in `sqlite3-binding.c`; [upstream dedication](https://www.sqlite.org/copyright.html) |
 | `react`, `react-dom` | 19.2.8 | MIT; each npm tarball's `package/LICENSE` |
 | `scheduler` (React DOM dependency) | 0.27.0 | MIT; npm tarball `package/LICENSE` |

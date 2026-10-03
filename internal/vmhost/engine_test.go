@@ -205,6 +205,29 @@ func TestSignedImageAndUnsafeMetadata(t *testing.T) {
 		t.Fatalf("invalid signature accepted: %v", err)
 	}
 }
+
+// The two-disk profile has no manifest to stat, so its image file is checked on its own: a missing
+// component blocks the deployment instead of ending it needs_attention after the journal was written.
+func TestPreflightBlocksAProfileWhoseSystemImageIsNotStaged(t *testing.T) {
+	e := testEngine(t)
+	e.config.SystemImage = filepath.Join(t.TempDir(), "controller-system.img")
+	e.config.SystemImageSHA256 = strings.Repeat("a", 64)
+	fakeCommand(t, "virsh", "exit 0")
+	missing, err := e.Preflight(context.Background(), DeploySpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(e.config.SystemImage, []byte("system image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := e.Preflight(context.Background(), DeploySpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(staged.Blockers) != len(missing.Blockers)-1 {
+		t.Fatalf("the missing image must be a blocker of its own: without it %q, with it %q", missing.Blockers, staged.Blockers)
+	}
+}
 func TestInterruptedRetryNeverRecreates(t *testing.T) {
 	e := testEngine(t)
 	s := validSpec(t)
@@ -307,6 +330,47 @@ func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 	for _, want := range []string{"ssh_pwauth: true", "disable_root: false", "/usr/local/lib/nex/apply-update", "/usr/local/lib/nex/appliance-firstboot", "/etc/nex/updates.conf", "nex-controller-update.path", "systemctl, enable, --now, nex-controller-update.path"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("seed missing %q in %s", want, text)
+		}
+	}
+}
+
+// The system-image profile has no in-guest update helper: even when the single-disk bundle's helper files exist
+// beside the engine's image path, a profile seed never carries them.
+func TestProfileSeedCarriesNoUpdateHelper(t *testing.T) {
+	e := testEngine(t)
+	bundle := t.TempDir()
+	e.config.ImagePath = filepath.Join(bundle, "controller.qcow2")
+	updateDir := filepath.Join(bundle, "update")
+	if err := os.MkdirAll(updateDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"apply-update", "appliance-firstboot", "nex-controller-update.path", "nex-controller-update.service", "updates.conf"} {
+		if err := os.WriteFile(filepath.Join(updateDir, name), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := validSpec(t)
+	id := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	dir := filepath.Join(e.config.StorageDir, id)
+	j := journal{Operation: Operation{ID: s.RequestID, VMID: id}, Name: s.Name, Disk: filepath.Join(dir, "controller-data.qcow2"), System: filepath.Join(dir, "system-"+strings.Repeat("c", 64)+".img"), Bridge: e.config.Bridge}
+	if err := os.Mkdir(dir, 0711); err != nil {
+		t.Fatal(err)
+	}
+	fakeCommand(t, "genisoimage", "exit 0")
+	if err := e.seed(context.Background(), j, s); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(e.config.StateDir, id+"-seed", "user-data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	if !strings.Contains(text, "/etc/nex-controller/bootstrap.json") {
+		t.Fatalf("profile seed lacks the bootstrap credentials: %s", text)
+	}
+	for _, unwanted := range []string{"apply-update", "nex-controller-update", "/etc/nex/updates.conf", "runcmd"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("profile seed carries the update helper (%q): %s", unwanted, text)
 		}
 	}
 }

@@ -33,7 +33,7 @@ executes `sudo -n docker "$@"`. The private key is used only by host OpenSSL and
 never mounted in the container. Output must be empty. Build inside Debian to avoid
 incompatible host glibc linkage; no workstation binary is copied into the image.
 
-Outputs: `controller.qcow2`, `manifest.json`, detached `manifest.sig`, `public-key.raw`,
+Outputs of the default `--profile single-disk`: `controller.qcow2`, `manifest.json`, detached `manifest.sig`, `public-key.raw`,
 `nex-source.tar.gz`, `components.tsv`, `LICENSE`, `NOTICE`, `ARTWORK-LICENSE.md`, and
 `build-inputs.json`.
 Install the public key through a trusted release channel; the key accompanying an
@@ -107,6 +107,78 @@ the state archive. Never run two Controllers with the restored identity. The gue
 contains `/usr/local/lib/nex/controller-recovery` for direct quiesced recovery commands.
 A usable replacement provisioning walkthrough and real restore evidence are acceptance
 gates; the commands and unit tests alone do not prove successful recovery.
+
+## Controller profile: read-only system image and data disk (Phase I-4b)
+
+Status: the guest image is built from `image/controller/` (below) and the host side is unit-tested against a fake libvirt.
+`docs/qa/image/phase4-controller-image.md` records what was built and booted and what was not.
+
+### Build the system image
+
+```sh
+python3 appliance/build.py --profile controller --version DEVELOPMENT_VERSION --sequence N --output dist/controller-image
+```
+
+No Debian cloud image and no signing key are used. `build.py` compiles the Controller and its UI in the pinned builder container
+(`build-controller-payload.sh`), then runs `image/build.sh controller`: the Debian trixie snapshot packages of
+`image/controller/controller.packages` (the same packages `build-inside.sh` installs into the single-disk appliance, minus the
+package manager state, plus systemd-boot) plus the payload tree become an erofs image on a dm-verity tree, a UKI whose command line
+carries the root hash, and a raw GPT disk (ESP with systemd-boot and the UKI, root partition, verity partition; UEFI only, unsigned,
+no Secure Boot). Outputs: `controller-system.img`, `vm-image.json` (digest, root hash, size, the exact `--payload` argument) and
+the source and licence files. The image's digest goes into the release through
+`scripts/update-publish.py publish --payload vm-image:controller=dist/controller-image/controller-system.img`; the release
+manifest's root signature is the only signature (the single-disk `manifest.sig` is not produced for this profile).
+
+Inside the guest: the root is read-only; `/etc` is the same persistent overlay the host image uses (upper layer on the data disk
+under `/var/lib/nex/etc`, so `/etc/nex-controller` lives on the data disk and `controller-recovery` and `host-recovery` see the same
+two paths); `/var` is `/dev/vdb`, made as ext4 by the initrd on first boot (`x-systemd.makefs`, never on an existing file system);
+cloud-init reads the same NoCloud seed as before; `appliance-ready.json` is written through a link into `/var/lib/nex-controller`.
+There is no `apt`, no `apply-update`, no `nex-controller-update.path`; Core replaces the whole image.
+
+### Deploy
+
+On an image-edition host, stage the `vm-image` component (it is an on-demand payload under
+`/var/lib/nex/payload/<sha256>/controller-system.img`), then `core-local-setup configure --address A --storage D --controller-image-sha256 SHA256`
+and restart `nex-core-local`: it starts with `--controller-system-image` and `--controller-system-image-sha256` instead of the
+single-disk `--image/--manifest/--signature/--trusted-key`, and the local deploy page creates the two-disk profile. The domain pins UEFI
+with Secure Boot off (the image is unsigned until phase I-5).
+
+With `vmhost.Config.SystemImage` and `SystemImageSHA256` set, Nex Core deploys the Controller as two disks under the VM's directory,
+keeping the VM UUID and management MAC for life:
+
+- `system-<sha256>.img`, raw, attached **read-only** as `vda` with guest UEFI. The digest is the `vm-image` component's digest in the
+  signed release manifest; the separate appliance signature of the single-disk image is not used for this profile.
+- `controller-data.qcow2`, attached as `vdb`, mounted at `/var`, holding only what the recovery commands above already enumerate
+  (`var/lib/nex-controller` and `etc/nex-controller`; the latter is a bind mount from the data disk). No new Controller-owned data.
+
+Nex Core replaces the system image with a journaled, resumable swap under one operation ID
+(`POST /api/local/v1/updates/apply` with `scope:"controller"`, or the pool rollout's controller_first step). Before it stops
+anything it runs the ownership checks every other Controller action uses (the deployment's recorded paths and bridge, a plain qcow2
+data disk on local ext4, XFS or Btrfs that no other libvirt domain references) and checks that the data checkpoint fits. The steps are
+then: graceful guest-agent shutdown (the Controller is not forced off here; a shutdown already under way is waited for), a checkpoint of
+`controller-data.qcow2`, the domain redefined with the new system disk, start, a readiness probe of the UI for 10 minutes, then commit,
+keeping the old image and the checkpoint until the next update. The checkpoint is `cp --reflink=auto`: it shares extents on Btrfs (and on
+XFS made with reflink), but on ext4 it is a full copy of the data disk's allocated bytes, and a restore copies it again, so twice that
+size must be free; the swap refuses with `controller_insufficient_storage` before it stops the Controller when it is not. If the new
+image is not ready, the failed guest is stopped gracefully and the checkpoint and the old image are restored and probed. A new image
+that never booted far enough to run the guest agent cannot be stopped gracefully; because the checkpoint replaces everything it wrote it is
+forced off (`virsh destroy`) once the graceful request was refused or timed out, and it is the only guest a swap ever forces. If the old
+image does not come back either, the VM stays stopped (`needs_attention`). A service restart during a step interrupts the swap and
+repeating the request resumes it. A guest that accepted the pre-swap shutdown request but had not stopped when the 10-minute wait ended
+fails the swap (`controller_shutdown_failed`, nothing changed); the request cannot be withdrawn, so the guest may still power off
+afterwards and is then started with Nex Core's local power control. If power is lost in the middle of a swap and libvirt autostarts the
+previous image again, repeating the request stops it gracefully (never forced), refreshes the data checkpoint even if the old guest
+already stopped after writing, and carries on. A proven failed new image that autostarted during rollback is stopped and the checkpoint
+restored again; after the old image has been redefined, its subsequent writes are preserved.
+`host-recovery export` and `restore` check both live and inactive definitions against the deployment and, for an alternate system image,
+a matching durable running/needs-attention swap journal. They require the owned data disk and approved read-only system image, and a
+reachable guest agent; they never start a stopped VM. `controller-recovery` works on the same two guest paths.
+
+What the profile no longer receives: the cloud-init bootstrap of `apply-update`, `nex-controller-update.path`/`.service` and
+`/etc/nex/updates.conf` (`appendUpdateBootstrap` is skipped when the deployment has a system image; `TestProfileSeedCarriesNoUpdateHelper`).
+What stays, for the classic edition: the single-disk appliance (`build-inside.sh`, `controller.qcow2`, its signed manifest), the
+helper files in `packaging/controller`, the Controller `.deb` and its `postinst`/`prerm`, `appendUpdateBootstrap` for the single-disk
+seed and the Controller's own APT routes and Settings panel. They are removed together with the classic edition, not before.
 
 ## Checks
 

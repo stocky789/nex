@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Publish a signed Debian APT repository layout for Nex packages."""
+"""Publish a signed Debian APT repository layout for Nex packages.
+
+One repository root is one channel. The stable archive is the root itself; the development channel is a
+second, independent repository in its subdirectory (`--repo-root <root>/dev`, same suite name), so each has
+its own pool, indexes and retention and one signing key serves both.
+"""
 import argparse
+import functools
 from datetime import datetime, timezone
 from email.utils import format_datetime
 import gzip
@@ -127,18 +133,53 @@ def find_scanpackages():
 
 
 def copy_deb(deb, repo_root, component):
+    """Import package bytes under an immutable content-addressed pool path."""
     package = validate_deb_name(deb.name)
     letter = package[0]
     relative_dir = Path("pool") / component / letter / package
     dest_dir = _safe_under(repo_root, relative_dir)
     _ensure_real_dir(dest_dir, create=True)
-    dest = dest_dir / deb.name
-    if dest.is_symlink():
-        raise AptPublishError(f"refusing symlink destination: {dest}")
-    shutil.copy2(deb, dest)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{deb.name}.", dir=dest_dir)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        shutil.copy2(deb, tmp)
+        digest = hashlib.sha256()
+        with tmp.open("rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        relative_dir = relative_dir / f"sha256-{digest.hexdigest()}"
+        dest_dir = _safe_under(repo_root, relative_dir)
+        _ensure_real_dir(dest_dir, create=True)
+        dest = _safe_under(repo_root, relative_dir / deb.name)
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
     if dest.is_symlink():
         raise AptPublishError(f"refusing symlink after copy: {dest}")
-    return Path("pool") / component / letter / package / deb.name
+    return relative_dir / deb.name
+
+
+def prune_pool(repo_root, component, keep):
+    """Delete all but the newest `keep` versions of every package in the component's pool.
+
+    Each nex-core-local package embeds the Controller appliance, so a channel that publishes on every
+    merge would otherwise grow without bound.
+    """
+    def by_version(left, right):
+        a, b = left.name.split("_")[1], right.name.split("_")[1]
+        return debian_newer(a, b) - debian_newer(b, a)
+
+    removed = []
+    for package_dir in sorted(_safe_under(repo_root, Path("pool") / component).glob("*/*")):
+        if package_dir.is_symlink() or not package_dir.is_dir():
+            continue
+        debs = sorted((deb for deb in package_dir.rglob("*.deb") if not deb.is_symlink()),
+                      key=functools.cmp_to_key(by_version))
+        for deb in debs[:-keep]:
+            deb.unlink()
+            removed.append(deb.name)
+    return removed
 
 
 def _deb_control_fields(deb_path):
@@ -459,22 +500,62 @@ def init_key(gpg_home):
     raise AptPublishError(f"failed to create signing key: {last_error}")
 
 
-def publish(repo_root, codename, component, arch, deb_paths, gpg_home):
-    repo_root = _ensure_real_dir(repo_root, create=True)
-    _ensure_real_dir(_safe_under(repo_root, Path("pool") / component), create=True)
+def publish(repo_root, codename, component, arch, deb_paths, gpg_home, keep=None):
+    repo_root = _ensure_real_dir(repo_root, create=True).resolve()
+    pool = _safe_under(repo_root, Path("pool") / component)
+    _ensure_real_dir(pool, create=True)
     collect = collect_debs(deb_paths) if deb_paths else []
-    for deb in collect:
-        copy_deb(deb, repo_root, component)
-    packages_path, packages_gz_path, packages_text = scan_packages(
-        repo_root, codename, component, arch)
-    release_path = write_release(
-        repo_root, codename, component, arch, packages_path, packages_gz_path)
-    published = write_updates_json(repo_root, newest_packages(packages_text))
-    if gpg_has_secret(gpg_home):
-        sign_and_export(repo_root, release_path, gpg_home)
-    else:
-        print("apt-publish: warning: no signing key in "
-              f"{gpg_home}; wrote unsigned Release (lab use only)", file=sys.stderr)
+    with tempfile.TemporaryDirectory(prefix=".publish-", dir=repo_root) as temporary:
+        staging = Path(temporary)
+        _ensure_real_dir(_safe_under(staging, Path("pool") / component), create=True)
+        # Hard links avoid copying the archive's large packages; atomic imports never alter their shared bytes.
+        live_debs = [deb for deb in sorted(pool.rglob("*.deb")) if not deb.is_symlink() and deb.is_file()]
+        for deb in live_debs:
+            relative = deb.relative_to(repo_root)
+            staged = _safe_under(staging, relative)
+            _ensure_real_dir(staged.parent, create=True)
+            os.link(_safe_under(repo_root, relative), staged)
+        imported = set()
+        for deb in collect:
+            relative = copy_deb(deb, staging, component)
+            imported.add(relative)
+            package_dir = (staging / relative).parent.parent
+            for superseded in package_dir.rglob(deb.name):
+                if superseded != staging / relative:
+                    superseded.unlink()
+        if keep:
+            prune_pool(staging, component, keep)
+        retained = {deb.relative_to(staging) for deb in (staging / "pool" / component).rglob("*.deb")}
+        packages_path, packages_gz_path, packages_text = scan_packages(
+            staging, codename, component, arch)
+        release_path = write_release(
+            staging, codename, component, arch, packages_path, packages_gz_path)
+        published = write_updates_json(staging, newest_packages(packages_text))
+        metadata = [packages_path, packages_gz_path, release_path]
+        if gpg_has_secret(gpg_home):
+            sign_and_export(staging, release_path, gpg_home)
+            metadata += [staging / "pubkey.gpg", release_path.with_name("Release.gpg"),
+                         release_path.with_name("InRelease")]
+        else:
+            if any(_safe_under(repo_root, Path("dists") / codename / name).exists()
+                   for name in ("InRelease", "Release.gpg")):
+                raise AptPublishError("refusing to replace a signed archive without a signing key")
+            print("apt-publish: warning: no signing key in "
+                  f"{gpg_home}; wrote unsigned Release (lab use only)", file=sys.stderr)
+        metadata.append(staging / "updates.json")
+        packages = [staging / relative for relative in sorted(imported) if (staging / relative).is_file()]
+        replacements = [(source, _safe_under(repo_root, source.relative_to(staging)))
+                        for source in packages + metadata]
+        for _source, target in replacements:
+            _ensure_real_dir(target.parent, create=True)
+        # Only a fully indexed and signed replacement may retire the committed archive's packages.
+        for source, target in replacements:
+            os.replace(source, target)
+        for deb in live_debs:
+            if deb.relative_to(repo_root) not in retained:
+                deb.unlink()
+                if deb.parent.name.startswith("sha256-") and not any(deb.parent.iterdir()):
+                    deb.parent.rmdir()
     return published
 
 
@@ -485,17 +566,21 @@ def main(argv=None):
     parser.add_argument("--component", default="main")
     parser.add_argument("--arch", default="amd64")
     parser.add_argument("--gpg-home", default="/etc/nex-apt/gnupg")
+    parser.add_argument("--keep", type=int, metavar="N",
+                        help="keep only the newest N versions of each package (default: keep all)")
     parser.add_argument("--init-key", action="store_true",
                         help="create a non-interactive archive signing key and exit")
     parser.add_argument("debs", nargs="*",
                         help=".deb paths or a directory of .deb files")
     args = parser.parse_args(argv)
+    if args.keep is not None and args.keep < 1:
+        parser.error("--keep must be at least 1")
     try:
         if args.init_key:
             if args.debs:
                 parser.error("--init-key does not take package paths")
             return init_key(args.gpg_home)
-        publish(args.repo_root, args.codename, args.component, args.arch, args.debs, args.gpg_home)
+        publish(args.repo_root, args.codename, args.component, args.arch, args.debs, args.gpg_home, args.keep)
     except AptPublishError as error:
         print(f"apt-publish: {error}", file=sys.stderr)
         return 1

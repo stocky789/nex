@@ -1,0 +1,3 @@
+# Core attaches the persistent data disk as the second virtio disk (vdb). x-systemd.makefs makes the file system
+# on a blank disk only; an existing one, and a restored checkpoint, is mounted untouched.
+/dev/vdb /var ext4 defaults,x-initrd.mount,x-systemd.makefs 0 2

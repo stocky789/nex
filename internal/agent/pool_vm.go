@@ -1722,6 +1722,83 @@ func savePoolVMs(s *Store, state poolVMState) error {
 	return vmhost.AtomicWrite(poolVMFile(s), b, 0600)
 }
 
+// poolVMRecoverySettlementProjection reserves each pending VM's largest current,
+// completed or no-effects-failure representation. Independent recoveries may settle
+// in any order, so pending deletion shrinkage never offsets another VM's growth.
+// It returns nil when no recovery is pending. Callers hold poolVMMu.
+func poolVMRecoverySettlementProjection(state poolVMState) (json.RawMessage, error) {
+	var prospective map[string]poolVMRecord
+	for id, record := range state.VMs {
+		if record.PendingRecovery == nil && record.PendingRecoveryResultSpec != nil {
+			return nil, errors.New("snapshot revert result definition has no pending reservation")
+		}
+		if record.PendingRecovery == nil {
+			continue
+		}
+		if prospective == nil {
+			prospective = make(map[string]poolVMRecord, len(state.VMs))
+			for otherID, other := range state.VMs {
+				prospective[otherID] = other
+			}
+		}
+		var descriptor *protocol.PoolVMSnapshot
+		var resultSpec *protocol.VMCreateSpec
+		outcome := "failed-before-effects"
+		if record.PendingRecovery.Kind == "snapshot-create" && record.PendingRecovery.AdmissionRefusal == "" {
+			if record.PendingSnapshot == nil {
+				return nil, errors.New("pending snapshot create has no durable descriptor")
+			}
+			copy := *record.PendingSnapshot
+			descriptor = &copy
+			outcome = "completed"
+		} else if record.PendingRecovery.Kind == "snapshot-revert" {
+			if record.PendingRecoveryResultSpec == nil {
+				return nil, errors.New("pending snapshot revert has no derived result definition")
+			}
+			copy := *record.PendingRecoveryResultSpec
+			resultSpec = &copy
+			outcome = "completed"
+		} else if record.PendingRecovery.Kind == "snapshot-delete" {
+			outcome = "completed"
+		}
+		evidence := protocol.PoolVMRecoveryEvidence{
+			Reservation: *record.PendingRecovery, Outcome: outcome, JournalSHA256: strings.Repeat("0", 64), Snapshot: descriptor, ResultSpec: resultSpec,
+		}
+		current, err := json.Marshal(record)
+		if err != nil {
+			return nil, err
+		}
+		largest, largestSize := record, len(current)
+		failure := protocol.PoolVMRecoveryEvidence{Reservation: *record.PendingRecovery,
+			Outcome: "failed-before-effects", JournalSHA256: strings.Repeat("0", 64)}
+		for i, terminal := range [...]protocol.PoolVMRecoveryEvidence{evidence, failure} {
+			if i == 1 && outcome == "failed-before-effects" {
+				break
+			}
+			candidate := record
+			if err := settlePoolVMRecovery(&candidate, record.HostID, terminal); err != nil {
+				return nil, errors.New("pending snapshot recovery has invalid terminal replica intent")
+			}
+			encoded, err := json.Marshal(candidate)
+			if err != nil {
+				return nil, err
+			}
+			if len(encoded) > largestSize {
+				largest, largestSize = candidate, len(encoded)
+			}
+		}
+		prospective[id] = largest
+	}
+	if prospective == nil {
+		return nil, nil
+	}
+	vmBytes, err := json.Marshal(prospective)
+	if err != nil || len(vmBytes) > protocol.PoolReplicaLimit {
+		return nil, errors.New("pending snapshots would exceed the pool authority limit when settled")
+	}
+	return vmBytes, nil
+}
+
 // poolVMRecoverySettlementHeadroom prevents later owner writes from consuming the
 // replica capacity already promised to a pending snapshot's terminal catalog entry.
 func poolVMRecoverySettlementHeadroom(s *Store, state poolVMState) error {
@@ -1742,45 +1819,9 @@ func poolVMRecoverySettlementHeadroom(s *Store, state poolVMState) error {
 	if peer.Membership.MasterHostID != s.State.HostID {
 		return nil // Members do not write the master's pool-vms.json owner projection.
 	}
-	prospective := make(map[string]poolVMRecord, len(state.VMs))
-	for id, record := range state.VMs {
-		prospective[id] = record
-	}
-	for id, record := range prospective {
-		if record.PendingRecovery == nil {
-			continue
-		}
-		var descriptor *protocol.PoolVMSnapshot
-		var resultSpec *protocol.VMCreateSpec
-		outcome := "failed-before-effects"
-		if record.PendingRecovery.Kind == "snapshot-create" && record.PendingRecovery.AdmissionRefusal == "" {
-			if record.PendingSnapshot == nil {
-				return errors.New("pending snapshot create has no durable descriptor")
-			}
-			copy := *record.PendingSnapshot
-			descriptor = &copy
-			outcome = "completed"
-		} else if record.PendingRecovery.Kind == "snapshot-revert" {
-			if record.PendingRecoveryResultSpec == nil {
-				return errors.New("pending snapshot revert has no derived result definition")
-			}
-			copy := *record.PendingRecoveryResultSpec
-			resultSpec = &copy
-			outcome = "completed"
-		} else if record.PendingRecovery.Kind == "snapshot-delete" {
-			outcome = "completed"
-		}
-		evidence := protocol.PoolVMRecoveryEvidence{
-			Reservation: *record.PendingRecovery, Outcome: outcome, JournalSHA256: strings.Repeat("0", 64), Snapshot: descriptor, ResultSpec: resultSpec,
-		}
-		if err := settlePoolVMRecovery(&record, record.HostID, evidence); err != nil {
-			return errors.New("pending snapshot recovery has invalid terminal replica intent")
-		}
-		prospective[id] = record
-	}
-	vmBytes, err := json.Marshal(prospective)
-	if err != nil || len(vmBytes) > protocol.PoolReplicaLimit {
-		return errors.New("pending snapshots would exceed the pool authority limit when settled")
+	vmBytes, err := poolVMRecoverySettlementProjection(state)
+	if err != nil {
+		return err
 	}
 	replica, _, err := buildPoolAuthorityReplicaForMembership(s, peer.Membership, vmBytes)
 	if err != nil || poolAuthorityReplicaFitsAddressedBodies(s, replica, peer.CAKeyPEM) != nil {

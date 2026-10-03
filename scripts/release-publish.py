@@ -16,11 +16,13 @@ Layout, all under one root owned by the publishing user (no root privilege neede
     <root>/latest -> 0.1.6~alpha1
 """
 import argparse
+from functools import cmp_to_key
 import hashlib
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -90,18 +92,21 @@ def sha256(path, chunk=1 << 20):
     return digest.hexdigest()
 
 
-def debian_sort_key(version):
-    """Order versions the way dpkg does for the subset release tags use.
-
-    '~' sorts below everything including the empty string, so 0.1.6~alpha1 comes
-    before 0.1.6. Anything else compares numerically per dot-separated field.
-    """
-    release, _, pre = version.partition("~")
-    fields = []
-    for part in release.split("."):
-        fields.append((0, int(part)) if part.isdigit() else (1, 0, part))
-    # No pre-release sorts above any pre-release of the same version.
-    return (fields, pre == "", pre)
+def compare_versions(left, right):
+    if left == right:
+        return 0
+    for relation, result in (("lt", -1), ("gt", 1)):
+        try:
+            compared = subprocess.run(
+                ["dpkg", "--compare-versions", left, relation, right],
+                capture_output=True, text=True)
+        except OSError as error:
+            raise ReleasePublishError("dpkg is required to order releases") from error
+        if compared.returncode == 0:
+            return result
+        if compared.returncode != 1:
+            raise ReleasePublishError(f"cannot compare release versions: {compared.stderr.strip()}")
+    return 0
 
 
 def existing_releases(root):
@@ -111,7 +116,7 @@ def existing_releases(root):
             continue
         if VERSION_DIR.match(child.name):
             found.append(child.name)
-    return sorted(found, key=debian_sort_key)
+    return sorted(found, key=cmp_to_key(compare_versions))
 
 
 def prune(root, keep):
@@ -134,7 +139,9 @@ def write_download_page(directory, version):
              '<meta name="viewport" content="width=device-width, initial-scale=1">',
              f"<title>Nex Core {version} downloads</title>",
              f"<h1>Nex Core {version}</h1>",
-             "<p>Development build for disposable evaluation.</p>"]
+             "<p>Development channel build of the next release, for testing only. It is replaced "
+             "by newer builds without notice.</p>" if "~dev." in version
+             else "<p>Development build for disposable evaluation.</p>"]
     for heading, names in (("Installer images", images), ("Source and compliance", documents)):
         lines.extend((f"<h2>{heading}</h2>", "<ul>"))
         for name in names:

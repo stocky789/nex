@@ -9,7 +9,15 @@ appliance. Take the current Core update before using root login. Deployment uses
 bridge created by current GUI installations; hosts installed by an older ISO need a prepared
 management bridge. Login/session rules are described in [secure web access](secure-web-access.md).
 
-Rebuilding media does not update an already deployed Controller VM. Use a private management
+Rebuilding media does not update an already deployed Controller VM. A Controller deployed in the two-disk profile (a read-only
+system image plus a persistent data disk) is updated by the Core that hosts it, either with the **Controller first** step of a
+[pool rollout](update-a-pool.md) or with the host-local `scope:"controller"` update; the swap is journaled, checks the Controller's
+ownership and storage first, shuts the Controller down gracefully, checkpoints its data, and restores the previous image and data if the
+new one is not ready (a new image whose guest agent never started is forced off for that restore; nothing else is ever forced). The guest image is built by
+`python3 appliance/build.py --profile controller` and a host is told to deploy it with `core-local-setup configure ... --controller-image-sha256`
+(see [appliance/README.md](../../appliance/README.md#controller-profile-read-only-system-image-and-data-disk-phase-i-4b)); without that
+setting, every appliance this page deploys is still the single-disk form and is not updated this way. **Unverified:** the image was
+booted once under QEMU on a development workstation (`docs/qa/image/phase4-controller-image.md`); no deployment by Core and no swap ran. Use a private management
 network or VPN, with no direct Internet exposure. Automatic Controller failover is not provided. Navigation on this page follows the development build 0.4.8 console layout; see
 [Navigate the Controller console](navigate-the-controller-console.md).
 
@@ -141,7 +149,19 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
 
 - **Missing bridge or capacity:** resolve the displayed preflight blocker on the selected
   lab host, then use **Refresh**. The deployment page does not change host networking or
-  format disks. Do not bypass the blocker by choosing an unrelated interface or disk.
+  format disks. Do not bypass the blocker by choosing an unrelated interface or disk. A host set up with
+  `--controller-image-sha256` also needs that image component fetched to `/var/lib/nex/payload/<sha256>/controller-system.img`;
+  until then preflight blocks.
+- **A Controller swap is refused or failed before the new image started** (`controller_insufficient_storage`, `controller_stage_failed`,
+  `controller_digest_mismatch`, `controller_shutdown_failed`): the Controller kept running its image and nothing was changed.
+  `controller_insufficient_storage` means the storage cannot clone files (ext4), so the data checkpoint and a restore each need the data
+  disk's allocated size free; free that space and repeat with a new request ID. After `controller_shutdown_failed` the guest may still power
+  off by itself, because a graceful request cannot be withdrawn: check the Controller's state and start it with **Start** in **Virtual
+  machines**. If power was lost in the middle of a swap and the host rebooted, libvirt may have started the previous image again; repeating
+  the same request stops it gracefully (never forced), refreshes the checkpoint even if it already stopped after writing, and carries on.
+  During interrupted rollback, Core also stops a proven failed new image that autostarted and restores the checkpoint again; once the old
+  image was redefined, its later writes are kept. If the old image will not stop, the request ends with `controller_shutdown_failed`.
+  Unverified on a real host: these boundaries are covered by simulated hypervisor checks only.
 - **Invalid signature or incompatible appliance:** use the matching trusted package and
   release key. Do not replace the trusted key with one supplied by an untrusted image.
 - **Stale observations or expired login:** reconnect/sign in again. Security builds expire
@@ -207,6 +227,10 @@ with the same care as host root.
    exports consistent state and transfers it to a mode-0600 file. Controller remains
    stopped after success. A failure before the stop may leave it running; inspect actual state.
    An interrupted command may leave a partial file; it is not a valid recovery copy.
+   After a failed two-disk image swap, the helper also accepts the replacement image proven by
+   that appliance's matching durable swap journal. Keep the journal and deployment record intact;
+   an unrelated image or changed disk layout remains refused. The guest agent must be reachable,
+   and the helper does not start a stopped VM for you.
 
 2. Transfer the archive through a protected channel to storage outside the hosting server
    and encrypt it at rest. For example, use your independently verified recovery storage SSH
@@ -355,6 +379,9 @@ Recorded checks and their limits:
 - [Desktop rebuild](../qa/controller-desktop-rebuild/checks.md),
   [deployment usability](../qa/appliance/deployment-usability.md),
   [root login](../qa/appliance/root-auth.md) and [console URL](../qa/appliance/console-url.md).
+- [Immutable review-fix checks](../qa/2026-10-03-immutable-review-fixes.md) — interrupted rollback,
+  autostart and checkpoint behavior with fake libvirt/real scratch files; recovery provenance
+  checks with fixture domains. This is not a newly executed appliance/lab restore.
 
 A live appliance console login after deploy is not recorded. Physical hardware, physical-LAN
 behavior and redistribution clearance are not established.

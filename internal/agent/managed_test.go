@@ -700,3 +700,64 @@ func TestBundledMediaSeedRunsOffWorkerOneAtATime(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedPoolControlRecoversSameJournalOperationAfterReplicaFailure(t *testing.T) {
+	lab := newUpdateLab(t, 3)
+	ctx := context.Background()
+	if err := lab.start("managed-control", "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	cmd := protocol.Command{OperationID: "managed-abort", Kind: "pool-update",
+		Pool: &protocol.PoolCommand{RequestID: "managed-abort-request", Action: "update-control",
+			Membership: protocol.PoolMembership{MasterHostID: "master-1"},
+			Update:     &protocol.PoolUpdateRequest{RolloutID: "managed-control", Control: "abort"}}}
+	s := lab.pool.master
+	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}}); err != nil {
+		t.Fatal(err)
+	}
+	fail := true
+	pushPoolAuthorityReplicasAfterUpdate = func(context.Context, *Store, time.Duration) error {
+		if fail {
+			return errors.New("replica unavailable")
+		}
+		return nil
+	}
+	result := ExecutePoolUpdate(ctx, s, cmd)
+	if result.Status != "needs_attention" {
+		t.Fatalf("accepted unresolved control became terminal: %+v", result)
+	}
+	if _, err := completeManagedCommand(s, cmd.OperationID, managedCompletion{result: result}, nil); err != nil {
+		t.Fatal(err)
+	}
+	entry := s.State.Journal[cmd.OperationID]
+	entry.Acknowledged, entry.ObservedAt = true, time.Time{}
+	s.State.Journal[cmd.OperationID] = entry
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var persisted State
+	raw, err := os.ReadFile(filepath.Join(s.dir, "state.json"))
+	if err != nil || json.Unmarshal(raw, &persisted) != nil {
+		t.Fatalf("unresolved command was not persisted: %v", err)
+	}
+	reopened := &Store{dir: s.dir, State: persisted}
+	lab.pool.master, lab.c = reopened, NewPoolUpdateCoordinator(reopened)
+	if next := nextManagedCommand(reopened.State.Journal, ""); next != cmd.OperationID {
+		t.Fatalf("acknowledged unresolved operation cannot heal locally: %q", next)
+	}
+	fail = false
+	if err = lab.c.Advance(ctx); err != nil || lab.rollout().State != protocol.PoolUpdateAborted {
+		t.Fatalf("Core continuation required a Controller retry: %v", err)
+	}
+	result = ExecutePoolUpdate(ctx, reopened, cmd)
+	if result.Status != "succeeded" {
+		t.Fatalf("same command did not replay recovered outcome: %+v", result)
+	}
+	if _, err = completeManagedCommand(reopened, cmd.OperationID, managedCompletion{result: result}, nil); err != nil {
+		t.Fatal(err)
+	}
+	entry = reopened.State.Journal[cmd.OperationID]
+	if entry.Status != "succeeded" || entry.Acknowledged || nextManagedCommand(reopened.State.Journal, "") != "" {
+		t.Fatalf("recovered operation was not published once as terminal: %+v", entry)
+	}
+}

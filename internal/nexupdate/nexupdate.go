@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package nexupdate applies Nex Core and Nex Controller package updates from the
-// signed Nex archive. Nex Core is a distribution rather than a set of add-on
-// packages, so apt owns download, GPG verification and dependency resolution
-// against the archive its own installer configured; this package only decides
-// when to run apt and reports progress to the UI.
+// Package nexupdate updates Nex Core.
+//
+// Two editions share it. The image edition (image.go, trust.go, source.go, platform.go) is the Core's
+// own engine: it authenticates signed release metadata, downloads and stages a verity image into the
+// inactive A/B slot of every disk, arms the boot entry on activate, and rolls back; installed hosts
+// never run apt. The classic edition (this file) applies Nex Core and Nex Controller package updates
+// from the signed Nex archive: apt owns download, GPG verification and dependency resolution against
+// the archive its own installer configured, and this code only decides when to run apt and reports
+// progress to the UI. The classic path stays until it is retired; Edition selects the path.
 package nexupdate
 
 import (
@@ -20,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"nex.local/nex/internal/rootfs"
 	"nex.local/nex/internal/version"
 )
 
@@ -44,6 +49,7 @@ type Status struct {
 	AvailableVersion string `json:"available_version,omitempty"`
 	UpdateAvailable  bool   `json:"update_available"`
 	RepoURL          string `json:"repo_url"`
+	Channel          string `json:"channel,omitempty"` // the host's own check only: stable, or dev when repo_url is the development subtree
 	Phase            string `json:"phase,omitempty"`    // idle|downloading|installing|restarting|done|failed
 	Progress         *int   `json:"progress,omitempty"` // 0-100 when known
 	Message          string `json:"message,omitempty"`
@@ -123,7 +129,7 @@ func isPrivateHTTPRepoURL(repoURL string) bool {
 }
 
 func rewriteUpdatesConf(repoURL string) {
-	path := "/etc/nex/updates.conf"
+	path := UpdatesConfig
 	content := "repo_url=" + strings.TrimRight(repoURL, "/") + "\n"
 	tmp := path + ".tmp"
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -139,7 +145,7 @@ func DefaultRepoURL() string {
 	if v := strings.TrimSpace(os.Getenv("NEX_UPDATE_REPO")); v != "" {
 		return NormalizeRepoURL(v)
 	}
-	if b, err := os.ReadFile("/etc/nex/updates.conf"); err == nil {
+	if b, err := os.ReadFile(UpdatesConfig); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "repo_url=") {
@@ -438,6 +444,7 @@ func Check(ctx context.Context, repoURL, packageName string) (Status, error) {
 		Package:          packageName,
 		InstalledVersion: InstalledVersion(packageName),
 		RepoURL:          repoURL,
+		Channel:          RepoChannel(repoURL),
 	}
 	candidate := AptCandidate(ctx, packageName)
 	if candidate == "" {
@@ -474,6 +481,16 @@ func ApplyLocal(ctx context.Context, repoURL, packageName, stateDir string) (App
 	_, _ = apt(ctx, "update").CombinedOutput()
 
 	_ = WriteProgress(stateDir, Progress{Phase: "installing", Percent: 50, Message: "Installing package"})
+	// dpkg writes /usr and /boot, which a read-only-root host keeps read-only; the root is
+	// writable only until this function returns.
+	restoreRoot, err := rootfs.OpenWritable(ctx, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return Command(ctx, name, args...).CombinedOutput()
+	})
+	if err != nil {
+		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 50, Error: err.Error()})
+		return ApplyResult{Status: "failed", Message: err.Error()}, err
+	}
+	defer restoreRoot()
 	// Plain install both upgrades a packaged host and first-installs an appliance
 	// that only had a binary under /usr/local (apt --only-upgrade skips those).
 	out, err := apt(ctx, "install", "-y", packageName).CombinedOutput()

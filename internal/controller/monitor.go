@@ -219,6 +219,9 @@ func mergeInventory(old, incoming *protocol.Inventory) *protocol.Inventory {
 	// The host reports its management-network record on every heartbeat, deadline included.
 	// A stalled base observation must not freeze a running rollback countdown.
 	out.ManagementNetwork = incoming.ManagementNetwork
+	// The image update record changes between base observations (download progress, a boot verdict):
+	// show the host's latest report, and none once the host stops reporting it.
+	out.Image = incoming.Image
 	out.VMs = old.VMs
 	if newer("libvirt") {
 		out.VMs = incoming.VMs

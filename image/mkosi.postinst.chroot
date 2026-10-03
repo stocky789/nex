@@ -1,0 +1,65 @@
+#!/bin/sh
+# Runs inside the image tree after package installation. Makes the tree the same on every build:
+# a static os-release, an empty machine-id, no host keys, and a preset list that keeps what the
+# packages enabled (on first boot with an empty machine-id systemd re-applies presets, which would
+# otherwise disable every unit a package enabled through a symlink).
+set -eu
+
+label=${NEX_LABEL:-dev}
+sequence=${NEX_SEQUENCE:-0}
+state_format=${NEX_STATE_FORMAT:-3}
+min_state_format=${NEX_MIN_STATE_FORMAT:-0}
+md_generation=${NEX_MD_GENERATION:-0}
+md_fallback_safe=${NEX_MD_FALLBACK_SAFE:-0}
+
+cat > /usr/lib/os-release <<EOT
+PRETTY_NAME="Nex Core $label"
+NAME="Nex Core"
+ID=nex-core
+ID_LIKE=debian
+VERSION_ID="$label"
+IMAGE_ID=nex-core
+IMAGE_VERSION="$label.$sequence"
+BUILD_ID="$label-$sequence"
+SYSEXT_LEVEL="$label-$sequence"
+NEX_STATE_FORMAT=$state_format
+NEX_MIN_STATE_FORMAT=$min_state_format
+NEX_MD_GENERATION=$md_generation
+NEX_MD_FALLBACK_SAFE=$md_fallback_safe
+HOME_URL="https://nex.example/"
+EOT
+ln -sf ../usr/lib/os-release /etc/os-release
+
+# Identity is created on the host at first boot, never in the image.
+: > /etc/machine-id
+rm -f /var/lib/dbus/machine-id
+rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+rm -f /etc/hostname
+# Root's home must be writable (authorized_keys, shell history, known_hosts) but the image is read-only: /root is a link
+# into the data volume, where tmpfiles.d creates /var/roothome (mode 0700) before any login.
+rm -rf /root
+ln -s var/roothome /root
+# open-iscsi's postinst draws a random InitiatorName. Debian's own mechanism for images: with GenerateName=yes the first
+# start of iscsid (its ExecStartPre, /usr/lib/open-iscsi/startup-checks.sh) writes a unique name into /etc (the overlay
+# upper), once. One writer only, so it cannot race the daemon.
+cat > /etc/iscsi/initiatorname.iscsi <<'EOT'
+## DO NOT EDIT OR REMOVE THIS FILE!
+## The Nex Core image carries no initiator name: iscsid writes a unique one here on its first start on each host.
+GenerateName=yes
+EOT
+chmod 600 /etc/iscsi/initiatorname.iscsi
+# ldconfig's aux-cache records inode numbers of the build file system; /var/cache is the data volume at run time.
+rm -f /var/cache/ldconfig/aux-cache
+
+# Presets: every unit enabled by a package symlink stays enabled.
+preset=/usr/lib/systemd/system-preset/20-nex-image.preset
+: > "$preset"
+for link in /etc/systemd/system/*.wants/* /etc/systemd/system/*.requires/*; do
+    [ -L "$link" ] || continue
+    [ "$(readlink "$link")" = /dev/null ] && continue
+    echo "enable $(basename "$link")"
+done | sort -u >> "$preset"
+
+# The host never runs apt or dpkg: drop what only they use. (/var is the data volume at run time.)
+rm -rf /var/cache/apt /var/lib/apt/lists /var/cache/debconf /var/log/*
+rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list

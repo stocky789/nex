@@ -30,8 +30,22 @@ import (
 	"time"
 )
 
-type Config struct{ StateDir, StorageDir, Bridge, ImagePath, ManifestPath, SignaturePath, PublicKeyPath, VirshURI string }
-type Engine struct{ config Config }
+type Config struct {
+	StateDir, StorageDir, Bridge, ImagePath, ManifestPath, SignaturePath, PublicKeyPath, VirshURI string
+	// SystemImage selects the two-disk Controller profile: the verified release component (under the
+	// payload directory) and its SHA-256 from the signed release manifest. Empty keeps the single-disk qcow2 appliance.
+	SystemImage, SystemImageSHA256 string
+}
+type Engine struct {
+	config Config
+	// swapHook, swapPoll, shutdownWait, statfs and syncPath are test seams (the Controller swap's stages, its polling and
+	// shutdown waits, the host's filesystem report and the staged image's fsync); zero values are the production behavior.
+	swapHook     func(stage string) error
+	swapPoll     time.Duration
+	shutdownWait time.Duration
+	statfs       func(string, *syscall.Statfs_t) error
+	syncPath     func(string) error
+}
 type DeploySpec struct {
 	RequestID      string   `json:"request_id"`
 	Name           string   `json:"name"`
@@ -87,12 +101,21 @@ type manifest struct {
 	MinimumMemoryMiB int    `json:"minimum_memory_mib"`
 	MinimumDiskGiB   int    `json:"minimum_disk_gib"`
 }
+
+// journal is one operation's durable record. A Controller deployment with a System image is the
+// two-disk profile: a read-only system disk that appliance_swap.go replaces, and Disk, the
+// persistent controller-data.qcow2 that keeps the Controller's own state across a swap.
 type journal struct {
 	Operation
 	Digest string `json:"digest"`
 	Name   string `json:"name"`
 	Disk   string `json:"disk"`
 	Bridge string `json:"bridge"`
+	// System is the system image the domain boots; empty for the single-disk qcow2 appliance.
+	System string `json:"system,omitempty"`
+	// PreviousSystem is the image the last swap replaced, kept until the next update.
+	PreviousSystem string     `json:"previous_system,omitempty"`
+	Swap           *swapState `json:"swap,omitempty"`
 }
 
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
@@ -199,6 +222,9 @@ func validate(s DeploySpec) error {
 func (e *Engine) Preflight(ctx context.Context, s DeploySpec) (Preflight, error) {
 	s = defaults(s)
 	p := Preflight{ImageVerification: "Signed manifest checked; full image integrity and format verification runs during deployment", CPUs: s.CPUs, MemoryMiB: s.MemoryMiB, DiskGiB: s.DiskGiB, Bridge: e.config.Bridge, StorageDir: e.config.StorageDir, Blockers: []string{}}
+	if e.config.SystemImage != "" {
+		p.ImageVerification = "The Controller system image file is present; deployment checks its SHA-256 against the digest of the signed release manifest while it copies the file"
+	}
 	if s.RequestID != "" {
 		if err := validate(s); err != nil {
 			p.Blockers = append(p.Blockers, err.Error())
@@ -234,8 +260,8 @@ func (e *Engine) Preflight(ctx context.Context, s DeploySpec) (Preflight, error)
 	if available < uint64(s.MemoryMiB+2048)*1024 {
 		p.Blockers = append(p.Blockers, "insufficient available RAM including 2 GiB host reserve")
 	}
-	var stat syscall.Statfs_t
-	if err = syscall.Statfs(e.config.StorageDir, &stat); err != nil {
+	stat, err := e.statfsOf(e.config.StorageDir)
+	if err != nil {
 		return p, err
 	}
 	// Only known local filesystems: pool registration never establishes shared-disk ownership.
@@ -255,8 +281,14 @@ func (e *Engine) Preflight(ctx context.Context, s DeploySpec) (Preflight, error)
 	if _, err = e.virsh(ctx, "list", "--all", "--uuid"); err != nil {
 		p.Blockers = append(p.Blockers, "local libvirt unavailable")
 	}
-	if _, err = e.verifyManifest(); err != nil {
-		p.Blockers = append(p.Blockers, err.Error())
+	if e.config.SystemImage == "" {
+		if _, err = e.verifyManifest(); err != nil {
+			p.Blockers = append(p.Blockers, err.Error())
+		}
+	} else if !layerHex.MatchString(e.config.SystemImageSHA256) {
+		p.Blockers = append(p.Blockers, "Controller system image digest is not configured")
+	} else if st, err := os.Stat(e.config.SystemImage); err != nil || !st.Mode().IsRegular() {
+		p.Blockers = append(p.Blockers, "Controller system image is not staged; fetch the Controller image component first")
 	}
 	p.Ready = len(p.Blockers) == 0
 	return p, nil
@@ -633,12 +665,15 @@ func (e *Engine) Deploy(ctx context.Context, s DeploySpec) (Operation, error) {
 	if !p.Ready {
 		return Operation{}, fmt.Errorf("preflight blocked: %s", strings.Join(p.Blockers, "; "))
 	}
-	m, err := e.verifyImage(ctx)
-	if err != nil {
-		return Operation{}, err
-	}
-	if s.CPUs < m.MinimumVCPUs || s.MemoryMiB < m.MinimumMemoryMiB || s.DiskGiB < m.MinimumDiskGiB {
-		return Operation{}, errors.New("selected resources below signed appliance requirements")
+	profile := e.config.SystemImage != ""
+	var m manifest
+	if !profile {
+		if m, err = e.verifyImage(ctx); err != nil {
+			return Operation{}, err
+		}
+		if s.CPUs < m.MinimumVCPUs || s.MemoryMiB < m.MinimumMemoryMiB || s.DiskGiB < m.MinimumDiskGiB {
+			return Operation{}, errors.New("selected resources below signed appliance requirements")
+		}
 	}
 	vms, err := e.List(ctx)
 	if err != nil {
@@ -656,6 +691,14 @@ func (e *Engine) Deploy(ctx context.Context, s DeploySpec) (Operation, error) {
 	}
 	dir := filepath.Join(e.config.StorageDir, id)
 	j := journal{Operation: Operation{ID: s.RequestID, VMID: id, Kind: "deploy", Status: "running", Stage: "copying_disk", Progress: 10, ControllerURL: staticURL(s)}, Digest: digest, Name: s.Name, Disk: filepath.Join(dir, "controller.qcow2"), Bridge: e.config.Bridge}
+	srcPath, dstPath, wantSHA := e.config.ImagePath, j.Disk, m.ImageSHA256
+	if profile {
+		// The two-disk profile: the system image is a release component verified by its digest in the
+		// signed release manifest; the data disk starts empty and is the only part that persists a swap.
+		j.System = filepath.Join(dir, "system-"+e.config.SystemImageSHA256+".img")
+		j.Disk = filepath.Join(dir, dataDiskName(j))
+		srcPath, dstPath, wantSHA = e.config.SystemImage, j.System, e.config.SystemImageSHA256
+	}
 	if err = e.save(j); err != nil {
 		return j.Operation, err
 	}
@@ -671,11 +714,11 @@ func (e *Engine) Deploy(ctx context.Context, s DeploySpec) (Operation, error) {
 		return fail(err)
 	}
 	// Independent copy, verified before qemu-img can inspect or change it. Never an overlay.
-	src, err := os.Open(e.config.ImagePath)
+	src, err := os.Open(srcPath)
 	if err != nil {
 		return fail(err)
 	}
-	dst, err := os.OpenFile(j.Disk, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		src.Close()
 		return fail(err)
@@ -713,13 +756,15 @@ func (e *Engine) Deploy(ctx context.Context, s DeploySpec) (Operation, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if hex.EncodeToString(h.Sum(nil)) != m.ImageSHA256 {
+	if hex.EncodeToString(h.Sum(nil)) != wantSHA {
 		return fail(errors.New("copied appliance digest mismatch"))
 	}
-	if err = checkImage(ctx, j.Disk); err != nil {
-		return fail(err)
+	if profile {
+		_, err = run(ctx, "qemu-img", "create", "-f", "qcow2", j.Disk, strconv.Itoa(s.DiskGiB)+"G")
+	} else if err = checkImage(ctx, j.Disk); err == nil {
+		_, err = run(ctx, "qemu-img", "resize", j.Disk, strconv.Itoa(s.DiskGiB)+"G")
 	}
-	if _, err = run(ctx, "qemu-img", "resize", j.Disk, strconv.Itoa(s.DiskGiB)+"G"); err != nil {
+	if err != nil {
 		return fail(err)
 	}
 	j.Stage = "creating_seed"
@@ -794,6 +839,11 @@ func (e *Engine) DiscoverControllerURL(ctx context.Context, id string) (string, 
 	if err = e.owned(ctx, j); err != nil {
 		return "", err
 	}
+	return e.discoverURL(ctx, j)
+}
+
+// discoverURL reads the management address from the guest agent and records it. The caller holds the engine lock.
+func (e *Engine) discoverURL(ctx context.Context, j journal) (string, error) {
 	data, err := e.virsh(ctx, "qemu-agent-command", j.VMID, `{"execute":"guest-network-get-interfaces"}`)
 	if err != nil {
 		return "", errors.New("waiting for the Controller guest agent and DHCP address")
@@ -873,7 +923,7 @@ func managementAddress(data []byte, managementMAC string) (string, error) {
 // observation failure keeps the operation for reconcile, which never replays effects.
 func (e *Engine) undefinedDeploy(ctx context.Context, j journal) bool {
 	if (j.Status != "running" && j.Status != "needs_attention") || (j.Stage != "copying_disk" && j.Stage != "creating_seed") ||
-		!uuidPattern.MatchString(j.VMID) || j.Disk != filepath.Join(e.config.StorageDir, j.VMID, "controller.qcow2") {
+		!uuidPattern.MatchString(j.VMID) || j.Disk != filepath.Join(e.config.StorageDir, j.VMID, dataDiskName(j)) {
 		return false
 	}
 	vms, err := e.List(ctx)
@@ -931,8 +981,11 @@ func (e *Engine) seed(ctx context.Context, j journal, s DeploySpec) error {
 	var b strings.Builder
 	b.WriteString("#cloud-config\nhostname: " + s.Hostname + "\nmanage_etc_hosts: true\nssh_pwauth: true\ndisable_root: false\nwrite_files:\n")
 	b.WriteString("  - path: /etc/nex-controller/bootstrap.json\n    owner: root:root\n    permissions: '0600'\n    encoding: b64\n    content: " + base64.StdEncoding.EncodeToString(data) + "\n")
-	if err := e.appendUpdateBootstrap(&b); err != nil {
-		return err
+	// The system-image profile has no in-guest update helper: Core replaces the whole image (appliance_swap.go).
+	if j.System == "" {
+		if err := e.appendUpdateBootstrap(&b); err != nil {
+			return err
+		}
 	}
 	userData := b.String()
 	meta := "instance-id: " + j.VMID + "\nlocal-hostname: " + s.Hostname + "\n"
@@ -1022,7 +1075,12 @@ type memoryXML struct {
 	Value int    `xml:",chardata"`
 }
 type osXML struct {
-	Type osTypeXML `xml:"type"`
+	// Firmware "efi" lets libvirt choose guest UEFI; the controller profile boots a verity system image through it.
+	Firmware string `xml:"firmware,attr,omitempty"`
+	// FirmwareFeatures pins the profile's UEFI build: no Secure Boot, no enrolled keys. The system image's boot loader
+	// and UKI are unsigned (Secure Boot is phase I-5); libvirt would otherwise be free to pick an enforcing build.
+	FirmwareFeatures *firmwareXML `xml:"firmware,omitempty"`
+	Type             osTypeXML    `xml:"type"`
 }
 type osTypeXML struct {
 	Arch    string `xml:"arch,attr"`
@@ -1116,8 +1174,17 @@ type graphicsXML struct {
 }
 
 func makeDomain(j journal, s DeploySpec) domainXML {
-	d := domainXML{Type: "kvm", Name: j.Name, UUID: j.VMID, Memory: memoryXML{"MiB", s.MemoryMiB}, VCPU: s.CPUs, CPU: cpuXML{Mode: "host-passthrough", Check: "none"}, OS: osXML{osTypeXML{"x86_64", "q35", "hvm"}}}
+	d := domainXML{Type: "kvm", Name: j.Name, UUID: j.VMID, Memory: memoryXML{"MiB", s.MemoryMiB}, VCPU: s.CPUs, CPU: cpuXML{Mode: "host-passthrough", Check: "none"}, OS: osXML{Type: osTypeXML{"x86_64", "q35", "hvm"}}}
 	d.Devices.Disks = []diskXML{{Type: "file", Device: "disk", Driver: driverXML{Name: "qemu", Type: "qcow2"}, Source: sourceXML{File: j.Disk}, Target: targetXML{Dev: "vda", Bus: "virtio"}}, {Type: "file", Device: "cdrom", Driver: driverXML{Name: "qemu", Type: "raw"}, Source: sourceXML{File: filepath.Join(filepath.Dir(j.Disk), "seed.iso")}, Target: targetXML{Dev: "sda", Bus: "sata"}, Readonly: &struct{}{}}}
+	if j.System != "" {
+		d.OS.Firmware = "efi"
+		d.OS.FirmwareFeatures = &firmwareXML{Features: []firmwareFeatureXML{{Enabled: "no", Name: "secure-boot"}, {Enabled: "no", Name: "enrolled-keys"}}}
+		d.Devices.Disks = []diskXML{
+			{Type: "file", Device: "disk", Driver: driverXML{Name: "qemu", Type: "raw"}, Source: sourceXML{File: j.System}, Target: targetXML{Dev: "vda", Bus: "virtio"}, Readonly: &struct{}{}},
+			{Type: "file", Device: "disk", Driver: driverXML{Name: "qemu", Type: "qcow2"}, Source: sourceXML{File: j.Disk}, Target: targetXML{Dev: "vdb", Bus: "virtio"}},
+			d.Devices.Disks[1],
+		}
+	}
 	nic := interfaceXML{Type: "bridge", Source: sourceXML{Bridge: j.Bridge}}
 	nic.MAC.Address = mac(j.VMID)
 	nic.Model.Type = "virtio"
@@ -1164,8 +1231,33 @@ func (e *Engine) deployment(id string) (journal, error) {
 	return journal{}, errors.New("Local power control is only available for the Controller appliance deployed from this page")
 }
 func (e *Engine) owned(ctx context.Context, j journal) error {
-	if !uuidPattern.MatchString(j.VMID) || j.Disk != filepath.Join(e.config.StorageDir, j.VMID, "controller.qcow2") || j.Bridge != e.config.Bridge {
+	if err := e.ownedFiles(ctx, j); err != nil {
+		return err
+	}
+	if err := e.ownedDomain(ctx, j); err != nil {
+		return err
+	}
+	// Inspect backing metadata too: a local pathname alone cannot establish exclusive storage.
+	if err := checkImage(ctx, j.Disk); err != nil {
+		return err
+	}
+	return e.powerState(ctx, j.VMID)
+}
+
+// dataDiskName is the writable disk's file name in the VM's directory.
+func dataDiskName(j journal) string {
+	if j.System != "" {
+		return "controller-data.qcow2"
+	}
+	return "controller.qcow2"
+}
+
+func (e *Engine) ownedFiles(ctx context.Context, j journal) error {
+	if !uuidPattern.MatchString(j.VMID) || j.Disk != filepath.Join(e.config.StorageDir, j.VMID, dataDiskName(j)) || j.Bridge != e.config.Bridge {
 		return errors.New("persisted ownership is not valid for this host configuration")
+	}
+	if j.System != "" && filepath.Dir(j.System) != filepath.Dir(j.Disk) {
+		return errors.New("persisted system image is not valid for this host configuration")
 	}
 	real, err := filepath.EvalSymlinks(j.Disk)
 	if err != nil || real != j.Disk {
@@ -1174,8 +1266,8 @@ func (e *Engine) owned(ctx context.Context, j journal) error {
 	if err = e.exclusiveDisk(ctx, j); err != nil {
 		return err
 	}
-	var stat syscall.Statfs_t
-	if err = syscall.Statfs(j.Disk, &stat); err != nil {
+	stat, err := e.statfsOf(j.Disk)
+	if err != nil {
 		return err
 	}
 	switch uint64(stat.Type) {
@@ -1183,38 +1275,65 @@ func (e *Engine) owned(ctx context.Context, j journal) error {
 	default:
 		return errors.New("owned disk is no longer on supported local storage")
 	}
+	return nil
+}
+
+// statfsOf reports the filesystem holding path.
+func (e *Engine) statfsOf(path string) (syscall.Statfs_t, error) {
+	var stat syscall.Statfs_t
+	if e.statfs != nil {
+		return stat, e.statfs(path, &stat)
+	}
+	return stat, syscall.Statfs(path, &stat)
+}
+
+// ownedDomain checks the running and the persistent definition against the journal.
+func (e *Engine) ownedDomain(ctx context.Context, j journal) error {
 	for _, args := range [][]string{{"dumpxml", j.VMID}, {"dumpxml", j.VMID, "--inactive"}} {
 		b, err := e.virsh(ctx, args...)
 		if err != nil {
 			return errors.New("cannot establish current and persistent VM ownership")
 		}
-		var d domainXML
-		if xml.Unmarshal(b, &d) != nil || d.UUID != j.VMID || d.Name != j.Name || d.Type != "kvm" {
-			return errors.New("domain identity does not match persisted ownership")
+		if err = checkDomain(b, j); err != nil {
+			return err
 		}
-		if len(d.Devices.Disks) < 1 || len(d.Devices.Disks) > 2 || len(d.Devices.Interfaces) != 1 || len(d.Devices.Hostdev) > 0 || len(d.Devices.Filesystems) > 0 {
-			return errors.New("unsupported domain devices; local power blocked")
-		}
-		writable := 0
-		for _, disk := range d.Devices.Disks {
-			if disk.Device == "disk" {
-				writable++
-				if disk.Type != "file" || disk.Source.File != j.Disk || disk.Driver.Type != "qcow2" || disk.Readonly != nil || disk.Shareable != nil || disk.Source.Dev != "" || disk.Source.Protocol != "" {
-					return errors.New("VM writable disk ownership changed")
-				}
-			} else if disk.Device != "cdrom" || disk.Readonly == nil || (disk.Source.File != "" && disk.Source.File != filepath.Join(filepath.Dir(j.Disk), "seed.iso")) {
-				return errors.New("unsupported VM media")
+	}
+	return nil
+}
+
+func checkDomain(b []byte, j journal) error {
+	var d domainXML
+	if xml.Unmarshal(b, &d) != nil || d.UUID != j.VMID || d.Name != j.Name || d.Type != "kvm" {
+		return errors.New("domain identity does not match persisted ownership")
+	}
+	maxDisks := 2
+	if j.System != "" {
+		maxDisks = 3
+	}
+	if len(d.Devices.Disks) < 1 || len(d.Devices.Disks) > maxDisks || len(d.Devices.Interfaces) != 1 || len(d.Devices.Hostdev) > 0 || len(d.Devices.Filesystems) > 0 {
+		return errors.New("unsupported domain devices; local power blocked")
+	}
+	writable, system := 0, 0
+	for _, disk := range d.Devices.Disks {
+		switch {
+		case disk.Device == "disk" && j.System != "" && disk.Source.File == j.System:
+			system++
+			if disk.Type != "file" || disk.Driver.Type != "raw" || disk.Readonly == nil || disk.Shareable != nil {
+				return errors.New("VM system image is not attached read-only")
 			}
-		}
-		if writable != 1 || d.Devices.Interfaces[0].Type != "bridge" || d.Devices.Interfaces[0].Source.Bridge != j.Bridge || !strings.EqualFold(d.Devices.Interfaces[0].MAC.Address, mac(j.VMID)) {
-			return errors.New("VM disk/network assignment changed")
+		case disk.Device == "disk":
+			writable++
+			if disk.Type != "file" || disk.Source.File != j.Disk || disk.Driver.Type != "qcow2" || disk.Readonly != nil || disk.Shareable != nil || disk.Source.Dev != "" || disk.Source.Protocol != "" {
+				return errors.New("VM writable disk ownership changed")
+			}
+		case disk.Device != "cdrom" || disk.Readonly == nil || (disk.Source.File != "" && disk.Source.File != filepath.Join(filepath.Dir(j.Disk), "seed.iso")):
+			return errors.New("unsupported VM media")
 		}
 	}
-	// Inspect backing metadata too: a local pathname alone cannot establish exclusive storage.
-	if err = checkImage(ctx, j.Disk); err != nil {
-		return err
+	if writable != 1 || (j.System != "") != (system == 1) || d.Devices.Interfaces[0].Type != "bridge" || d.Devices.Interfaces[0].Source.Bridge != j.Bridge || !strings.EqualFold(d.Devices.Interfaces[0].MAC.Address, mac(j.VMID)) {
+		return errors.New("VM disk/network assignment changed")
 	}
-	return e.powerState(ctx, j.VMID)
+	return nil
 }
 func (e *Engine) powerState(ctx context.Context, id string) error {
 	state, err := e.virsh(ctx, "domstate", id)

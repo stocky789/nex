@@ -1,0 +1,15 @@
+[Unit]
+Description=Nex Core state format guard
+# Fails when the retained state (ZFS records, managed VM storage) needs a newer state_format than this
+# image reads. libvirtd and nex-core-local require it, so they never start over state they cannot read;
+# nex-boot-check then fails the counted boot and the host falls back to the previous image.
+DefaultDependencies=no
+After=local-fs.target
+Before=libvirtd.service nex-core-local.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nex-update state-guard

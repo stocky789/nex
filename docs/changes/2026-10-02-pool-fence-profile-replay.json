@@ -1,0 +1,40 @@
+{
+  "summary": "Fix a pool lab defect found during the immutable rollout work: executing a fence-profile command rewrote the PoolCommand shared with the agent journal, so the next replay of the same operation looked like a reused ID with different input and stopped the agent. ExecutePoolFenceProfile now works on a copy. Also assessed: internal/vmhost/pool_quorum.go gains ExpectedVotes, TotalVotes and Quorum (votequorum's own counts, read from the same corosync-quorumtool output) for the rollout quorum gate, and internal/agent/pool_update_transport_test.go covers the live peer transport. API impact: existing contract.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "internal/agent/pool_promote.go",
+    "internal/agent/pool_fence_replay_test.go",
+    "internal/agent/pool_update_transport_test.go",
+    "internal/vmhost/pool_quorum.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator step changes; the fix removes an agent stop after a fence profile was recorded.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No route or wire field changed. PoolQuorum gains the optional JSON fields expected_votes, total_votes and quorum, which are on-host quorum observations used by the rollout gate and are not part of a published route schema.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "A defect fix inside the existing pool feature; no milestone changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns the agent command journal and the fence profile; the Controller only replays the command.",
+    "record": "The agent's journal entry for the operation, which is now left exactly as received."
+  },
+  "verification": {
+    "method": "TestRecordingAManagementControllerLeavesTheJournaledCommandUntouched passes (go test ./internal/agent -run ...). The failing-before run was not repeated; the defect was observed in the three-host lab.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "docs/qa/image/phase6-lab3.md",
+      "internal/agent/pool_fence_replay_test.go"
+    ]
+  }
+}

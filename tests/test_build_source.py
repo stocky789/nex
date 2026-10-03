@@ -60,7 +60,8 @@ class SourceArchiveTests(unittest.TestCase):
             self.assertTrue((target / 'scripts/release-publish.py').exists())
             for name in ('appliance/firstboot.py', 'packaging/core-local/build.py',
                          'packaging/core-local/nex-root-auth.c', 'packaging/core-local/nex-core-local.pam',
-                         'packaging/core-local/libvirtd-apparmor-policy.py', 'docs/api/local-openapi.json'):
+                         'packaging/core-local/libvirtd-apparmor-policy.py', 'docs/api/local-openapi.json',
+                         'image/snapshot', 'image/mkosi.conf'):
                 self.assertTrue((target / name).exists())
             for name in ('internal/server.key', 'installer/private.go', '.env', '.cache/password',
                          'appliance/signing.key'):

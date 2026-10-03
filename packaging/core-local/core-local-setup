@@ -12,6 +12,8 @@ import subprocess
 CONFIG = Path('/etc/nex/core-local.env')
 STATE = Path('/var/lib/nex/core-local')
 BUNDLE = Path('/usr/share/nex/appliance')
+# Image edition: the Controller system image is an on-demand payload outside the verified slot, one directory per digest.
+PAYLOAD = Path('/var/lib/nex/payload')
 ISSUE = Path('/run/issue.d/50-nex-local.issue')
 
 
@@ -30,7 +32,21 @@ def console_notice(text):
         pass  # The notice remains available to the next login prompt.
 
 
-def configure(address, storage, bridge, automatic=False):
+def controller_system_image(config):
+    """(path, sha256) of the Controller system image for Core's two-disk profile, or None for the single-disk appliance.
+
+    `configure --controller-image-sha256` names the vm-image release component by the digest in the signed release
+    manifest; the image itself is the on-demand payload Core fetched, under /var/lib/nex/payload/<sha256>/.
+    """
+    digest = config.get('controller_image_sha256', '')
+    if not digest:
+        return None
+    if not re.fullmatch(r'[0-9a-f]{64}', digest):
+        raise ValueError('controller_image_sha256 is not a SHA-256 digest')
+    return PAYLOAD / digest / 'controller-system.img', digest
+
+
+def configure(address, storage, bridge, automatic=False, controller_image_sha256=None):
     ip = ipaddress.ip_address(address)
     if ip.is_unspecified or ip.is_multicast:
         raise ValueError('select a specific management IP address')
@@ -43,7 +59,14 @@ def configure(address, storage, bridge, automatic=False):
         raise ValueError('select an existing Linux bridge')
     CONFIG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = CONFIG.with_suffix('.tmp')
-    temporary.write_text(json.dumps({'address': str(ip), 'storage': str(path), 'bridge': bridge, 'automatic': automatic}) + '\n')
+    values = {'address': str(ip), 'storage': str(path), 'bridge': bridge, 'automatic': automatic}
+    if controller_image_sha256 is None and CONFIG.exists():
+        controller_image_sha256 = json.loads(CONFIG.read_text()).get('controller_image_sha256')
+    if controller_image_sha256:
+        if not re.fullmatch(r'[0-9a-f]{64}', controller_image_sha256):
+            raise ValueError('the Controller image digest must be 64 lowercase hex characters')
+        values['controller_image_sha256'] = controller_image_sha256
+    temporary.write_text(json.dumps(values) + '\n')
     temporary.chmod(0o600)
     temporary.replace(CONFIG)
 
@@ -100,6 +123,7 @@ def main():
     parser.add_argument('--address')
     parser.add_argument('--storage')
     parser.add_argument('--bridge', default='')
+    parser.add_argument('--controller-image-sha256', help='configure: deploy the two-disk read-only Controller profile from this vm-image release component (image edition); pass "" to return to the single-disk appliance')
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error('root is required')
@@ -111,7 +135,7 @@ def main():
     if args.action == 'configure':
         if not all([args.address, args.storage]):
             parser.error('configure requires --address and --storage; --bridge is optional until deployment')
-        configure(args.address, args.storage, args.bridge)
+        configure(args.address, args.storage, args.bridge, controller_image_sha256=args.controller_image_sha256)
         print('Configured. Run systemctl restart nex-core-local to apply.')
         return
     if args.action == 'init':
@@ -127,6 +151,7 @@ def main():
         initialize(config)
         return
     host = '[' + config['address'] + ']' if ':' in config['address'] else config['address']
+    profile = controller_system_image(config)
     argv = ['/usr/lib/nex/nex-core-local', '--listen', host + ':9443',
             '--data-dir', str(STATE), '--agent-state-dir', '/var/lib/nex-core-agent',
             '--tls-cert', str(STATE / 'tls.crt'), '--tls-key', str(STATE / 'tls.key'),
@@ -134,9 +159,13 @@ def main():
             '--docs-dir', '/usr/share/nex/core-local/api',
             '--source-archive', '/usr/share/nex/core-local/nex-source.tar.gz',
             '--storage-dir', config['storage'], '--bridge', config['bridge'],
-            '--image', str(BUNDLE / 'controller.qcow2'), '--manifest', str(BUNDLE / 'manifest.json'),
-            '--signature', str(BUNDLE / 'manifest.sig'), '--trusted-key', str(BUNDLE / 'release.pub'),
             '--libvirt-uri', 'qemu:///system']
+    if profile:
+        # The digest in the signed release manifest is the only integrity check of the system image.
+        argv += ['--controller-system-image', str(profile[0]), '--controller-system-image-sha256', profile[1]]
+    else:
+        argv += ['--image', str(BUNDLE / 'controller.qcow2'), '--manifest', str(BUNDLE / 'manifest.json'),
+                 '--signature', str(BUNDLE / 'manifest.sig'), '--trusted-key', str(BUNDLE / 'release.pub')]
     if args.action == 'prepare-recovery':
         if not args.request_file:
             parser.error('prepare-recovery requires --request-file')

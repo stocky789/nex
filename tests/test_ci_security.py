@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Catch a missing runtime artifact before either runner starts browser QA."""
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -68,10 +71,6 @@ class BrowserArtifactTests(unittest.TestCase):
                 smoke = workflow.index('iso_url_browser.py')
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
-                self.assertIn('cancel-in-progress: true', workflow)
-                group = ("${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}"
-                         if provider == '.github' else 'nex-shared-runner')
-                self.assertIn(f'  group: {group}\n', workflow)
                 # Browser lane must be first and must not wait on Go.
                 browser_job = workflow.index('\n  controller-browser:')
                 go_job = workflow.index('\n  go:')
@@ -82,25 +81,24 @@ class BrowserArtifactTests(unittest.TestCase):
                 self.assertNotIn('schedule:', workflow)
 
     def test_phase1_runs_once_per_pull_request_commit(self):
-        # BUG-0412: push and pull_request share the cancelling nex-shared-runner group,
-        # so a '**' push trigger made the two runs of one commit cancel each other.
+        # Integration pushes are covered directly; feature branch pushes are
+        # covered by pull_request, so one commit does not schedule duplicate labs.
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
-                triggers = workflow[workflow.index('\non:\n'):workflow.index('\nconcurrency:')]
+                triggers = workflow[workflow.index('\non:\n'):workflow.index('\ndefaults:')]
                 uncommented = '\n'.join(line for line in triggers.splitlines() if not line.lstrip().startswith('#'))
-                self.assertEqual(uncommented.split(), 'on: push: branches: - main pull_request:'.split())
+                # main (stable) and dev (development) are the integration branches; feature
+                # branches are covered by their pull request.
+                self.assertEqual(uncommented.split(), 'on: push: branches: - main - dev pull_request:'.split())
 
-    def test_release_shares_the_shared_runner_concurrency_group(self):
-        # Release ISO builds and Controller foundation browser labs must not
-        # overlap on the single Gitea act_runner (runs 4222+4223).
+    def test_release_runs_for_both_integration_branches_and_nothing_else(self):
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
-                release = (ROOT / provider / 'workflows/release.yml').read_text()
-                group = ("${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}"
-                         if provider == '.github' else 'nex-shared-runner')
-                self.assertIn(f'  group: {group}\n', release)
-                self.assertIn('cancel-in-progress: true', release)
+                workflow = (ROOT / provider / 'workflows/release.yml').read_text()
+                triggers = workflow[workflow.index('\non:\n'):workflow.index('\ndefaults:')]
+                uncommented = '\n'.join(line for line in triggers.splitlines() if not line.lstrip().startswith('#'))
+                self.assertEqual(uncommented.split(), 'on: push: branches: - main - dev'.split())
 
     def test_forge_release_only_attaches_isos_and_checksums(self):
         for provider in PROVIDERS:
@@ -213,6 +211,139 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
                 self.assertNotIn('NEX_WEBSITE_RELEASE_ID', text)
 
 
+def release_step(provider, name):
+    """The shell body of one named release step, exactly as CI runs it."""
+    text = (ROOT / provider / 'workflows/release.yml').read_text()
+    step = text.split(f'      - name: {name}\n', 1)[1].split('\n      - name:', 1)[0]
+    return textwrap.dedent(step.split('        run: |\n', 1)[1])
+
+
+class ReleaseChannelTests(unittest.TestCase):
+    """main releases the stable channel and dev the development channel, each into its own subtree.
+
+    The steps run for real against fake ssh/scp/python3 so a regression shows up as a stable
+    release landing in the development tree, a development run replacing the live website, or a
+    development build that never becomes a pre-release.
+    """
+
+    CHANGELOG = '# Changelog\n\n## [Unreleased]\n\n%s\n## [0.4.18] \u2014 2026-09-28\n\n- Shipped.\n'
+
+    def run_step(self, provider, name, cwd, env, tools=()):
+        bin_dir = Path(cwd) / 'bin'
+        bin_dir.mkdir(exist_ok=True)
+        for tool in tools:
+            fake = bin_dir / tool
+            fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{cwd}/{tool}.log"\n')
+            fake.chmod(0o755)
+        return subprocess.run(['bash', '-euo', 'pipefail', '-c', release_step(provider, name)], cwd=cwd, text=True,
+                              capture_output=True, env={**os.environ, **env, 'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}'})
+
+    def checkout(self, root):
+        """A CI checkout of dev: main's last release is origin/main, and dev has one commit of staged work."""
+        def git(*args):
+            subprocess.run(['git', '-c', 'user.name=CI', '-c', 'user.email=ci@example.invalid', *args],
+                           cwd=root, check=True, capture_output=True)
+        (root / 'scripts').mkdir()
+        shutil.copy(ROOT / 'scripts/release-version.py', root / 'scripts')
+        (root / 'CHANGELOG.md').write_text(self.CHANGELOG % '')
+        git('init', '-q', '-b', 'main')
+        git('add', '.')
+        git('commit', '-q', '-m', 'release')
+        git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        git('checkout', '-q', '-b', 'dev')
+        (root / 'CHANGELOG.md').write_text(self.CHANGELOG % '- Staged work.\n')
+        git('commit', '-q', '-am', 'work')
+
+    def test_branch_decides_the_channel_version_and_publish_paths(self):
+        for provider in PROVIDERS:
+            for branch, expected in (
+                    ('main', 'tag=v0.4.18\nversion=0.4.18\nchannel=stable\napt_path=apt\ndownloads_path=downloads\n'),
+                    ('dev', 'tag=v0.4.19-dev.2\nversion=0.4.19~~dev.2\nchannel=dev\napt_path=apt/dev\ndownloads_path=downloads/dev\n')):
+                with self.subTest(provider=provider, branch=branch), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    self.checkout(root)
+                    output = root / 'output'
+                    result = self.run_step(provider, 'Resolve release channel, version and notes', root,
+                                           {'NEX_BRANCH': branch, 'GITHUB_OUTPUT': str(output)})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(output.read_text(), expected)
+                    # A development build ships what dev has staged; a stable release its heading.
+                    notes = (root / '.cache/release-notes.md').read_text()
+                    self.assertEqual(notes, '- Staged work.\n' if branch == 'dev' else '- Shipped.\n')
+
+    def test_any_other_branch_is_refused(self):
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.checkout(root)
+                result = self.run_step(provider, 'Resolve release channel, version and notes', root,
+                                       {'NEX_BRANCH': 'feature', 'GITHUB_OUTPUT': str(root / 'output')})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('main and dev only', result.stderr)
+                self.assertFalse((root / 'output').exists())
+
+    def test_development_publishes_into_its_own_subtree_and_never_the_website(self):
+        for provider in PROVIDERS:
+            for channel, version, flags in (
+                    ('stable', '0.4.18', ("nex-apt-publish '", "release-publish.py' --iso")),
+                    ('dev', '0.4.19~~dev.7', ("nex-apt-publish --repo-root /srv/nex-apt/dev --keep 3 '",
+                                             "release-publish.py' --root /srv/nex-downloads/dev --iso"))):
+                with self.subTest(provider=provider, channel=channel), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / 'dist/netinst').mkdir(parents=True)
+                    (root / 'dist/netinst' / ('nex-core-local-' + 'a' * 64 + '.deb')).write_bytes(b'x')
+                    (root / 'scripts').mkdir()
+                    deploy = root / 'scripts/website-ci-deploy.sh'
+                    deploy.write_text(f'#!/bin/sh\ntouch "{root}/website-deployed"\n')
+                    deploy.chmod(0o755)
+                    result = self.run_step(provider, 'Publish to the website host', root, {
+                        'NEX_VERSION': version, 'NEX_CHANNEL': channel, 'NEX_DEPLOY_HOST': 'host.example.invalid',
+                        'NEX_DEPLOY_USER': 'publisher', 'NEX_DEPLOY_KEY': 'key', 'NEX_DEPLOY_KNOWN_HOSTS': 'hosts',
+                        'GITHUB_SHA': 'f' * 40}, tools=('ssh', 'scp'))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    remote = ' '.join((root / 'ssh.log').read_text().split())
+                    for flag in flags:
+                        self.assertIn(flag, remote)
+                    if channel == 'dev':
+                        self.assertNotIn("nex-apt-publish '", remote)
+                    # Only the stable channel replaces the live pages.
+                    self.assertEqual((root / 'website-deployed').exists(), channel == 'stable')
+
+    def test_development_builds_are_pruned_pre_releases_and_stable_releases_are_not(self):
+        for provider in PROVIDERS:
+            for channel, tag, version, name in (
+                    ('stable', 'v0.4.18', '0.4.18', 'Nex Core 0.4.18'),
+                    ('dev', 'v0.4.19-dev.7', '0.4.19~~dev.7', 'Nex Core 0.4.19~~dev.7 (development)')):
+                with self.subTest(provider=provider, channel=channel), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    # python3 records its arguments and then runs the real script, which stops after parsing
+                    # them (no forge to talk to): reaching its "required" message proves the arguments parse.
+                    (root / 'bin').mkdir()
+                    shim = root / 'bin/python3'
+                    shim.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{root}/python3.log"\nexec {sys.executable} "$@"\n')
+                    shim.chmod(0o755)
+                    (root / 'scripts').mkdir()
+                    shutil.copy(ROOT / 'scripts/gitea-release.py', root / 'scripts')
+                    result = self.run_step(provider, 'Create or replace the release', root, {
+                        'GITHUB_TOKEN': 'token', 'GITHUB_SHA': 'f' * 40, 'NEX_CHANNEL': channel, 'NEX_TAG': tag,
+                        'NEX_VERSION': version, 'GITHUB_API_URL': '', 'GITHUB_REPOSITORY': ''})
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn('GITHUB_API_URL, GITHUB_REPOSITORY and GITHUB_TOKEN are required', result.stderr)
+                    lines = (root / 'python3.log').read_text().splitlines()
+                    self.assertEqual(lines[0].split()[:5], ['scripts/gitea-release.py', '--tag', tag, '--target', 'f' * 40])
+                    self.assertIn(f'--name {name} ', lines[0] + ' ')
+                    if channel == 'stable':
+                        self.assertNotIn('--prune-tags', lines[0])
+                        continue
+                    words = lines[0].split()
+                    pattern = re.compile(next(word for word in words if word.startswith('--prune-tags=')).split('=', 1)[1])
+                    # Pruning may only ever select development builds; stable tags are safe.
+                    self.assertTrue(pattern.search('v0.4.19-dev.7'))
+                    for kept in ('v0.4.18', 'v0.5.0-rc1', 'v0.5.0'):
+                        self.assertFalse(pattern.search(kept), kept)
+                    self.assertEqual(words[words.index('--keep') + 1], '3')
+
+
 class GitHubMinuteBudgetTests(unittest.TestCase):
     """Hosted github.com minutes are paid for; the forge runs the full suite for free.
 
@@ -237,6 +368,65 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
         for index, (start, name) in enumerate(starts):
             end = starts[index + 1][0] if index + 1 < len(starts) else len(body)
             yield name, body[start:end]
+
+    def test_image_workflow_is_forge_only_serial_and_cap_bounded(self):
+        # The image build, QEMU boots, tamper proof and double build are heavy disposable labs: forge-only like
+        # recovery-libvirt, chained with `needs` so one job runs at a time on the shared runner, with the lab caps.
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                path = ROOT / provider / 'workflows/image.yml'
+                text = path.read_text()
+                jobs = dict(self.jobs(path))
+                self.assertEqual(list(jobs), ['image-layout', 'image-build-boot', 'controller-image', 'image-repro'])
+                previous = None
+                for name, block in jobs.items():
+                    self.assertIn(self.SKIP, block, name)
+                    self.assertIn('timeout-minutes:', block, name)
+                    if previous:
+                        self.assertIn(f'needs: {previous}\n', block, name)
+                    previous = name
+                for name in ('image-build-boot', 'controller-image', 'image-repro'):
+                    self.assertIn("NEX_DOCKER_CPUS: '2'", jobs[name], name)
+                    self.assertIn('NEX_DOCKER_MEMORY: 4g', jobs[name], name)
+                for step in ('image/build.sh all', 'tests/integration/image_boot.py', 'tests/integration/image_update.py',
+                             'appliance/build.py --profile controller', 'tests/integration/controller_image_boot.py',
+                             'scripts/image-repro-check.sh'):
+                    self.assertIn(step, text)
+
+    def test_image_jobs_set_up_go_the_qemu_host_and_the_docker_workspace_before_they_need_them(self):
+        # A clean runner has none of this: host-side `go build` in image/build.sh, the QEMU/OVMF/KVM boot labs and the
+        # workspace bind mounts of a runner whose job runs in a container each need a step that runs first.
+        needs_go = ('go test', 'image/build.sh', 'appliance/build.py', 'image-repro-check.sh')
+        needs_qemu = ('image_boot.py', 'image_update.py', 'controller_image_boot.py')
+        needs_docker_host = ('image/build.sh', 'appliance/build.py', 'image-repro-check.sh', 'tests/integration/')
+        for provider in PROVIDERS:
+            path = ROOT / provider / 'workflows/image.yml'
+            for name, block in self.jobs(path):
+                steps = re.split(r'(?m)^      - ', block.split('\n    steps:\n', 1)[1])[1:]
+                with self.subTest(provider=provider, job=name):
+                    def first(markers):
+                        return next((i for i, step in enumerate(steps) if any(m in step for m in markers)), None)
+                    go = first(('uses: https://github.com/actions/setup-go@',))
+                    if first(needs_go) is not None:
+                        self.assertIsNotNone(go, 'a job running go needs the pinned setup-go step')
+                        self.assertLess(go, first(needs_go))
+                        self.assertRegex(steps[go], r'setup-go@[0-9a-f]{40} ')
+                    if first(needs_qemu) is not None:
+                        kvm = first(('/dev/kvm',))
+                        self.assertIsNotNone(kvm, 'a QEMU lab job must check /dev/kvm')
+                        self.assertLess(kvm, first(needs_qemu))
+                        if 'controller_image_boot.py' in block:
+                            for tool in ('openssl', 'sfdisk', 'mcopy', 'mkfs.vfat'):
+                                self.assertIn(tool, steps[kvm], f'the QEMU prerequisite step must check {tool}')
+                    if first(needs_docker_host) is not None:
+                        host = first(('scripts/ci-host-workspace.sh',))
+                        self.assertIsNotNone(host, 'a Docker job must locate its workspace on the Docker host')
+                        # A failing substitution inside `echo "...$(cmd)"` does not trip errexit: assign it on its own line.
+                        self.assertRegex(steps[host], r'(?m)^\s+ws=\$\(scripts/ci-host-workspace\.sh\)\s*$')
+                        self.assertLess(host, first(needs_docker_host))
+                        for step in steps[first(needs_docker_host):]:
+                            if any(m in step for m in needs_docker_host):
+                                self.assertIn('NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}', step)
 
     def test_only_the_cheap_job_runs_on_github_com(self):
         workflows = sorted((ROOT / '.github/workflows').glob('*.yml'))

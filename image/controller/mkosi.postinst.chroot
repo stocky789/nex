@@ -1,0 +1,65 @@
+#!/bin/sh
+# Runs inside the Controller image tree after package installation and after the payload tree
+# (appliance/build-controller-payload.sh) was copied over it. Makes the tree identical on every build.
+set -eu
+
+label=${NEX_LABEL:-dev}
+sequence=${NEX_SEQUENCE:-0}
+
+cat > /usr/lib/os-release <<EOT
+PRETTY_NAME="Nex Controller $label"
+NAME="Nex Controller"
+ID=nex-controller
+ID_LIKE=debian
+VERSION_ID="$label"
+IMAGE_ID=nex-controller
+IMAGE_VERSION="$label.$sequence"
+BUILD_ID="$label-$sequence"
+HOME_URL="https://nex.example/"
+EOT
+ln -sf ../usr/lib/os-release /etc/os-release
+
+# Identity is created in the guest at first boot (cloud-init, firstboot), never in the image.
+: > /etc/machine-id
+rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub /etc/hostname
+rm -rf /root/.ssh /root/.bash_history
+
+# The payload tree arrives owned by the builder's user; everything in the image belongs to root.
+chown -R root:root /usr/local/lib/nex /usr/local/share/nex /etc/systemd/system/nex-controller.service /etc/systemd/system/nex-appliance-init.service /etc/systemd/system/corosync-qnetd.service.d
+chmod 755 /usr/local/lib/nex/*
+chmod -R a+rX /usr/local/share/nex
+install -d -m 700 /etc/nex-controller
+# The account comes from the sysusers.d file of this image with a fixed uid/gid: /etc/nex-controller and the Controller's state
+# live on the data disk and keep the numeric owner firstboot gave them across image swaps, so the id must never move with the
+# package set (useradd --system would take whatever system id is free at build time). sysusers only suggests an id and takes
+# another when it is held, so the result is checked.
+systemd-sysusers nex-controller.conf
+[ "$(id -u nex-controller):$(id -g nex-controller)" = 280:280 ] || { echo "nex-controller is not 280:280; another package holds the id" >&2; exit 1; }
+# Name resolution: networkd passes the DNS servers of the netplan configuration to systemd-resolved, whose stub is the resolver.
+# The link is part of the image (the package's tmpfiles rule `L!` only creates it at boot, and only when nothing is there).
+ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+# The readiness marker the host probes is written by firstboot; the root is read-only, so it lands on the data disk.
+ln -s /var/lib/nex-controller/appliance-ready.json /usr/local/share/nex/dist/appliance-ready.json
+
+# corosync-qnetd keeps its NSS database in /run (see the payload's drop-in); then the helper is not shipped.
+sh /usr/local/lib/nex/package-service-policy runtime-qnetd
+rm -f /usr/local/lib/nex/package-service-policy
+
+systemctl enable qemu-guest-agent nex-appliance-init nex-controller corosync-qnetd ssh systemd-resolved systemd-timesyncd
+if [ -e /usr/lib/systemd/system/systemd-networkd.service ]; then systemctl enable systemd-networkd; fi
+passwd -l root
+rm -f /var/lib/systemd/random-seed
+
+# Components inventory for the licence and source manifest, then drop the package manager's state: the guest never runs apt.
+dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\t${source:Package}\t${source:Version}\n' > /usr/local/share/nex/components.tsv
+rm -rf /var/cache/apt /var/lib/apt/lists /var/cache/debconf /var/cache/ldconfig/aux-cache /var/log/*
+rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list
+
+# Presets: every unit enabled by a package or above stays enabled when systemd applies presets at first boot.
+preset=/usr/lib/systemd/system-preset/20-nex-image.preset
+: > "$preset"
+for link in /etc/systemd/system/*.wants/* /etc/systemd/system/*.requires/*; do
+    [ -L "$link" ] || continue
+    [ "$(readlink "$link")" = /dev/null ] && continue
+    echo "enable $(basename "$link")"
+done | sort -u >> "$preset"

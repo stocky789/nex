@@ -1138,6 +1138,9 @@ func ValidatePoolResourceMutations(mutations []PoolResourceMutation) error {
 // cannot be dropped, reordered or replaced without invalidating the whole copy.
 var PoolReplicaSections = []string{"membership", "vms", "storage", "networks", "media", "storage_clusters", "resource_mutations"}
 
+// PoolReplicaUpdateRolloutSection names the optional rollout section; see SectionDigests.
+const PoolReplicaUpdateRolloutSection = "update_rollout"
+
 type PoolReplicaSection struct {
 	Name   string `json:"name"`
 	SHA256 string `json:"sha256"`
@@ -1200,9 +1203,12 @@ type PoolAuthorityReplica struct {
 	// BackupManifest binds the paged backup authority (repositories, policy/schedule
 	// definitions, retained runs, catalog index) for master takeover. Full NFS
 	// recovery-point payloads are never embedded. Covered by ContentDigest and signature.
-	BackupManifest *PoolBackupManifest  `json:"backup_manifest,omitempty"`
-	Sections       []PoolReplicaSection `json:"sections"`
-	Signature      string               `json:"signature,omitempty"`
+	BackupManifest *PoolBackupManifest `json:"backup_manifest,omitempty"`
+	// UpdateRollout is the master's pool-update.json: the one section declared only while a
+	// rollout record exists. A promoted master adopts it paused (master_changed).
+	UpdateRollout *PoolUpdateRollout   `json:"update_rollout,omitempty"`
+	Sections      []PoolReplicaSection `json:"sections"`
+	Signature     string               `json:"signature,omitempty"`
 }
 
 // SigningBytes is everything but the signature: the per-member fields are deliberately
@@ -1232,8 +1238,14 @@ func (r PoolAuthorityReplica) ContentDigest() (string, error) {
 // SectionDigests recomputes the per-section digests from the replica's own fields.
 func (r PoolAuthorityReplica) SectionDigests() ([]PoolReplicaSection, error) {
 	values := []any{r.Membership, r.VMs, r.Storage, r.Networks, r.Media, r.StorageClusters, r.ResourceMutations}
-	out := make([]PoolReplicaSection, 0, len(PoolReplicaSections))
-	for i, name := range PoolReplicaSections {
+	names := PoolReplicaSections
+	// update_rollout is declared only while a rollout record exists, so a pool that never
+	// rolled out keeps the section layout every older member verifies.
+	if r.UpdateRollout != nil {
+		values, names = append(values, r.UpdateRollout), append(append([]string{}, names...), PoolReplicaUpdateRolloutSection)
+	}
+	out := make([]PoolReplicaSection, 0, len(names))
+	for i, name := range names {
 		b, err := json.Marshal(values[i])
 		if err != nil {
 			return nil, err
@@ -1301,6 +1313,9 @@ func (r PoolAuthorityReplica) Valid() error {
 	}
 	if r.BackupManifest != nil && r.BackupManifest.Valid() != nil {
 		return errors.New("pool authority replica backup manifest is invalid")
+	}
+	if r.UpdateRollout != nil && r.UpdateRollout.Valid() != nil {
+		return errors.New("pool authority replica update rollout is invalid")
 	}
 	return r.VerifySections()
 }
@@ -1376,11 +1391,24 @@ type PoolCommand struct {
 	// preflight named them. Core re-computes that set when the promotion runs and refuses if
 	// it differs, so an operator can never power off a host they were not shown.
 	FenceHostIDs []string `json:"fence_host_ids,omitempty"`
+	// Update is the request of the update-rollout and update-control actions.
+	Update *PoolUpdateRequest `json:"update,omitempty"`
 }
 
 func (c PoolCommand) Valid() error {
-	if c.RequestID == "" || c.Action != "member-join" && c.Action != "storage-reconcile" && c.Action != "join" && c.Action != "maintenance" && c.Action != "master-change" && c.Action != "eject" && c.Action != "transfer-cancel" && c.Action != "promote" && c.Action != "fence-profile" && c.Action != "bmc-provisioning" && c.Action != "host-fencing" {
+	if c.RequestID == "" || c.Action != "member-join" && c.Action != "storage-reconcile" && c.Action != "join" && c.Action != "maintenance" && c.Action != "master-change" && c.Action != "eject" && c.Action != "transfer-cancel" && c.Action != "promote" && c.Action != "fence-profile" && c.Action != "bmc-provisioning" && c.Action != "host-fencing" && c.Action != "update-rollout" && c.Action != "update-control" {
 		return errors.New("invalid pool command action")
+	}
+	// A rollout is the master's own multi-step job: it carries only the routing target and its
+	// request; the master reads its own membership.
+	if c.Action == "update-rollout" || c.Action == "update-control" {
+		if c.Update == nil {
+			return errors.New("a pool update command carries no update request")
+		}
+		if err := requireNonEmptyBoundedID(c.Membership.MasterHostID, "a pool update requires the pool master"); err != nil {
+			return err
+		}
+		return c.Update.Valid(c.Action)
 	}
 	// Host fencing is one pool-wide setting, so unlike every other action here it names no
 	// member: only the master, which keeps it.  Enabled is a desired state, so re-sending

@@ -20,3 +20,6 @@ docs/qa/**/*.jpg
 docs/qa/**/*.jpeg
 docs/qa/**/*.webp
 docs/qa/**/*.gif
+
+# mkosi image build output (image/build.sh)
+image/out/

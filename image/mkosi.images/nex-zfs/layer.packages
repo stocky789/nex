@@ -1,0 +1,7 @@
+# Packages the nex-zfs layer adds on top of the base (disjoint from ../../base.packages).
+# nex-zfs-modules is not a Debian package: build-layer.sh packs the kernel modules that
+# scripts/build-zfs-modules.sh built and signed from the Debian zfs-linux source, as a package that
+# provides zfs-modules (so zfs-zed never pulls zfs-dkms, a compiler or headers in).
+zfsutils-linux
+zfs-zed
+nex-zfs-modules
