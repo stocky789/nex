@@ -85,17 +85,28 @@ func TestLocalUpdatesAuthAndApply(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || result.Status != "scheduled" {
 		t.Fatalf("%s", w.Body)
 	}
-	// The background apply should reach a terminal phase, not just start one.
-	for i := 0; i < 100; i++ {
+	// The apply installs and schedules the restart, then hands the outcome to the restarted
+	// service: it must stay "verifying", not claim "done", until that service has checked.
+	for range 100 {
 		time.Sleep(20 * time.Millisecond)
 		w = callLocal(s, "GET", "/api/local/v1/updates", nil, cookie, csrf, "https://core.test")
 		_ = json.Unmarshal(w.Body.Bytes(), &st)
-		if st.Phase == "done" || st.Phase == "failed" {
+		if st.Phase == nexupdate.PhaseVerifying || st.Phase == "failed" {
 			break
 		}
 	}
+	if st.Phase != nexupdate.PhaseVerifying {
+		t.Fatalf("expected the apply to wait for the restarted service's check, got %+v", st)
+	}
+	// The restarted service resolves it; this test host has no Controller to report to.
+	s.WatchPostUpdate()
+	for i := 0; i < 200 && st.Phase != "done"; i++ {
+		time.Sleep(20 * time.Millisecond)
+		w = callLocal(s, "GET", "/api/local/v1/updates", nil, cookie, csrf, "https://core.test")
+		_ = json.Unmarshal(w.Body.Bytes(), &st)
+	}
 	if st.Phase != "done" {
-		t.Fatalf("expected a completed apply, got %+v", st)
+		t.Fatalf("expected the restarted service to complete the update, got %+v", st)
 	}
 }
 

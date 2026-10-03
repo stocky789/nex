@@ -51,14 +51,23 @@ been walked through on a running Controller, a host or a VM: only automated hand
 2. Select **Check**. The package index is refreshed at most once every five minutes,
    so a release published moments ago can take that long to appear.
 3. If an update is listed, select **Update**.
-4. Watch the progress through refresh, install and restart; errors appear on the same
-   page and include apt's own message. Progress moves in steps, not by download percentage.
-5. Sign in again if the session drops after restart.
+4. Watch the progress through refresh, install, shutdown of virtual machines, reboot and
+   report check; errors appear on the same page and include apt's own message. Progress moves in
+   steps, not by download percentage. A host reboot takes several minutes.
+5. Sign in again if the session drops after the restart. Before you start, expect the host (or,
+   for the Controller, the appliance) to reboot: machines on a Core host are stopped for the
+   reboot, so schedule the update accordingly.
 
 ## Expected result
 
-Installed and available versions are shown. Apply schedules a package install and
-service restart; the page reports that the service is restarting. After a Core update the
+Installed and available versions are shown. Apply installs the package and restarts the
+service. On a Core host the update ends with a reboot: virtual machines are shut down cleanly
+(never forced off), the host reboots, and the machines that were running start again. The
+Controller appliance reboots its guest after its own update. The progress then reads *waiting for
+this host to report to its Controller* and becomes **Update complete** only after the Controller
+has received a report from the restarted host. If a machine does not shut down within five
+minutes, the host is not rebooted, stays up with its machines running, and the page says so.
+After a Core update the
 host identifies as `Nex Core <new version>` in `/etc/os-release`, the console banner and the
 **Nex Core** field on the host's **Overview** tab in Controller; that package version is the only Nex Core version.
 
@@ -129,6 +138,15 @@ been walked through in a browser or on a running host (see [Verification](#verif
 ## Troubleshooting
 
 - Repo errors appear beside the version fields; a failed package-index refresh now says so directly. Fix connectivity or `repo_url` and check again.
+- **The update says it needs attention after the restart:** the package is installed, but the host
+  has not reported to its Controller since it restarted, so the update is not counted as
+  complete. Check that the Controller is running and reachable from the host, then select **Check**.
+  The host keeps retrying on its own. If the page also says the host was not rebooted, a virtual
+  machine did not shut down in time: shut it down from its console and update again.
+- **A virtual machine did not start again after the reboot:** a machine starts again after an
+  update only if it was running before it, and only after the host is back in service, so a host
+  in maintenance mode, or a pool master still waiting for its members to confirm it, starts it
+  later, not immediately. Start it from its page if you do not want to wait.
 - **An image update task failed or needs attention:** the host card shows its recorded error
   beside the task link. Open the task for details and check the running/staged image state
   before retrying; a failed check does not mean the host has no newer release.

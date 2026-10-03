@@ -1,0 +1,32 @@
+{
+  "summary": "Start working version 0.4.23 for the DHCP Controller reporting fix, the post-update report check and the reboot after a Core update.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-10-04-version-0.4.23.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only the changelog-derived version heading changes; the operator steps for the bundled changes are documented by their own change records."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Version numbering changes no client, Controller/Core or observed-result contract. The update-phase contract change is recorded in 2026-10-04-update-reboot-and-report-check.json.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Version numbering changes no milestone or acceptance gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Version labels and release notes create no durable product state."
+  },
+  "verification": {
+    "method": "Changelog-derived version resolution and documentation structure checks.",
+    "evidence": [
+      "CHANGELOG.md",
+      "scripts/release-version.py",
+      "tests/test_release_version.py"
+    ]
+  }
+}

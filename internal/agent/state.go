@@ -92,6 +92,10 @@ type Store struct {
 	beforePublish  func() error // test-only deterministic pre-rename failure hook
 	afterPublish   func() error // test-only deterministic post-rename failure hook
 	State          State
+	// lastReport is when the Controller last answered a report from this process. It is
+	// in-memory observation only; a restart starts from zero, so a value means "reported
+	// since this process started".
+	lastReport atomic.Int64
 }
 
 // publishedStateError means state.json was atomically renamed before the
@@ -108,6 +112,15 @@ func (e *publishedStateError) Unwrap() error { return e.err }
 func stateWasPublished(err error) bool {
 	var published *publishedStateError
 	return errors.As(err, &published)
+}
+
+// LastReport returns when the Controller last accepted a report from this process, or the
+// zero time if none has been accepted since the process started.
+func (s *Store) LastReport() time.Time {
+	if ns := s.lastReport.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
 }
 
 func OpenStore(dir string) (*Store, error) {

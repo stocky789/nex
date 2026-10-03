@@ -130,6 +130,7 @@ function UpdatesPanel({
       )}
       {update?.error && <p className="warning" role="status">{update.error}</p>}
       {note && phase === "idle" && <p className="notice" role="status">{note}</p>}
+      <p className="note">After a successful update the Controller appliance reboots, so this page is unavailable for a short time. Workloads on the hosts are not affected.</p>
       <p className="note">Each host's Nex Core version is listed under Members. Classic hosts update through their own package archive; image-edition hosts update themselves and are listed under Host images.</p>
     </Section>
   );

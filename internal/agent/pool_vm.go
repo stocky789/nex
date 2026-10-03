@@ -3433,6 +3433,9 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 	restricted := requirePoolStartPath(s)
 	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
 	managed, checks := engine.Applied(ctx)
+	// Guests an update shut down for a reboot return with the autostart ones, through the
+	// same gates below. The record only counts on a boot after the one that wrote it.
+	restart := pendingUpdateRestart(s)
 	// libvirt starts enabled domains before this agent can confirm pool authority. Keep
 	// native autostart disabled for every managed VM; the durable Core Autostart setting
 	// below is the boot intent, and this pass starts it only after current master admission.
@@ -3460,7 +3463,7 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 		return "pool VM autostart skipped: managed VM checks are not ready"
 	}
 	for _, vm := range managed.VMs {
-		if !vm.Autostart || suppressionFailed[vm.ID] {
+		if !(vm.Autostart || restart[vm.ID]) || suppressionFailed[vm.ID] {
 			continue
 		}
 		shared := poolVMOnSharedStorage(managed, vm)
@@ -3518,6 +3521,10 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 		} else if err == nil && observed == "shut off" {
 			_ = poolVMRequestPeerBound(ctx, s, vm.ID, "stopped", op, epoch, nil, false, nil, nil)
 		}
+	}
+	// Every recorded guest has now had its one attempt this boot, started or refused.
+	if restart != nil {
+		finishUpdateRestart(s)
 	}
 	return ""
 }

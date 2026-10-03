@@ -7421,7 +7421,7 @@
     },
     &quot;phase&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;idle, downloading, installing, restarting, done, or failed when an apply is tracked.&quot;
+      &quot;description&quot;: &quot;idle, downloading, installing, restarting, verifying, attention, done, or failed when an apply is tracked. On a Core host, verifying means the service has restarted and Core is waiting for the host to report to its Controller; attention means no report was accepted in time (the package is installed and the host keeps retrying).&quot;
     },
     &quot;progress&quot;: {
       &quot;type&quot;: &quot;integer&quot;,

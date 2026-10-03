@@ -2,7 +2,7 @@
 // channel and base_url come from the host's own status (package edition: channel only; image edition: both).
 export type UpdateStatus = { package: string; core_available_version?: string; installed_version: string; available_version?: string; update_available: boolean; repo_url: string; channel?: string; base_url?: string; phase?: string; progress?: number; message?: string; error?: string };
 
-// Polls the update status once a second until the helper reports done or failed, for up to
+// Polls the update status once a second until the helper reports done, failed or attention, for up to
 // ten minutes. The service restarts mid-apply, so a poll that cannot reach it is part of a
 // normal update, not a failure. An uncertain submission also tolerates temporary server errors.
 export async function followUpdate(
@@ -24,8 +24,8 @@ export async function followUpdate(
       continue;
     }
     onStatus(st);
-    if (st.phase === "downloading" || st.phase === "installing" || st.phase === "restarting") sawActivity = true;
-    if (st.phase === "done" || st.phase === "failed") return uncertain && !sawActivity ? undefined : st;
+    if (st.phase === "downloading" || st.phase === "installing" || st.phase === "restarting" || st.phase === "verifying") sawActivity = true;
+    if (st.phase === "done" || st.phase === "failed" || st.phase === "attention") return uncertain && !sawActivity ? undefined : st;
     if (uncertain) {
       idleReads = !st.phase || st.phase === "idle" ? idleReads + 1 : 0;
       if (idleReads >= 5) return st;

@@ -1,0 +1,58 @@
+{
+  "summary": "Core updates end in a graceful-shutdown reboot with managed guests restarted afterwards, the Controller appliance reboots after its update, and every Core update is only complete once the restarted host has reported to its Controller.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "internal/localcore/postupdate.go",
+    "internal/localcore/postupdate_test.go",
+    "internal/localcore/update_reboot_test.go",
+    "internal/localcore/updates_test.go",
+    "internal/agent/state.go",
+    "internal/agent/run.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/update_restart.go",
+    "internal/agent/update_restart_test.go",
+    "internal/agent/last_report_test.go",
+    "internal/vmhost/guest_shutdown.go",
+    "cmd/nex-core-local/main.go",
+    "web/src/updates.ts",
+    "web/src/updates.test.mjs",
+    "web/src/main.tsx",
+    "web/src/settings.tsx",
+    "web/src/local.tsx",
+    "docs/guide/software-updates.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "tests/integration/core_restart_reporting_lab.py",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The update steps, expected result and troubleshooting describe the reboot, the clean guest shutdown, the report check and the needs-attention outcome.",
+    "pages": ["docs/guide/software-updates.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "GET /updates on Core and Controller can report two new phases, verifying and attention, and a Core apply no longer ends in done until the restarted host has reported. No route or field is added; consumers that treat unknown phases as in progress must also stop on attention.",
+    "operations": ["GET /api/local/v1/updates", "POST /api/local/v1/updates/apply", "GET /api/v1/updates"],
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/local-openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Update-flow hardening inside the existing Updates capability."
+  },
+  "state": {
+    "owner": "core",
+    "record": "nex-core-local state directory: post-update-check.json and update-progress.json; agent state directory: update-restart.json",
+    "reason": "The report check marker (post-update-check.json, with update-progress.json) is in nex-core-local's state directory and the list of guests to restart (update-restart.json) is in the agent's state directory, both on the host. A fresh Controller recovers nothing: it only reads the host's reported update phase, and a host reboots and restarts its own guests with no Controller connected."
+  },
+  "verification": {
+    "method": "Go tests cover the report-check outcomes (attention on silence, done for an unenrolled host, no effect without an update), that LastReport only records accepted reports, the reboot decision in ApplyLocal (reboot, no reboot with the reason kept, guests restored when the reboot cannot be scheduled, appliance versus standalone Controller) and the boot pass honouring the restart record (only after a reboot, never in maintenance mode); the pass test fails without the hook. web/src/updates.test.mjs covers verifying and attention. tests/integration/core_restart_reporting_lab.py failed on the unfixed binary and passed on the fixed one against a lab Core and Controller. Not run: a real apt update followed by a host reboot with running guests, the reboot-and-restart path on a pool master with members, and a browser walkthrough of the warnings.",
+    "evidence": [
+      "internal/agent/update_restart_test.go",
+      "internal/localcore/update_reboot_test.go",
+      "internal/localcore/postupdate_test.go",
+      "tests/integration/core_restart_reporting_lab.py"
+    ]
+  }
+}

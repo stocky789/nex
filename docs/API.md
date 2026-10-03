@@ -6094,6 +6094,13 @@ configured source offers is returned in
 the JSON `error` field with HTTP 200. While an apply runs, GET also returns `phase`,
 `progress` and `message` from `update-progress.json` in the service state directory.
 `progress` reports fixed steps rather than download percentage.
+On a Core host the apply does not end in `done` when the package is installed. It records
+`verifying` and restarts `nex-core-local`; the restarted service resolves the phase itself,
+with no Controller involved. `done` means the embedded agent has had a report accepted by
+the Controller since the restart (or the host has no Controller). `attention` means none was
+accepted within about six minutes: the package is installed, `error` explains, and the agent
+keeps retrying. The state is the service's `update-progress.json` plus a private
+`post-update-check.json` marker that survives a further restart until the check resolves.
 The Controller's GET also returns `core_available_version`, the newest `nex-core-local` the
 same archive offers, so the host page can compare each host's reported version with it; the
 field is omitted when the archive does not offer the package.

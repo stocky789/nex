@@ -757,6 +757,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		}
 		return err
 	}
+	s.lastReport.Store(time.Now().UnixNano())
 	// An authenticated report answered by the enrolled Controller, over a socket whose local
 	// address is one the applied spec puts on the management bridge, is this host proving its
 	// connectivity over the configuration under test; a staged change cannot be confirmed

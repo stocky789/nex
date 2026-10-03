@@ -18,6 +18,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+## [0.4.23] — 2026-10-04
+
+### Major Feature
+
+- A Core update now finishes with a reboot, so a host that has run for a long time comes back fresh on the new version. Virtual machines are shut down cleanly first (never forced off) and those that were running start again afterwards, through the same pool checks as any start; a host in maintenance mode or waiting for pool confirmation starts them once it is back in service. If a machine does not shut down within five minutes the host is not rebooted and the page says why. The Controller appliance reboots after its own update. The update dialogs warn about this before you start.
+- An update is only reported complete once the restarted host has reported to its Controller. If it has not, the update shows **needs attention** with the reason instead of finishing silently; the host keeps retrying on its own.
+
+### Bug Fixes
+
+- After a Core update or service restart, a host whose Controller was deployed with DHCP stayed stale in the Controller although both were running: Core found the Controller again but its host agent stopped immediately and never reported. The agent now keeps running. Affects hosts on 0.4.18 or later; installing this build restores reporting.
+
 ## [0.4.22] — 2026-10-04
 
 ### Minor Feature

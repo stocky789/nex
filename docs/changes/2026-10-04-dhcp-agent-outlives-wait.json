@@ -1,0 +1,33 @@
+{
+  "summary": "Keep the embedded Core agent running after a DHCP Controller address refresh, so a host is not left stale after a Core update or restart.",
+  "paths": [
+    "internal/localcore/deploy.go",
+    "internal/localcore/deploy_refresh_test.go",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-10-04-dhcp-agent-outlives-wait.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator update and restart steps are unchanged; Core now keeps reporting after the restart as the guide already describes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core API contract changed; only which context bounds the embedded agent started by the local DHCP resume path."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix inside the existing Core local resume path."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable setting; agent enrollment, Controller URL and the deployment record remain Core-owned as before."
+  },
+  "verification": {
+    "method": "The strengthened DHCP refresh regression failed before the fix and passes after; go test ./internal/localcore passes. On a lab host with a DHCP-deployed Controller, a goroutine dump of the stuck Core process showed no agent goroutine; a build with the fix, temporarily bind-mounted and then removed, restarted through the update path and the host resumed reporting. Not run: an end-to-end package update from a released build containing the fix.",
+    "evidence": [
+      "internal/localcore/deploy_refresh_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

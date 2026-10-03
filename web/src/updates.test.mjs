@@ -18,6 +18,15 @@ assert.deepEqual(seen, ["restarting", "done"]);
 const failed = await followUpdate(async () => ({ phase: "failed", error: "apt failed" }), () => {}, sleep);
 assert.equal(failed.error, "apt failed");
 
+// A Core update ends "verifying" until the restarted host reports again; a host that never
+// does is "attention", which must stop the wait instead of polling for ten minutes.
+const unreported = [{ phase: "verifying" }, { phase: "verifying" }, { phase: "attention", error: "no report" }];
+const attention = await followUpdate(async () => unreported.shift(), () => {}, sleep);
+assert.equal(attention.phase, "attention", "the wait ends on attention");
+assert.equal(attention.error, "no report");
+const verified = [{ phase: "verifying" }, { phase: "done", message: "Update complete" }];
+assert.equal((await followUpdate(async () => verified.shift(), () => {}, sleep, true)).phase, "done", "verifying counts as update activity for an uncertain apply");
+
 await assert.rejects(followUpdate(async () => { throw Object.assign(new Error("update check failed"), { status: 500 }); }, () => {}, sleep), /update check failed/, "an HTTP error still surfaces");
 
 const lostResponse = [Object.assign(new Error("gateway restarted"), { status: 502 }), { phase: "downloading" }, { phase: "done", message: "Update complete" }];

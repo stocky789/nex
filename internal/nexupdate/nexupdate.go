@@ -49,8 +49,8 @@ type Status struct {
 	AvailableVersion string `json:"available_version,omitempty"`
 	UpdateAvailable  bool   `json:"update_available"`
 	RepoURL          string `json:"repo_url"`
-	Channel          string `json:"channel,omitempty"` // the host's own check only: stable, or dev when repo_url is the development subtree
-	Phase            string `json:"phase,omitempty"`    // idle|downloading|installing|restarting|done|failed
+	Channel          string `json:"channel,omitempty"`  // the host's own check only: stable, or dev when repo_url is the development subtree
+	Phase            string `json:"phase,omitempty"`    // idle|downloading|installing|restarting|verifying|attention|done|failed
 	Progress         *int   `json:"progress,omitempty"` // 0-100 when known
 	Message          string `json:"message,omitempty"`
 	Error            string `json:"error,omitempty"`
@@ -227,6 +227,85 @@ func ReadProgress(stateDir string) (Progress, bool) {
 
 func ClearProgress(stateDir string) {
 	_ = os.Remove(ProgressPath(stateDir))
+}
+
+// PhaseVerifying and PhaseAttention are the Core-only phases that follow a restart: the
+// package is installed and the service restarted, and Core is waiting for (or failed to
+// see) the first accepted report to the Controller.
+const (
+	PhaseVerifying = "verifying"
+	PhaseAttention = "attention"
+)
+
+const postUpdateCheckFileName = "post-update-check.json"
+
+func postUpdateCheckPath(stateDir string) string {
+	return filepath.Join(stateDir, postUpdateCheckFileName)
+}
+
+// BeginPostUpdateCheck durably records that the next start of nex-core-local must see its
+// host report to the Controller before the update counts as complete. The optional note is
+// appended to the outcome, for what the operator should know about this restart.
+func BeginPostUpdateCheck(stateDir, note string) error {
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(map[string]string{"started_at": time.Now().UTC().Format(time.RFC3339), "note": note})
+	if err != nil {
+		return err
+	}
+	tmp := postUpdateCheckPath(stateDir) + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, postUpdateCheckPath(stateDir))
+}
+
+// PostUpdateCheckPending reports whether a restart is still owed its report check.
+func PostUpdateCheckPending(stateDir string) bool {
+	_, err := os.Stat(postUpdateCheckPath(stateDir))
+	return err == nil
+}
+
+// FinishPostUpdateCheck records the outcome as the update progress and clears the marker.
+// The outcome is written first: a crash between the two repeats the check, never loses it.
+// A note recorded with the marker (why the host was not rebooted) is added to the message.
+func FinishPostUpdateCheck(stateDir string, outcome Progress) error {
+	if note := postUpdateCheckNote(stateDir); note != "" {
+		if outcome.Message != "" {
+			outcome.Message += " " + note
+		} else {
+			outcome.Error += " " + note
+		}
+	}
+	if err := WriteProgress(stateDir, outcome); err != nil {
+		return err
+	}
+	return os.Remove(postUpdateCheckPath(stateDir))
+}
+
+func postUpdateCheckNote(stateDir string) string {
+	b, err := os.ReadFile(postUpdateCheckPath(stateDir))
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		Note string `json:"note"`
+	}
+	_ = json.Unmarshal(b, &m)
+	return m.Note
+}
+
+// PrepareReboot, when set by nex-core-local, makes an update end in a host reboot: it shuts
+// the guests down gracefully and returns how to bring them back if the reboot cannot be
+// scheduled. An error means nothing was left stopped and the host must not be rebooted.
+var PrepareReboot func(ctx context.Context) (undo func(context.Context), err error)
+
+// applianceInstalled reports whether this Controller is the bundled appliance guest, which
+// reboots after an update. A Controller installed on a host of its own only restarts.
+func applianceInstalled(stateDir string) bool {
+	_, err := os.Stat(filepath.Join(stateDir, "appliance-initialized"))
+	return err == nil
 }
 
 func MergeProgress(st *Status, stateDir string) {
@@ -516,27 +595,72 @@ func ApplyLocal(ctx context.Context, repoURL, packageName, stateDir string) (App
 		return ApplyResult{Status: "failed", Message: msg}, errors.New(msg)
 	}
 	unit := "nex-core-local.service"
-	if packageName == "nex-controller" {
+	core := packageName != "nex-controller"
+	if !core {
 		unit = "nex-controller.service"
 	} else {
 		installRecommended(ctx, stateDir)
 	}
-	_ = WriteProgress(stateDir, Progress{Phase: "restarting", Percent: 98, Message: "Restarting service"})
-	restart := Command(ctx, "systemd-run", "--unit=nex-update-restart", "--no-block", "/bin/systemctl", "restart", unit)
-	if out, err := restart.CombinedOutput(); err != nil {
+	// A Core host is only updated once it reports to its Controller again, so the check
+	// is recorded before the restart or reboot that the restarted service will resolve.
+	if core {
+		if err := BeginPostUpdateCheck(stateDir, ""); err != nil {
+			_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 98, Error: "package installed but the post-update check could not be recorded: " + err.Error()})
+			return ApplyResult{Status: "failed", Message: err.Error()}, err
+		}
+	}
+	reboot, undo := false, func(context.Context) {}
+	switch {
+	case core && PrepareReboot != nil:
+		_ = WriteProgress(stateDir, Progress{Phase: PhaseVerifying, Percent: 96, Message: "Shutting down guests, then rebooting the host"})
+		var err error
+		if undo, err = PrepareReboot(ctx); err != nil {
+			// Nothing is left stopped. Keep the installed update live by restarting the
+			// service, and say why the host was not rebooted.
+			undo = func(context.Context) {}
+			_ = BeginPostUpdateCheck(stateDir, "The host was not rebooted: "+err.Error()+".")
+		} else {
+			reboot = true
+		}
+	case !core:
+		reboot = applianceInstalled(stateDir)
+	}
+	action, what := []string{"restart", unit}, unit+" will restart shortly"
+	if reboot {
+		action, what = []string{"reboot"}, "the host will reboot shortly"
+		if !core {
+			what = "the Controller appliance will reboot shortly"
+		}
+	}
+	if core {
+		_ = WriteProgress(stateDir, Progress{Phase: PhaseVerifying, Percent: 98, Message: "Restarting, then waiting for this host to report to its Controller"})
+	} else {
+		_ = WriteProgress(stateDir, Progress{Phase: "restarting", Percent: 98, Message: "Restarting"})
+	}
+	schedule := func(action []string) ([]byte, error) {
+		return Command(ctx, "systemd-run", append([]string{"--unit=nex-update-restart", "--no-block", "/bin/systemctl"}, action...)...).CombinedOutput()
+	}
+	out, err = schedule(action)
+	if err != nil && reboot {
+		// Guests are already down: bring them back, then fall back to a service restart.
+		undo(ctx)
+		reboot, what = false, unit+" will restart shortly"
+		action = []string{"restart", unit}
+		out, err = schedule(action)
+	}
+	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			msg = err.Error()
 		}
+		_ = os.Remove(postUpdateCheckPath(stateDir))
 		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 98, Error: "package installed but restart failed: " + msg})
 		return ApplyResult{Status: "failed", Message: "package installed but restart failed: " + msg}, err
 	}
-	_ = WriteProgress(stateDir, Progress{Phase: "done", Percent: 100, Message: unit + " will restart shortly"})
-	return ApplyResult{
-		Status:    "scheduled",
-		Message:   unit + " will restart shortly",
-		Operation: "systemd-run restart",
-	}, nil
+	if !core {
+		_ = WriteProgress(stateDir, Progress{Phase: "done", Percent: 100, Message: what})
+	}
+	return ApplyResult{Status: "scheduled", Message: what, Operation: "systemd-run " + action[0]}, nil
 }
 
 // recommendedCorePackages are OpenZFS and the headers DKMS builds it against.
@@ -583,7 +707,7 @@ func StartApplyLocal(repoURL, packageName, stateDir string) (ApplyResult, error)
 	if applyRunning {
 		return ApplyResult{Status: "failed", Message: "update already in progress"}, errors.New("update already in progress")
 	}
-	if p, ok := ReadProgress(stateDir); ok && (p.Phase == "downloading" || p.Phase == "installing" || p.Phase == "restarting") {
+	if p, ok := ReadProgress(stateDir); ok && (p.Phase == "downloading" || p.Phase == "installing" || p.Phase == "restarting" || p.Phase == PhaseVerifying) {
 		return ApplyResult{Status: "failed", Message: "update already in progress"}, errors.New("update already in progress")
 	}
 	applyRunning = true

@@ -940,7 +940,7 @@ function App() {
                     if (st?.phase === "done") {
                       setUpdateNote(st.message || "Update complete");
                       setUpdatePhase("done");
-                    } else if (st?.phase === "failed") {
+                    } else if (st?.phase === "failed" || st?.phase === "attention") {
                       setUpdatePhase("error");
                       setActionError(st.error || st.message || "Update failed");
                     } else {
