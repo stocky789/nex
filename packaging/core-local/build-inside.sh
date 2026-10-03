@@ -11,6 +11,12 @@ tar -xzf /input/nex-source.tar.gz --strip-components=1
 go build -mod=vendor -trimpath -buildvcs=false -ldflags "-buildid= -X nex.local/nex/internal/version.Version=${NEX_VERSION}" -o /build/nex-core-local ./cmd/nex-core-local
 (cd web && npm ci && npm run typecheck && npm run build)
 cc -Wall -Wextra -Werror -O2 packaging/core-local/nex-root-auth.c -lpam -o /build/nex-root-auth
+# --export-dynamic keeps the helper's read/pread/pread64 in the dynamic symbol table, so libblkid's calls
+# bind to them (symbol interposition) and the probe is served from the iSCSI LUN; the helper's selfcheck
+# refuses to run if libblkid bypasses them. The test binary needs it for the same selfcheck.
+cc -Wall -Wextra -Werror -O2 -Wl,--export-dynamic packaging/core-local/nex-iscsi-inspect.c $(pkg-config --cflags --libs libiscsi blkid) -o /build/nex-iscsi-inspect
+cc -Wall -Wextra -Werror -O2 -Wl,--export-dynamic packaging/core-local/nex-iscsi-inspect-test.c $(pkg-config --cflags --libs libiscsi blkid) -o /build/nex-iscsi-inspect-test
+/build/nex-iscsi-inspect-test
 pkg=/build/package
 install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/nex/appliance" "$pkg/usr/share/doc/nex-core-local" "$pkg/etc/libvirt/hooks/qemu.d" "$pkg/usr/share/nex/core-local"
 install -d "$pkg/usr/share/keyrings"
@@ -37,6 +43,7 @@ else
     printf '/etc/pam.d/nex-core-local\n/etc/modules-load.d/nex-sensors.conf\n/etc/modules-load.d/nex-ipmi.conf\n' > "$pkg/DEBIAN/conffiles"
 fi
 install -m755 /build/nex-root-auth "$pkg/usr/lib/nex/"
+install -m755 /build/nex-iscsi-inspect "$pkg/usr/lib/nex/"
 install -m755 /build/nex-core-local "$pkg/usr/lib/nex/"
 install -m755 packaging/core-local/core-local-setup "$pkg/usr/lib/nex/"
 if [ "$edition" = classic ]; then
@@ -87,6 +94,8 @@ install -m644 /usr/local/go/LICENSE "$pkg/usr/share/doc/nex-core-local/go-LICENS
 install -m644 vendor/github.com/klauspost/compress/LICENSE "$pkg/usr/share/doc/nex-core-local/klauspost-compress-LICENSE"
 install -m644 vendor/github.com/mattn/go-sqlite3/LICENSE "$pkg/usr/share/doc/nex-core-local/go-sqlite3-LICENSE"
 install -m644 /usr/share/doc/libpam0g/copyright "$pkg/usr/share/doc/nex-core-local/pam-copyright"
+install -m644 /usr/share/doc/libiscsi7/copyright "$pkg/usr/share/doc/nex-core-local/libiscsi-copyright"
+install -m644 /usr/share/doc/libblkid1/copyright "$pkg/usr/share/doc/nex-core-local/libblkid-copyright"
 for file in \
     vendor/github.com/aws/aws-sdk-go-v2/LICENSE.txt \
     vendor/github.com/aws/aws-sdk-go-v2/NOTICE.txt \
@@ -143,7 +152,7 @@ Package: nex-core-local
 Version: ${NEX_VERSION}
 Architecture: amd64
 Maintainer: Nex contributors
-Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, ifupdown, bridge-utils, vlan, dmidecode, pciutils, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh, ipmitool, sbd
+Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, ifupdown, bridge-utils, vlan, dmidecode, pciutils, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, libiscsi7, libblkid1, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh, ipmitool, sbd
 Recommends: linux-headers-amd64, zfs-dkms, zfsutils-linux
 Section: admin
 Priority: optional

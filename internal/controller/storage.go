@@ -52,6 +52,9 @@ func (c *Controller) completeStorageDiscoveries(host string, results []protocol.
 		if !ok || result.HostID != host || result.HostID != pending.request.HostID || result.PoolID != pending.request.PoolID {
 			continue
 		}
+		if protocol.ValidateStorageDiscoveryResult(result) != nil {
+			result = protocol.StorageDiscoveryResult{RequestID: result.RequestID, PoolID: result.PoolID, HostID: result.HostID, Status: "failed", Error: "storage discovery is unavailable", ObservedAt: result.ObservedAt}
+		}
 		if ch := pending.result; ch != nil {
 			select {
 			case ch <- result:
@@ -84,6 +87,14 @@ func (c *Controller) discoverStorage(w http.ResponseWriter, r *http.Request, use
 	var capabilities []string
 	if err = tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", request.HostID).Scan(&raw); err != nil || json.Unmarshal([]byte(raw), &capabilities) != nil || !contains(capabilities, protocol.StorageDiscoveryCapability) {
 		fail(w, http.StatusConflict, "host does not support storage discovery")
+		return
+	}
+	if request.Purpose != "" && !contains(capabilities, protocol.StorageDiscoveryPurposeCapability) {
+		fail(w, http.StatusConflict, "host does not support backup-purpose discovery; upgrade Nex Core")
+		return
+	}
+	if request.TargetIQN != "" && !contains(capabilities, protocol.ISCSIInspectCapability) {
+		fail(w, http.StatusConflict, "host does not support selected-target iSCSI inspection; upgrade Nex Core")
 		return
 	}
 	if request.Kind == "zfs-device" && !contains(capabilities, protocol.ZFSProvisionCapability) {

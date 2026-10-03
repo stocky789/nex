@@ -26,8 +26,8 @@ verification limits that apply to its workflow.
 8. [Operate the private website](operate-website.md)
    (authorized maintainers; nginx releases, monitoring and rollback).
 9. [Add VM storage repositories](storage-repositories.md)
-   (local directories, NFSv4, SMB3, iSCSI and OpenZFS; new ZFS provisioning is restricted
-   to internal disposable labs).
+   (local directories, NFSv4, SMB3, iSCSI and OpenZFS; updated Core hosts detect iSCSI LUN
+   identities on target selection or **Inspect LUNs**; new ZFS provisioning is restricted to internal disposable labs).
 10. [Join a host to a pool](join-a-pool.md)
    (add a host from the pool's **Settings** → **Members**, with the host-local procedure as the
    recovery path; per-host shared-storage access and guest-network/ISO convergence, with native
@@ -75,7 +75,7 @@ verification limits that apply to its workflow.
    (Controller and host-local package updates from a configured repo; image-edition hosts update
    themselves from **Settings → Updates → Host images**, with task refusals and interruption-safe API retries;
    [Roll back a host update](roll-back-a-host-update.md) returns one to its previous release;
-   [Update a pool](update-a-pool.md) runs a pool-wide rollout from **Settings → Updates → Pool rollout**, unverified).
+   [Update a pool](update-a-pool.md) runs a pool-wide update from **Settings → Updates → Pool update**, unverified).
 25. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; ISO and package build, readable forge downloads, and website publication).
 26. [Set up backup repositories](backup-repositories.md)

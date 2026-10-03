@@ -1,0 +1,41 @@
+{
+  "summary": "Let the Create backup repository form browse NFS exports and SMB3 shares and folders with the same Core discovery as VM storage, flagging folders that already hold a backup repository.",
+  "paths": [
+    "web/src/share-browser.tsx",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/backup-repositories.tsx",
+    "web/src/backup-repositories.test.mjs",
+    "internal/protocol/storage.go",
+    "internal/protocol/storage_test.go",
+    "internal/vmhost/storage_discovery.go",
+    "internal/vmhost/storage_discovery_test.go",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "docs/guide/backup-repositories.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The backup repository steps describe Browse exports and Browse shared folders, the E marker and browsing troubleshooting.",
+    "pages": ["docs/guide/backup-repositories.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "POST /api/v1/storage/discover (StorageDiscoveryRequest) gains the optional purpose field, valid for nfs and smb only and gated by the storage-discovery-purpose-v1 Core capability (409 when absent; older Cores would silently ignore it). With purpose backup an SMB candidate's existing flag reports a backup repository's owner.json instead of VM storage's marker. No new route, Core command or durable state.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Operator convenience on an existing backup repository workflow; no milestone or acceptance status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Discovery is a transient pool-master observation; Controller and Core journal, cache and store nothing from it. Registration still records the repository on the pool master as before."
+  },
+  "verification": {
+    "method": "On 2026-10-03: go test ./internal/protocol ./internal/controller and go test ./internal/vmhost -run Discover passed, including the new test that a backup-purpose SMB discovery flags only owner.json and the new purpose validation test. npm run typecheck and the web tests passed at that time, before the later review-fix round, which did not rerun them; the backup form test drives the real component to check the NFS and SMB3 discovery requests, the credential-gated button and the stale-master refusal. generate_api.py --check passed. Not executed: a browser walkthrough of the picker on the backup form and a run against a real NFS/SMB server.",
+    "evidence": ["internal/vmhost/storage_discovery_test.go", "internal/protocol/storage_test.go", "web/src/backup-repositories.test.mjs"]
+  }
+}

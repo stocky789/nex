@@ -30,6 +30,8 @@ mdadm
 nfs-common
 libnfs-utils
 open-iscsi
+libiscsi7
+libblkid1
 
 # Platform tools used by Core
 python3

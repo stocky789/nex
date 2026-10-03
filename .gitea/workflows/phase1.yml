@@ -91,6 +91,18 @@ jobs:
       # runner can exceed Go's default ten-minute package deadline.
       - name: Test Go services and recovery
         run: go test -race -timeout 20m ./...
+      - name: Verify native read-only iSCSI metadata boundaries
+        run: |
+          set -euo pipefail
+          tar -C packaging/core-local -cf - nex-iscsi-inspect.c nex-iscsi-inspect-test.c |
+            docker run --rm -i --entrypoint sh debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a -ec '
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev pkg-config libiscsi-dev libblkid-dev
+              mkdir /src
+              tar -xf - -C /src
+              cc -Wall -Wextra -Werror -O2 -Wl,--export-dynamic /src/nex-iscsi-inspect-test.c $(pkg-config --cflags --libs libiscsi blkid) -o /tmp/nex-iscsi-inspect-test
+              /tmp/nex-iscsi-inspect-test
+            '
       - name: Exercise root-owned snapshot and SMB rollback fixtures
         run: |
           mkdir -p .cache

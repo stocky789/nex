@@ -26,8 +26,8 @@ type Task = { id: string; status: string; error?: string };
 
 const stages: Record<string, string> = {
   pending: "Waiting to stage", staged: "Staged", maintenance: "Entering maintenance", teardown: "Waiting for the pool's watchdogs",
-  drain: "Stopping guests", activate: "Activating", boot: "Rebooting", confirm: "Confirming the release", release: "Leaving maintenance",
-  restart: "Restarting guests", soak: "Soaking", done: "Updated", rolled_back: "Rolled back",
+  drain: "Stopping virtual machines", activate: "Activating", boot: "Rebooting", confirm: "Confirming the release", release: "Leaving maintenance",
+  restart: "Restarting virtual machines", soak: "Soaking", done: "Updated", rolled_back: "Rolled back",
 };
 export const hostStageLabel = (stage: string) => stages[stage] ?? stage;
 const controllerStages: Record<string, string> = { scan: "Looking for the Controller", swap: "Swapping the Controller image", done: "Done" };
@@ -49,7 +49,7 @@ const pauseHints: Record<string, string> = {
   operator_paused: "Paused by an operator. Resume to continue.",
   master_changed: "The pool master changed. Review the pool, then resume or abort.",
   needs_attention: "A step needs an operator. Read the message, fix it, then resume or abort.",
-  running_vms: "Running guests block the update. Stop them, or resume with running guests shut down.",
+  running_vms: "Running virtual machines block the update. Stop them, or resume with running virtual machines shut down.",
   step_timeout: "A step did not finish in time. Check the host, then resume.",
   rolled_back: "A host or the Controller fell back to its previous release. Resume stages it again; abort keeps committed hosts.",
   unconfirmed: "A host has not confirmed the release.",
@@ -65,13 +65,13 @@ export function rolloutControls(view: RolloutView | undefined): Record<"pause" |
   const off = (why: string) => ({ enabled: false, why });
   const on = { enabled: true, why: "" };
   const r = view?.rollout;
-  if (!r) return { pause: off("There is no rollout."), resume: off("There is no rollout."), abort: off("There is no rollout.") };
+  if (!r) return { pause: off("There is no update in progress."), resume: off("There is no update in progress."), abort: off("There is no update in progress.") };
   if (view.connection !== "fresh") { const why = "The pool master must be freshly connected."; return { pause: off(why), resume: off(why), abort: off(why) }; }
   const active = r.state === "running" || r.state === "paused";
   return {
-    pause: r.state === "running" && !r.pause_requested ? on : off(r.pause_requested ? "A pause is already requested." : "The rollout is not running."),
-    resume: r.state === "paused" ? on : off("The rollout is not paused."),
-    abort: active ? on : off("The rollout has ended."),
+    pause: r.state === "running" && !r.pause_requested ? on : off(r.pause_requested ? "A pause is already requested." : "The update is not running."),
+    resume: r.state === "paused" ? on : off("The update is not paused."),
+    abort: active ? on : off("The update has ended."),
   };
 }
 export const canRollBackHost = (view: RolloutView | undefined, host: RolloutHost) =>
@@ -183,23 +183,24 @@ export function PoolRollout({ pool, hosts, api, busy, initial }: { pool: Pool; h
     : Boolean(confirming.host && canRollBackHost(live, confirming.host));
   const poolHosts = hosts.filter(h => !h.revoked).length;
 
-  return <Section icon="refresh" title="Pool rollout" count={rollout ? rollout.hosts.length : undefined}>
-    {!view ? <p className="note">Reading the pool master's rollout record…</p> : <>
-      {unsupported && <Banner tone="warn" role="status">A pool rollout needs {POOL_ROLLOUT_CAPABILITY} on the master and every member. Upgrade Nex Core on the hosts that lack it.</Banner>}
+  return <Section icon="refresh" title="Pool update" count={rollout ? rollout.hosts.length : undefined}>
+    {!view ? <p className="note">Reading the pool master's update record…</p> : <>
+      <p className="note">Updates every host in this pool to a new Nex Core release, one host at a time, so the pool stays up. Members are updated first and the master last.</p>
+      {unsupported && <Banner tone="warn" role="status">Pool update is not available yet: the master and every member must run a Nex Core version that supports it ({POOL_ROLLOUT_CAPABILITY}). Update the hosts that lack it one by one under Host images first.</Banner>}
       {live!.connection !== "fresh" && <p className="note">The pool master is {live!.connection}; the record below is its last report and actions are unavailable until it reconnects.</p>}
       {rollout ? <>
         <dl className="details">
-          <dt>Release</dt><dd>Sequence {rollout.sequence}</dd>
+          <dt>Release number</dt><dd>{rollout.sequence}</dd>
           <dt>State</dt><dd><Badge value={rollout.state} label={rollout.state === "paused" ? "Paused" : rollout.state === "running" ? "Running" : rollout.state === "finalized" ? "Finalized" : "Aborted"} />{" "}{rolloutPhaseLabel(rollout.phase)}</dd>
-          <dt>Running guests</dt><dd>{rollout.running_vms === "shutdown" ? "Shut down gracefully, then restarted on the same host" : "Refuse while any guest runs"}</dd>
+          <dt>Running virtual machines</dt><dd>{rollout.running_vms === "shutdown" ? "Shut down gracefully, then restarted on the same host" : "Refused while any virtual machine runs"}</dd>
           <dt>Started</dt><dd><time dateTime={rollout.created_at} title={date(rollout.created_at)}>{relativeTime(rollout.created_at)}</time></dd>
-          {rollout.finalized_sequence ? <><dt>Finalized</dt><dd>Sequence {rollout.finalized_sequence}; irreversible migrations may now run</dd></> : null}
+          {rollout.finalized_sequence ? <><dt>Finalized</dt><dd>Release number {rollout.finalized_sequence}; irreversible migrations may now run</dd></> : null}
         </dl>
         {rollout.pause && <Banner tone={rollout.pause.code === "operator_paused" ? "info" : "bad"} role="status">
           <b>{rollout.pause.code}</b>: {rollout.pause.message}{pauseHint(rollout.pause.code) ? ` ${pauseHint(rollout.pause.code)}` : ""}
         </Banner>}
         <table className="rollout-steps">
-          <caption className="sr-only">Rollout steps in order</caption>
+          <caption className="sr-only">Pool update steps in order</caption>
           <thead><tr><th scope="col">Step</th><th scope="col">Where</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             <tr><th scope="row">Controller first</th><td>{rollout.controller?.host_id ? nameOf(rollout.controller.host_id) : "The host running the Controller"}</td>
@@ -207,43 +208,43 @@ export function PoolRollout({ pool, hosts, api, busy, initial }: { pool: Pool; h
             {rollout.hosts.map(host => <tr key={host.host_id}>
               <th scope="row">Update host</th><td>{nameOf(host.host_id)}</td>
               <td><Badge value={host.stage === "done" ? "ready" : host.stage === "rolled_back" ? "failed" : "pending"} label={hostStageLabel(host.stage)} />
-                {host.stopped_by_update?.length ? <span className="small"> · {host.stopped_by_update.length} guest{host.stopped_by_update.length === 1 ? "" : "s"} stopped by the update</span> : null}
+                {host.stopped_by_update?.length ? <span className="small"> · {host.stopped_by_update.length} virtual machine{host.stopped_by_update.length === 1 ? "" : "s"} stopped by the update</span> : null}
                 {host.error ? <><br /><span className="small">{host.error}</span></> : null}</td>
               <td>{canRollBackHost(live, host) && <button type="button" className="sm" disabled={busy || sending} onClick={() => ask("rollback_host", host)}>Roll back host</button>}</td>
             </tr>)}
           </tbody>
         </table>
-      </> : <p className="note">No rollout has been started for this pool.</p>}
+      </> : <p className="note">No pool update has been started.</p>}
       {error && <Banner tone="bad" role="alert">{error}</Banner>}
       {task && <p className="small" role="status">Task <a className="task-link" href="#/tasks" title={`Task ${task.id}`}>{task.id}</a> {task.status}.
-        {result ? taskKind === "check" ? <> Preflight refused: <b>{result.code || "refused"}</b> {result.message}</> : <> Refused: <b>{result.code || "refused"}</b> {result.message}</> : task.status === "succeeded" && taskKind === "check" ? " Preflight passed: the pool is ready for this release." : null}</p>}
+        {result ? taskKind === "check" ? <> Readiness check refused: <b>{result.code || "refused"}</b> {result.message}</> : <> Refused: <b>{result.code || "refused"}</b> {result.message}</> : task.status === "succeeded" && taskKind === "check" ? " Readiness check passed: the pool is ready for this release." : null}</p>}
       <div className="actions">
         {(["pause", "resume", "abort"] as const).map(action =>
           <button key={action} type="button" className="sm" disabled={busy || sending || !controls[action].enabled} title={controls[action].why || undefined} onClick={() => ask(action)}>{action[0].toUpperCase() + action.slice(1)}</button>)}
       </div>
       {!active && <form className="rollout-start" onSubmit={e => { e.preventDefault(); }}>
-        <label>Release sequence <input type="number" min={1} value={sequence} placeholder={offered ? String(offered) : ""} onChange={e => setSequence(e.target.value)} /></label>
-        <label><input type="checkbox" checked={shutdown} onChange={e => setShutdown(e.target.checked)} /> Shut down running guests gracefully (otherwise the rollout waits for each host's guests to stop)</label>
+        <label>Release number <input type="number" min={1} value={sequence} placeholder={offered ? String(offered) : ""} onChange={e => setSequence(e.target.value)} /></label>
+        <label><input type="checkbox" checked={shutdown} onChange={e => setShutdown(e.target.checked)} /> Shut down running virtual machines gracefully (otherwise the update waits for you to stop each host's virtual machines)</label>
         <div className="actions">
-          <button type="button" className="sm" disabled={busy || sending || !fresh || unsupported || !wanted} title={!wanted ? "No release sequence is known. Check each host first." : undefined}
-            onClick={() => void submit("check", () => submitRollout(api, pool.id, "check", held.current, wanted, shutdown))}>Run preflight</button>
+          <button type="button" className="sm" disabled={busy || sending || !fresh || unsupported || !wanted} title={!wanted ? "No release number is known. Check each host first." : undefined}
+            onClick={() => void submit("check", () => submitRollout(api, pool.id, "check", held.current, wanted, shutdown))}>Check readiness</button>
           <button type="button" className="sm primary" disabled={busy || sending || !fresh || unsupported || !wanted}
-            onClick={() => setConfirming({ action: "start" })}>Start rollout</button>
+            onClick={() => setConfirming({ action: "start" })}>Start update</button>
         </div>
       </form>}
       <dialog ref={dialog} className="confirm-dialog" aria-labelledby="rollout-confirm-title" onCancel={e => { if (sending) e.preventDefault(); }} onClose={() => setConfirming(undefined)}>
-        {confirming && <form aria-label={`Confirm ${confirming.action === "start" ? "start rollout" : confirming.action === "abort" ? "abort" : "host rollback"}`} onSubmit={e => { e.preventDefault(); if (!confirmable) return; if (confirming.action === "start") void submit("start", () => submitRollout(api, pool.id, "start", held.current, wanted, shutdown)); else void control(confirming.action, confirming.host); }}>
-          <h2 id="rollout-confirm-title">{confirming.action === "start" ? "Start rollout?" : confirming.action === "abort" ? "Abort rollout?" : `Roll back ${nameOf(confirming.host?.host_id)}?`}</h2>
+        {confirming && <form aria-label={`Confirm ${confirming.action === "start" ? "start update" : confirming.action === "abort" ? "abort" : "host rollback"}`} onSubmit={e => { e.preventDefault(); if (!confirmable) return; if (confirming.action === "start") void submit("start", () => submitRollout(api, pool.id, "start", held.current, wanted, shutdown)); else void control(confirming.action, confirming.host); }}>
+          <h2 id="rollout-confirm-title">{confirming.action === "start" ? "Start pool update?" : confirming.action === "abort" ? "Abort pool update?" : `Roll back ${nameOf(confirming.host?.host_id)}?`}</h2>
           <p>{confirming.action === "start"
-            ? `Start rollout of release sequence ${wanted} on ${poolHosts} host${poolHosts === 1 ? "" : "s"}? Every host reboots, one at a time, the master last. Running guests: ${shutdown ? "shut down gracefully, then restarted on the same host" : "the rollout waits for each host's guests to stop"}.`
+            ? `Update ${poolHosts} host${poolHosts === 1 ? "" : "s"} to release ${wanted}? Every host reboots, one at a time, the master last. Running virtual machines: ${shutdown ? "shut down gracefully, then restarted on the same host" : "the update waits for each host's virtual machines to stop"}.`
             : confirming.action === "abort"
-              ? "Abort the rollout? Hosts that already committed the release stay on it. The host in progress is taken out of maintenance and its stopped guests are restarted."
+              ? "Abort the pool update? Hosts that already finished stay on the new release. The host in progress is taken out of maintenance and its stopped virtual machines are restarted."
               : `Reboot ${nameOf(confirming.host?.host_id)} into its previous release? The host restarts now.`}</p>
           {!confirmable && <p className="task-error" role="alert">This is no longer possible with the pool's current state.</p>}
-          <div className="actions"><button type="button" onClick={() => setConfirming(undefined)}>Keep as is</button><button className="primary" disabled={sending || !confirmable}>{confirming.action === "start" ? "Start rollout" : confirming.action === "abort" ? "Abort rollout" : "Roll back host"}</button></div>
+          <div className="actions"><button type="button" onClick={() => setConfirming(undefined)}>Keep as is</button><button className="primary" disabled={sending || !confirmable}>{confirming.action === "start" ? "Start update" : confirming.action === "abort" ? "Abort update" : "Roll back host"}</button></div>
         </form>}
       </dialog>
-      <p className="note">The pool master runs the rollout and keeps its record, so it carries on if this Controller is replaced. Members update first, the master last, one host at a time, and nothing is ever forced.</p>
+      <p className="note">The pool master runs the update and keeps its record, so it carries on if this Controller is replaced. Nothing is ever forced.</p>
     </>}
   </Section>;
 }

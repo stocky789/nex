@@ -61,6 +61,16 @@ when Core must rediscover retained points.
    - **SFTP:** **Server**, optional **Port** (default 22), **Repository root**,
      **Pinned SSH host key fingerprint**, **Username** and **SSH private key**.
 
+   For NFS, enter **NFS server** and select **Browse exports**; for SMB3, enter the server,
+   **Username**, optional **Domain** and **Password**, then select **Browse shared folders**. The
+   pool master lists the server's exports or shares; select a row and **Select folder**, or
+   double-click to open it, to fill **Export path** or **Share** and the directory below it.
+   **Up** and **Refresh** move within the list; **Cancel** or Escape closes it without changing
+   the form. Browsing is a read-only, transient look from the pool master and creates nothing;
+   **Save** still verifies the destination. Typing the values remains available. Browsing needs
+   the pool master to run an updated Nex Core; otherwise the Controller refuses it and you type
+   the values.
+
    For SMB3, S3 and SFTP, **Save** stays unavailable until the fields have a form Core
    accepts: an S3 endpoint is `https://host` with no path, bucket and share names contain no
    `/`, directories and prefixes are relative without `..`, an SFTP root is an
@@ -239,6 +249,12 @@ and test restore read every artifact and verify its digest.
   disposable restore. A past online report is not a current write guarantee.
 - NFS mount missing or changed: verify the exact export and filesystem identity
   before retrying. A local directory at the same path is not an independent backup.
+- Browsing exports or shared folders fails or lists nothing: the pool master must be connected and
+  up to date, the server reachable and, for SMB3, the username, password and domain correct. An
+  empty list is not proof the server has no storage; type the values instead. **E** on an SMB3
+  folder means a backup repository already lives there (an `owner.json` owner file): use it only
+  to bring that repository back with its **original repository ID**, and never to start a second
+  one. NFS folders are never marked.
 - SMB3 access fails: check the share, account, encrypted mount and owner/share
   markers. A write-denied share can refuse new backups while an intact point
   remains readable; a cached CIFS session may temporarily keep old access alive.

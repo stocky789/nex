@@ -18,7 +18,7 @@ def main():
     server.block_on_close = False
     threading.Thread(target=server.serve_forever, daemon=True).start()
     hosts = [{"id": f"core-{n}", "pool_id": "pool-qa", "hostname": f"core-{n}", "connection": "fresh", "revoked": False,
-              "capabilities": ["managed-vm-v1", "storage-clustered-iscsi-v2", "storage-repositories-v1", "storage-discovery-v1"], "inventory": {"os_version": "Nex Core 0.4.8", "cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}} for n in range(1, 4)]
+              "capabilities": ["managed-vm-v1", "storage-clustered-iscsi-v2", "storage-repositories-v1", "storage-discovery-v1", "storage-discovery-purpose-v1", "storage-iscsi-inspect-v1"], "inventory": {"os_version": "Nex Core 0.4.8", "cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}} for n in range(1, 4)]
     cluster = {"pool_id": "pool-qa", "host_id": "core-1", "status": "needs_attention", "operations": [{
         "request_id": "cluster-apply-1", "membership_generation": 2, "status": "awaiting_fencing", "updated_at": "2026-09-12T00:00:00Z",
         "config": {"repository_id": "gfs2-lun", "cluster_id": "qa-cluster", "generation": 4, "lock_table": "qa_lock",
@@ -50,6 +50,9 @@ def main():
             ], "vms": [], "networks": [], "media": [], "operations": [], "audit": []}
     errors, requests, credentials, fences, applies, deferred_discovery, deferred_browser, deferred_credentials = [], [], [], [], [], [], [], []
     mode = {"fence_timeout": False, "fence_abort": False, "discovery": "success", "browser_deferred": False, "credential_deferred": False}
+    mode["inspection"] = "single"
+    deferred_inspection, inspections = [], []
+    inspected_lun = {"lun": 0, "wwid": "3600qa", "filesystem_uuid": "00000000-0000-0000-0000-000000000000", "filesystem_type": "gfs2", "size_bytes": 1024 ** 3}
 
     def api(route):
         request = route.request
@@ -77,6 +80,16 @@ def main():
                 else: route.fulfill(json=reply)
                 return
             assert body["kind"] == "iscsi", body
+            if body.get("target_iqn"):
+                inspections.append(body)
+                reply = {"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-1", "status": "succeeded", "iscsi_luns": [inspected_lun]}
+                if mode["inspection"] == "multiple": reply["iscsi_luns"] = [inspected_lun, {**inspected_lun, "lun": 4, "wwid": "3600-second-gfs2", "filesystem_uuid": "00000000-0000-0000-0000-000000000004"}]
+                elif mode["inspection"] == "blank": reply["iscsi_luns"] = [{"lun": 0, "error": "No filesystem signature detected."}]
+                elif mode["inspection"] == "unsupported": reply["iscsi_luns"] = [{**inspected_lun, "filesystem_type": "ext4"}]
+                elif mode["inspection"] == "failed": reply.update(status="failed", iscsi_luns=[], error="Core clustered target inspection failed.")
+                if mode["inspection"] == "deferred": deferred_inspection.append((route, reply))
+                else: route.fulfill(json=reply)
+                return
             reply = {"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-1", "status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": body["server"], "target_iqn": "iqn.2026-01.example.test:discovered-gfs2"}}, "browsable": False}]}
             if mode["discovery"] == "deferred": deferred_discovery.append((route, reply))
             elif mode["discovery"] == "stale": route.fulfill(status=504, json={"error": "Core target discovery became stale"})
@@ -291,8 +304,101 @@ def main():
             expect(discovered).to_be_visible()
             discovered.click()
             expect(setup.get_by_label("Target IQN", exact=True)).to_have_value("iqn.2026-01.example.test:discovered-gfs2")
+            expect(setup.get_by_label("LUN", exact=True)).to_have_value("0")
+            expect(setup.get_by_label("LUN WWID", exact=True)).to_have_value(inspected_lun["wwid"])
+            expect(setup.get_by_label("Filesystem UUID", exact=True)).to_have_value(inspected_lun["filesystem_uuid"])
+            assert inspections[-1]["target_iqn"] == "iqn.2026-01.example.test:discovered-gfs2"
+            inspection_scope = {key: inspections[-1][key] for key in ("host_id", "pool_id", "server", "kind")}
+            assert inspection_scope == {"host_id": "core-1", "pool_id": "pool-qa", "server": "storage.example.test:3260", "kind": "iscsi"}, inspection_scope
+            assert "credentials" not in inspections[-1]
+            # Same-IQN selection must authorize a fresh attempt, without inventing an IQN edit.
+            mode["inspection"] = "deferred"
+            setup.get_by_role("button", name="Discover targets", exact=True).click()
+            discovered.click()
+            pending, reply = take_deferred(page, deferred_inspection, "same clustered target inspection")
+            setup.get_by_role("button", name="Cancel LUN inspection", exact=True).click()
+            setup.get_by_label("LUN", exact=True).fill("23")
+            pending.fulfill(json=reply)
+            expect(setup.get_by_label("LUN", exact=True)).to_have_value("23")
+            for outcome in ("failed", "single"):
+                mode["inspection"] = outcome
+                setup.get_by_role("button", name="Discover targets", exact=True).click()
+                with page.expect_response(lambda r: r.url.endswith("/api/v1/storage/discover") and r.request.post_data_json.get("target_iqn") == "iqn.2026-01.example.test:discovered-gfs2"):
+                    discovered.click()
+                if outcome == "failed":
+                    expect(setup.get_by_text("Core clustered target inspection failed.", exact=False)).to_be_visible()
+                    expect(setup.get_by_label("LUN", exact=True)).to_have_value("23")
+                else:
+                    expect(setup.get_by_label("LUN", exact=True)).to_have_value("0")
+                    expect(setup.get_by_label("LUN WWID", exact=True)).to_have_value(inspected_lun["wwid"])
+            mode["inspection"] = "multiple"
+            setup.get_by_role("button", name="Discover targets", exact=True).click()
+            discovered.click()
+            picker = setup.get_by_label("Detected LUN", exact=True)
+            expect(picker).to_have_value("")
+            expect(setup.get_by_label("LUN", exact=True)).to_have_value("")
+            picker.focus()
+            page.keyboard.press("Space")
+            page.keyboard.press("End")
+            page.keyboard.press("Enter")
+            expect(setup.get_by_label("LUN", exact=True)).to_have_value("4")
+            expect(setup.get_by_label("LUN WWID", exact=True)).to_have_value("3600-second-gfs2")
+            page.screenshot(path=str(ROOT / ".cache/cluster-storage-iscsi-multiple-luns.png"), full_page=True)
+            setup.get_by_role("button", name="Discover targets", exact=True).click()
+            with page.expect_response(lambda r: r.url.endswith("/api/v1/storage/discover") and r.request.post_data_json.get("target_iqn") == "iqn.2026-01.example.test:discovered-gfs2"):
+                discovered.click()
+            expect(picker).to_be_visible()
+            expect(picker).to_have_value("")
+            expect(setup.get_by_label("LUN", exact=True)).to_have_value("")
+            for value, message in [("blank", "No filesystem signature detected."), ("unsupported", "not supported for clustered GFS2")]:
+                mode["inspection"] = value
+                iqn = f"iqn.2026-01.example.test:{value}-gfs2"
+                before = len(inspections)
+                setup.get_by_label("Target IQN", exact=True).fill(iqn)
+                assert len(inspections) == before, "typing the IQN must not inspect"
+                with page.expect_request(lambda r: r.url.endswith("/api/v1/storage/discover") and r.post_data_json.get("target_iqn") == iqn):
+                    setup.get_by_role("button", name="Inspect LUNs", exact=True).click()
+                expect(setup.get_by_text(message, exact=False)).to_be_visible()
+                expect(setup.get_by_label("Filesystem UUID", exact=True)).to_be_editable()
+                if value == "blank": expect(setup.get_by_label("Filesystem UUID", exact=True)).to_have_value("")
+            mode["inspection"] = "deferred"
+            setup.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:pending-gfs2")
+            setup.get_by_role("button", name="Inspect LUNs", exact=True).click()
+            pending, reply = take_deferred(page, deferred_inspection, "clustered LUN inspection")
+            setup.get_by_label("Target portal", exact=True).fill("other-storage.example.test:3260")
+            setup.get_by_role("button", name="Cancel LUN inspection", exact=True).click()
+            setup.get_by_label("LUN", exact=True).fill("19")
+            pending.fulfill(json=reply)
+            expect(setup.get_by_label("LUN", exact=True)).to_have_value("19")
+            expect(setup.get_by_label("LUN WWID", exact=True)).to_have_value("")
+            setup.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:closing-gfs2")
+            setup.get_by_role("button", name="Inspect LUNs", exact=True).click()
+            pending, reply = take_deferred(page, deferred_inspection, "closing clustered LUN inspection")
+            panel.locator("summary").first.click()
+            pending.fulfill(json=reply)
+            expect(setup).to_be_hidden()
+            before = len(inspections)
+            panel.locator("summary").first.click()
+            expect(setup).to_be_visible()
+            expect(setup.get_by_role("button", name="Cancel LUN inspection", exact=True)).to_have_count(0)
+            assert len(inspections) == before
+            expect(setup.get_by_label("LUN", exact=True)).to_have_value("")
+            # An older Core without the capability keeps manual entry and never receives an inspection request.
+            for host in hosts: host["capabilities"].remove("storage-iscsi-inspect-v1")
+            refresh()
+            before = len(inspections)
+            setup.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:legacy-gfs2")
+            expect(setup.get_by_text("This Core does not support read-only LUN inspection.", exact=False)).to_be_visible()
+            assert len(inspections) == before
+            for host in hosts: host["capabilities"].append("storage-iscsi-inspect-v1")
+            refresh()
+            mode["inspection"] = "single"
+            setup.get_by_label("Target portal", exact=True).fill("storage.example.test:3260")
+            setup.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:discovered-gfs2")
+            setup.get_by_role("button", name="Inspect LUNs", exact=True).click()
+            expect(setup.get_by_label("LUN WWID", exact=True)).to_have_value(inspected_lun["wwid"])
             assert any(path == "storage/discover" for path in requests), requests
-            for label, value in [("Repository name", "Shared GFS2"), ("LUN", "0"), ("LUN WWID", "3600qa"), ("Filesystem UUID", "00000000-0000-0000-0000-000000000000")]: setup.get_by_label(label, exact=True).fill(value)
+            setup.get_by_label("Repository name", exact=True).fill("Shared GFS2")
             for n in range(1, 4):
                 row = setup.get_by_role("group", name=f"core-{n} · Corosync node {n}", exact=True)
                 for label, value in [("Corosync address", f"192.0.2.{9+n}"), ("Fence SSH host", "lab.example.test"), ("SSH login", "operator"), ("SSH port", "22"), ("Libvirt domain UUID", f"00000000-0000-0000-0000-00000000000{n}"), ("Virsh URI", "qemu+ssh://lab/system"), ("Pinned SSH host key", "lab.example.test ssh-ed25519 AAAA"), ("SSH private key", "private-key")]: row.get_by_label(label, exact=True).fill(value)
@@ -302,6 +408,9 @@ def main():
             assert len(credentials) == 3 and {item["target_host_id"] for item in credentials} == {"core-1", "core-2", "core-3"}, credentials
             assert all(item["kind"] == "fence_ssh" and "ssh_private_key" in item["credentials"] for item in credentials), credentials
             assert applies[-1]["registration"]["source"]["iscsi"]["target_iqn"] == "iqn.2026-01.example.test:discovered-gfs2", applies
+            assert applies[-1]["registration"]["source"]["iscsi"]["lun"] == 0
+            assert applies[-1]["registration"]["source"]["iscsi"]["wwid"] == inspected_lun["wwid"]
+            assert applies[-1]["registration"]["source"]["iscsi"]["filesystem_uuid"] == inspected_lun["filesystem_uuid"]
             assert any(path == "storage/cluster/apply" for path in requests), requests
             assert any(path.startswith("storage/cluster?pool_id=pool-qa") for path in requests), requests
             assert not errors, errors

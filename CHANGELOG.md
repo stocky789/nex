@@ -18,6 +18,23 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Minor Feature
+
+- Creating a backup repository can now browse the destination like VM storage does: **Browse exports** for NFS and **Browse shared folders** for SMB3, with **E** marking folders that already hold a backup repository. Browsing needs an updated Nex Core (`storage-discovery-purpose-v1`); the Controller refuses it for an older one instead of showing unreliable markers.
+- iSCSI target selection now inspects the available LUNs read-only and fills detected LUN numbers,
+  WWIDs and existing filesystem UUIDs. Select the intended LUN when several are available;
+  missing identities remain explicit, and exclusive access still needs operator confirmation.
+  Inspection runs when you select a discovered target or select **Inspect LUNs**, not while you type. It logs in as a second session with the host's own initiator name, which some single-session targets may reject; a target reporting more than 64 LUNs is refused and the values can be entered manually.
+
+### Bug Fixes
+
+- An iSCSI portal advertising no targets now reports an empty discovery result instead of the
+  misleading “storage discovery is unavailable” failure.
+
+### Miscellaneous
+
+- The panel formerly named **Pool rollout** in Settings → Updates is now **Pool update**, with a one-line explanation of what it does, plain labels (**Check readiness**, **Start update**, release number, virtual machines) and a clearer message when a host needs updating first. Wording only; behaviour is unchanged.
+
 ## [0.4.21] — 2026-10-03
 
 ### Bug Fixes

@@ -4,6 +4,7 @@ import type { API, Host } from "./types";
 import { AccessLights, Badge, MiniBar, Section, checkedAt, date, size, type HostAccess } from "./ui";
 import { Icon } from "./icons";
 import { confirmMatches } from "./managed";
+import { useShareBrowser, type BrowseResult } from "./share-browser";
 import { OrphanedBackups } from "./backup-orphans";
 import {
   backupKinds, backupOpID, loadRecoveryPoints, repositoryTarget, repositoryHealth, rid,
@@ -31,6 +32,9 @@ const validRelative = (path: string) => path.split("/").every(validComponent);
 
 // validSMBDomain mirrors Core: an optional plain domain or workgroup name.
 export const validSMBDomain = (value: string) => value.length <= 253 && !/[\s\p{Cc}/\\=,;'"`$&|<>()]/u.test(value);
+
+// A folder chosen in the browser fills the destination fields of its protocol.
+export const browsedFolderFields = (kind: "nfs" | "smb", container: string, directory: string) => kind === "smb" ? { share: container, directory } : { exportPath: container, directory };
 
 // backupSource builds the registration source, or null when Core's validator would refuse it,
 // so the credential is never delivered for a destination that cannot be registered.
@@ -266,6 +270,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   };
   const closeForm = () => {
     if (working || createUncertain) return;
+    closeBrowser();
     resetForm();
   };
 
@@ -364,6 +369,25 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const createWhy = unavailable ? "Controller inventory could not be loaded." : busy ? "Another task is already in progress." : "";
   const fieldsDisabled = Boolean(working) || createUncertain;
   const patchRemote = (values: Partial<typeof blankRemote>) => change(() => setRemote(current => ({ ...current, ...values })));
+  // Folder discovery is a transient Core observation of the destination; registration still verifies it.
+  const master = hosts.find(h => h.id === masterHostID);
+  const browseReady = Boolean(master && !master.revoked && master.connection === "fresh" && master.capabilities?.includes("storage-repositories-v1") && master.capabilities?.includes("storage-discovery-v1") && master.capabilities?.includes("storage-discovery-purpose-v1"));
+  const browseWhy = browseReady ? undefined : "The pool master must be connected and support backup folder discovery.";
+  const { browse, close: closeBrowser, dialog: browserDialog } = useShareBrowser({
+    server: remote.server.trim(),
+    context: [poolID, masterHostID, remote.kind, remote.server, ...(remote.kind === "smb3" ? [remote.username, remote.secret, remote.domain] : []), master?.connection, master?.revoked, master?.capabilities?.join(",")].join("\n"),
+    discover: (kind, path, signal) => api<BrowseResult>("storage/discover", "POST", {
+      request_id: crypto.randomUUID(), pool_id: poolID, host_id: masterHostID, kind, purpose: "backup", server: remote.server.trim(), ...(path ? { path } : {}),
+      ...(kind === "smb" ? { credentials: { username: remote.username.trim(), secret: remote.secret, ...(remote.domain.trim() ? { domain: remote.domain.trim() } : {}) } } : {}),
+    }, undefined, undefined, signal),
+    onSelect: (kind, container, directory) => patchRemote(browsedFolderFields(kind, container, directory)),
+  });
+  const credentialFields = remote.kind !== "nfs" && <>
+    <label>{remote.kind === "s3" ? "Access key ID" : "Username"}<input required value={remote.username} autoComplete="username" disabled={fieldsDisabled} onChange={e => patchRemote({ username: e.target.value })} /></label>
+    {remote.kind === "smb3" && <label>Domain<input value={remote.domain} autoComplete="off" disabled={fieldsDisabled} placeholder="Optional, for domain accounts" onChange={e => patchRemote({ domain: e.target.value })} /></label>}
+    {remote.kind === "sftp" ? <label>SSH private key<textarea required={!credentialReceipt.current} value={remote.sshKey} autoComplete="off" spellCheck={false} disabled={fieldsDisabled} onChange={e => patchRemote({ sshKey: e.target.value })} /></label>
+      : <label>{remote.kind === "s3" ? "Secret access key" : "Password"}<input required={!credentialReceipt.current} type="password" value={remote.secret} autoComplete="new-password" disabled={fieldsDisabled} onChange={e => patchRemote({ secret: e.target.value })} /></label>}
+  </>;
 
   return <Section icon="backup" title="Backup repositories" actions={<>
     <button type="button" className="sm primary" disabled={blocked || form || Boolean(working)} title={createWhy || undefined} onClick={() => setForm(true)}>
@@ -397,8 +421,13 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
           <label>Region<input value={remote.region} disabled={fieldsDisabled} placeholder="us-east-1" pattern="[a-z0-9\-]{0,32}" onChange={e => patchRemote({ region: e.target.value })} /></label>
         </> : <>
           <label>{remote.kind === "nfs" ? "NFS server" : remote.kind === "smb3" ? "SMB server" : "Server"}<input required value={remote.server} disabled={fieldsDisabled} placeholder="backup.example.test" onChange={e => patchRemote({ server: e.target.value })} /></label>
+          {remote.kind === "nfs" && <button type="button" disabled={fieldsDisabled || !browseReady || !remote.server.trim()} title={browseWhy} onClick={() => browse("nfs")}>Browse exports</button>}
           {remote.kind === "nfs" && <label>Export path<input required value={remote.exportPath} disabled={fieldsDisabled} placeholder="/exports/backups" pattern="/.*" onChange={e => patchRemote({ exportPath: e.target.value })} /></label>}
-          {remote.kind === "smb3" && <label>Share<input required value={remote.share} disabled={fieldsDisabled} onChange={e => patchRemote({ share: e.target.value })} /></label>}
+          {remote.kind === "smb3" && <>
+            {credentialFields}
+            <button type="button" disabled={fieldsDisabled || !browseReady || !remote.server.trim() || !remote.username.trim() || !remote.secret} title={browseWhy} onClick={() => browse("smb")}>Browse shared folders</button>
+            <label>Share<input required value={remote.share} disabled={fieldsDisabled} onChange={e => patchRemote({ share: e.target.value })} /></label>
+          </>}
           {(remote.kind === "nfs" || remote.kind === "smb3") && <label>Directory within {remote.kind === "nfs" ? "export" : "share"}<input value={remote.directory} disabled={fieldsDisabled} placeholder="Optional" onChange={e => patchRemote({ directory: e.target.value })} /></label>}
           {remote.kind === "sftp" && <>
             <label>Port<input type="number" min="1" max="65535" value={remote.port} disabled={fieldsDisabled} placeholder="22" onChange={e => patchRemote({ port: e.target.value })} /></label>
@@ -406,12 +435,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
           </>}
           {remote.kind === "sftp" && <label>Pinned SSH host key fingerprint<input required value={remote.hostKey} disabled={fieldsDisabled} placeholder="SHA256:…" onChange={e => patchRemote({ hostKey: e.target.value })} /></label>}
         </>}
-        {remote.kind !== "nfs" && <>
-          <label>{remote.kind === "s3" ? "Access key ID" : "Username"}<input required value={remote.username} autoComplete="username" disabled={fieldsDisabled} onChange={e => patchRemote({ username: e.target.value })} /></label>
-          {remote.kind === "smb3" && <label>Domain<input value={remote.domain} autoComplete="off" disabled={fieldsDisabled} placeholder="Optional, for domain accounts" onChange={e => patchRemote({ domain: e.target.value })} /></label>}
-          {remote.kind === "sftp" ? <label>SSH private key<textarea required={!credentialReceipt.current} value={remote.sshKey} autoComplete="off" spellCheck={false} disabled={fieldsDisabled} onChange={e => patchRemote({ sshKey: e.target.value })} /></label>
-            : <label>{remote.kind === "s3" ? "Secret access key" : "Password"}<input required={!credentialReceipt.current} type="password" value={remote.secret} autoComplete="new-password" disabled={fieldsDisabled} onChange={e => patchRemote({ secret: e.target.value })} /></label>}
-        </>}
+        {remote.kind !== "smb3" && credentialFields}
         <div className="actions">
           <button type="submit" className="primary" disabled={Boolean(working) || (!createBody.current && !canCreate) || blocked}>
             {working === createKey ? "Working…" : "Save"}
@@ -445,6 +469,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
         </tr>)}
       </tbody>
     </table></div> : null}
+    {browserDialog}
     {/* Forget is queued (202), so the first refetch usually still lists the repository; refetch again once Core has had time to drop it. */}
     {orphans && <OrphanedBackups api={api} poolID={poolID} repo={orphans} onClose={() => setOrphans(null)} />}
     {forgetting && <ForgetRepository api={api} poolID={poolID} repo={forgetting} onClose={() => setForgetting(null)}

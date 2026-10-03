@@ -31,7 +31,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     host = {"id": "core-qa", "pool_id": "pool-qa", "hostname": "core-qa", "connection": "fresh", "revoked": False,
-            "capabilities": ["managed-vm-v1", "storage-repositories-v1", "storage-discovery-v1"], "inventory": {"os_version": "Nex Core 0.4.8", "cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}}
+            "capabilities": ["managed-vm-v1", "storage-repositories-v1", "storage-discovery-v1", "storage-discovery-purpose-v1", "storage-iscsi-inspect-v1"], "inventory": {"os_version": "Nex Core 0.4.8", "cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}}
     healthy = {"id": "core-assigned-repository", "pool_id": "pool-qa", "host_id": "core-qa", "name": "VM share", "kind": "smb",
                "source": {"smb": {"server": "files.example.test", "share": "vms"}}, "identity": "files.example.test/vms",
                "generation": 1, "status": "succeeded", "operation_id": "storage-register-core", "credential_present": True,
@@ -48,6 +48,9 @@ def main():
     mode = {"fail_recheck": True, "unauthorized": False, "fail_discovery": False,
             "browser_empty": False, "browser_error": False, "browser_failed": False, "browser_deferred": False}
     deferred_browser_replies = []
+    deferred_inspection = []
+    mode["inspection"] = "single"
+    inspected_lun = {"lun": 0, "wwid": "3600-inspected-qa", "filesystem_uuid": "00000000-0000-0000-0000-000000000123", "filesystem_type": "ext4", "size_bytes": 1024 ** 3}
 
     def browser_candidates(kind, path):
         if kind == "nfs":
@@ -92,17 +95,34 @@ def main():
                     route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": []})
             elif body["kind"] in ("nfs", "smb"):
                 route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": browser_candidates(body["kind"], body.get("path", ""))})
+            elif body["kind"] == "iscsi" and body.get("target_iqn"):
+                reply = {"request_id": body["request_id"], "pool_id": body["pool_id"], "host_id": body["host_id"], "status": "succeeded", "iscsi_luns": [inspected_lun]}
+                if mode["inspection"] == "multiple":
+                    reply["iscsi_luns"] = [inspected_lun, {**inspected_lun, "lun": 7, "wwid": "3600-second-qa", "filesystem_uuid": "00000000-0000-0000-0000-000000000456", "filesystem_type": "xfs"}]
+                elif mode["inspection"] == "empty": reply.pop("iscsi_luns")
+                elif mode["inspection"] == "blank": reply["iscsi_luns"] = [{"lun": 0, "wwid": "3600-blank-qa", "error": "No filesystem signature detected."}]
+                elif mode["inspection"] == "unsupported": reply["iscsi_luns"] = [{**inspected_lun, "filesystem_type": "ntfs", "error": "Filesystem ntfs is unsupported."}]
+                elif mode["inspection"] == "failed": reply.update(status="failed", iscsi_luns=[], error="Core could not inspect this selected target.")
+                if mode["inspection"] == "deferred": deferred_inspection.append((route, reply))
+                else: route.fulfill(json=reply)
             elif body["kind"] == "iscsi":
-                route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:vm-storage"}}, "path": "iqn.2026-01.example.test:vm-storage", "browsable": False}]})
+                route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": [{"kind": "iscsi", "source": {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:vm-storage", "lun": 0}}, "browsable": False}]})
             else:
                 route.fulfill(json={"request_id": body["request_id"], "pool_id": "pool-qa", "host_id": "core-qa", "status": "succeeded", "candidates": [{"kind": "nfs", "source": {"nfs": {"server": "nfs.example.test", "export": "/exports/vms"}}, "path": "/exports/vms", "browsable": True}]})
         elif path == "storage/credentials":
             # A credential endpoint returns only Core's opaque receipt.  The test also verifies
             # that no later durable request repeats the secret.
-            route.fulfill(status=201, json={"receipt": "core-only-receipt"})
+            if mode.get("fail_credentials"): route.fulfill(status=503, json={"error": "Simulated credential handoff failure"})
+            else: route.fulfill(status=201, json={"receipt": "core-only-receipt"})
         elif path == "storage":
+            if mode.get("fail_registration"):
+                route.fulfill(status=503, json={"error": "Simulated registration failure"})
+                return
             data["storage"] = [{**healthy, "name": body["name"], "status": "queued", "operation_id": "storage-register-core"}]
             data["operations"] = [{"id": "storage-register-core", "host_id": "core-qa", "kind": "storage-register", "request_id": body["request_id"], "status": "queued", "created_at": "2026-09-11T00:00:00Z", "updated_at": "2026-09-11T00:00:00Z", "actor": "operator"}]
+            route.fulfill(status=202, json=data["storage"][0])
+        elif path.endswith("/update"):
+            data["storage"] = [{**data["storage"][0], **body["registration"], "generation": data["storage"][0]["generation"] + 1}]
             route.fulfill(status=202, json=data["storage"][0])
         elif path.endswith("/recheck"):
             if mode["unauthorized"]:
@@ -305,12 +325,233 @@ def main():
                     expect(form.get_by_label(label, exact=True)).to_be_visible()
                 if kind == "iscsi":
                     expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_visible()
+            iscsi_label = "This LUN is restricted to this Core initiator only"
+            inspect_button = form.get_by_role("button", name="Inspect LUNs", exact=True)
+
+            def last_iscsi_source():
+                return next(body for path, body in reversed(submissions) if path == "storage" and body.get("kind") == "iscsi")["source"]["iscsi"]
+
+            def submit_failed_registration():
+                # The simulated failure keeps the draft while still recording the exact request body.
+                mode["fail_registration"] = True
+                with page.expect_response(lambda r: r.url.endswith("/api/v1/storage") and r.request.method == "POST"):
+                    form.get_by_role("button", name="Register and check access", exact=True).click()
+                expect(page.get_by_role("alert")).to_contain_text("Simulated registration failure")
+                mode["fail_registration"] = False
+
+            def start_inspection(iqn):
+                form.get_by_label("Target IQN", exact=True).fill(iqn)
+                inspect_button.click()
             form.get_by_label("Target portal", exact=True).fill("storage.example.test:3260")
             discover_targets = form.get_by_role("button", name="Discover targets", exact=True)
             expect(discover_targets).to_be_enabled()
             discover_targets.click()
             form.get_by_role("button", name="Use iqn.2026-01.example.test:vm-storage", exact=True).click()
             expect(form.get_by_label("Target IQN", exact=True)).to_have_value("iqn.2026-01.example.test:vm-storage")
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("0")
+            expect(form.get_by_label("LUN WWID", exact=True)).to_have_value(inspected_lun["wwid"])
+            expect(form.get_by_label("Existing filesystem UUID", exact=True)).to_have_value(inspected_lun["filesystem_uuid"])
+            expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).not_to_be_checked()
+            page.screenshot(path=str(args.evidence / "iscsi-single-lun.png"), full_page=True)
+            # Registration carries exactly the detected identity; exclusivity is an explicit operator act.
+            form.get_by_label("Name", exact=True).fill("Autofilled iSCSI")
+            submit_failed_registration()
+            assert last_iscsi_source() == {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:vm-storage", "lun": 0, "wwid": inspected_lun["wwid"], "filesystem_uuid": inspected_lun["filesystem_uuid"], "exclusive_target": False, "mode": "exclusive"}, last_iscsi_source()
+            form.get_by_label(iscsi_label, exact=True).check()
+            submit_failed_registration()
+            assert last_iscsi_source()["exclusive_target"] is True, last_iscsi_source()
+            form.get_by_label(iscsi_label, exact=True).uncheck()
+            # A failed submission must leave a cancelled/manual source draft intact.
+            form.get_by_label("Name", exact=True).fill("Manual iSCSI")
+            form.get_by_label("LUN", exact=True).fill("19")
+            form.get_by_label("LUN WWID", exact=True).fill("manual-registration-wwid")
+            manual_uuid = "00000000-0000-0000-0000-000000000019"
+            form.get_by_label("Existing filesystem UUID", exact=True).fill(manual_uuid)
+            form.get_by_label("This LUN is restricted to this Core initiator only", exact=True).check()
+            mode["fail_registration"] = True
+            before = len(submissions)
+            with page.expect_response(lambda r: r.url.endswith("/api/v1/storage") and r.request.method == "POST"):
+                form.get_by_role("button", name="Register and check access", exact=True).click()
+            expect(page.get_by_role("alert")).to_contain_text("Simulated registration failure")
+            expect(form.get_by_role("button", name="Register and check access", exact=True)).to_be_enabled()
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("19")
+            expect(form.get_by_label("LUN WWID", exact=True)).to_have_value("manual-registration-wwid")
+            expect(form.get_by_label("Existing filesystem UUID", exact=True)).to_have_value(manual_uuid)
+            expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_checked()
+            assert not any(path == "storage/discover" and body.get("target_iqn") for path, body in submissions[before:])
+            mode["fail_registration"] = False
+            # Selecting the same target retries after either manual cancellation or an error.
+            for outcome in ("failed", "single"):
+                mode["inspection"] = outcome
+                form.get_by_role("button", name="Discover targets", exact=True).click()
+                with page.expect_response(lambda r: r.url.endswith("/api/v1/storage/discover") and r.request.post_data_json.get("target_iqn") == "iqn.2026-01.example.test:vm-storage"):
+                    form.get_by_role("button", name="Use iqn.2026-01.example.test:vm-storage", exact=True).click()
+                if outcome == "failed":
+                    expect(form.get_by_text("Core could not inspect this selected target.", exact=False)).to_be_visible()
+                    expect(form.get_by_label("LUN", exact=True)).to_have_value("19")
+                else:
+                    expect(form.get_by_label("LUN", exact=True)).to_have_value("0")
+                    expect(form.get_by_label("LUN WWID", exact=True)).to_have_value(inspected_lun["wwid"])
+                expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_checked()
+            checks.append("Failed submissions preserve cancelled manual identities and exclusivity without reinspection; selecting the same target retries cancelled and failed inspections")
+
+            def inspect_mode(value):
+                # Typing the IQN never inspects; the Inspect LUNs button is the explicit trigger.
+                mode["inspection"] = value
+                iqn = f"iqn.2026-01.example.test:{value}"
+                before = len(submissions)
+                form.get_by_label("Target IQN", exact=True).fill(iqn)
+                assert not any(path == "storage/discover" for path, _ in submissions[before:]), "typing the IQN must not inspect"
+                with page.expect_request(lambda r: r.url.endswith("/api/v1/storage/discover") and r.post_data_json.get("target_iqn") == iqn):
+                    inspect_button.click()
+
+            inspect_mode("multiple")
+            picker = form.get_by_label("Detected LUN", exact=True)
+            expect(picker).to_be_visible()
+            expect(picker).to_have_value("")
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("")
+            expect(form.get_by_label("LUN WWID", exact=True)).to_have_value("")
+            picker.focus()
+            page.keyboard.press("Space")
+            page.keyboard.press("End")
+            page.keyboard.press("Enter")
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("7")
+            expect(form.get_by_label("LUN WWID", exact=True)).to_have_value("3600-second-qa")
+            expect(form.get_by_label("Existing filesystem UUID", exact=True)).to_have_value("00000000-0000-0000-0000-000000000456")
+            page.screenshot(path=str(args.evidence / "iscsi-multiple-luns.png"), full_page=True)
+            # An explicit multi-LUN choice registers exactly the chosen LUN's identity (the IQN edit cleared exclusivity).
+            submit_failed_registration()
+            assert last_iscsi_source() == {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:multiple", "lun": 7, "wwid": "3600-second-qa", "filesystem_uuid": "00000000-0000-0000-0000-000000000456", "exclusive_target": False, "mode": "exclusive"}, last_iscsi_source()
+            for value, message in [("empty", "Core reported no LUNs"), ("blank", "No filesystem signature detected."), ("unsupported", "not supported for ordinary iSCSI"), ("failed", "Core could not inspect this selected target.")]:
+                inspect_mode(value)
+                expect(form.get_by_text(message, exact=False)).to_be_visible()
+                if value in ("empty", "failed"):
+                    expect(form.get_by_label("LUN", exact=True)).to_have_value("")
+                if value == "blank":
+                    expect(form.get_by_label("LUN", exact=True)).to_have_value("0")
+                    expect(form.get_by_label("Existing filesystem UUID", exact=True)).to_have_value("")
+                expect(form.get_by_label("LUN WWID", exact=True)).to_be_editable()
+            checks.append("Selected targets autofill actual LUN zero and Core identity; multiple LUNs require keyboard-accessible explicit selection; blank, unsupported, empty and failed observations remain honest and editable")
+
+            mode["inspection"] = "single"
+            before = len(submissions)
+            form.get_by_label("CHAP account", exact=True).fill("fixture-chap")
+            with page.expect_request(lambda r: r.url.endswith("/api/v1/storage/discover") and r.post_data_json.get("target_iqn")) as account_only:
+                inspect_button.click()
+            assert "credentials" not in account_only.value.post_data_json, account_only.value.post_data_json
+            chap_secret = "fixture-transient-chap-secret"
+            before = len(submissions)
+            form.get_by_label("CHAP secret", exact=True).fill(chap_secret)
+            assert not any(path == "storage/discover" for path, _ in submissions[before:]), "typing CHAP must not inspect"
+            with page.expect_request(lambda r: r.url.endswith("/api/v1/storage/discover") and r.post_data_json.get("target_iqn") and r.post_data_json.get("credentials", {}).get("secret") == chap_secret) as chap:
+                inspect_button.click()
+            assert chap.value.post_data_json["credentials"] == {"username": "fixture-chap", "secret": chap_secret}
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("0")
+            # Editing CHAP credentials keeps the detected identity; only kind/host/portal/IQN changes clear it.
+            form.get_by_label("CHAP account", exact=True).fill("fixture-chap-edited")
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("0")
+            expect(form.get_by_label("LUN WWID", exact=True)).to_have_value(inspected_lun["wwid"])
+            form.get_by_label("CHAP account", exact=True).fill("fixture-chap")
+            assert chap_secret not in page.locator("body").inner_text()
+            assert chap_secret not in page.evaluate("JSON.stringify({local: {...localStorage}, session: {...sessionStorage}})")
+            for index, field in enumerate(("Target portal", "Target IQN", "CHAP account", "CHAP secret")):
+                mode["inspection"] = "deferred"
+                start_inspection(f"iqn.2026-01.example.test:pending-{index}")
+                pending, reply = take_deferred(page, deferred_inspection, "selected-target LUN inspection")
+                form.get_by_label(field, exact=True).fill("" if field == "Target IQN" else f"changed-{index}")
+                if field != "Target IQN":
+                    form.get_by_role("button", name="Cancel LUN inspection", exact=True).click()
+                form.get_by_label("LUN", exact=True).fill("23")
+                form.get_by_label("LUN WWID", exact=True).fill("manual-wwid")
+                pending.fulfill(json=reply)
+                expect(form.get_by_label("LUN", exact=True)).to_have_value("23")
+                expect(form.get_by_label("LUN WWID", exact=True)).to_have_value("manual-wwid")
+                expect(form.get_by_label("Existing filesystem UUID", exact=True)).to_have_value("")
+                deferred_inspection.clear()
+            start_inspection("iqn.2026-01.example.test:manual")
+            pending, reply = take_deferred(page, deferred_inspection, "manual LUN entry during inspection")
+            form.get_by_label("LUN", exact=True).fill("25")
+            pending.fulfill(json=reply)
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("25")
+            start_inspection("iqn.2026-01.example.test:host")
+            pending, reply = take_deferred(page, deferred_inspection, "changing inspection host")
+            form.get_by_label("Host", exact=True).select_option("")
+            form.get_by_label("LUN", exact=True).fill("26")
+            pending.fulfill(json=reply)
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("26")
+            form.get_by_label("Target IQN", exact=True).fill("")
+            form.get_by_label("Host", exact=True).select_option("core-qa")
+            start_inspection("iqn.2026-01.example.test:cancel")
+            pending, reply = take_deferred(page, deferred_inspection, "cancelled LUN inspection")
+            form.get_by_role("button", name="Cancel LUN inspection", exact=True).click()
+            form.get_by_label("LUN", exact=True).fill("24")
+            pending.fulfill(json=reply)
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("24")
+            start_inspection("iqn.2026-01.example.test:close")
+            pending, reply = take_deferred(page, deferred_inspection, "closing LUN inspection")
+            form.get_by_role("button", name="Close", exact=True).click()
+            pending.fulfill(json=reply)
+            expect(form).to_have_count(0)
+            page.get_by_role("button", name="Register storage", exact=True).click()
+            form.get_by_label("Repository type").select_option("iscsi")
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("")
+            # Removing the inspection capability models an older Core without manufacturing an empty success.
+            host["capabilities"].remove("storage-iscsi-inspect-v1")
+            refresh()
+            form.get_by_label("Host", exact=True).select_option("core-qa")
+            form.get_by_label("Target portal", exact=True).fill("storage.example.test:3260")
+            before = len(submissions)
+            form.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:legacy")
+            expect(form.get_by_text("This Core does not support read-only LUN inspection.", exact=False)).to_be_visible()
+            assert not any(path == "storage/discover" and body.get("target_iqn") for path, body in submissions[before:])
+            form.get_by_label("LUN", exact=True).fill("9")
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("9")
+            # The submit-only CHAP scrub must not behave like an operator credential edit.
+            form.get_by_label("Name", exact=True).fill("Legacy manual iSCSI")
+            form.get_by_label("CHAP account", exact=True).fill("legacy-chap")
+            form.get_by_label("CHAP secret", exact=True).fill("fixture-legacy-chap-secret")
+            form.get_by_label("LUN", exact=True).fill("9")
+            form.get_by_label("LUN WWID", exact=True).fill("manual-legacy-wwid")
+            form.get_by_label("Existing filesystem UUID", exact=True).fill(manual_uuid)
+            form.get_by_label("This LUN is restricted to this Core initiator only", exact=True).check()
+            mode["fail_credentials"] = True
+            with page.expect_response(lambda r: r.url.endswith("/api/v1/storage/credentials") and r.request.method == "POST"):
+                form.get_by_role("button", name="Register and check access", exact=True).click()
+            expect(page.get_by_role("alert")).to_contain_text("Simulated credential handoff failure")
+            expect(form.get_by_label("CHAP secret", exact=True)).to_have_value("")
+            expect(form.get_by_label("LUN", exact=True)).to_have_value("9")
+            expect(form.get_by_label("LUN WWID", exact=True)).to_have_value("manual-legacy-wwid")
+            expect(form.get_by_label("Existing filesystem UUID", exact=True)).to_have_value(manual_uuid)
+            expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_checked()
+            mode["fail_credentials"] = False
+            form.get_by_role("button", name="Close", exact=True).click()
+            saved_source = {"iscsi": {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:saved", "lun": 12, "wwid": "3600-saved-qa", "filesystem_uuid": manual_uuid, "exclusive_target": True, "mode": "exclusive"}}
+            data["storage"] = [{**healthy, "id": "saved-iscsi-qa", "name": "Saved iSCSI", "kind": "iscsi", "source": saved_source}]
+            host["capabilities"].append("storage-iscsi-inspect-v1")
+            mode["inspection"] = "multiple"
+            refresh()
+            before = len(submissions)
+            page.get_by_role("row").filter(has_text="Saved iSCSI").get_by_role("button", name="Update", exact=True).click()
+            editor = page.get_by_role("region", name="Update storage", exact=True)
+            expect(editor.get_by_label("LUN", exact=True)).to_have_value("12")
+            expect(editor.get_by_label("LUN WWID", exact=True)).to_have_value(saved_source["iscsi"]["wwid"])
+            expect(editor.get_by_label("Existing filesystem UUID", exact=True)).to_have_value(manual_uuid)
+            expect(editor.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_checked()
+            assert not any(path == "storage/discover" and body.get("target_iqn") for path, body in submissions[before:])
+            editor.get_by_label("Name", exact=True).fill("Renamed iSCSI")
+            with page.expect_response(lambda r: r.url.endswith("/api/v1/storage/saved-iscsi-qa/update") and r.request.method == "POST") as updated:
+                editor.get_by_role("button", name="Update and check access", exact=True).click()
+            assert updated.value.request.post_data_json["registration"]["source"] == saved_source
+            expect(editor).to_have_count(0)
+            expect(page.get_by_text("Storage update request submitted for Renamed iSCSI", exact=False)).to_be_visible()
+            data["storage"] = []
+            refresh()
+            host["capabilities"].remove("storage-iscsi-inspect-v1")
+            page.get_by_role("button", name="Register storage", exact=True).click()
+            checks.append("Failed CHAP handoff scrubs only the secret, retaining old-Core manual identity and exclusivity; existing iSCSI name-only updates preserve source fields without inspection")
+            host["capabilities"].append("storage-iscsi-inspect-v1")
+            mode["inspection"] = "single"
+            checks.append("CHAP travels only in transient inspection POST bodies; target/portal/host/CHAP changes, manual edits, cancel and close reject late field writes; older Core keeps a manual workflow without selected-target requests")
             form.get_by_label("Repository type").select_option("smb")
             form.get_by_label("Name", exact=True).fill("VM share")
             form.get_by_label("SMB server").fill("files.example.test")
@@ -341,18 +582,18 @@ def main():
             expect(form.get_by_label("Share", exact=True)).to_have_value("team-share")
             expect(form.locator(".storage-selected-folder")).to_have_text("vms")
             checks.append("SMB browsing works before a manual share exists and applies the selected share plus relative directory only after confirmation")
-            page.get_by_role("button", name="Register and check access", exact=True).click()
-            expect(page.get_by_text("Storage registration queued", exact=False)).to_be_visible()
+            with page.expect_response(lambda reply: reply.url.endswith("/api/v1/storage") and reply.request.method == "POST"):
+                page.get_by_role("button", name="Register and check access", exact=True).click()
             expect(page.get_by_text("core-assigned-repository", exact=True)).to_have_count(0)
-            assert "core-assigned-repository" == data["storage"][0]["id"]
-            credential = next(body for path, body in submissions if path == "storage/credentials")
-            register = next(body for path, body in submissions if path == "storage")
+            credential = next(body for path, body in submissions if path == "storage/credentials" and body["credentials"].get("secret") == secret)
+            register = next(body for path, body in submissions if path == "storage" and body.get("kind") == "smb")
             assert credential["credentials"] == {"username": "nex-vm", "secret": secret, "domain": "truenas"}, credential
             assert register["source"] == {"smb": {"server": "files.example.test", "share": "team-share", "directory": "vms"}}, register
             assert register["credential_receipt"] == "core-only-receipt" and secret not in json.dumps(register), register
             assert credential["registration_request_id"] == register["request_id"] == register["credential_request_id"], (credential, register)
             # Wait for close() after reload; asserting while the form is still mounted races the password input.
             expect(page.get_by_role("region", name="Register storage")).to_have_count(0)
+            expect(page.get_by_text("Storage registration request submitted for VM share", exact=False)).to_be_visible()
             assert secret not in page.content() and secret not in page.evaluate("Object.values(sessionStorage).join(' ')")
             expect(page.get_by_text("VM share", exact=True)).to_be_visible()
             # The queued Core registration task is listed on Tasks (the old bottom task strip is gone).
@@ -373,8 +614,9 @@ def main():
             expect(page.get_by_role("alert")).to_contain_text("Simulated Core access check unavailable")
             page.screenshot(path=str(args.evidence / "error.png"), full_page=True)
             mode["fail_recheck"] = False
-            page.get_by_role("button", name="Recheck", exact=True).click()
-            expect(page.get_by_text("Access recheck queued", exact=False)).to_be_visible()
+            with page.expect_response(lambda r: r.url.endswith("/recheck") and r.request.method == "POST"):
+                page.get_by_role("button", name="Recheck", exact=True).click()
+            expect(page.get_by_text("Access recheck submitted for VM share", exact=False)).to_be_visible()
             expect(page.get_by_role("button", name="Detach", exact=True)).to_be_disabled()
             data["storage"] = [healthy]
             refresh()

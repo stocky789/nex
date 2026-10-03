@@ -142,6 +142,17 @@ func TestValidateStorageDiscoveryAllowsSelectedNamesWithSpaces(t *testing.T) {
 	}
 }
 
+func TestValidateStorageDiscoveryPurpose(t *testing.T) {
+	v := StorageDiscoveryRequest{RequestID: "discover-1", PoolID: "pool-1", HostID: "host-1", Kind: StorageKindSMB, Server: "files.example.test", Purpose: StorageDiscoveryPurposeBackup}
+	if err := ValidateStorageDiscovery(v); err != nil {
+		t.Fatalf("backup purpose rejected: %v", err)
+	}
+	v.Purpose = "restore"
+	if err := ValidateStorageDiscovery(v); err == nil {
+		t.Fatal("unknown discovery purpose accepted")
+	}
+}
+
 func TestValidateStorageLifecycle(t *testing.T) {
 	base := StorageLifecycleRequest{RepositoryID: "repo-1", PoolID: "pool-1", HostID: "host-1"}
 	for _, c := range []struct {

@@ -4,7 +4,7 @@
 
 Development build, **unverified**. A pool of image-edition Nex Core hosts is updated by the pool master's Core as one durable
 rollout: it stages the release on every host, swaps the Controller appliance first when the Controller runs on a pool host, then
-updates one host at a time, members first and the master last. **Settings** → **Updates** → **Pool rollout** shows what the master
+updates one host at a time, members first and the master last. The **Pool update** panel (**Settings** → **Updates**; formerly **Pool rollout**) shows what the master
 and the hosts report and sends your pause, resume, abort and roll-back requests. The rollout belongs to the master, so it carries on
 if the Controller is stopped or replaced. No part of this page has been walked through on a running pool: see
 [Verification](#verification). The rollout never forces a guest off: guests of a host wait, or, if you choose, are shut down
@@ -14,9 +14,9 @@ image is never forced off (see [Deploy the Controller appliance](deploy-controll
 
 ## Prerequisites
 
-- Every host of the pool runs the image edition, is freshly connected and advertises pool rollouts; otherwise the panel says to
-  upgrade Nex Core on the host that lacks them. A host that has not found the release (use **Check** under **Host images** first)
-  blocks the preflight.
+- Every host of the pool runs the image edition, is freshly connected and supports pool updates; otherwise the panel says to
+  update the hosts that lack it one by one first. A host that has not found the release (use **Check** under **Host images** first)
+  blocks the readiness check.
 - A Controller administrator session. The pool master must be freshly connected.
 - High availability is off. A rollout refuses while it is on.
 - Decide what happens to running guests. **Refuse** (the default) waits, up to six hours per host, for the guests on that host to be
@@ -27,12 +27,12 @@ image is never forced off (see [Deploy the Controller appliance](deploy-controll
 
 ## Steps
 
-1. Open **Settings** → **Updates** with the pool selected and find **Pool rollout**.
-2. Enter the release sequence (it is prefilled when every host reports the same newest release) and choose how running guests are
+1. Open **Settings** → **Updates** with the pool selected and find **Pool update**.
+2. Enter the release number (it is prefilled when every host reports the same newest release) and choose how running guests are
    handled.
-3. Select **Run preflight**. A passing preflight records nothing and says the pool is ready. A refusal shows a stable code and one
+3. Select **Check readiness**. A passing check records nothing and says the pool is ready. A refusal shows a stable code and one
    message, for example `quorum_margin`, `running_vms`, `bridge_required`, `controller_too_old` or `host_busy`; fix it and run it again.
-4. Select **Start rollout**. The table shows **Controller first** and one row per host in the order they will be updated.
+4. Select **Start update**. The table shows **Controller first** and one row per host in the order they will be updated.
 5. Watch the rows. While a rollout runs you can **Pause** (it stops between hosts), and while it is paused you can **Resume**,
    **Abort** or **Roll back host** for a host that has activated the release. Abort puts maintenance mode back and starts again the
    guests the rollout stopped, on every host it had started on, and only becomes **Aborted** once every one of those hosts is out of
@@ -52,8 +52,8 @@ instead of finalizing it.
 
 ## Troubleshooting
 
-- **Run preflight is greyed out:** the pool master is not freshly connected, a member lacks pool rollouts, or no release sequence is
-  known. The page says which.
+- **Check readiness is greyed out:** the pool master is not freshly connected, a member does not support pool updates, or no release
+  number is known. The page says which.
 - **`running_vms`:** a guest is running on the next host and the policy is Refuse. Stop it, or abort and start again with the
   graceful shutdown choice.
 - **`quorum_margin` or `host_busy`:** taking the next host down would leave the pool without a majority, or that host is running

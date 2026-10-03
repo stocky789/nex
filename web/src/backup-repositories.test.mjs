@@ -4,7 +4,8 @@ import React from "react";
 import { bundleTestModule } from "./test-helpers.mjs";
 
 const { repositoryHealth, repositoryTarget } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "repository-health"));
-const { BackupRepositories, backupSource, forgetBody, hostAccess, validRepositoryID, validSMBDomain } = await import(bundleTestModule(new URL("./backup-repositories.tsx", import.meta.url), "repository-host-access", true));
+const { BackupRepositories, backupSource, browsedFolderFields, forgetBody, hostAccess, validRepositoryID, validSMBDomain } = await import(bundleTestModule(new URL("./backup-repositories.tsx", import.meta.url), "repository-host-access", true));
+const { browseSelection } = await import(bundleTestModule(new URL("./share-browser.tsx", import.meta.url), "share-browser-selection"));
 assert.equal(repositoryHealth({ health: { status: "online", observed_at: "2026-09-28T09:59:00Z" } }), "online");
 assert.equal(repositoryHealth({ health: { status: "offline", observed_at: "2026-09-28T09:59:00Z" } }), "offline");
 assert.equal(repositoryHealth({ health: { status: "online", observed_at: new Date(Date.now() + 3_600_000).toISOString() } }), "online", "a master clock ahead of the browser does not hide Core's health");
@@ -62,9 +63,9 @@ assert.deepEqual(forgetBody("bforget-1", "Primary", [{ id: "a", protected: true 
 // Render the component with a deterministic hook dispatcher and invoke its actual form handlers.
 // Network replies and polling remain asynchronous; no DOM or new test dependency is required.
 const internals = React.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
-function repositoryForm(api) {
+function repositoryForm(api, hosts = []) {
   const slots = [], effects = [], timers = new Map();
-  let cursor = 0, tree, props = { api, poolID: "pool-a", masterHostID: "master-a", hosts: [], busy: false, unavailable: false, onNotice() {} };
+  let cursor = 0, tree, props = { api, poolID: "pool-a", masterHostID: "master-a", hosts, busy: false, unavailable: false, onNotice() {} };
   globalThis.window = {
     setInterval(fn) { const id = timers.size + 1; timers.set(id, fn); return id; },
     clearInterval(id) { timers.delete(id); },
@@ -106,6 +107,12 @@ function repositoryForm(api) {
   render();
   return {
     render, field,
+    button(label) {
+      render();
+      const node = nodes(tree).find(n => n.type === "button" && n.props.children === label);
+      assert.ok(node, `button ${label} is visible`);
+      return node;
+    },
     async settle() { for (let i = 0; i < 6; i++) await Promise.resolve(); render(); },
     open() { render(); nodes(tree).find(n => n.type === "button" && n.props.className === "sm primary").props.onClick(); render(); },
     fill(label, value) { render(); field(label).props.onChange({ target: { value } }); render(); },
@@ -216,3 +223,55 @@ lateForm.fill("Destination type", "smb3");
 assert.equal(lateForm.field("Password").props.required, true, "late pool A acknowledgement cannot authorize pool B");
 assert.deepEqual(lateRegistrations, [], "an old-scope credential reply cannot submit a registration after switching pools");
 lateForm.close();
+
+// Folder discovery: the same transient Core request the VM storage picker sends, scoped to the pool master and the backup purpose.
+const master = { id: "master-a", connection: "fresh", revoked: false, capabilities: ["storage-repositories-v1", "storage-discovery-v1", "storage-discovery-purpose-v1"] };
+const discoveries = [];
+const browseForm = repositoryForm(async (path, method, body) => {
+  if (method === "GET") return [];
+  discoveries.push({ path, method, body: structuredClone(body) });
+  return { status: "succeeded", candidates: [] };
+}, [master]);
+await browseForm.settle();
+browseForm.open();
+assert.equal(browseForm.button("Browse exports").props.disabled, true, "NFS browsing waits for a server");
+browseForm.fill("NFS server", "nas.example.test");
+assert.equal(browseForm.button("Browse exports").props.disabled, false);
+browseForm.button("Browse exports").props.onClick();
+await browseForm.settle();
+assert.deepEqual(discoveries.map(({ path, method, body: { request_id, ...rest } }) => [path, method, rest]), [
+  ["storage/discover", "POST", { pool_id: "pool-a", host_id: "master-a", kind: "nfs", purpose: "backup", server: "nas.example.test" }],
+]);
+browseForm.fill("Destination type", "smb3");
+assert.equal(browseForm.button("Browse shared folders").props.disabled, true, "SMB browsing waits for an account");
+browseForm.fill("Username", "backup-user");
+browseForm.fill("Domain", "EXAMPLE");
+browseForm.fill("Password", "fixture-secret");
+browseForm.button("Browse shared folders").props.onClick();
+await browseForm.settle();
+assert.deepEqual(discoveries[1].body.credentials, { username: "backup-user", secret: "fixture-secret", domain: "EXAMPLE" });
+assert.equal(discoveries[1].body.kind, "smb");
+assert.equal(discoveries[1].body.purpose, "backup");
+browseForm.close();
+
+const staleForm = repositoryForm(async () => [], [{ ...master, connection: "stale" }]);
+await staleForm.settle();
+staleForm.open();
+staleForm.fill("NFS server", "nas.example.test");
+assert.equal(staleForm.button("Browse exports").props.disabled, true, "an unreachable pool master cannot browse");
+staleForm.close();
+
+// An older Core ignores the purpose field, so it would list ordinary directories: the Controller refuses, and the form does not offer the picker.
+const oldCoreForm = repositoryForm(async () => [], [{ ...master, capabilities: ["storage-repositories-v1", "storage-discovery-v1"] }]);
+await oldCoreForm.settle();
+oldCoreForm.open();
+oldCoreForm.fill("NFS server", "nas.example.test");
+assert.equal(oldCoreForm.button("Browse exports").props.disabled, true, "backup browsing needs the purpose capability");
+oldCoreForm.close();
+
+// A folder picked in the browser fills the fields of its protocol.
+assert.deepEqual(browsedFolderFields("nfs", "/exports/backups", "team/vms"), { exportPath: "/exports/backups", directory: "team/vms" });
+assert.deepEqual(browsedFolderFields("smb", "backups", ""), { share: "backups", directory: "" });
+assert.deepEqual(browseSelection("smb", "/backups/team/vms", "", undefined), { container: "backups", directory: "team/vms" });
+assert.deepEqual(browseSelection("nfs", "/exports/backups/team", "/exports/backups", undefined), { container: "/exports/backups", directory: "team" });
+assert.deepEqual(browseSelection("nfs", "/exports/backups", "", "/exports/backups"), { container: "/exports/backups", directory: "" });

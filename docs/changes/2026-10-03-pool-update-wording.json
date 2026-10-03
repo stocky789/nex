@@ -1,0 +1,31 @@
+{
+  "summary": "Rename the Pool rollout panel in Settings, Updates to Pool update and use plain labels (Check readiness, Start update, release number) in the UI, guide and changelog.",
+  "paths": [
+    "web/src/pool-rollout.tsx",
+    "web/src/pool-rollout.test.mjs",
+    "docs/guide/update-a-pool.md",
+    "docs/guide/README.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The pool update guide uses the Pool update panel name, Check readiness, Start update and release number wording.",
+    "pages": ["docs/guide/update-a-pool.md", "docs/guide/README.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI wording only; no route, field, capability or protocol changes."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Wording only; no milestone or acceptance status changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state is added or changed; the rollout remains owned by the pool master's Core."
+  },
+  "verification": {
+    "method": "Wording change only. Not executed: a browser walkthrough of the renamed panel.",
+    "evidence": ["web/src/pool-rollout.test.mjs"]
+  }
+}

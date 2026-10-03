@@ -220,6 +220,31 @@ func (q *transientResultQueue[T]) append(s *Store, results []T) {
 var transientStorageDiscoveries = newTransientResultQueue[protocol.StorageDiscoveryResult](128)
 var transientStorageClusters = newTransientResultQueue[protocol.StorageClusterResult](128)
 
+// The probe forks the native inspection helper, so the answer is cached rather than
+// repeated on every report. It only gates an optional capability, so 30s staleness is safe.
+const iscsiInspectionProbeTTL = 30 * time.Second
+
+var (
+	iscsiInspectionProbe = vmhost.ISCSIInspectionAvailable
+	iscsiInspectionNow   = time.Now
+	iscsiInspectionMu    sync.Mutex
+	iscsiInspectionAt    time.Time
+	iscsiInspectionOK    bool
+)
+
+func storageISCSIInspectionAvailable(ctx context.Context) bool {
+	iscsiInspectionMu.Lock()
+	defer iscsiInspectionMu.Unlock()
+	if now := iscsiInspectionNow(); iscsiInspectionAt.IsZero() || now.Sub(iscsiInspectionAt) >= iscsiInspectionProbeTTL || now.Before(iscsiInspectionAt) {
+		ok := iscsiInspectionProbe(ctx)
+		if ctx.Err() != nil {
+			return iscsiInspectionOK
+		}
+		iscsiInspectionOK, iscsiInspectionAt = ok, now
+	}
+	return iscsiInspectionOK
+}
+
 // transientPoolResults answers the Controller's brokered pool requests on the next report.
 // Nothing here is durable: the master's own offer record is the authority.
 var transientPoolResults = newTransientResultQueue[protocol.PoolResult](32)
@@ -650,7 +675,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		// System-disk replace opens storage/discover for the spare list, so it shares the
 		// storage handshake gate with discovery and ZFS provision/replace. The image edition's
 		// slot layout is not rebuilt by it yet, so an image host never offers it.
-		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.ZFSProvisionCapability, protocol.ZFSReplaceCapability)
+		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.StorageDiscoveryPurposeCapability, protocol.ZFSProvisionCapability, protocol.ZFSReplaceCapability)
+		if storageISCSIInspectionAvailable(ctx) {
+			capabilities = append(capabilities, protocol.ISCSIInspectCapability)
+		}
 		if !imageUpdateAvailable() {
 			capabilities = append(capabilities, protocol.SystemDiskReplaceCapability)
 		}
@@ -1034,7 +1062,8 @@ func vmUsesPoolSharedStorage(vm protocol.VMCreateSpec, storage []protocol.Storag
 }
 
 func storageDiscoveryScopeMatches(state State, request protocol.StorageDiscoveryRequest) bool {
-	return request.HostID == state.HostID && request.PoolID == state.PoolID
+	return request.HostID == state.HostID && request.PoolID == state.PoolID &&
+		(request.TargetIQN == "" || state.StorageProtocolReady)
 }
 
 func storageClusterScopeMatches(state State, request protocol.StorageClusterRequest) bool {

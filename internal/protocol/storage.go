@@ -14,6 +14,11 @@ import (
 
 const StorageRepositoryCapability = "storage-repositories-v1"
 const StorageDiscoveryCapability = "storage-discovery-v1"
+
+// StorageDiscoveryPurposeCapability marks a Core that honours the discovery purpose field.
+// An older Core ignores the field, so the Controller refuses a purpose request for it.
+const StorageDiscoveryPurposeCapability = "storage-discovery-purpose-v1"
+const ISCSIInspectCapability = "storage-iscsi-inspect-v1"
 const ZFSProvisionCapability = "storage-zfs-provision-v1"
 
 // ZFSReplaceCapability gates replacing a failed disk in a provisioned pool, hot spares and
@@ -198,6 +203,9 @@ type StorageCredentialRetireRequest struct {
 	HostID  string `json:"host_id"`
 }
 
+// StorageDiscoveryPurposeBackup scopes discovery to choosing a backup repository destination.
+const StorageDiscoveryPurposeBackup = "backup"
+
 // StorageDiscoveryRequest is a short-lived Core observation request.  It is never a
 // repository command: neither the Controller nor Core journals it, and credentials (if
 // supplied for SMB/CHAP discovery) exist only for this one authenticated exchange.
@@ -208,7 +216,11 @@ type StorageDiscoveryRequest struct {
 	Kind        string              `json:"kind"`
 	Server      string              `json:"server,omitempty"`
 	Path        string              `json:"path,omitempty"`
+	TargetIQN   string              `json:"target_iqn,omitempty"`
 	Credentials *StorageCredentials `json:"credentials,omitempty"`
+	// Purpose "backup" makes the SMB existing-repository flag look for a backup
+	// repository's owner marker instead of VM storage's marker.
+	Purpose string `json:"purpose,omitempty"`
 }
 
 type StorageDiscoveryCandidate struct {
@@ -311,6 +323,16 @@ type ZFSProvisionHostResult struct {
 	DatasetGUID  string               `json:"dataset_guid,omitempty"`
 }
 
+// ISCSILUNDiscovery contains only observed identity from a transient read-only inspection.
+type ISCSILUNDiscovery struct {
+	LUN            uint64 `json:"lun"`
+	WWID           string `json:"wwid,omitempty"`
+	FilesystemUUID string `json:"filesystem_uuid,omitempty"`
+	FilesystemType string `json:"filesystem_type,omitempty"`
+	SizeBytes      uint64 `json:"size_bytes,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
 // StorageDiscoveryResult deliberately returns only operator-safe source metadata and
 // directory names. Credentials, mount options, device paths and command output stay Core-local.
 type StorageDiscoveryResult struct {
@@ -319,8 +341,10 @@ type StorageDiscoveryResult struct {
 	HostID     string                      `json:"host_id"`
 	Status     string                      `json:"status"`
 	Candidates []StorageDiscoveryCandidate `json:"candidates,omitempty"`
-	Error      string                      `json:"error,omitempty"`
-	ObservedAt time.Time                   `json:"observed_at"`
+	// ISCSILUNs is omitted when empty: on a succeeded selected-target result, absence means none.
+	ISCSILUNs  []ISCSILUNDiscovery `json:"iscsi_luns,omitempty"`
+	Error      string              `json:"error,omitempty"`
+	ObservedAt time.Time           `json:"observed_at"`
 }
 
 var zfsName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]*(/[A-Za-z0-9][A-Za-z0-9_.:-]*)*$`)
@@ -569,6 +593,9 @@ func ValidateStorageDiscovery(v StorageDiscoveryRequest) error {
 	if v.Path != "" && !storagePath(v.Path) {
 		return errors.New("storage discovery path is invalid")
 	}
+	if v.Purpose != "" && (v.Purpose != StorageDiscoveryPurposeBackup || (v.Kind != StorageKindNFS && v.Kind != StorageKindSMB)) {
+		return errors.New("storage discovery purpose must be empty or backup, and only applies to NFS and SMB")
+	}
 	if v.Credentials != nil && (len(v.Credentials.Secret) > 4096 || len(v.Credentials.Username) > 253 || !ValidSMBDomain(v.Credentials.Domain) || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\x00\r\n")) {
 		return errors.New("storage discovery credentials are invalid")
 	}
@@ -578,7 +605,66 @@ func ValidateStorageDiscovery(v StorageDiscoveryRequest) error {
 	if v.Kind == StorageKindISCSI && v.Server == "" {
 		return errors.New("iSCSI discovery needs a portal")
 	}
+	if v.TargetIQN != "" && (v.Kind != StorageKindISCSI || !ValidISCSITarget(v.TargetIQN)) {
+		return errors.New("selected target IQN is only valid for iSCSI discovery")
+	}
+	if v.Kind == StorageKindISCSI && v.Credentials != nil && (v.Credentials.Domain != "" || (v.Credentials.Username == "") != (v.Credentials.Secret == "")) {
+		return errors.New("iSCSI discovery CHAP needs both username and secret, without a domain")
+	}
+	// Target listing never logs in, so credentials there would be silently ignored.
+	if v.Kind == StorageKindISCSI && v.TargetIQN == "" && v.Credentials != nil {
+		return errors.New("iSCSI CHAP is only used for selected-target inspection")
+	}
+	// Selected-target inspection uses libiscsi's 255-byte CHAP buffer; longer secrets would be truncated.
+	if v.Kind == StorageKindISCSI && v.TargetIQN != "" && v.Credentials != nil && len(v.Credentials.Secret) > 255 {
+		return errors.New("iSCSI discovery CHAP secret must not exceed 255 bytes")
+	}
 	return nil
+}
+
+// MaxISCSILUNDiscoveries bounds one selected-target inspection result.
+const MaxISCSILUNDiscoveries = 64
+
+// ValidateStorageDiscoveryResult bounds the one field family a Core could otherwise use to
+// inflate controller memory or put control characters in front of an operator.
+func ValidateStorageDiscoveryResult(v StorageDiscoveryResult) error {
+	if len(v.ISCSILUNs) > MaxISCSILUNDiscoveries || (len(v.ISCSILUNs) > 0 && v.Status != "succeeded") || !printableASCII(v.Error, 511) {
+		return errors.New("storage discovery result is invalid")
+	}
+	seen := make(map[uint64]bool, len(v.ISCSILUNs))
+	for _, lun := range v.ISCSILUNs {
+		if seen[lun.LUN] || !printableASCII(lun.WWID, 255) || !printableASCII(lun.FilesystemUUID, 255) || !printableASCII(lun.FilesystemType, 63) || !printableASCII(lun.Error, 511) {
+			return errors.New("storage discovery result is invalid")
+		}
+		seen[lun.LUN] = true
+	}
+	return nil
+}
+
+func printableASCII(value string, limit int) bool {
+	if len(value) > limit {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < ' ' || value[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidISCSITarget accepts an iSCSI name (RFC 3720 allows at most 223 bytes) without URL
+// delimiters or control characters.
+func ValidISCSITarget(target string) bool {
+	if len(target) > 223 || !(strings.HasPrefix(target, "iqn.") || strings.HasPrefix(target, "eui.") || strings.HasPrefix(target, "naa.")) {
+		return false
+	}
+	for _, c := range target {
+		if c < '!' || c > '~' || strings.ContainsRune("/\\", c) {
+			return false
+		}
+	}
+	return true
 }
 
 func ValidateZFSProvision(v ZFSProvisionRequest) error {

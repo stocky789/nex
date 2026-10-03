@@ -1731,31 +1731,31 @@ API impact: **new client operation and changed Core report contract** —
 `POST /api/v1/storage/discover` accepts an administrator/CSRF-protected
 `StorageDiscoveryRequest` scoped to one eligible pool host. The Controller passes it once in
 the authenticated protocol-v2 report response only after that Core advertises both
-`storage-repositories-v1` and `storage-discovery-v1`; the Core returns the matching
+`storage-repositories-v1` and `storage-discovery-v1` (backup-purpose requests also need `storage-discovery-purpose-v1`); the Core returns the matching
 `StorageDiscoveryResult` on its next report. This is a bounded request/response relay, not a
 repository command or durable operation: Controller deletes its in-memory entry on delivery,
 result, browser cancellation or 30 seconds, and neither side journals, adopts, audits or caches
 candidates or supplied SMB/CHAP credentials. The Controller receives credential bytes only for
 that relay; its database never contains them.
 
-Core limits each observation to eight seconds. `200` returns a sanitized result (including an
+Core limits each observation to eight seconds (the agent's single deadline; the native helper's own alarm is seven). `200` returns a sanitized result (including an
 empty or failed observation); `504` returns `status: stale` after the relay deadline. Invalid
 scope, source selector, request ID or credential bounds is `400`; an inactive/wrong-pool Core,
 missing capability or duplicate active request is `409`. Core rejects local symlinks, enumerates
 unmounted NFS exports with `showmount`, uses an ephemeral mode-0600 SMB credential file for
-`smbclient` source/share/directory browsing, sends iSCSI discovery only with nonpersistent
-`iscsiadm` discoverydb settings, and lists already mounted ZFS sources. Results contain only kind,
+`smbclient` source/share/directory browsing, uses nonpersistent `iscsiadm` SendTargets to
+enumerate iSCSI targets, and lists already mounted ZFS sources. Ordinary candidates contain kind,
 source, directory path, browsable state and an optional existing-repository flag. The
 `zfs-device` kind additionally returns operator-safe physical-device metadata and stable
 by-id paths; it requires `storage-zfs-provision-v1`. Results never contain passwords,
-mount options or raw command output. Discovery cannot create a directory, mount/login a backend, retain an iSCSI node/session,
-change repository configuration or weaken later registration validation. A cancelled or stale
-request must use a new request ID.
+mount options or raw command output. Discovery cannot create a directory, mount a backend,
+retain a kernel iSCSI node/session, change repository configuration or weaken later registration
+validation. A cancelled or stale request must use a new request ID.
 
 The network picker reuses this contract: omit `path` to enumerate an SMB server's shares
 using the supplied account, optional domain and secret, or an NFS server's advertised exports. Supply the returned
 absolute path to list its immediate directories. These are live remote observations, not
-registered-repository inventory. Each result is capped at 64 candidates. SMB folder results may
+registered-repository inventory. Each result is capped at 64 candidates. Without `purpose`, SMB folder results may
 set `existing` when Core sees a `.nex-storage-marker` in that folder; the flag is advisory and
 does not skip registration identity checks. The client retains
 the originally selected NFS export and submits a relative `directory` when registering a
@@ -1765,13 +1765,48 @@ whitespace and command/unit syntax are rejected. SMB/NFS relative directories ca
 spaces; traversal, backslashes and control characters remain rejected. SMB browsing passes
 the selected directory as a separate native argument, never an interpolated command. Marker
 probes use a fixed `ls .nex-storage-marker` command with the folder in `-D`.
-The clustered-GFS2 setup panel also reuses this existing request, always scoped to the selected
-pool master, to enumerate and select an iSCSI target IQN for its portal. That observation neither
-logs in nor mounts a target, and it does not provide the LUN number, WWID or filesystem UUID:
-those remain required storage-inventory attestations in the cluster apply registration, which Core
-validates on the selected members. It adds no clustered-storage discovery route or schema.
-The wire shape and capability negotiation are unchanged; older Core builds may reject
-newly supported names, so use matching Core and Controller builds for these sources.
+
+Backup repository creation reuses this request, scoped to the pool master, to browse NFS exports and
+SMB shares and folders. It adds the optional `purpose` field (`"backup"`; any other value is `400`, and it is valid only for kinds `nfs` and `smb`, `400` otherwise).
+The Controller requires the addressed Core to advertise `storage-discovery-purpose-v1`; otherwise it returns `409` (`host does not support backup-purpose discovery; upgrade Nex Core`). Without `purpose`, nothing changes. With `purpose: "backup"`, `existing` on an SMB candidate means Core saw a backup repository's
+`owner.json` in that folder, probed with the same fixed `ls` form, instead of VM storage's
+`.nex-storage-marker`. NFS candidates are never flagged. API impact:
+**changed contract** (additive request field and Core capability); no new route, Core command or durable state. An older
+Core would silently ignore the unknown field and could mislabel candidates, so the Controller refuses instead; browsing from the backup form needs matching Core and Controller builds.
+
+For `kind: "iscsi"`, omitting `target_iqn` enumerates targets. Open-iSCSI's typed exit 21
+(no portals found) is an empty observation, not a failed connection. Supplying `target_iqn`
+inspects only that selected target; Controller requires the addressed Core to advertise
+`storage-iscsi-inspect-v1`, otherwise returns `409`. A target selector on another kind,
+an invalid IQN, an incomplete CHAP account/secret pair, a CHAP pair or domain on target listing (no `target_iqn`), or a domain on iSCSI is `400`.
+
+Selected-target inspection returns `iscsi_luns`: at most 64 entries with unique `lun` values, only on a `succeeded` result. A target reporting more than 64 LUNs is refused (the inspection fails; enter values manually) rather than truncated. An inspected target with no block LUNs omits `iscsi_luns`; absent on a succeeded result means none. Core and the Controller both enforce these limits: `ValidateStorageDiscoveryResult` requires printable ASCII, `wwid`/`filesystem_uuid` at most 255 bytes, `filesystem_type` at most 63 and `error` at most 511, and the Controller drops an invalid result and treats it as failed. A filesystem UUID that is not printable ASCII or not a valid registration UUID downgrades only that LUN (empty UUID plus a per-LUN `error`). Each entry carries its
+actual `lun` (including zero), optional `wwid`, `filesystem_uuid`, `filesystem_type`,
+`size_bytes`, and an operator-safe `error` explaining incomplete observations. Missing values
+remain unknown, never placeholder identities. Native filesystem probing supplies a UUID only
+for one unambiguous filesystem; a blank, unsupported or ambiguous layout is reported honestly.
+The UI inspects only on explicit target selection or its `Inspect LUNs` button, never while typing, and sends CHAP credentials only when both account and secret are present. It fills a single reported LUN automatically, or asks the operator to select one of
+several, and keeps the exclusive-initiator confirmation manual.
+
+Core uses its existing initiator IQN and a private userspace iSCSI connection for read-only
+LUN enumeration, device identification, capacity and filesystem metadata. This is a second login
+to the target with the host's own IQN; some single-session targets may reject or disturb it. It creates no kernel
+device, node record or writable mount and does not modify or log out existing sessions. The helper runs with a minimal environment (`LC_ALL=C`). CHAP
+credentials travel only in the transient request and helper stdin, never in process arguments,
+logs or durable state. Selected-target CHAP secrets are limited to 255 UTF-8 bytes; longer
+secrets are refused before dispatch rather than truncated by the native library.
+Core context cancellation and the Core deadline close only this observation's connection.
+Browser cancellation discards the Controller relay and late results; already-dispatched Core
+work finishes within its independent deadline, without requiring the Controller connection.
+Runtime support is probed before Core advertises the inspection capability.
+
+The clustered-GFS2 panel uses the same two-stage contract on the pool master. Detection does
+not prove writable access, exclusivity, a healthy clustered filesystem, fencing or quorum;
+registration and cluster apply still validate those independently. No new route, durable command
+or resource identity is added. Older hosts retain target listing and manual entry; upgrade Core
+before expecting LUN autofill, and upgrade Controller before submitting the new request field.
+API impact: **changed contract** — additive selected-target request, observation result and
+Core capability. State owner: **none** — no durable discovery state.
 
 ### Failed request records, placement warnings and retryable enrollment conflicts
 

@@ -1,0 +1,68 @@
+{
+  "summary": "Inspect selected iSCSI targets in Nex Core to autofill actual LUN, native WWID and existing filesystem UUID in ordinary and clustered storage forms, with honest incomplete results, explicit multiple-LUN selection and unchanged manual exclusivity.",
+  "paths": [
+    "internal/protocol/storage.go",
+    "internal/protocol/storage_iscsi_discovery_test.go",
+    "internal/vmhost/storage_discovery.go",
+    "internal/vmhost/storage_iscsi_discovery.go",
+    "internal/vmhost/storage_iscsi_discovery_test.go",
+    "internal/agent/run.go",
+    "internal/agent/storage_iscsi_discovery_test.go",
+    "internal/controller/storage.go",
+    "internal/controller/storage_iscsi_discovery_test.go",
+    "packaging/core-local/nex-iscsi-inspect.c",
+    "packaging/core-local/nex-iscsi-inspect-test.c",
+    "packaging/core-local/Dockerfile",
+    "packaging/core-local/build-inside.sh",
+    "installer/packages.txt",
+    "image/base.packages",
+    "image/packages.lock",
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "tests/integration/storage_repositories_browser.py",
+    "tests/integration/cluster_storage_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/storage-repositories.md",
+    "docs/guide/README.md",
+    "docs/plans/2026-09-11-vm-storage-repositories.md",
+    "docs/LICENSING.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-10-03-iscsi-lun-autofill.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Storage steps explain selected-target detection, actual LUN zero, explicit multiple-LUN choice, transient CHAP, incomplete/unsupported identities, older-Core manual fallback and unchanged exclusivity. Troubleshooting and verification identify safe retry and native/browser limits.",
+    "pages": ["docs/guide/storage-repositories.md", "docs/guide/README.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Existing POST /api/v1/storage/discover and Core storage-discover relay gain optional iSCSI target_iqn, transient iscsi_luns and storage-iscsi-inspect-v1 capability gating; Controller validates results (printable ASCII, bounded fields, at most 64 unique LUNs) and a target reporting more than 64 LUNs is refused. The backup-purpose field is gated by storage-discovery-purpose-v1. Both sides validate scope and input, keep credentials out of arguments/state/results, and preserve bounded failure/cancellation, safe observation retries and older-Core compatibility. Selected-target CHAP is limited to 255 UTF-8 bytes without narrowing target-only or SMB discovery.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Completes a local discovery workflow and records its storage-plan correction; no milestone, release or phase acceptance status changes. Existing image, clustered storage and hardware gates remain open."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Core performs bounded read-only userspace observation using its existing initiator identity. No discovery journal, node, kernel session, mount, resource identity or durable Controller/pool record is added. Registration remains the existing Core-owned durable workflow."
+  },
+  "verification": {
+    "method": "One-off, non-reproducible Core/native disposable-target smokes (throwaway runners, not retained) observed ext4/XFS/GFS2, a single GPT filesystem, blank/ambiguous media, CHAP success/refusal and empty results, with unchanged backing hashes and native/kernel records. Six concurrent observations preserved an existing session; actual context cancellation and unresponsive-peer timeout closed sockets. Focused Go suites, native C regressions, frontend types/tests/build and generated API checks passed when last run before the final review fixes; the review-fix round did not rerun the browser harnesses, full Go suites or package/image builds. independent source reviews cleared reported corrections. QA distinguishes simulated browser APIs from native target evidence and records untested deployment/image/hardware limits and the full-worktree privacy failure caused by pre-existing unrelated core dumps.",
+    "evidence": [
+      "docs/qa/2026-10-03-iscsi-lun-autofill.md",
+      "internal/protocol/storage_iscsi_discovery_test.go",
+      "internal/vmhost/storage_iscsi_discovery_test.go",
+      "internal/agent/storage_iscsi_discovery_test.go",
+      "internal/controller/storage_iscsi_discovery_test.go",
+      "packaging/core-local/nex-iscsi-inspect-test.c",
+      "tests/integration/storage_repositories_browser.py",
+      "tests/integration/cluster_storage_browser.py"
+    ]
+  }
+}

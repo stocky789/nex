@@ -634,3 +634,29 @@ recheck the actual built dependency graph and final artifact before external
 distribution. This source inspection does not certify an ISO, package or
 source-delivery path. The existing complete-component and matching-source
 release gate still applies.
+
+## Read-only iSCSI inspection helper — 2026-10-03
+
+The original AGPL-3.0-only `nex-iscsi-inspect` helper dynamically links Debian's
+`libiscsi7` **1.20.0-4** and `libblkid1` **2.41.5-0+deb13u1** in the pinned image package set. Development headers
+are build dependencies only; neither a separate kernel initiator nor a modified
+Debian library is shipped for discovery.
+
+- [Debian's exact libiscsi copyright record](https://metadata.ftp-master.debian.org/changelogs/main/libi/libiscsi/libiscsi_1.20.0-4_copyright)
+  licenses the linked library/header code under **LGPL-2.1-or-later**. The package's
+  GPL-2.0-or-later example utilities are separate programs, not copied or linked
+  into this helper.
+- [libblkid's library license](https://github.com/util-linux/util-linux/blob/v2.41.5/libblkid/COPYING)
+  is **LGPL-2.1-or-later**. The helper uses its native metadata parser; its bounded
+  private-descriptor read adapter is original Nex code, not a library fork.
+
+These library licenses permit dynamic combination with original AGPL Nex code,
+subject to preserving their notices, matching corresponding library source and
+the LGPL user's replacement/relinking rights. Keep the complete Debian package
+copyright records with the helper's binary distribution and retain the shared
+libraries as replaceable Debian components. The helper's capability check refuses
+an incompatible metadata library instead of weakening read-only probing.
+
+This license/source review is not external-release certification. The existing
+complete-component manifest, matching-source retention and tested source-delivery
+gate still applies to both Core editions and their final release artifacts.

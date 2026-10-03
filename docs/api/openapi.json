@@ -2972,7 +2972,7 @@
       "post": {
         "operationId": "discoverStorage",
         "summary": "Discover a storage source from Nex Core",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller validates pool/host scope then relays one bounded discovery request only to the addressed authenticated Core advertising storage-repositories-v1 and storage-discovery-v1. Discovery is an observation, never a registration: it cannot create directories, mount or log in a source, retain iSCSI nodes/sessions, change repository state or journal work. The Controller keeps the request (including SMB/CHAP credentials when supplied) only in an in-memory request/response relay, deletes it on Core delivery, result, browser cancellation or the 30-second deadline, and writes neither credentials nor candidates to SQLite, a journal, audit log or cache. Core limits work to eight seconds and returns sanitized candidates only; no credentials, device paths, mount options or command output. A 200 result may be empty, failed or stale; 504 is stale when no Core result arrives before the deadline. Retry with a new request ID after timeout or cancellation.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller validates pool/host scope then relays one bounded discovery request only to the addressed authenticated Core advertising storage-repositories-v1 and storage-discovery-v1. For kind iscsi, omit target_iqn to list targets with nonpersistent SendTargets; supply target_iqn to inspect only that target, requiring storage-iscsi-inspect-v1. Inspection uses Core's own initiator identity and an isolated read-only userspace connection, returns iscsi_luns with observed identities and per-LUN limitations, and never creates a kernel iSCSI session/node, mounts or formats a LUN, writes to storage, or changes existing sessions. Credentials travel only in the transient relay and private helper stdin, never command arguments or stored state. The Controller deletes its in-memory entry on delivery, result, browser cancellation or the 30-second deadline; Core work is bounded to eight seconds. Results contain no credentials, device paths, mount options or raw command output. A 200 observation may be empty or failed; 504 is stale when no Core result arrives before the deadline. Retry with a new request ID after timeout or cancellation. Discovery neither proves exclusive writer access nor weakens registration validation. The optional purpose backup (kinds nfs and smb only; 400 otherwise) requires the Core to advertise storage-discovery-purpose-v1, else 409 host does not support backup-purpose discovery; an older Core would silently ignore it, so the Controller refuses instead. Selected-target iSCSI inspection logs in as a second session using the host's own initiator IQN, so some single-session targets may reject or disturb it. A target reporting more than 64 LUNs is refused and the inspection fails; enter values manually. The Controller validates every Core result (printable ASCII, bounded field lengths, at most 64 unique LUNs, LUNs only on a succeeded result) and treats an invalid result as failed. An empty inspection omits iscsi_luns. Inspection CHAP credentials require both account and secret (one alone is 400), and a domain is not accepted for iSCSI; target listing accepts no CHAP credentials.",
         "security": [
           {
             "AdminSession": []
@@ -17142,6 +17142,11 @@
           "path": {
             "type": "string"
           },
+          "target_iqn": {
+            "type": "string",
+            "maxLength": 223,
+            "description": "Optional for kind iscsi only. Omit to discover targets; supply a previously selected IQN to inspect its LUNs. Requires storage-iscsi-inspect-v1 on the addressed Core. Inspection CHAP secrets are limited to 255 UTF-8 bytes and rejected before relay when too long."
+          },
           "credentials": {
             "anyOf": [
               {
@@ -17152,6 +17157,13 @@
               }
             ],
             "writeOnly": true
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "backup"
+            ],
+            "description": "Optional. backup makes an SMB candidate's existing flag report a backup repository's owner marker instead of VM storage's marker. Valid only for kinds nfs and smb (400 otherwise); requires storage-discovery-purpose-v1 on the addressed Core (409 otherwise, because an older Core silently ignores the field)."
           }
         },
         "required": [
@@ -17714,6 +17726,17 @@
               "$ref": "#/components/schemas/StorageDiscoveryCandidate"
             }
           },
+          "iscsi_luns": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/ISCSILUNDiscovery"
+            },
+            "description": "Selected-target iSCSI observations. Absent on a succeeded inspection means no block LUNs were reported (empty results are omitted); absent on older Core and on target-only discovery. At most 64 entries with unique lun values, and only on a succeeded result; a target reporting more than 64 LUNs is refused instead of capped. Missing identities are unknown, not defaults."
+          },
           "error": {
             "type": "string"
           },
@@ -17730,6 +17753,38 @@
           "observed_at"
         ],
         "x-go-type": "protocol.StorageDiscoveryResult"
+      },
+      "ISCSILUNDiscovery": {
+        "type": "object",
+        "description": "One read-only Core observation of a selected target's LUN. Zero is valid. LUN numbers retain native Linux HCTL addressing, including flat-addressing bits, so the observed identity can be registered without selecting another LUN. Filesystem identity is supplied only when native probing identifies one unambiguous filesystem; error explains partial or unsupported observations.",
+        "properties": {
+          "lun": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "uint64"
+          },
+          "wwid": {
+            "type": "string"
+          },
+          "filesystem_uuid": {
+            "type": "string"
+          },
+          "filesystem_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "uint64"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lun"
+        ],
+        "x-go-type": "protocol.ISCSILUNDiscovery"
       },
       "StorageCredentialHandoff": {
         "type": "object",

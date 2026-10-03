@@ -91,8 +91,21 @@ for production workloads. Use an explicitly selected disposable lab host.
      **Up** returns to the parent and **Refresh** lists it again. **Cancel** or Escape closes the
      picker without changing the form, including while folders are loading. A late discovery
      reply must not reopen it; select the browse button again to start a new request.
-   - **iSCSI LUN:** enter **Target portal**, then **Discover targets** and select a target
-     to fill its IQN. Discovery does not log into or mount a target.
+   - **iSCSI LUN:** enter **Target portal**, then **Discover targets** and select a target, or
+     select **Inspect LUNs** to inspect the typed target again. Inspection never runs while you
+     type. Core inspects that target's LUNs without mounting or formatting them. A single data LUN
+     is selected automatically; for several LUNs, select the intended one. Nex fills the
+     actual **LUN**, **LUN WWID** and **Existing filesystem UUID** that Core can detect,
+     including LUN **0**. A missing identity stays blank; example placeholders are not values.
+     A blank, unsupported or ambiguous filesystem is reported, not created or repaired.
+     Enter **CHAP account** and **CHAP secret** before selecting the target if it requires them;
+     both are needed, and they are sent only for that selected-target inspection, never for
+     listing targets. Editing CHAP later keeps the saved LUN identities; changing the portal or
+     target clears them. Inspection logs in as a second session with this host's own initiator
+     name; some single-session targets may reject or disturb it, in which case enter the values
+     manually. A target reporting more than 64 LUNs is refused; enter the values manually.
+     Autofill requires an updated Core advertising iSCSI inspection support; older Core hosts
+     still support target discovery and manual entry.
    - Local directories and mounted ZFS datasets offer **Discover safe existing sources**.
 
    Discovery is read-only and never creates, formats or changes a source. It is not proof of
@@ -113,6 +126,11 @@ for production workloads. Use an explicitly selected disposable lab host.
      **Existing filesystem UUID**. Select **This LUN is restricted to this Core initiator only**.
      Enter **CHAP account** and **CHAP secret** only when the target requires CHAP. Core chooses
      the mount point.
+   - After autofill, explicitly confirm the exclusive-initiator restriction for ordinary
+     ext4/XFS storage. Detection cannot prove that another initiator lacks write access.
+     A new, unformatted target has no existing filesystem UUID and cannot be registered as
+     an existing filesystem. Discovery never formats it; prepare it separately only after
+     verifying the exact target and accepting the resulting data-loss risk.
 
 5. Select **Register and check access**. Core connects or inspects the source, confirms its
    identity and tests Core and QEMU access. SMB and iSCSI credentials go to Core and are not shown
@@ -360,9 +378,12 @@ it. In a selected disposable lab, provide:
 
 Steps:
 
-1. Enter the target portal and use **Discover targets** to select the IQN. Discovery does not log
-   in or find the LUN number, WWID or filesystem UUID; enter those from your storage inventory.
-   Core validates them on every selected Core.
+1. Enter the target portal and use **Discover targets** to select the IQN. On a Core with
+   read-only LUN inspection support, Nex fills a single detected LUN automatically or offers
+   **Detected LUN** when several are available. Confirm the intended GFS2 LUN, WWID and
+   filesystem UUID; missing values require verified storage inventory, not the placeholders.
+   Inspection does not prove fencing, quorum or writable access. Core validates the selected
+   identities independently on every selected Core.
 2. Enter the repository name and each Core's Corosync and fence values. Do not put a password in
    the private-key field, weaken host-key checking, use a hostname instead of the domain UUID, or
    point a profile at an unselected VM.
@@ -482,6 +503,23 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   and locking. Passwords are not recoverable from Controller; rotate them with an update. A missing
   or changed `.nex-storage-marker` fails safely: restore it from a trusted copy, then **Recheck**.
   Do not recreate it or detach/re-register a repository with VM disks.
+- **No iSCSI targets were returned:** confirm the target service is enabled and advertised on the
+  selected portal, and that the Core initiator is allowed by its discovery ACL. An empty list
+  does not identify a LUN or prove that a target's data is missing.
+- **A target was found but its LUN identities are incomplete:** verify its LUN mapping and
+  initiator ACL, then select the target again, or select **Inspect LUNs**, to inspect it afresh. For CHAP, enter the username
+  and password before selecting the target; read-only inspection accepts passwords up to
+  255 UTF-8 bytes. A Core without inspection support keeps the manual fields available.
+- **No filesystem UUID was detected:** a blank LUN, an unsupported filesystem or several
+  filesystem signatures cannot supply a safe registration identity. Inspection never formats
+  the LUN. Supply an independently verified existing identity or prepare the storage separately;
+  do not invent a UUID or confirm exclusive access merely because inspection succeeded.
+- **Inspection was cancelled or failed:** manual entries remain editable. Selecting the same
+  discovered target again, or **Inspect LUNs**, starts a fresh inspection. Editing an existing registration's name
+  leaves its saved identities unchanged unless you deliberately change its source.
+- **The target reports only an EUI device identifier:** this profile needs a compatible native
+  LUN WWID. Inspection leaves it missing rather than filling an unusable value. Check whether
+  the target can report a stable NAA device identity; do not invent a WWID.
 - **iSCSI access fails:** verify portal, IQN, LUN, WWID and filesystem UUID, that the target ACL
   allows only this Core, and that the filesystem is not mounted elsewhere. Do not use `/dev/sdX`,
   format the LUN, or attach a second initiator.
@@ -524,6 +562,13 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   protection and is unsupported.
 
 ## Verification
+
+Read-only iSCSI LUN detection was exercised against real userspace targets with disposable
+file-backed ext4, XFS and GFS2 media, and both storage forms were walked through in Chromium
+with simulated API replies. Single/multiple selection, incomplete identities, CHAP, cancellation,
+manual fallback, failed-submit draft preservation and existing name-only updates were checked.
+See [iSCSI LUN detection verification](../qa/2026-10-03-iscsi-lun-autofill.md) for actual native
+results, inspected captures and limits; no production NAS or installed-host upgrade is claimed.
 
 The GUI navigation on this page was rewritten for the Controller console redesign (development
 build 0.4.8); the walkthrough is recorded in the

@@ -24,6 +24,8 @@ assert.deepEqual(enabled(rolloutControls(view({ state: "finalized" }))), []);
 assert.deepEqual(enabled(rolloutControls(view({}, "stale"))), []);
 assert.deepEqual(enabled(rolloutControls({ pool_id: "p", connection: "fresh", supported: true })), []);
 assert.match(rolloutControls(view({}, "stale")).abort.why, /freshly connected/);
+assert.equal(rolloutControls(undefined).pause.why, "There is no update in progress.");
+assert.equal(rolloutControls(view({ state: "finalized" })).abort.why, "The update has ended.");
 
 // A host can only be rolled back once it activated, and only while the rollout is paused.
 const paused = view({ state: "paused" });
@@ -79,7 +81,7 @@ const pool = { id: "pool-1", name: "pool-1", site_id: "s", master_host_id: "h1" 
 const hosts = [{ id: "h1", hostname: "alpha", revoked: false }, { id: "h2", hostname: "bravo", revoked: false }];
 const api = async () => { throw new Error("not used in static render"); };
 const html = renderToStaticMarkup(createElement(PoolRollout, { pool, hosts, api, busy: false }));
-assert.match(html, /Pool rollout/);
+assert.match(html, /Pool update/);
 assert.match(html, /Reading the pool master/);
 const render = (v) => renderToStaticMarkup(createElement(PoolRollout, { pool, hosts, api, busy: false, initial: v }));
 const body = render(view({
@@ -91,13 +93,16 @@ assert.match(body, /Controller first/);
 assert.match(body, /Swapping the Controller image/);
 assert.match(body, /bravo/);                       // host names come from the host list, ids only as a fallback
 assert.match(body, /controller_rolled_back/);       // the stable code and the literal message are both shown
-assert.match(body, /2 guests stopped by the update/);
+assert.match(body, /2 virtual machines stopped by the update/);
+assert.match(body, /Release number/);
+assert.match(body, /<caption class="sr-only">Pool update steps in order<\/caption>/);
+assert.doesNotMatch(body, /guest|[Ss]equence|[Rr]ollout steps/); // operator wording: virtual machines, release number, pool update
 assert.match(body, /Roll back host/);               // h2 has activated and the rollout is paused
 assert.match(body, /needs an operator/);            // the pause hint
-assert.doesNotMatch(body, /Start rollout/);         // no second rollout while one is active
+assert.doesNotMatch(body, /Start update/);          // no second update while one is active
 const ended = render(view({ state: "finalized", phase: "finalize", finalized_sequence: 7 }));
 assert.match(ended, /Finalized/);
-assert.match(ended, /Start rollout/);
+assert.match(ended, /Start update/);
 assert.match(render({ pool_id: "pool-1", connection: "fresh", supported: false }), /pool-update-rollout-v1/);
 assert.match(render({ pool_id: "pool-1", connection: "stale", supported: true, rollout: rollout() }), /last report/);
 // A double click sends once: the second call does nothing while the first is on the wire, and the gate

@@ -177,6 +177,33 @@ func TestDiscoverSMBWritesDomainAndLeavesNonMarkerFoldersUnmarked(t *testing.T) 
 		t.Fatalf("SMB auth file %q", auth)
 	}
 }
+
+func TestDiscoverSMBBackupPurposeFlagsOnlyBackupOwnerMarker(t *testing.T) {
+	oldRun := nativeRun
+	t.Cleanup(func() { nativeRun = oldRun })
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "smbclient" {
+			return nil, errors.New("unexpected native command")
+		}
+		if slices.Contains(args, "-L") {
+			return []byte("Disk|backups|storage\nDisk|vms|storage\n"), nil
+		}
+		// "backups" holds a backup repository, "vms" holds VM storage.
+		switch {
+		case slices.Contains(args, "ls "+backupOwnerMarkerName) && slices.Contains(args, "//storage.example.test/backups"):
+			return []byte("  " + backupOwnerMarkerName + "                 A       32  Wed Jan 1 00:00:00 2026\n"), nil
+		case slices.Contains(args, "ls "+smbMarkerName) && slices.Contains(args, "//storage.example.test/vms"):
+			return []byte("  " + smbMarkerName + "                 A       32  Wed Jan 1 00:00:00 2026\n"), nil
+		}
+		return nil, errors.New("no marker")
+	}
+	r := request(protocol.StorageKindSMB)
+	r.Purpose = protocol.StorageDiscoveryPurposeBackup
+	g := DiscoverStorage(context.Background(), r)
+	if g.Status != "succeeded" || len(g.Candidates) != 2 || !g.Candidates[0].Existing || g.Candidates[1].Existing {
+		t.Fatalf("backup discovery flagged %+v", g)
+	}
+}
 func TestDiscoverStorageCancellationIsReported(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

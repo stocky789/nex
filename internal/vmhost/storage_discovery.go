@@ -27,7 +27,7 @@ var (
 	discoveryLocalSafe    = localStorage
 )
 
-// DiscoverStorage performs transient observations only: it does not mount, log in or persist data.
+// DiscoverStorage performs transient observations only: it never mounts, creates kernel sessions or persists data.
 func DiscoverStorage(ctx context.Context, r protocol.StorageDiscoveryRequest) protocol.StorageDiscoveryResult {
 	result := protocol.StorageDiscoveryResult{RequestID: r.RequestID, PoolID: r.PoolID, HostID: r.HostID, Status: "failed", ObservedAt: time.Now().UTC()}
 	if err := protocol.ValidateStorageDiscovery(r); err != nil {
@@ -51,9 +51,17 @@ func DiscoverStorage(ctx context.Context, r protocol.StorageDiscoveryRequest) pr
 	case protocol.StorageKindSMB:
 		candidates, err = discoverSMB(ctx, r)
 	case protocol.StorageKindISCSI:
-		candidates, err = discoverISCSI(ctx, r)
+		if r.TargetIQN != "" {
+			result.ISCSILUNs, err = inspectISCSILUNs(ctx, r)
+		} else {
+			candidates, err = discoverISCSI(ctx, r)
+		}
+	}
+	if err == nil {
+		err = ctx.Err()
 	}
 	if err != nil {
+		result.ISCSILUNs = nil
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 			result.Status = "cancelled"
 			result.Error = "discovery cancelled"
@@ -152,6 +160,11 @@ func discoverNFS(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 }
 
 func discoverSMB(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]protocol.StorageDiscoveryCandidate, error) {
+	// Existing means VM storage's marker, or a backup repository's owner file when choosing a backup destination.
+	marker := smbMarkerName
+	if r.Purpose == protocol.StorageDiscoveryPurposeBackup {
+		marker = backupOwnerMarkerName
+	}
 	// The password file lives on RAM-backed tmpfs, so it never reaches a disk.
 	f, err := os.CreateTemp("/dev/shm", "nex-smb-discovery-")
 	if err != nil {
@@ -185,7 +198,7 @@ func discoverSMB(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 		if err != nil {
 			return nil, err
 		}
-		return markExistingSMBCandidates(ctx, name, parseSMBShares(ctx, r.Server, string(b))), nil
+		return markExistingSMBCandidates(ctx, name, marker, parseSMBShares(ctx, r.Server, string(b))), nil
 	}
 	share, dir, ok := discoverySMBPath(r.Path)
 	if !ok {
@@ -196,7 +209,7 @@ func discoverSMB(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 	if err != nil {
 		return nil, err
 	}
-	return markExistingSMBCandidates(ctx, name, parseSMBDirectories(ctx, r.Server, share, dir, string(b))), nil
+	return markExistingSMBCandidates(ctx, name, marker, parseSMBDirectories(ctx, r.Server, share, dir, string(b))), nil
 }
 func discoverySMBPath(v string) (string, string, bool) {
 	p := strings.Split(strings.TrimPrefix(path.Clean(v), "/"), "/")
@@ -239,7 +252,7 @@ func parseSMBDirectories(ctx context.Context, server, share, dir, text string) [
 	return out
 }
 
-func markExistingSMBCandidates(ctx context.Context, credFile string, candidates []protocol.StorageDiscoveryCandidate) []protocol.StorageDiscoveryCandidate {
+func markExistingSMBCandidates(ctx context.Context, credFile, marker string, candidates []protocol.StorageDiscoveryCandidate) []protocol.StorageDiscoveryCandidate {
 	for i := range candidates {
 		if err := ctx.Err(); err != nil {
 			break
@@ -251,25 +264,25 @@ func markExistingSMBCandidates(ctx context.Context, credFile string, candidates 
 		if !ok {
 			continue
 		}
-		candidates[i].Existing = smbMarkerPresent(ctx, credFile, candidates[i].Source.SMB.Server, share, dir)
+		candidates[i].Existing = smbMarkerPresent(ctx, credFile, marker, candidates[i].Source.SMB.Server, share, dir)
 	}
 	return candidates
 }
 
-func smbMarkerPresent(ctx context.Context, credFile, server, share, dir string) bool {
+func smbMarkerPresent(ctx context.Context, credFile, marker, server, share, dir string) bool {
 	args := []string{"-g", "-A", credFile, "//" + server + "/" + share}
 	if dir != "" {
 		args = append(args, "-D", dir)
 	}
-	args = append(args, "-c", "ls "+smbMarkerName)
+	args = append(args, "-c", "ls "+marker)
 	b, err := nativeRun(ctx, "smbclient", args...)
-	return err == nil && smbListingHasMarker(string(b))
+	return err == nil && smbListingHasMarker(marker, string(b))
 }
 
-func smbListingHasMarker(text string) bool {
+func smbListingHasMarker(marker, text string) bool {
 	for _, line := range strings.Split(text, "\n") {
 		p := discoverySMBLine.FindStringSubmatch(line)
-		if len(p) == 3 && p[1] == smbMarkerName && !strings.Contains(p[2], "D") {
+		if len(p) == 3 && p[1] == marker && !strings.Contains(p[2], "D") {
 			return true
 		}
 	}
@@ -298,6 +311,9 @@ func discoveryComponent(v string) bool {
 func discoverISCSI(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]protocol.StorageDiscoveryCandidate, error) {
 	// nonpersistent SendTargets writes no discovery database, node or session; no login is issued.
 	b, err := nativeRun(ctx, "iscsiadm", "-m", "discoverydb", "-t", "sendtargets", "-p", r.Server, "-o", "nonpersistent", "--discover")
+	if iscsiNoActiveSessionsError(err) {
+		return nil, nil // open-iscsi's typed "no objects found" exit, not a transport failure
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +323,7 @@ func discoverISCSI(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]p
 			return nil, err
 		}
 		p := strings.Fields(line)
-		if len(p) < 2 || !strings.HasPrefix(p[1], "iqn.") || len(p[1]) > 223 || strings.ContainsAny(p[1], " \t\r\n") {
+		if len(p) < 2 || !protocol.ValidISCSITarget(p[1]) {
 			continue
 		}
 		out = append(out, protocol.StorageDiscoveryCandidate{Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Portal: r.Server, TargetIQN: p[1]}}})

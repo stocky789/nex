@@ -13,9 +13,40 @@ const stubbed = code
   .replace('from "react"', 'from "data:text/javascript,export const Fragment=()=>null;export const useEffect=()=>{};export const useRef=()=>({});export const useState=()=>[undefined,()=>{}];"')
   .replace('from "./zfs"', 'from "data:text/javascript,export const ZFSProvisionWizard=()=>null;export const ZFSReplaceDialog=()=>null;export const zfsFailedDevices=(pool)=>(pool?.devices||[]).filter(d=>d.state!==\'ONLINE\').map(d=>{const item={device:d.path||d.name,state:d.state};if(d.parent)item.parent=d.parent;return item;});export const zfsReplaceableDevices=(pool)=>zfsFailedDevices(pool).filter(d=>d.parent!==\'replacing\'&&d.parent!==\'spare\');"')
   .replace('from "./ui"', 'from "data:text/javascript,export const About=()=>null;export const AccessLights=()=>null;export const Badge=()=>null;export const MiniBar=()=>null;export const Section=()=>null;export const badgeTone=()=>\'neutral\';export const size=(b)=>b+\' B\';"')
-  .replace('from "./labels"', 'from "data:text/javascript,export const relativeTime=()=>\'\';"');
+  .replace('from "./labels"', 'from "data:text/javascript,export const relativeTime=()=>\'\';"')
+  .replace('from "./share-browser"', 'from "data:text/javascript,export const useShareBrowser=()=>({browse(){},close(){},dialog:null});"');
 writeFileSync(file, stubbed);
-const { zfsPoolSummary, zfsScanProgress, zfsSizeBytes, storageServesData, storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable, registrationDiscardable, discardConfirmText, storageScope, storageHostAccess, defaultLocalStorage } = await import(`file://${file}`);
+const { zfsPoolSummary, zfsScanProgress, zfsSizeBytes, storageServesData, storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable, registrationDiscardable, discardConfirmText, storageScope, storageHostAccess, defaultLocalStorage, iscsiLUNFields, iscsiInspectionOutcome } = await import(`file://${file}`);
+
+// Core observations preserve a real LUN zero and never synthesize a missing identity.
+const inspected = { lun: 0, wwid: "3600-inspected", filesystem_uuid: "00000000-0000-0000-0000-000000000123", filesystem_type: "ext4", size_bytes: 4096 };
+assert.deepEqual(iscsiLUNFields(inspected), { lun: "0", wwid: inspected.wwid, filesystem_uuid: inspected.filesystem_uuid });
+assert.deepEqual(iscsiLUNFields({ lun: 7 }), { lun: "7", wwid: "", filesystem_uuid: "" });
+
+// What a finished inspection does to the form. One clean LUN (including LUN 0) fills the fields;
+// several blank them until the operator chooses; a failed or error-carrying result touches nothing.
+const lunB = { lun: 1, wwid: "3600-second", filesystem_uuid: "00000000-0000-0000-0000-000000000124", filesystem_type: "xfs" };
+assert.deepEqual(iscsiInspectionOutcome({ status: "succeeded", iscsi_luns: [inspected] }), { luns: [inspected], selected: "0", error: "", fields: { lun: "0", wwid: inspected.wwid, filesystem_uuid: inspected.filesystem_uuid } });
+assert.deepEqual(iscsiInspectionOutcome({ status: "succeeded", iscsi_luns: [inspected, lunB] }), { luns: [inspected, lunB], selected: "", error: "", fields: { lun: "", wwid: "", filesystem_uuid: "" } });
+assert.deepEqual(iscsiInspectionOutcome({ status: "failed", error: "login refused", iscsi_luns: [inspected] }), { luns: [], selected: "", error: "login refused", fields: null });
+assert.match(iscsiInspectionOutcome({ status: "failed" }).error, /did not complete/);
+assert.equal(iscsiInspectionOutcome({ status: "failed" }).fields, null);
+const noLUNs = iscsiInspectionOutcome({ status: "succeeded" });
+assert.deepEqual([noLUNs.luns, noLUNs.fields, noLUNs.selected], [[], null, ""]);
+assert.match(noLUNs.error, /no LUNs/, "a succeeded result without iscsi_luns means the target has none");
+const partial = iscsiInspectionOutcome({ status: "succeeded", iscsi_luns: [{ lun: 3, wwid: "3600-only" }] });
+assert.deepEqual(partial.fields, { lun: "3", wwid: "3600-only", filesystem_uuid: "" }, "a missing identity stays blank");
+const withError = iscsiInspectionOutcome({ status: "succeeded", error: "one LUN could not be read", iscsi_luns: [inspected, lunB] });
+assert.deepEqual([withError.luns.length, withError.fields, withError.error], [2, null, "one LUN could not be read"], "the LUN list is kept next to the error and nothing is autofilled");
+
+// Inspection logs in to the target, so it runs only on an explicit choice, never on keystrokes, and
+// target listing never carries CHAP credentials.
+assert.doesNotMatch(src, /setTimeout/);
+assert.match(src, /Inspect LUNs/);
+assert.match(src, /now\.username && now\.secret \? \{ credentials/);
+assert.match(src, /\.\.\.\(kind === "smb" \? \{ credentials: smbCredentials\(values\) \} : \{\}\) \};/);
+assert.match(src, /Inspection interrupted, select the target again\./);
+assert.match(src, /const changedContext = changed\(\["kind", "host_id", "portal", "target_iqn"\]\);/);
 
 assert.equal(defaultLocalStorage({ kind: "local", path: "/var/lib/libvirt/images", name: "Renamed by operator" }), true);
 assert.equal(defaultLocalStorage({ path: "/var/lib/libvirt/images", name: "ISO" }), true, "legacy default registration");

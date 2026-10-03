@@ -324,6 +324,11 @@ func runWithDir(ctx context.Context, dir *os.File, name string, args ...string) 
 }
 
 func runCommand(ctx context.Context, dir string, stdin []byte, name string, args ...string) ([]byte, error) {
+	return runCommandEnv(ctx, dir, append(os.Environ(), "LC_ALL=C"), stdin, name, args...)
+}
+
+// runCommandEnv is runCommand with an explicit child environment.
+func runCommandEnv(ctx context.Context, dir string, env []string, stdin []byte, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -331,7 +336,7 @@ func runCommand(ctx context.Context, dir string, stdin []byte, name string, args
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	cmd.Env = env
 	cmd.WaitDelay = time.Second
 	var out, stderr cappedOutput
 	cmd.Stdout = &out

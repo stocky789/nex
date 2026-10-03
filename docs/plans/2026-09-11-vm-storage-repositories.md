@@ -14,6 +14,22 @@ Guide impact: **updated** in the storage repository guide. No new durable state 
 accepted registrations remain in the pool master's Core storage journal and normal inventory
 adoption path. This corrects the existing scope, not migration, HA or UEFI acceptance.
 
+2026-10-03 scope correction (project owner): iSCSI target selection must also inspect the
+selected target's LUNs and autofill every identity Core can detect. A single reported LUN is
+selected automatically; multiple LUNs require explicit selection. Missing filesystem UUIDs
+are not invented, and the exclusive-initiator attestation remains manual.
+Core performs bounded read-only userspace iSCSI and native filesystem probing: no kernel
+login/node, mount, formatting, writes, NAS configuration changes or disruption of existing
+sessions. The Controller only relays the request and renders Core's transient observations.
+API impact: **changed contract** — optional `target_iqn`, `iscsi_luns` results and
+`storage-iscsi-inspect-v1` capability on the existing storage-discovery API/report exchange.
+Guide impact: **updated** in [storage repositories](../guide/storage-repositories.md).
+State owner: **none** — discovery remains transient; accepted registrations keep their
+existing Core-owned journal/inventory adoption. Native read-only probing, partial/ambiguous
+results, authentication, cancellation, compatibility and browser stale-result checks are
+required before this correction is accepted. Existing storage/fencing phase gates do not change.
+
+
 Date: 2026-09-11  
 Status: Implementation authorized by project owner; single-host backend code and UI are in
 review and disposable-lab testing. Acceptance remains open until the checks below pass.
