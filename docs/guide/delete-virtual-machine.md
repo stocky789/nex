@@ -29,7 +29,8 @@ Navigation on this page follows the development build 0.4.8 console layout; see
 3. Leave **Permanently delete disks from storage** unchecked to keep the disk files on the
    host after the VM is removed. Check it only when you intend to erase those files.
    Keeping disks keeps only the disk files. The VM's UEFI variable store (boot entries and
-   Secure Boot settings) and its emulated TPM state are always removed with the VM, so a guest
+   Secure Boot settings) and its emulated TPM state, including any vTPM state a restore replace
+   kept beside the VM, are always removed with the VM, so a guest
    that seals secrets to the TPM, such as BitLocker, needs its recovery key before it can use a
    retained disk again.
 4. Select **Delete VM** (or **Delete VM and disks** when wiping). The request is queued as a
@@ -41,7 +42,8 @@ Navigation on this page follows the development build 0.4.8 console layout; see
 ## Expected result
 
 The VM is undefined on the host and no longer listed in Controller. Its UEFI variable store and
-TPM state are removed in both cases. With disks retained, the qcow2 files remain under the
+TPM state (including retained restore-replace vTPM state) are removed in both cases. A delete is
+refused, before the VM is undefined, if a retained vTPM tree changed since Core recorded it. With disks retained, the qcow2 files remain under the
 storage repository; with wipe selected, those files are removed.
 HTTP acceptance is not proof of completion — wait for the task and an updated inventory.
 

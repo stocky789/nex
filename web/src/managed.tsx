@@ -4,6 +4,7 @@ import type { ConsoleMedia, Guest } from "./console";
 import { Icon } from "./icons";
 import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, secureBootText, tpmText, type DiskRow, type NICRow, type PlacementState } from "./vm-create";
 import { VMEditor, editBlocker } from "./vm-edit";
+import { VMReleaseRetained } from "./release-retained";
 import { StorageRepositories, discardConfirmText, registrationDiscardable, storageOwnerFresh, storageServesData } from "./storage";
 import { About, AccessLights, Badge, Menu, Section, type HostAccess } from "./ui";
 import { capitalize } from "./labels";
@@ -95,7 +96,6 @@ export const placementWarningNotice = (warnings: string[]) => warnings.map(sente
 // resource down, records the removal durably and every member converges on its next pass. The
 // Controller only submits the request and shows what the hosts report, so nothing here deletes a
 // row by itself — the row goes when the master reports it gone.
-export const removalCapability = "pool-resource-removal-v1";
 
 // Core's generations are 1-based on the wire, with 0 meaning "written before generations existed".
 export const resourceGeneration = (value?: number) => (value || 0) > 0 ? value as number : 1;
@@ -123,11 +123,10 @@ export const renameChanged = (current: string, next: string) => validResourceNam
 // Why a removal or rename cannot be submitted right now; "" means it can. Order matters: state
 // the most fundamental reason, so an operator is not told to reconnect a host when the view they
 // are looking at is the stale part.
-export function lifecycleBlocker(o: { unavailable: boolean; inFlight: boolean; ready: boolean; hostFresh: boolean; capable: boolean }): string {
+export function lifecycleBlocker(o: { unavailable: boolean; inFlight: boolean; ready: boolean; hostFresh: boolean }): string {
   if (o.unavailable) return "Controller inventory may be out of date. Use Retry above to reload it before changing this pool resource.";
   if (!o.ready) return "Wait for Nex Core to confirm this resource before changing it.";
   if (!o.hostFresh) return "The pool master is not freshly connected. Reconnect it before changing this pool resource.";
-  if (!o.capable) return "This Nex Core cannot remove pool networks or ISOs yet; upgrade Nex Core.";
   if (o.inFlight) return "A request for this resource is already in flight. Wait for Nex Core to report its result.";
   return "";
 }
@@ -363,7 +362,6 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       unavailable, inFlight: inFlightScope === scope,
       ready: Boolean(resourceID) && resourceStatus === "succeeded",
       hostFresh: Boolean(host && readyHost(host)),
-      capable: Boolean(host?.capabilities?.includes(removalCapability)),
     });
   }
   function beginLifecycle(event: { currentTarget: HTMLButtonElement }, target: Lifecycle) {
@@ -617,7 +615,7 @@ export function VMDetails({ vm, hosts, storage, networks, media, api, reload, bu
   const host = hosts.find(h => h.id === vm.host_id);
   const blocker = editBlocker(vm, host);
   return <section className="tile" aria-label="VM definition">
-    <h2>Definition{!editing && <span className="actions"><button type="button" className="sm" disabled={busy || unavailable || Boolean(blocker)} title={blocker || undefined} onClick={() => onEditing(true)}>Edit hardware</button><VMDelete vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} /></span>}</h2>
+    <h2>Definition{!editing && <span className="actions"><button type="button" className="sm" disabled={busy || unavailable || Boolean(blocker)} title={blocker || undefined} onClick={() => onEditing(true)}>Edit hardware</button><VMReleaseRetained vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} /><VMDelete vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} /></span>}</h2>
     {editing && spec ? <VMEditor vm={vm} host={host} poolName={host?.hostname || ""} storage={storage} networks={networks} media={media} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} onClose={() => onEditing(false)} /> : <dl className="details"><dt>Name</dt><dd>{vm.name}</dd><dt>VM identity</dt><dd className="mono">{vm.id}</dd><dt>Observed state</dt><dd>{capitalize(stateText(vm.state))}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Start on boot</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd><dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated · the host locks this much RAM while the VM runs, and keeps the capacity committed to this VM while it is stopped" : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None · CD drive empty"}{spec.boot.media_boot_order > 0 && <small>CD drive boot order {spec.boot.media_boot_order}</small>}</dd><dt>Driver disc</dt><dd>{spec.drivers_media_id ? media.find(m => m.id === spec.drivers_media_id)?.name || spec.drivers_media_id : "None · second CD drive empty"}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Secure Boot</dt><dd>{secureBootText(spec.boot)}{spec.boot.firmware === "uefi" && !spec.boot.secure_boot && <small>Not recorded in this definition: a UEFI VM defined before the choice existed boots with the enrolled-keys firmware. Edit and save the VM to record it.</small>}</dd><dt>TPM</dt><dd>{tpmText(spec.boot)}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>}
     {!vm.protected && !editing && <p className="note">To install a guest, open the console and use Start VM on its toolbar so the console is attached in time for the boot prompt. Changes a running guest can take apply while it runs.</p>}
   </section>;

@@ -43,7 +43,7 @@ func labNICs(names ...string) []protocol.NIC {
 // selfMembership is what a Core that masters its own single-host pool reports.
 func selfMembership(host, pool string) *protocol.PoolMembership {
 	return &protocol.PoolMembership{PoolID: pool, MasterHostID: host, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: host, CertificateSHA256: labCertificateHash, Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()},
+		{HostID: host, Hostname: host, CertificateSHA256: labCertificateHash, Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()},
 	}}
 }
 
@@ -56,7 +56,7 @@ func newJoinLab(t *testing.T) *joinLab {
 		enrolled := a.enroll(a.token(site, ""), csr(t))
 		h.id, h.cert = enrolled.HostID, certificate(t, enrolled.CertificatePEM)
 		h.pool = a.poolOf(h.id)
-		h.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
+		h.caps = []string{protocol.ManagedVMCapability}
 		h.inv = protocol.Inventory{Hostname: "core", AgentVersion: "0.3.5", CPUModels: []string{"Skylake-Server"}, NICs: labNICs("nex0"), Managed: &protocol.ManagedState{Membership: selfMembership(h.id, h.pool)}}
 	}
 	l.send(&l.master, nil)
@@ -273,7 +273,7 @@ func TestPoolJoinRefusesCrossSiteHost(t *testing.T) {
 	base := "/api/v1/pools/" + l.master.pool + "/members"
 	otherSite := l.a.site()
 	other := l.a.enroll(l.a.token(otherSite, ""), csr(t))
-	otherHost := joinHost{id: other.HostID, cert: certificate(t, other.CertificatePEM), pool: l.a.poolOf(other.HostID), caps: []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability},
+	otherHost := joinHost{id: other.HostID, cert: certificate(t, other.CertificatePEM), pool: l.a.poolOf(other.HostID), caps: []string{protocol.ManagedVMCapability},
 		inv: protocol.Inventory{Hostname: "other", AgentVersion: "0.3.5", CPUModels: []string{"Skylake-Server"}, NICs: labNICs("nex0"), Managed: &protocol.ManagedState{Membership: selfMembership(other.HostID, l.a.poolOf(other.HostID))}}}
 	l.send(&otherHost, nil)
 	body := map[string]string{"request_id": "cross-site", "host_id": otherHost.id, "peer_origin": "https://192.0.2.13:9444", "master_url": "https://192.0.2.11:9444"}
@@ -304,32 +304,14 @@ func TestPoolJoinIgnoresFailedVMCreate(t *testing.T) {
 	}
 }
 
-func TestPoolJoinRefusesStaleHostMissingCapabilityAndIneligibleCandidate(t *testing.T) {
+func TestPoolJoinRefusesStaleHostAndIneligibleCandidate(t *testing.T) {
 	l := newJoinLab(t)
 	base := "/api/v1/pools/" + l.master.pool + "/members"
-	// A member that never advertises pool-join-v1.
-	l.member.caps = []string{protocol.ManagedVMCapability}
-	l.send(&l.member, nil)
-	w := l.a.call("POST", base, l.joinRequest("no-member-capability"), nil, 409)
-	if !strings.Contains(w.Body.String(), protocol.PoolJoinCapability) || !strings.Contains(w.Body.String(), "upgrade both hosts") {
-		t.Fatalf("capability refusal must name the capability and both hosts: %s", w.Body.String())
-	}
-	l.member.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.member, nil)
-	// A master that never advertises it.
-	l.master.caps = []string{protocol.ManagedVMCapability}
-	l.send(&l.master, nil)
-	w = l.a.call("POST", base, l.joinRequest("no-master-capability"), nil, 409)
-	if !strings.Contains(w.Body.String(), "upgrade both hosts") {
-		t.Fatalf("master capability refusal: %s", w.Body.String())
-	}
-	l.master.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.master, nil)
 	// Remote storage on the candidate, then a managed VM, are refused here too. Mirrored
 	// rows are never withdrawn by a report that simply stops mentioning them, so these run
 	// in the order an operator would hit them.
 	l.adoptMemberRemoteStorage()
-	w = l.a.call("POST", base, l.joinRequest("has-storage"), nil, 409)
+	w := l.a.call("POST", base, l.joinRequest("has-storage"), nil, 409)
 	if !strings.Contains(w.Body.String(), "remote storage") {
 		t.Fatalf("remote storage refusal: %s", w.Body.String())
 	}
@@ -434,7 +416,7 @@ func TestPoolMembersProjectionCountsAccessAndRefusesToGuessWhenMasterIsStale(t *
 	membership := selfMembership(l.master.id, l.master.pool)
 	membership.Generation = 2
 	membership.Members[0].Generation = 2
-	membership.Members = append(membership.Members, protocol.PoolMember{HostID: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC(), PeerOrigin: "https://192.0.2.12:9444"})
+	membership.Members = append(membership.Members, protocol.PoolMember{HostID: l.member.id, Hostname: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC(), PeerOrigin: "https://192.0.2.12:9444"})
 	l.master.inv.Managed.Membership = membership
 	// storage healthy, network failed, media absent (pending).
 	l.poolLabResources(l.member.id,
@@ -557,7 +539,7 @@ func TestPoolJoinCandidatesPreviewsUplinkAndRefusals(t *testing.T) {
 	if rows["uplink"].Result != "will_not_converge" || !strings.Contains(rows["uplink"].Subject, "VLAN 100 on lab0") {
 		t.Fatalf("uplink row: %+v", rows["uplink"])
 	}
-	if rows["connection"].Result != "compatible" || rows["capability"].Result != "compatible" || rows["membership"].Result != "compatible" || rows["cpu"].Result != "compatible" || rows["version"].Result != "compatible" {
+	if rows["connection"].Result != "compatible" || rows["membership"].Result != "compatible" || rows["cpu"].Result != "compatible" || rows["version"].Result != "compatible" {
 		t.Fatalf("candidate rows: %+v", rows)
 	}
 	// Remote storage refuses the join outright.

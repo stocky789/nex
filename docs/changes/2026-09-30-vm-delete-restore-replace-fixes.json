@@ -1,0 +1,40 @@
+{
+  "summary": "VM delete after all snapshots are deleted, restore-replace keeps NICs and MAC, failed test restore cleanup settles, online backup refuses TPM guests, unacknowledged snapshot reservations stay retryable.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_backup_restore.go",
+    "internal/vmhost/managed_backup_online.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/managed_backup_test.go",
+    "internal/vmhost/managed_backup_restore_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/agent/backup_test_restore_test.go",
+    "docs/guide/restore-replace.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-30-vm-delete-restore-replace-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Replace now keeps NICs and MACs and the guide warns that retained originals accumulate.",
+    "pages": ["docs/guide/restore-replace.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Core refusal and result semantics change only: VM delete, restore-replace, backup-test-cleanup and online backup admission keep their endpoints and fields.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes; no milestone or acceptance gate changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "Managed VM journals on the owning host and pool-vms.json on the pool master.",
+    "reason": "No new state; a fresh Controller reads the same VM definitions and journals through the existing inventory."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/vmhost and internal/agent; no lab run.",
+    "evidence": ["internal/vmhost/managed_test.go", "internal/vmhost/managed_backup_test.go", "internal/agent/backup_test_restore_test.go", "docs/BUG_LEDGER.md"]
+  }
+}

@@ -139,7 +139,7 @@ func TestEjectedMemberCanRejoinWithANewCertificate(t *testing.T) {
 		for i := range state.Membership.Members {
 			state.Membership.Members[i].Generation = state.Membership.Generation
 		}
-		state.Membership.Members = append(state.Membership.Members, protocol.PoolMember{HostID: "member-1", CertificateSHA256: strings.Repeat("a", 64), Generation: state.Membership.Generation, Status: "ejected"})
+		state.Membership.Members = append(state.Membership.Members, protocol.PoolMember{HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("a", 64), Generation: state.Membership.Generation, Status: "ejected"})
 		err = savePoolPeer(master, state)
 	}
 	poolPeerMu.Unlock()
@@ -162,7 +162,7 @@ func TestEjectedMemberCanRejoinWithANewCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: offer.Token, HostID: member.State.HostID, CSRPEM: csr}); err != nil {
+	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: offer.Token, HostID: member.State.HostID, Hostname: "member.example.test", CSRPEM: csr}); err != nil {
 		t.Fatalf("rejoin after eject: %v", err)
 	}
 	state, err = loadPoolPeer(master)
@@ -394,15 +394,38 @@ func TestStorageClusterMemberVerifyPathsAcceptOnlyCurrentMaster(t *testing.T) {
 	}
 }
 
+// rehomeMember is a member of a reachable master's pool whose local pool identity
+// is reset, so a test can mark a rehome pending and resume it.
+func rehomeMember(t *testing.T) *Store {
+	t.Helper()
+	master, s := peerStore(t, "master-1", "new-pool"), peerStore(t, "member-1", "old-pool")
+	master.State.PoolName = "New Pool"
+	for _, store := range []*Store{master, s} {
+		if err := EnsurePoolMembership(store); err != nil {
+			t.Fatal(err)
+		}
+	}
+	joinPeerMember(t, master, s)
+	s.State.PoolID, s.State.PoolName = "old-pool", ""
+	return s
+}
+
+func markRehomePending(t *testing.T, s *Store) {
+	t.Helper()
+	state := peerState(t, s)
+	state.PendingRehome = &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}
+	if err := savePoolPeer(s, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPoolRehomeResumes(t *testing.T) {
-	s := peerStore(t, "member-1", "old-pool")
+	s := rehomeMember(t)
 	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)
 	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: "old-pool", VMID: vm.ID, HostID: s.State.HostID, Spec: *vm}}, Inventory: map[string]poolVMInventory{s.State.HostID: {HostID: s.State.HostID, Generation: 1, VMs: []protocol.VMCreateSpec{*vm}}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := savePoolPeer(s, poolPeerState{PendingRehome: &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}}); err != nil {
-		t.Fatal(err)
-	}
+	markRehomePending(t, s)
 	if err := ResumePoolRehome(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
@@ -538,10 +561,8 @@ func TestPoolRehomeDoesNotResurrectDeletedSoloVMOnPromotion(t *testing.T) {
 }
 
 func TestPoolRehomeCancellationKeepsMarkerForRetry(t *testing.T) {
-	s := peerStore(t, "member-1", "old-pool")
-	if err := savePoolPeer(s, poolPeerState{PendingRehome: &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}}); err != nil {
-		t.Fatal(err)
-	}
+	s := rehomeMember(t)
+	markRehomePending(t, s)
 	if err := os.WriteFile(poolVMFile(s), []byte("not JSON"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -589,5 +610,26 @@ func TestPoolPeerExactRoutesRejectWrongMethodWith405(t *testing.T) {
 		if response.StatusCode != http.StatusMethodNotAllowed || response.Header.Get("Allow") != http.MethodPost {
 			t.Fatalf("GET %s = %d Allow=%q, want 405 Allow=POST", path, response.StatusCode, response.Header.Get("Allow"))
 		}
+	}
+}
+
+// A joiner that predates hostname reporting is told why it was refused, rather than an
+// opaque "join refused" that gives neither operator nor joiner log a cause.
+func TestPoolPeerJoinWithoutHostnameStatesTheRefusal(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	if err := EnsurePoolMembership(master); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(peerJoinRequest{Offer: "x", HostID: "member-1"})
+	w := httptest.NewRecorder()
+	PoolPeerHandler(master).ServeHTTP(w, httptest.NewRequest(http.MethodPost, poolJoinPath, strings.NewReader(string(body))))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "upgrade and restart Nex Core") {
+		t.Fatalf("hostname-less join: %d %q", w.Code, w.Body.String())
+	}
+	body, _ = json.Marshal(peerJoinRequest{Offer: "x", HostID: "member-1", Hostname: "member.example.test"})
+	w = httptest.NewRecorder()
+	PoolPeerHandler(master).ServeHTTP(w, httptest.NewRequest(http.MethodPost, poolJoinPath, strings.NewReader(string(body))))
+	if w.Code != http.StatusConflict || strings.TrimSpace(w.Body.String()) != "join refused" {
+		t.Fatalf("other refusal must stay opaque: %d %q", w.Code, w.Body.String())
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -40,6 +41,9 @@ func TestScheduledMemberDispatchSendsPortableRepository(t *testing.T) {
 	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: vm.PoolID, VMID: vm.ID, HostID: vm.HostID, State: "stopped", Spec: vm}}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := UpsertPoolBackupPolicy(master, testPolicy()); err != nil {
+		t.Fatal(err)
+	}
 	run := protocol.BackupRun{OperationID: "schedule-1", Kind: protocol.BackupKindScheduled, PoolID: "pool-1", VMID: vm.ID,
 		RepositoryID: "repo-1", RecoveryPointID: "schedule-1", PolicyID: "pol-1", ScheduleID: "sch-1", OccurrenceID: "schedule-1",
 		PolicyRevision: 1, OccurrenceAt: time.Now().UTC(), CaptureMode: protocol.BackupCaptureStopped, Stage: "reserved", Status: "pending", CreatedAt: time.Now().UTC()}
@@ -55,9 +59,9 @@ func TestScheduledMemberDispatchSendsPortableRepository(t *testing.T) {
 	if err := savePoolBackupRun(member, memberRun); err != nil {
 		t.Fatal(err)
 	}
-	work, ok, err := nextPendingPeerBackup(master)
-	if err != nil || !ok || work.repo.MountPath != "" || work.repo.Identity != nil || work.repo.Access.Status != "" {
-		t.Fatalf("peer work retained host-local repository fields: %+v ok=%v err=%v", work.repo, ok, err)
+	work, ok := nextPendingPeerBackup(master, peerBackoff{}, time.Now())
+	if !ok || work.repo.MountPath != "" || !reflect.DeepEqual(work.repo.Identity, work.localRepo.Identity) || work.repo.Access.Status != "" {
+		t.Fatalf("peer work retained host-local repository fields: %+v ok=%v", work.repo, ok)
 	}
 	queue := make(chan BackupRequest)
 	peerBackupRequests.Store(member, queue)
@@ -79,7 +83,7 @@ func TestScheduledMemberDispatchSendsPortableRepository(t *testing.T) {
 		t.Fatalf("authenticated peer dispatch: %+v", completion)
 	}
 	wire := <-seen
-	if wire.MountPath != "" || wire.Identity != nil || wire.Access.Status != "" {
+	if wire.MountPath != "" || !reflect.DeepEqual(wire.Identity, work.localRepo.Identity) || wire.Access.Status != "" {
 		t.Fatalf("POST carried master host mount: %+v", wire)
 	}
 }
@@ -124,7 +128,7 @@ func TestPeerTestRestoreWaitsForJournalToCatchUpWithRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-1")
-	if _, err := ImportPoolBackupCatalog(master, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), master, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	point, err := getCatalogPoint(master, "repo-1", "point-1")
@@ -175,12 +179,20 @@ func TestPeerTestRestoreWaitsForJournalToCatchUpWithRun(t *testing.T) {
 	if second.err != nil || second.reply.Result.Status != "succeeded" || second.reply.Run == nil || second.reply.Run.Stage != "registered" {
 		t.Fatalf("settled peer result: %+v", second)
 	}
-	for _, status := range []string{"pending", "needs_attention"} {
-		reply := second.reply
-		reply.Result.Status = status
-		var permanent permanentPeerBackupError
-		if err := validatePeerBackupReply(context.Background(), work, reply); err == nil || errors.As(err, &permanent) {
-			t.Fatalf("journal %s while run succeeded must remain retryable: %v", status, err)
+	pending := second.reply
+	pending.Result.Status = "pending"
+	if err := validatePeerBackupReply(context.Background(), work, pending); err == nil || errors.As(err, &permanent) {
+		t.Fatalf("pending journal while run succeeded must remain retryable: %v", err)
+	}
+	// A journal needing attention is authoritative; the master records it and re-observes.
+	for _, runStatus := range []string{"succeeded", "failed"} {
+		attention := second.reply
+		attention.Result.Status = "needs_attention"
+		memberRun := *attention.Run
+		memberRun.Status = runStatus
+		attention.Run = &memberRun
+		if err := validatePeerBackupReply(context.Background(), work, attention); err != nil {
+			t.Fatalf("needs-attention journal with %s run was refused: %v", runStatus, err)
 		}
 	}
 	inconsistent := second.reply
@@ -201,7 +213,7 @@ func TestMemberRestorePeerRoundTripPreservesRegisteredStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-1")
-	if _, err := ImportPoolBackupCatalog(master, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), master, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	point, err := getCatalogPoint(master, "repo-1", "point-1")
@@ -275,7 +287,7 @@ func TestCleanMemberRestorePeerPersistsMasterCatalogDigest(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := ImportPoolBackupCatalog(master, "repo-1"); err != nil {
+			if _, err := importPoolBackupCatalog(context.Background(), master, "repo-1"); err != nil {
 				t.Fatal(err)
 			}
 			point, err := getCatalogPoint(master, "repo-1", "point-1")
@@ -441,7 +453,7 @@ func TestMemberCleanupPeerBindsExactReceipt(t *testing.T) {
 	cmd := protocol.Command{OperationID: "cleanup-op", Kind: "backup-test-cleanup", TestRestoreClean: &protocol.TestRestoreCleanupRequest{
 		RepositoryID: "repo-1", RecoveryPointID: "point-1", TestVMID: testRun.NewVMID}}
 	work, remote, err := memberCleanupWork(master, cmd)
-	if err != nil || !remote || work.repo.MountPath != "" || work.repo.Identity != nil {
+	if err != nil || !remote || work.repo.MountPath != "" || work.repo.Identity == nil {
 		t.Fatalf("member cleanup work: %+v remote=%v err=%v", work, remote, err)
 	}
 	receipt := protocol.BackupMetadataReceipt{OperationID: cmd.OperationID, Kind: cmd.Kind, IntentSHA256: work.intent,
@@ -462,7 +474,7 @@ func TestMemberCleanupPeerBindsExactReceipt(t *testing.T) {
 			}
 		}
 	}()
-	result, err := waitPeerCleanup(context.Background(), work)
+	result, err := waitPeerCleanup(context.Background(), work, func() {})
 	if err != nil || result.Status != "succeeded" {
 		t.Fatalf("cleanup receipt round trip: %+v err=%v", result, err)
 	}
@@ -569,6 +581,150 @@ func TestApplyBackupScheduleTickHonorsHostLimitAndVMOverride(t *testing.T) {
 	}
 	if statuses["vm-1"] != "pending" || statuses["vm-2"] != "skipped_overlap" {
 		t.Fatalf("host limit was not enforced: %v", statuses)
+	}
+}
+
+func TestApplyBackupScheduleTickMissingVMDoesNotStarveOtherPolicies(t *testing.T) {
+	s := seedBackupMaster(t)
+	vms, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vms.VMs["vm-1"] = poolVMRecord{PoolID: "pool-1", VMID: "vm-1", HostID: "host-a", State: "stopped", Epoch: 1, Spec: *poolVMTestSpec("vm-1", "host-a")}
+	if err := savePoolVMs(s, vms); err != nil {
+		t.Fatal(err)
+	}
+	gone, live := testPolicy(), testPolicy()
+	gone.ID, gone.ScheduleID, gone.VMIDs = "pol-a", "sch-a", []string{"vm-gone"}
+	live.ID, live.ScheduleID = "pol-b", "sch-b"
+	last := time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC)
+	gone.LastDispatchAt, live.LastDispatchAt = last, last
+	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{gone.ID: gone, live.ID: live}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyBackupScheduleTick(s, time.Date(2026, 9, 27, 2, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("one policy with a VM that left the pool aborted the tick: %v", err)
+	}
+	runs, err := listPoolBackupRuns(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]string{}
+	for _, run := range runs {
+		statuses[run.PolicyID] = run.Status
+	}
+	if statuses["pol-a"] != "failed" || statuses["pol-b"] != "pending" {
+		t.Fatalf("occurrences = %v, want pol-a failed and pol-b pending", statuses)
+	}
+	for _, id := range []string{"pol-a", "pol-b"} {
+		stored, err := GetPoolBackupPolicy(s, id)
+		if err != nil || !stored.LastDispatchAt.After(last) {
+			t.Fatalf("%s cursor did not advance: %+v %v", id, stored, err)
+		}
+	}
+}
+
+func TestApplyBackupScheduleTickRecordsSlotWhenRepositoryBusy(t *testing.T) {
+	s := seedBackupMaster(t)
+	vms, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vms.VMs["vm-1"] = poolVMRecord{PoolID: "pool-1", VMID: "vm-1", HostID: "host-a", State: "stopped", Epoch: 1, Spec: *poolVMTestSpec("vm-1", "host-a")}
+	if err := savePoolVMs(s, vms); err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy()
+	policy.LastDispatchAt = time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC)
+	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{policy.ID: policy}}); err != nil {
+		t.Fatal(err)
+	}
+	poolBackupAuthorityMu.Lock()
+	mutation, err := reserveBackupRepositoryMutation(s, policy.RepositoryID)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mutation.release()
+	if _, err := ApplyBackupScheduleTick(s, time.Date(2026, 9, 27, 2, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := listPoolBackupRuns(s)
+	if err != nil || len(runs) != 1 || runs[0].Status != "skipped_overlap" || runs[0].VMID != "vm-1" {
+		t.Fatalf("a due slot hit a busy repository without a run record: %+v %v", runs, err)
+	}
+}
+
+func TestApplyBackupScheduleTickDoesNotClobberConcurrentCASUpsert(t *testing.T) {
+	s := seedBackupMaster(t)
+	if _, err := upsertTestBackupRepository(s, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vms, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vms.VMs["vm-1"] = poolVMRecord{PoolID: "pool-1", VMID: "vm-1", HostID: "host-a", State: "stopped", Epoch: 1, Spec: *poolVMTestSpec("vm-1", "host-a")}
+	if err := savePoolVMs(s, vms); err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy()
+	policy.LastDispatchAt = time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC)
+	policy.Retention.KeepLatest = 7
+	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{policy.ID: policy}}); err != nil {
+		t.Fatal(err)
+	}
+	previous := scheduleTickBeforePolicySave
+	t.Cleanup(func() { scheduleTickBeforePolicySave = previous })
+	scheduleTickBeforePolicySave = func(store *Store) {
+		current, err := GetPoolBackupPolicy(store, policy.ID)
+		if err != nil {
+			t.Errorf("load policy for concurrent upsert: %v", err)
+			return
+		}
+		rev := current.Revision
+		upd := current
+		upd.ExpectedRevision = &rev
+		upd.Name = "operator-edit"
+		upd.Retention.KeepLatest = 99
+		if _, err := UpsertPoolBackupPolicy(store, upd); err != nil {
+			t.Errorf("concurrent ExpectedRevision upsert: %v", err)
+		}
+	}
+	if _, err := ApplyBackupScheduleTick(s, time.Date(2026, 9, 27, 2, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := GetPoolBackupPolicy(s, policy.ID)
+	if err != nil || stored.Name != "operator-edit" || stored.Retention.KeepLatest != 99 || stored.Revision != 2 {
+		t.Fatalf("schedule tick clobbered CAS upsert: %+v err=%v", stored, err)
+	}
+}
+
+func TestApplyBackupScheduleTickAdvancesCursorsWhenUncontended(t *testing.T) {
+	s := seedBackupMaster(t)
+	vms, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vms.VMs["vm-1"] = poolVMRecord{PoolID: "pool-1", VMID: "vm-1", HostID: "host-a", State: "stopped", Epoch: 1, Spec: *poolVMTestSpec("vm-1", "host-a")}
+	if err := savePoolVMs(s, vms); err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy()
+	wantDispatch := time.Date(2026, 9, 27, 2, 0, 0, 0, time.UTC)
+	policy.LastDispatchAt = time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC)
+	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{policy.ID: policy}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyBackupScheduleTick(s, time.Date(2026, 9, 27, 2, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := GetPoolBackupPolicy(s, policy.ID)
+	if err != nil || !stored.LastDispatchAt.Equal(wantDispatch) || !stored.NextDispatchAt.After(wantDispatch) {
+		t.Fatalf("uncontended tick must persist schedule cursors: %+v err=%v", stored, err)
 	}
 }
 

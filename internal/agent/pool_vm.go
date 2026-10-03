@@ -414,7 +414,7 @@ func ReservePoolVMSnapshot(ctx context.Context, s *Store, command protocol.Comma
 			return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not confirm snapshot reservation")
 		}
 		if err := confirmPoolVMSnapshotReplica(ctx, s, &ack, nil); err != nil {
-			return protocol.PoolVMRecoveryReservation{}, err
+			return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{err}
 		}
 		return *ack.SnapshotReservation, nil
 	}
@@ -436,15 +436,15 @@ func ReservePoolVMSnapshot(ctx context.Context, s *Store, command protocol.Comma
 	req.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(req)
 	if err != nil {
-		return protocol.PoolVMRecoveryReservation{}, err
+		return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master refused snapshot reservation")
+		return protocol.PoolVMRecoveryReservation{}, snapshotReservationRefusal(response, "pool master refused snapshot reservation")
 	}
 	var ack poolVMRequest
 	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&ack) != nil || !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
-		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not return an exact snapshot reservation acknowledgement")
+		return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{errors.New("pool master did not return an exact snapshot reservation acknowledgement")}
 	}
 	return *ack.SnapshotReservation, nil
 }
@@ -484,7 +484,7 @@ func ReservePoolVMSnapshotRevert(ctx context.Context, s *Store, command protocol
 			return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not confirm snapshot revert reservation")
 		}
 		if err := confirmPoolVMSnapshotReplica(ctx, s, &ack, nil); err != nil {
-			return protocol.PoolVMRecoveryReservation{}, err
+			return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{err}
 		}
 		return *ack.SnapshotReservation, nil
 	}
@@ -508,15 +508,15 @@ func ReservePoolVMSnapshotRevert(ctx context.Context, s *Store, command protocol
 	req.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(req)
 	if err != nil {
-		return protocol.PoolVMRecoveryReservation{}, err
+		return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master refused snapshot revert reservation")
+		return protocol.PoolVMRecoveryReservation{}, snapshotReservationRefusal(response, "pool master refused snapshot revert reservation")
 	}
 	var ack poolVMRequest
 	if json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&ack) != nil || !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
-		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not return an exact snapshot revert reservation acknowledgement")
+		return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{errors.New("pool master did not return an exact snapshot revert reservation acknowledgement")}
 	}
 	return *ack.SnapshotReservation, nil
 }
@@ -555,7 +555,7 @@ func ReservePoolVMSnapshotDelete(ctx context.Context, s *Store, command protocol
 			return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not confirm snapshot delete reservation")
 		}
 		if err := confirmPoolVMSnapshotReplica(ctx, s, &ack, nil); err != nil {
-			return protocol.PoolVMRecoveryReservation{}, err
+			return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{err}
 		}
 		return *ack.SnapshotReservation, nil
 	}
@@ -579,15 +579,15 @@ func ReservePoolVMSnapshotDelete(ctx context.Context, s *Store, command protocol
 	req.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(req)
 	if err != nil {
-		return protocol.PoolVMRecoveryReservation{}, err
+		return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master refused snapshot delete reservation")
+		return protocol.PoolVMRecoveryReservation{}, snapshotReservationRefusal(response, "pool master refused snapshot delete reservation")
 	}
 	var ack poolVMRequest
 	if json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&ack) != nil || !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
-		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not return an exact snapshot delete reservation acknowledgement")
+		return protocol.PoolVMRecoveryReservation{}, reservationUnconfirmed{errors.New("pool master did not return an exact snapshot delete reservation acknowledgement")}
 	}
 	return *ack.SnapshotReservation, nil
 }
@@ -1079,6 +1079,30 @@ func reservePoolVMSnapshotDeleteLocked(s *Store, owner string, req poolVMRequest
 		return poolVMRequest{}, err
 	}
 	return snapshotReservationAck(req, reservation), nil
+}
+
+// reservationUnconfirmed marks a reservation the master may have saved without the
+// requester learning of it: a lost reply, a server error, or a master that could not
+// get every ready member to acknowledge. The master keeps it for an exact retry, so the
+// requester must keep its intent and retry rather than abandon it and strand it.
+type reservationUnconfirmed struct{ error }
+
+func (reservationUnconfirmed) Is(target error) bool {
+	return target == vmhost.ErrSnapshotReservationUnconfirmed
+}
+
+func (e reservationUnconfirmed) Unwrap() error { return e.error }
+
+// poolSnapshotSavedHeader marks a refusal that follows a saved reservation or settlement the
+// master could not yet get every ready member to acknowledge. It is a header, not message
+// text, so rewording the refusal cannot turn a retryable answer into an abandoned one.
+const poolSnapshotSavedHeader = "X-Nex-Snapshot-Saved"
+
+func snapshotReservationRefusal(response *http.Response, message string) error {
+	if response.StatusCode >= 500 || response.Header.Get(poolSnapshotSavedHeader) != "" {
+		return reservationUnconfirmed{errors.New(message)}
+	}
+	return errors.New(message)
 }
 
 func snapshotReservationAck(request poolVMRequest, reservation protocol.PoolVMRecoveryReservation) poolVMRequest {
@@ -1780,13 +1804,19 @@ func poolSharedVM(ctx context.Context, s *Store, cmd protocol.Command) (protocol
 				break
 			}
 		}
-	} else if cmd.Delete != nil {
+	} else if cmd.Delete != nil || cmd.ReleaseRetained != nil {
+		id := ""
+		if cmd.Delete != nil {
+			id = cmd.Delete.VMID
+		} else {
+			id = cmd.ReleaseRetained.VMID
+		}
 		state, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
 		if !managedVMChecksReady(checks) {
 			return v, false, errors.New("managed VM state is unavailable")
 		}
 		for _, candidate := range state.VMs {
-			if candidate.ID == cmd.Delete.VMID {
+			if candidate.ID == id {
 				v = candidate
 				break
 			}
@@ -1832,7 +1862,7 @@ func poolSharedVM(ctx context.Context, s *Store, cmd protocol.Command) (protocol
 	// remains pool-owned after an edit removes its final shared disk or after
 	// that repository is detached. The proof is read-only managed history, not
 	// a member policy cache.
-	if cmd.Kind == "vm-update" || cmd.Power != nil || cmd.Delete != nil || cmd.VMMedia != nil {
+	if cmd.Kind == "vm-update" || cmd.Power != nil || cmd.Delete != nil || cmd.ReleaseRetained != nil || cmd.VMMedia != nil {
 		used, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).VMHasPoolSharedStorageHistory(ctx, v.ID)
 		if err != nil {
 			return v, false, errors.New("managed VM shared-storage history is unavailable")
@@ -2535,6 +2565,7 @@ func PoolVMHandler(s *Store) http.Handler {
 				ackErr = confirmPoolVMSnapshotReplica(r.Context(), s, nil, req.RecoveryEvidence)
 			}
 			if ackErr != nil {
+				w.Header().Set(poolSnapshotSavedHeader, "1")
 				http.Error(w, "snapshot state was saved but is not yet acknowledged by every ready member", http.StatusConflict)
 				return
 			}
@@ -2586,6 +2617,19 @@ func PoolVMMediaCommand(ctx context.Context, s *Store, cmd protocol.Command) pro
 	return update
 }
 
+// poolVMDeleteMatchesOwner reports whether a delete or release request names the VM v, this
+// host and its pool. poolSharedVM prefers a command's VM definition, so the request's own VM
+// identity is compared rather than assumed.
+func poolVMDeleteMatchesOwner(s *Store, cmd protocol.Command, v protocol.VMCreateSpec) bool {
+	id, pool, host := "", "", ""
+	if cmd.Delete != nil {
+		id, pool, host = cmd.Delete.VMID, cmd.Delete.PoolID, cmd.Delete.HostID
+	} else if cmd.ReleaseRetained != nil {
+		id, pool, host = cmd.ReleaseRetained.VMID, cmd.ReleaseRetained.PoolID, cmd.ReleaseRetained.HostID
+	}
+	return id == v.ID && pool == s.State.PoolID && host == s.State.HostID
+}
+
 // AdmitPoolVMExecution must wrap every managed create/start/stop.  Its returned callback
 // records only a confirmed local observation; it never frees ownership after an error/timeout.
 func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (func(protocol.Result, error) error, error) {
@@ -2624,8 +2668,11 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	ownerAdmission = ownerAdmission || (v.ID != "" && cmd.Kind == "vm-media")
 	// Every pool VM deletion is durable master state. Keep the check independent
 	// of DeleteDisks: retaining or unlinking disks must not discard catalog points.
-	if cmd.Kind == "vm-delete" && v.ID != "" {
-		if cmd.Delete == nil || cmd.Delete.VMID != v.ID || cmd.Delete.PoolID != s.State.PoolID || cmd.Delete.HostID != s.State.HostID {
+	// Releasing retained originals deletes files a settling restore may still rely on, so it
+	// takes the same owner admission: the master refuses it while an update, restore or
+	// snapshot recovery is pending for the VM.
+	if (cmd.Kind == "vm-delete" || cmd.Kind == "vm-release-retained") && v.ID != "" {
+		if !poolVMDeleteMatchesOwner(s, cmd, v) {
 			return nil, errors.New("VM delete does not match the local pool owner")
 		}
 		if err := poolVMRequestPeer(ctx, s, v.ID, "delete-check", nil, false, &v, nil); err != nil {
@@ -2811,6 +2858,12 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	}, nil
 }
 
+// poolVMPlacementRefusal is a definite master refusal (HTTP 409) of a VM
+// placement, as opposed to a transport or server failure whose outcome is unknown.
+type poolVMPlacementRefusal string
+
+func (r poolVMPlacementRefusal) Error() string { return string(r) }
+
 func poolVMDefineRequestPeer(ctx context.Context, s *Store, vm protocol.VMCreateSpec, operationID string) error {
 	membership, err := Membership(s)
 	if err != nil || operationID == "" {
@@ -2849,7 +2902,11 @@ func poolVMDefineRequestPeer(ctx context.Context, s *Store, vm protocol.VMCreate
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
-		return errors.New("pool master refused VM placement: " + placementError(errors.New(string(body))))
+		message := "pool master refused VM placement: " + placementError(errors.New(string(body)))
+		if response.StatusCode == http.StatusConflict {
+			return poolVMPlacementRefusal(message)
+		}
+		return errors.New(message)
 	}
 	var reply poolVMRequest
 	if json.NewDecoder(response.Body).Decode(&reply) != nil || reply.VMID != vm.ID || reply.Action != "define" || reply.OperationID != operationID || !reply.PlacementAccepted || !reply.SpecMatch {

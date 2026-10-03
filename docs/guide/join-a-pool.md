@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.18. Add an enrolled Nex Core host to another host's pool from Nex
+Development product 0.4.19. Add an enrolled Nex Core host to another host's pool from Nex
 Controller: **Settings** → **Members** (with the pool chosen in the top-bar scope menu) →
 **Add host to pool**. The pool master owns membership and
 pool-wide configuration (shared storage, guest VLANs, and ISO library entries on those shared
@@ -22,6 +22,8 @@ Known limits in this release:
   existing IDs only when it can prove that an earlier local removal was part of that host's eject.
   Do not manually edit host records to force resource recovery; the normal retry path is safe.
 - A host that has any virtual machine, or any storage that is not local to it, is refused.
+- A joining host erases the backup credentials it held for its former pool; the new pool master
+  delivers the credentials of the new pool's backup repositories.
 - The Controller-driven workflow has not yet been walked through on real hardware; see
   [Verification](#verification) before relying on these steps.
 
@@ -30,8 +32,7 @@ Navigation on this page follows the development build 0.4.8 console layout; see
 
 ## Prerequisites
 
-- Two enrolled Nex Core hosts in the same site, on matching development builds, both reporting
-  the `pool-join-v1` capability. The Controller refuses the join and names the upgrade otherwise.
+- Two enrolled Nex Core hosts in the same site, on matching development builds.
 - The joining host must currently be the master of its own single-host pool (every enrolled host
   is), with no managed VMs and no remote storage registered.
 - Both hosts connected and fresh in Controller: the master must answer within 45 seconds, and the
@@ -70,7 +71,7 @@ Navigation on this page follows the development build 0.4.8 console layout; see
    host** form (see [Set up Nex Controller and enroll a host](manage-controller.md)). Enroll
    the host there, then return here once it reports.
 3. Select a host and read its compatibility preview. Each row is a check (connection, version,
-   capability, membership, VMs, storage, uplink, CPU) with a result:
+   membership, VMs, storage, uplink, CPU) with a result:
    - **compatible** — nothing to do.
    - **will not converge** — the host can still join; a pool setting that cannot be applied there
      (typically a pool VLAN whose uplink NIC name the host does not have) is reported against it
@@ -112,15 +113,21 @@ OpenZFS, exclusive iSCSI and host-local bridges stay on the host that owns them.
 The membership lives on the pool master, not in Controller. A replacement Controller connected to
 the same hosts reads the same membership, names, peer addresses and any unfinished join back from
 them, with nothing to re-enter.
+An offline member still appears under **Members** with an unknown connection and its name from
+Core's membership record; it has no Hosts-panel link until it enrolls with this Controller.
 
 ## Troubleshooting
 
 Messages below are the exact text the interface shows.
 
-- **“adding a host to a pool needs pool-join-v1 on both hosts; upgrade both hosts”** — one side is
-  an older build. Upgrade both, or use the host-local recovery path.
 - **“only the master of its own single-host pool can join another pool”** — the selected host is
   already a member of a pool, or is a master with members of its own.
+- **“joining Core did not report a valid hostname; upgrade and restart Nex Core on the joining
+  host”** — the joining host runs a Core that predates hostname reporting (for example a 0.4.18
+  Core that was not restarted after the upgrade). The master refuses the join and the joiner's
+  error and log carry this reason. Upgrade and restart Nex Core on the joining host, then retry.
+  Members of pools created before hostnames were reported keep an empty hostname: nothing
+  backfills it.
 - **“joining a pool with managed VMs is not supported; migrate or remove workloads first”** —
   remove the workloads, then retry. Nothing has been started.
 - **“joining a pool with existing remote storage is not supported; detach it first”** — detach the

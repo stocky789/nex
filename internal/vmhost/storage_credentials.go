@@ -3,9 +3,10 @@ package vmhost
 
 import (
 	"bytes"
-	"crypto/hmac"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,12 +23,16 @@ import (
 
 const credentialDirectory = "storage-credentials"
 
+// credentialStoreMu serializes every writer of the credential directory with the sweep in
+// StorageCredentialReceipts, which removes files no receipt names: without it the sweep
+// could delete a credentials file or temp file a concurrent save has not yet published.
+var credentialStoreMu sync.Mutex
+
+// The receipt JSON holds metadata and a Core-local proof of the credentials body. The secret
+// itself lives solely in the private credentials file named by the receipt.
 type storedCredential struct {
 	protocol.StorageCredentialReceipt
-	Username string `json:"username,omitempty"`
-	Secret   string `json:"secret"`
-	Domain   string `json:"domain,omitempty"`
-	Proof    string `json:"proof"`
+	Proof string `json:"proof,omitempty"`
 }
 
 func credentialPath(stateDir, requestID string) string {
@@ -47,64 +53,6 @@ func credentialDir(stateDir string) (string, error) {
 		return "", errors.New("credential directory must be private")
 	}
 	return dir, nil
-}
-
-func credentialKey(stateDir string) ([]byte, error) {
-	dir, err := credentialDir(stateDir)
-	if err != nil {
-		return nil, err
-	}
-	path := filepath.Join(dir, "receipt-key")
-	if info, err := os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
-			return nil, errors.New("credential receipt key must be a private regular file")
-		}
-		key, err := os.ReadFile(path)
-		if err != nil || len(key) != 32 {
-			return nil, errors.New("credential receipt key is invalid")
-		}
-		return key, nil
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if os.IsExist(err) {
-		return credentialKey(stateDir)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if _, err = f.Write(key); err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return nil, err
-	}
-	return key, nil
-}
-
-func credentialProofFields(h protocol.StorageCredentialHandoff) []string {
-	fields := []string{h.Offer.RequestID, h.Offer.RegistrationRequestID, h.Offer.PoolID, h.Offer.HostID, h.Offer.RepositoryID, h.Credentials.Username, h.Credentials.Secret}
-	if h.Credentials.Domain != "" {
-		fields = append(fields, h.Credentials.Domain)
-	}
-	return fields
-}
-
-func credentialProof(key []byte, h protocol.StorageCredentialHandoff) string {
-	m := hmac.New(sha256.New, key)
-	for _, v := range credentialProofFields(h) {
-		_, _ = m.Write([]byte(v))
-		_, _ = m.Write([]byte{0})
-	}
-	return hex.EncodeToString(m.Sum(nil))
 }
 
 func receiptID() (string, error) {
@@ -141,38 +89,81 @@ func smbAuthFileBody(username, secret, domain string) (string, error) {
 	return contents, nil
 }
 
-func materializeMountCredential(stateDir string, stored storedCredential) error {
-	if !storageID.MatchString(stored.Receipt) {
+func parseSMBAuthFile(body string) (c protocol.StorageCredentials) {
+	for _, line := range strings.Split(body, "\n") {
+		key, value, _ := strings.Cut(line, "=")
+		switch key {
+		case "username":
+			c.Username = value
+		case "password":
+			c.Secret = value
+		case "domain":
+			c.Domain = value
+		}
+	}
+	return c
+}
+
+// SealCredential writes data to path encrypted by systemd-creds (TPM2 when the host has one,
+// the host key otherwise) under the credential name. The plaintext only travels over stdin.
+func SealCredential(ctx context.Context, name, path string, data []byte) error {
+	sealed, err := runSystemdCreds(ctx, data, "systemd-creds", "encrypt", "--name="+name, "-", "-")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, sealed)
+}
+
+// OpenCredential decrypts a file written by SealCredential.
+func OpenCredential(ctx context.Context, name, path string) ([]byte, error) {
+	return runSystemdCreds(ctx, nil, "systemd-creds", "decrypt", "--name="+name, path, "-")
+}
+
+// openMountCredential reads a credentials file back as written by materializeMountCredential;
+// it does not decrypt. The cap bounds the largest body validCredentialHandoff accepts.
+func openMountCredential(path string) (string, error) {
+	b, err := readSmall(path, 1<<17)
+	return string(b), err
+}
+
+func credentialBodyProof(c protocol.StorageCredentials) (string, error) {
+	body, err := smbAuthFileBody(c.Username, c.Secret, c.Domain)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// materializeMountCredential writes the mount.cifs credentials file once per receipt: root-only
+// in the private credential directory, because systemd 257 cannot hand a credential to a .mount
+// unit's helper. An exclusive matching file is left alone; anything else is repaired from the
+// receipt-bound handoff secret that SaveStorageCredential already proved.
+func materializeMountCredential(stateDir, receipt string, c protocol.StorageCredentials) error {
+	if !storageID.MatchString(receipt) {
 		return errors.New("storage credential cannot be used by the native mount")
 	}
 	root, err := credentialDir(stateDir)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return err
-	}
-	info, err := os.Lstat(root)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-		return errors.New("native credential directory must be private")
-	}
-	contents, err := smbAuthFileBody(stored.Username, stored.Secret, stored.Domain)
+	body, err := smbAuthFileBody(c.Username, c.Secret, c.Domain)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(root, stored.Receipt)
-	current, err := mountCredentialCurrent(path, []byte(contents))
+	path := filepath.Join(root, receipt)
+	current, err := mountCredentialCurrent(path, []byte(body))
 	if err != nil {
 		return err
 	}
 	if current {
 		return nil
 	}
-	return atomicWrite(path, []byte(contents))
+	return atomicWrite(path, []byte(body))
 }
 
-// mountCredentialCurrent accepts only the exact private file atomicWrite would
-// create. All other present files take the existing atomic repair path.
+// mountCredentialCurrent accepts only the exact private file atomicWrite would create.
+// Hardlinks, wrong owners, and mode/content damage take the repair path.
 func mountCredentialCurrent(path string, want []byte) (bool, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -199,14 +190,15 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 	if err := validCredentialHandoff(h); err != nil {
 		return empty, err
 	}
+	credentialStoreMu.Lock()
+	defer credentialStoreMu.Unlock()
 	if _, err := credentialDir(stateDir); err != nil {
 		return empty, err
 	}
-	key, err := credentialKey(stateDir)
+	proof, err := credentialBodyProof(h.Credentials)
 	if err != nil {
 		return empty, err
 	}
-	proof := credentialProof(key, h)
 	path := credentialPath(stateDir, h.Offer.RequestID)
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
@@ -217,13 +209,17 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 			return empty, err
 		}
 		var old storedCredential
-		if err = json.Unmarshal(b, &old); err != nil || old.RequestID != h.Offer.RequestID || old.PoolID != h.Offer.PoolID || old.HostID != h.Offer.HostID || old.RepositoryID != h.Offer.RepositoryID || old.RegistrationRequestID != h.Offer.RegistrationRequestID || !hmac.Equal([]byte(old.Proof), []byte(proof)) {
+		if err = json.Unmarshal(b, &old); err != nil || old.RequestID != h.Offer.RequestID || old.PoolID != h.Offer.PoolID || old.HostID != h.Offer.HostID || old.RepositoryID != h.Offer.RepositoryID || old.RegistrationRequestID != h.Offer.RegistrationRequestID {
 			return empty, errors.New("storage credential replay conflicts with existing receipt")
 		}
+		// A retired tombstone keeps no proof, so it is checked before the proof.
 		if old.Status != "ready" {
 			return empty, errors.New("storage credential receipt was retired; use a new request ID")
 		}
-		if err = materializeMountCredential(stateDir, old); err != nil {
+		if subtle.ConstantTimeCompare([]byte(old.Proof), []byte(proof)) != 1 {
+			return empty, errors.New("storage credential replay conflicts with existing receipt")
+		}
+		if err = materializeMountCredential(stateDir, old.Receipt, h.Credentials); err != nil {
 			return empty, err
 		}
 		return old.StorageCredentialReceipt, nil
@@ -235,15 +231,21 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 		return empty, err
 	}
 	receipt := protocol.StorageCredentialReceipt{Receipt: id, RequestID: h.Offer.RequestID, PoolID: h.Offer.PoolID, HostID: h.Offer.HostID, RepositoryID: h.Offer.RepositoryID, RegistrationRequestID: h.Offer.RegistrationRequestID, CreatedAt: time.Now().UTC(), Status: "ready"}
-	stored := storedCredential{StorageCredentialReceipt: receipt, Username: h.Credentials.Username, Secret: h.Credentials.Secret, Domain: h.Credentials.Domain, Proof: proof}
+	stored := storedCredential{StorageCredentialReceipt: receipt, Proof: proof}
 	b, err := json.Marshal(stored)
 	if err != nil {
 		return empty, err
 	}
-	if err = atomicWrite(path, b); err != nil {
+	// The secret lands first: a crash before the receipt leaves only an orphaned
+	// credentials file, never a receipt without its credential; StorageCredentialReceipts
+	// sweeps it. A failed receipt write removes it at once.
+	if err = materializeMountCredential(stateDir, id, h.Credentials); err != nil {
 		return empty, err
 	}
-	if err = materializeMountCredential(stateDir, stored); err != nil {
+	if err = atomicWrite(path, b); err != nil {
+		if dir, dirErr := credentialDir(stateDir); dirErr == nil {
+			_ = os.Remove(filepath.Join(dir, id))
+		}
 		return empty, err
 	}
 	return receipt, nil
@@ -287,6 +289,8 @@ func bindCredentialReceipt(stateDir, receipt, repositoryID, poolID, hostID, regi
 	if receipt == "" || repositoryID == "" || poolID == "" || hostID == "" || registrationRequestID == "" {
 		return errors.New("storage credential receipt binding is invalid")
 	}
+	credentialStoreMu.Lock()
+	defer credentialStoreMu.Unlock()
 	dir, err := credentialDir(stateDir)
 	if err != nil {
 		return err
@@ -315,24 +319,25 @@ func bindCredentialReceipt(stateDir, receipt, repositoryID, poolID, hostID, regi
 			return errors.New("storage credential receipt cannot bind this repository")
 		}
 		if stored.RepositoryID == repositoryID {
-			return materializeMountCredential(stateDir, stored)
+			return nil
 		}
 		stored.RepositoryID = repositoryID
 		updated, err := json.Marshal(stored)
 		if err != nil {
 			return err
 		}
-		if err = atomicWrite(path, updated); err != nil {
-			return err
-		}
-		return materializeMountCredential(stateDir, stored)
+		return atomicWrite(path, updated)
 	}
 	return errors.New("storage credential receipt is unavailable")
 }
 
 // StorageCredentialReceipts exposes only durable, opaque receipt metadata for adoption after a
-// Controller replacement. Credential material and keyed replay proofs remain Core-local.
+// Controller replacement. Credential material and replay proofs remain Core-local. Every
+// report calls it, so it also settles what a crash left in the directory: a credentials file
+// or temp file no receipt names, and a receipt that still carries a plaintext secret.
 func StorageCredentialReceipts(stateDir string) ([]protocol.StorageCredentialReceipt, error) {
+	credentialStoreMu.Lock()
+	defer credentialStoreMu.Unlock()
 	dir, err := credentialDir(stateDir)
 	if err != nil {
 		return nil, err
@@ -342,11 +347,13 @@ func StorageCredentialReceipts(stateDir string) ([]protocol.StorageCredentialRec
 		return nil, err
 	}
 	out := make([]protocol.StorageCredentialReceipt, 0, len(entries))
+	named := map[string]bool{}
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		b, err := readSmall(filepath.Join(dir, entry.Name()), 1<<20)
+		path := filepath.Join(dir, entry.Name())
+		b, err := readSmall(path, 1<<20)
 		if err != nil {
 			return nil, err
 		}
@@ -354,9 +361,51 @@ func StorageCredentialReceipts(stateDir string) ([]protocol.StorageCredentialRec
 		if err = json.Unmarshal(b, &stored); err != nil || stored.Receipt == "" || stored.RequestID == "" || stored.PoolID == "" || stored.HostID == "" {
 			return nil, errors.New("credential receipt is invalid")
 		}
+		if stored, err = scrubLegacyCredential(path, b, stored); err != nil {
+			return nil, err
+		}
+		named[stored.Receipt] = true
 		out = append(out, stored.StorageCredentialReceipt)
 	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && !strings.HasSuffix(name, ".json") && !named[name] &&
+			(strings.HasPrefix(name, ".write-") || name == "receipt-key" || storageID.MatchString(name)) {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
 	return out, nil
+}
+
+// scrubLegacyCredential rewrites a receipt written before the secret moved out of the receipt
+// JSON. It still holds the plaintext and a keyed proof the current code cannot check, so the
+// plaintext is dropped and the proof recomputed from it the way a new receipt's is; a retired
+// receipt keeps no proof. The credentials file beside it was written with the receipt. The
+// legacy receipt-key file is then an unnamed file and the sweep removes it.
+func scrubLegacyCredential(path string, raw []byte, stored storedCredential) (storedCredential, error) {
+	var legacy struct {
+		Username string `json:"username"`
+		Secret   string `json:"secret"`
+		Domain   string `json:"domain"`
+	}
+	retired := stored.Status != "ready"
+	switch {
+	case retired && stored.Proof != "":
+		stored.Proof = ""
+	case !retired && json.Unmarshal(raw, &legacy) == nil && legacy.Secret != "":
+		proof, err := credentialBodyProof(protocol.StorageCredentials{Username: legacy.Username, Secret: legacy.Secret, Domain: legacy.Domain})
+		if err != nil {
+			return stored, err
+		}
+		stored.Proof = proof
+	default:
+		return stored, nil
+	}
+	b, err := json.Marshal(stored)
+	if err != nil {
+		return stored, err
+	}
+	return stored, atomicWrite(path, b)
 }
 
 // releaseStorageCredential deletes the Core-local secret for a repository that is being
@@ -374,12 +423,20 @@ func releaseStorageCredential(stateDir string, s protocol.StorageRegistration) e
 // projection supplies attached=true while a repository still names the receipt, so a browser
 // request can never detach credentials from an active repository.
 func retireStorageCredential(stateDir, receipt, poolID, hostID string, attached bool) error {
+	return removeStorageCredential(stateDir, receipt, poolID, hostID, attached, false)
+}
+
+// Failed peer preparations discard the secret but preserve their generation-bound
+// replay binding. Browser handoffs and explicit retirements keep a permanent tombstone.
+func removeStorageCredential(stateDir, receipt, poolID, hostID string, attached, retryPoolPeer bool) error {
 	if !storageID.MatchString(receipt) || poolID == "" || hostID == "" {
 		return errors.New("storage credential receipt is invalid")
 	}
 	if attached {
 		return errors.New("storage credential receipt is still attached to a repository")
 	}
+	credentialStoreMu.Lock()
+	defer credentialStoreMu.Unlock()
 	dir, err := credentialDir(stateDir)
 	if err != nil {
 		return err
@@ -408,8 +465,9 @@ func retireStorageCredential(stateDir, receipt, poolID, hostID string, attached 
 		if stored.PoolID != poolID || stored.HostID != hostID {
 			return errors.New("storage credential receipt does not belong to this pool and host")
 		}
-		if stored.Status == "ready" {
-			stored.Status, stored.Secret, stored.Username, stored.Domain = "retired", "", "", ""
+		if stored.Status == "ready" && !retryPoolPeer {
+			// The proof would stay as an offline guess oracle for a retired password.
+			stored.Status, stored.Proof = "retired", ""
 			retired, err := json.Marshal(stored)
 			if err != nil {
 				return err

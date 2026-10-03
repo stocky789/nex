@@ -3,12 +3,6 @@
 .vms { display: flex; min-height: calc(100% + 36px); margin: -12px -16px -24px; }
 .vm-filters { position: sticky; top: 0; flex: 0 0 250px; display: flex; flex-direction: column; gap: 4px; max-height: 100vh; max-height: calc(100dvh - 48px); padding: 12px; overflow-y: auto; border-right: 1px solid var(--line-soft); }
 .vm-main { flex: 1; min-width: 0; padding: 12px 16px 24px; }
-.toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 12px; }
-/* The switch is a checkbox drawn as a track and knob; its label says what it does. */
-.switch { appearance: none; position: relative; width: 30px; height: 16px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: var(--radius-panel); background: var(--line); cursor: pointer; }
-.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--panel); transition: left .15s; }
-.switch:checked { background: var(--accent); }
-.switch:checked::after { left: 16px; }
 .facet { padding: 8px 0; border-top: 1px solid var(--line-soft); }
 .facet > summary { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 12px; font-weight: 600; cursor: pointer; list-style: none; }
 .facet > summary::-webkit-details-marker { display: none; }
@@ -39,7 +33,12 @@ table.list tbody tr.group:hover { background: none; }
 .pager button { margin-left: auto; }
 
 .tags { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.tag { display: inline-flex; align-items: center; gap: 2px; padding: 0 6px; border-radius: var(--radius-control); background: var(--neutral-bg); color: var(--neutral); font-size: 11px; font-weight: 600; line-height: 1.6; }
+.tag { display: inline-flex; align-items: center; gap: 2px; padding: 0 6px; border-radius: var(--radius-control); font-size: 11px; font-weight: 600; line-height: 1.6; }
+.tag-suggest { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag-suggest button.tag { min-height: 0; border: 0; cursor: pointer; }
+.tag-suggest button.tag:hover { filter: brightness(.95); }
+.group-by { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; font-size: 12px; }
+.group-by .ov-seg button { cursor: pointer; }
 .tag .icon-button { width: 16px; height: 16px; color: inherit; }
 .tag-editor { display: grid; gap: 8px; }
 .tag-editor form { display: flex; flex-wrap: wrap; gap: 6px; }

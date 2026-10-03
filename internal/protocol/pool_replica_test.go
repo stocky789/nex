@@ -11,8 +11,8 @@ import (
 func replicaFixture(t *testing.T) PoolAuthorityReplica {
 	t.Helper()
 	membership := PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 2, Members: []PoolMember{
-		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"},
-		{HostID: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 2, Status: "ready"},
+		{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"},
+		{HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 2, Status: "ready"},
 	}}
 	replica := PoolAuthorityReplica{
 		PoolID: "pool-1", MasterHostID: "master-1", Generation: 7, MemberHostID: "member-1",

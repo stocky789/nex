@@ -26,6 +26,8 @@ SOURCE_VERSION = "11.3.0-3+deb13u3+nex4"
 def system_probe_scope(mode: str) -> str:
     return f"paused BIOS external qcow2 {mode} public blockcommit; no integrated data-delete"
 DEBIAN_SNAPSHOT = "20260920T000000Z"
+# Security needs a later stamp: libssl-dev 3.5.7-1~deb13u3 matches the base image's libssl3t64.
+DEBIAN_SECURITY_SNAPSHOT = "20261001T000000Z"
 PATCH_FILES = (
     "readonly-disk-apparmor.patch",
     "unique-revert-overlay.patch",
@@ -1282,7 +1284,7 @@ def host_run(candidate_dir: Path | None = None) -> int:
 RUNTIME_INSTALL = r"""cat >/etc/apt/sources.list <<'SOURCES'
 deb http://snapshot.debian.org/archive/debian/20260920T000000Z/ trixie main
 deb http://snapshot.debian.org/archive/debian/20260920T000000Z/ trixie-updates main
-deb http://snapshot.debian.org/archive/debian-security/20260920T000000Z/ trixie-security main
+deb http://snapshot.debian.org/archive/debian-security/20261001T000000Z/ trixie-security main
 SOURCES
 rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list
 cat >/etc/apt/apt.conf.d/99snapshot <<'APT'
@@ -1425,7 +1427,7 @@ def apparmor_guest_run(evidence: Path, candidate_dir: Path,
             "    content: |\n"
             f"      deb http://snapshot.debian.org/archive/debian/{DEBIAN_SNAPSHOT}/ trixie main\n"
             f"      deb http://snapshot.debian.org/archive/debian/{DEBIAN_SNAPSHOT}/ trixie-updates main\n"
-            f"      deb http://snapshot.debian.org/archive/debian-security/{DEBIAN_SNAPSHOT}/ trixie-security main\n"
+            f"      deb http://snapshot.debian.org/archive/debian-security/{DEBIAN_SECURITY_SNAPSHOT}/ trixie-security main\n"
             "  - path: /etc/apt/apt.conf.d/99snapshot\n"
             "    permissions: '0644'\n"
             "    content: Acquire::Check-Valid-Until \"false\";\n"

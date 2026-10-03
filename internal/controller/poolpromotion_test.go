@@ -150,12 +150,6 @@ func TestPromotionPreflightDeadlineAndRefusals(t *testing.T) {
 	if body := l.a.call("POST", l.preflightPath(), map[string]string{"host_id": l.member.id}, nil, 409).Body.String(); !strings.Contains(body, "must be fresh and active to answer a preflight") {
 		t.Fatalf("a quiet candidate was not refused: %s", body)
 	}
-	l.send(&l.member, nil)
-	l.member.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.member, nil)
-	if body := l.a.call("POST", l.preflightPath(), map[string]string{"host_id": l.member.id}, nil, 409).Body.String(); !strings.Contains(body, protocol.PoolAuthorityTransferCapability) || !strings.Contains(body, l.member.id) {
-		t.Fatalf("the capability refusal does not name the candidate: %s", body)
-	}
 }
 
 // TestPromoteRelaysOneCommandToTheCandidate is the whole relay: one durable command, sent to
@@ -253,13 +247,9 @@ func TestPromoteRefusalMatrix(t *testing.T) {
 	if body := l.a.call("POST", l.promotePath(), base(map[string]any{"request_id": "no-membership"}), nil, 409).Body.String(); !strings.Contains(body, "has not reported its pool membership") {
 		t.Fatalf("an unreported membership was not refused: %s", body)
 	}
-	// Capability, then freshness: both are about the candidate.
+	// Freshness is about the candidate.
 	l.member.inv.Managed.Membership = l.transferMembership(2, l.master.id)
-	l.member.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
 	l.send(&l.member, nil)
-	if body := l.a.call("POST", l.promotePath(), base(map[string]any{"request_id": "no-capability"}), nil, 409).Body.String(); !strings.Contains(body, protocol.PoolAuthorityTransferCapability) {
-		t.Fatalf("the capability gate did not fire: %s", body)
-	}
 	l.forget(&l.member)
 	if body := l.a.call("POST", l.promotePath(), base(map[string]any{"request_id": "quiet"}), nil, 409).Body.String(); !strings.Contains(body, "must be fresh and active to be promoted") {
 		t.Fatalf("a quiet candidate was not refused: %s", body)
@@ -291,6 +281,71 @@ func TestPromotionRefusalFromCoreIsSurfacedVerbatim(t *testing.T) {
 	last := l.members(t).LastPromotion
 	if last == nil || last.OperationID != accepted.Operation.ID || last.Action != "promote" || last.Error != refusal || last.Conflict || last.Retryable {
 		t.Fatalf("Core's refusal was not surfaced verbatim: %+v", last)
+	}
+}
+
+func TestPromotionOperationRecoversAfterCoreCompletes(t *testing.T) {
+	l := newPromotionLab(t)
+	var accepted promotionAcceptance
+	read(t, l.a.call("POST", l.promotePath(), map[string]any{"request_id": "recover-promote", "host_id": l.member.id, "confirmation": l.poolName(t), "fence_confirmed": true, "fence_host_ids": []string{l.master.id}}, nil, 202), &accepted)
+	if commands := l.send(&l.member, nil).Commands; len(commands) != 1 || commands[0].OperationID != accepted.Operation.ID {
+		t.Fatalf("promotion command = %+v", commands)
+	}
+	operation := func() protocol.Operation {
+		var operations []protocol.Operation
+		read(t, l.a.call("GET", "/api/v1/operations", nil, nil, 200), &operations)
+		for _, candidate := range operations {
+			if candidate.ID == accepted.Operation.ID {
+				return candidate
+			}
+		}
+		t.Fatalf("promotion operation %s missing", accepted.Operation.ID)
+		return protocol.Operation{}
+	}
+	l.send(&l.member, func(r *protocol.ReportRequest) {
+		r.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "needs_attention", Error: "temporary fencer failure", ObservedAt: time.Now().UTC()}}
+	})
+	if got := operation(); got.Status != "needs_attention" {
+		t.Fatalf("interrupted promotion = %+v", got)
+	}
+	l.send(&l.member, func(r *protocol.ReportRequest) {
+		r.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "succeeded", ObservedAt: time.Now().UTC()}}
+	})
+	if got := operation(); got.Status != "succeeded" || got.Error != "" {
+		t.Fatalf("recovered promotion = %+v", got)
+	}
+}
+
+func TestPromotionOperationRecoversFromInventoryAfterOldControllerAcknowledgedResult(t *testing.T) {
+	l := newPromotionLab(t)
+	var accepted promotionAcceptance
+	read(t, l.a.call("POST", l.promotePath(), map[string]any{"request_id": "recover-old-controller", "host_id": l.member.id, "confirmation": l.poolName(t), "fence_confirmed": true, "fence_host_ids": []string{l.master.id}}, nil, 202), &accepted)
+	if commands := l.send(&l.member, nil).Commands; len(commands) != 1 || commands[0].OperationID != accepted.Operation.ID {
+		t.Fatalf("promotion command = %+v", commands)
+	}
+	l.send(&l.member, func(r *protocol.ReportRequest) {
+		r.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "needs_attention", Error: "temporary fencer failure", ObservedAt: time.Now().UTC()}}
+	})
+	// An older Controller acknowledges Core's later success without settling its
+	// operation row. Core then has no unacknowledged result to send after upgrade.
+	l.member.inv.Managed.Promotion = &protocol.PoolPromotionStatus{OperationID: accepted.Operation.ID, Stage: "repoint", Status: "needs_attention", ObservedAt: time.Now().UTC()}
+	l.send(&l.member, nil)
+	if last := l.members(t).LastPromotion; last == nil || last.Status != "needs_attention" {
+		t.Fatalf("unfinished promotion settled: %+v", last)
+	}
+	cfg := l.a.c.cfg
+	if err := l.a.c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.a.c = reopened
+	l.member.inv.Managed.Promotion = &protocol.PoolPromotionStatus{OperationID: accepted.Operation.ID, Stage: "done", Status: "succeeded", ObservedAt: time.Now().UTC()}
+	l.send(&l.member, nil)
+	if last := l.members(t).LastPromotion; last == nil || last.Status != "succeeded" || last.Error != "" {
+		t.Fatalf("durable promotion did not settle old receipt: %+v", last)
 	}
 }
 
@@ -435,16 +490,11 @@ func TestFenceProfileClearAndRefusals(t *testing.T) {
 	l.a.call("POST", "/api/v1/pools/no-such-pool/members/"+l.master.id+"/fence-profile", map[string]any{"request_id": "bad-4", "fence": nil}, nil, 404)
 	l.a.call("POST", l.fencePath("no-such-host"), map[string]any{"request_id": "bad-5", "fence": nil}, nil, 404)
 	// A host that is not a member of this pool has no fence profile here.
-	third := l.joinThird(t, protocol.PoolAuthorityTransferCapability)
+	third := l.joinThird(t)
 	l.master.inv.Managed.Membership = l.transferMembership(2, l.master.id)
 	l.send(&l.master, nil)
 	if body := l.a.call("POST", l.fencePath(third.id), map[string]any{"request_id": "bad-6", "fence": nil}, nil, 409).Body.String(); !strings.Contains(body, "no such member of this pool") {
 		t.Fatalf("a non-member was not refused: %s", body)
-	}
-	l.master.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.master, nil)
-	if body := l.a.call("POST", l.fencePath(l.master.id), map[string]any{"request_id": "bad-7", "fence": nil}, nil, 409).Body.String(); !strings.Contains(body, protocol.PoolAuthorityTransferCapability) {
-		t.Fatalf("the capability gate did not fire: %s", body)
 	}
 	l.forget(&l.master)
 	if body := l.a.call("POST", l.fencePath(l.master.id), map[string]any{"request_id": "bad-8", "fence": nil}, nil, 409).Body.String(); !strings.Contains(body, "must be fresh and active to record a fence profile") {
@@ -475,7 +525,7 @@ func TestPromotionProjectionShowsMemberOwnReportsWithAStaleMaster(t *testing.T) 
 	if strings.Contains(l.a.call("GET", "/api/v1/pools/"+l.master.pool+"/members", nil, nil, 200).Body.String(), labFenceReference) {
 		t.Fatalf("the projection exposed the credential reference")
 	}
-	if !fresh.TransferSupported || fresh.Restricted == nil || len(fresh.Restricted.Conflicts) != 1 {
+	if fresh.Restricted == nil || len(fresh.Restricted.Conflicts) != 1 {
 		t.Fatalf("member-own fields missing with a fresh master: %+v", fresh)
 	}
 	view := l.members(t)
@@ -493,9 +543,6 @@ func TestPromotionProjectionShowsMemberOwnReportsWithAStaleMaster(t *testing.T) 
 	stale := l.memberView(t, l.member.id)
 	if stale.Restricted == nil || stale.Restricted.Reason == "" || stale.Restricted.Conflicts[0] != "vm-7" {
 		t.Fatalf("a quiet master erased the member's own restriction: %+v", stale.Restricted)
-	}
-	if !stale.TransferSupported {
-		t.Fatalf("a quiet master erased the member's own capability: %+v", stale)
 	}
 	restricted := false
 	for _, check := range stale.Checks {

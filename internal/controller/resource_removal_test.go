@@ -36,11 +36,11 @@ func mediaLibrary(l *managedLab) []protocol.Media {
 	return out
 }
 
-// vlanLab enrolls a pool master that supports pool resource removal and registers one applied
-// pool VLAN on it, which is the state every removal and rename test starts from.
-func vlanLab(t *testing.T, caps ...string) (*managedLab, protocol.NetworkRegistration) {
+// vlanLab enrolls a pool master and registers one applied pool VLAN on it, which is the state
+// every removal and rename test starts from.
+func vlanLab(t *testing.T) (*managedLab, protocol.NetworkRegistration) {
 	t.Helper()
-	l := newManagedLab(t, append([]string{protocol.ManagedVMCapability}, caps...)...)
+	l := newManagedLab(t, protocol.ManagedVMCapability)
 	var vlan protocol.NetworkRegistration
 	req := registrationRequest{RequestID: "vlan-request", PoolID: l.pool, HostID: l.host.HostID, Name: "Guests", Kind: "vlan", Uplink: "nex0", VLAN: 100}
 	read(t, l.a.call("POST", "/api/v1/networks", req, nil, 201), &vlan)
@@ -61,7 +61,7 @@ func appliedVLAN(l *managedLab, vlan protocol.NetworkRegistration) protocol.Netw
 // decides nothing about the network itself, and every refusal is answered before anything is
 // queued.
 func TestPoolNetworkRemovalRelaysOneCommandToTheMaster(t *testing.T) {
-	l, vlan := vlanLab(t, protocol.PoolResourceRemovalCapability)
+	l, vlan := vlanLab(t)
 	path := "/api/v1/networks/" + vlan.ID
 	body := resourceLifecycleAPIRequest{RequestID: "remove-vlan", PoolID: l.pool, ExpectedGeneration: 1}
 
@@ -139,23 +139,9 @@ func TestPoolNetworkRemovalRelaysOneCommandToTheMaster(t *testing.T) {
 	}
 }
 
-// Without the master's capability nothing is sent: the operator is told to upgrade Core.
-func TestPoolNetworkRemovalNeedsTheMasterCapability(t *testing.T) {
-	l, vlan := vlanLab(t)
-	body := resourceLifecycleAPIRequest{RequestID: "remove-vlan", PoolID: l.pool, ExpectedGeneration: 1}
-	w := l.a.call("DELETE", "/api/v1/networks/"+vlan.ID, body, nil, 409)
-	if !strings.Contains(w.Body.String(), "the pool master does not support removing pool networks yet; upgrade Nex Core") {
-		t.Fatalf("capability refusal: %s", w.Body.String())
-	}
-	l.a.call("PATCH", "/api/v1/networks/"+vlan.ID, resourceLifecycleAPIRequest{RequestID: "rename-vlan", PoolID: l.pool, ExpectedGeneration: 1, Name: "Renamed"}, nil, 409)
-	if cmds := reportManaged(l, nil).Commands; len(cmds) != 0 {
-		t.Fatalf("an incapable master was sent a command: %+v", cmds)
-	}
-}
-
 // Renaming relays too, and the new name is the master's to report back.
 func TestPoolNetworkRenameRelaysAndIsMirroredFromTheMaster(t *testing.T) {
-	l, vlan := vlanLab(t, protocol.PoolResourceRemovalCapability)
+	l, vlan := vlanLab(t)
 	path := "/api/v1/networks/" + vlan.ID
 	l.a.call("PATCH", path, resourceLifecycleAPIRequest{RequestID: "rename-blank", PoolID: l.pool, ExpectedGeneration: 1}, nil, 400)
 	l.a.call("PATCH", path, resourceLifecycleAPIRequest{RequestID: "rename-vlan", PoolID: l.pool, ExpectedGeneration: 1, Name: "Lab guests"}, nil, 202)
@@ -189,7 +175,7 @@ func TestPoolNetworkRenameRelaysAndIsMirroredFromTheMaster(t *testing.T) {
 // The tombstone is the only thing that removes a mirror row, it comes from the owning host,
 // and nothing ever puts the row back.
 func TestNetworkTombstoneDropsTheMirrorAndNeverResurrectsIt(t *testing.T) {
-	l, vlan := vlanLab(t, protocol.PoolResourceRemovalCapability)
+	l, vlan := vlanLab(t)
 	applied := appliedVLAN(l, vlan)
 	reportManaged(l, func(m *protocol.ManagedState) { m.Networks = append(m.Networks, applied) })
 	if len(networks(l)) != 2 {
@@ -201,8 +187,8 @@ func TestNetworkTombstoneDropsTheMirrorAndNeverResurrectsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	membership := &protocol.PoolMembership{PoolID: l.pool, MasterHostID: l.host.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: l.host.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: member, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
+		{HostID: l.host.HostID, Hostname: l.host.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: member, Hostname: member, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
 	tombstone := protocol.NetworkRegistration{ID: vlan.ID, PoolID: l.pool, HostID: l.host.HostID, Generation: 2, Tombstone: true}
 	adopt := func(host string, state *protocol.ManagedState) {
 		t.Helper()
@@ -273,7 +259,7 @@ func importedISO(t *testing.T, l *managedLab) protocol.Media {
 }
 
 func TestImportedISORemovalRelaysToItsHost(t *testing.T) {
-	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.ISODownloadCapability, protocol.PoolResourceRemovalCapability)
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.ISODownloadCapability)
 	media := importedISO(t, l)
 	path := "/api/v1/media/" + media.ID
 	// An imported ISO needs a stable request_id; the old bodyless call is not enough.
@@ -316,8 +302,8 @@ func TestImportedISORemovalRelaysToItsHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	membership := &protocol.PoolMembership{PoolID: l.pool, MasterHostID: l.host.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: l.host.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: member, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
+		{HostID: l.host.HostID, Hostname: l.host.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: member, Hostname: member, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
 	tombstone := protocol.Media{ID: media.ID, PoolID: l.pool, HostID: l.host.HostID, Generation: 2, Tombstone: true}
 	tx, err := l.a.c.db.Begin()
 	if err != nil {
@@ -347,7 +333,7 @@ func TestImportedISORemovalRelaysToItsHost(t *testing.T) {
 
 // The failed-import discard keeps working exactly as the library UI calls it: no body at all.
 func TestFailedImportDiscardStillTakesNoBody(t *testing.T) {
-	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.ISODownloadCapability, protocol.PoolResourceRemovalCapability)
+	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.ISODownloadCapability)
 	v := mediaDownloadRequest{RequestID: "failed-iso", StorageID: l.storage, Name: "installer.iso", URL: "https://example.com/installer.iso"}
 	var media protocol.Media
 	read(t, l.a.call("POST", "/api/v1/media/download", v, nil, 201), &media)

@@ -1,0 +1,52 @@
+{
+  "summary": "Align backup destination docs with the live multi-kind Core contract: drop Planned-until-capability and backup-destination-* wording, describe SMB3 root-only credentials= mount files instead of TPM remount decrypt, reconcile peer credential replace_confirmation, and keep the roadmap honest that current-tree destination acceptance remains open.",
+  "paths": [
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/api/peer.html",
+    "docs/guide/backup-repositories.md",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "api": {
+    "impact": "existing contract",
+    "reason": "Published OpenAPI/HTML and API.md still described removed destination capabilities, Planned schemas, credential-for-life, and NFS-only lists while Core already registers NFS/SMB3/S3/SFTP without destination capability advertisements.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/local.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/backup-repositories.md"
+    ],
+    "reason": "Operator guide still claimed TPM-sealed SMB3 remount decrypt; current Core writes root-only mount.cifs credentials= files under backup-smb-credentials/."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation and roadmap honesty only; no durable Core or Controller state shape change."
+  },
+  "roadmap": {
+    "impact": "updated",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ],
+    "reason": "Roadmap keeps current-tree destination acceptance listed as open."
+  },
+  "verification": {
+    "method": "Documentation-only change: docs gate (scripts/check_docs.py --worktree) and reading the guide against the Core destination code; no lab run.",
+    "evidence": [
+      "docs/guide/backup-repositories.md",
+      "docs/API.md"
+    ]
+  }
+}

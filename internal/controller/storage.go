@@ -235,30 +235,15 @@ func (c *Controller) registerStorage(w http.ResponseWriter, r *http.Request, use
 	s.OperationID, s.Status = opID, "queued"
 	cmd := protocol.Command{OperationID: opID, Kind: "storage-register", Storage: &s}
 	// Core allocates the repository ID. This synthetic row only retains the request until
-	// the Core journal projection arrives and is never returned as a repository. It is
-	// still answered as the row's id, because a registration Core refuses never gets a Core
-	// ID and would otherwise be unaddressable — see discardFailedStorage.
+	// the Core journal projection arrives and is never returned as a repository. If Core
+	// refuses the request the row stays only as the replay record and is not listed.
 	rowID := "pending-storage-" + opID
 	op, err := c.saveResource(tx, user, v.RequestID, v.PoolID, v.HostID, v.Name, rowID, cmd, v)
 	if err != nil || tx.Commit() != nil {
 		fail(w, http.StatusInternalServerError, "registration storage failed")
 		return
 	}
-	write(w, http.StatusCreated, resourceRowResponse(rowID, cmd, op))
-}
-
-// discardFailedStorage discards a repository registration the host refused. It is the storage
-// twin of the failed-ISO-import discard: a refused registration is this Controller's own
-// request history and no host holds anything to remove. A repository a host does hold is
-// removed by relaying a detach, never by this route.
-func (c *Controller) discardFailedStorage(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	id := r.PathValue("id")
-	// Not identifierValid: a repository this route can discard is one Core never named, so
-	// its row ID is the Controller's own longer "pending-storage-<operation>" key. The
-	// lookup is parameterised; the bound is only to keep the query argument sane.
-	if id == "" || len(id) > 200 || !c.discardFailedRegistration(w, user, id, "storage-register") {
-		fail(w, http.StatusNotFound, "no failed storage registration with this ID; an adopted repository is removed with detach")
-	}
+	write(w, http.StatusCreated, resourceResponse(cmd, op))
 }
 
 type zfsProvisionAPIRequest struct {

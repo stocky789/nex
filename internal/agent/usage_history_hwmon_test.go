@@ -213,7 +213,8 @@ func TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls(t *testing.T) {
 	sys := t.TempDir()
 	hwmonChip(t, sys, 0, "nvme", "devices/pci0000:00/nvme/nvme0", map[string]string{"temp1_input": "38000"})
 	root := hwmonRoot(sys)
-	if got := hwmonSensorsWithin(root, time.Minute); len(got) != 1 || got[0].Celsius != 38 {
+	reader := &hwmonReader{}
+	if got := reader.sensorsWithin(root, time.Minute); len(got) != 1 || got[0].Celsius != 38 {
 		t.Fatalf("first read = %+v", got)
 	}
 
@@ -235,9 +236,9 @@ func TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls(t *testing.T) {
 		w.Close()
 		// Leave no read in flight, or the next test's read is the one that waits.
 		for {
-			hwmonLast.mu.Lock()
-			reading := hwmonLast.reading
-			hwmonLast.mu.Unlock()
+			reader.mu.Lock()
+			reading := reader.reading
+			reader.mu.Unlock()
 			if !reading {
 				return
 			}
@@ -249,7 +250,7 @@ func TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls(t *testing.T) {
 	const wait = 200 * time.Millisecond
 	for i := 0; i < 3; i++ {
 		start := time.Now()
-		got := hwmonSensorsWithin(root, wait)
+		got := reader.sensorsWithin(root, wait)
 		elapsed := time.Since(start)
 		// The first of these starts the read that then stalls, so it pays the bound once.
 		// Every later one finds that read already in flight and must not wait on it at
@@ -269,10 +270,10 @@ func TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls(t *testing.T) {
 	}
 
 	// A chip that never comes back must produce a gap rather than the same reading for ever.
-	hwmonLast.mu.Lock()
-	hwmonLast.at = time.Now().Add(-hwmonLastMaxAge - time.Second)
-	hwmonLast.mu.Unlock()
-	if got := hwmonSensorsWithin(root, wait); got != nil {
+	reader.mu.Lock()
+	reader.at = time.Now().Add(-hwmonLastMaxAge - time.Second)
+	reader.mu.Unlock()
+	if got := reader.sensorsWithin(root, wait); got != nil {
 		t.Fatalf("a reading older than %s was still served: %+v", hwmonLastMaxAge, got)
 	}
 }

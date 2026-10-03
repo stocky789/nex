@@ -418,6 +418,8 @@ func poolStorageAccess(s *Store) map[string]map[string]protocol.PoolStorageAcces
 }
 
 func PoolStorageMemberAccess(s *Store, storage []protocol.StorageRegistration) []protocol.StorageRegistration {
+	// Lock order is peer before storage: read membership before taking poolStorageMu.
+	membership, _ := Membership(s)
 	poolStorageMu.Lock()
 	defer poolStorageMu.Unlock()
 	accesses := poolStorageAccess(s)
@@ -427,12 +429,18 @@ func PoolStorageMemberAccess(s *Store, storage []protocol.StorageRegistration) [
 		s.poolStorageAccess = map[string]map[string]protocol.PoolStorageAccess{}
 		accesses = s.poolStorageAccess
 	}
-	membership, _ := Membership(s)
 	out := append([]protocol.StorageRegistration(nil), storage...)
 	for i := range out {
 		// Member access is this process's observation, never a journaled or
 		// caller-provided health cache. The copy above keeps the caller untouched.
 		out[i].MemberAccess = nil
+		if protocol.IsPoolSharedStorage(out[i]) && !protocol.IsClusteredISCSI(out[i]) {
+			out[i].Capabilities.EligibleHostIDs = nil
+			if slices.Contains(storage[i].Capabilities.EligibleHostIDs, out[i].HostID) {
+				out[i].Capabilities.EligibleHostIDs = []string{out[i].HostID}
+			}
+			out[i].Capabilities.Shared = false
+		}
 		if protocol.IsPoolSharedStorage(out[i]) {
 			for _, member := range membership.Members {
 				if member.HostID != s.State.HostID && member.Status == "ready" && poolStorageEligibleForMember(out[i], member.HostID) && accesses[out[i].ID][member.HostID].HostID == "" {
@@ -441,7 +449,18 @@ func PoolStorageMemberAccess(s *Store, storage []protocol.StorageRegistration) [
 			}
 		}
 		for _, access := range accesses[out[i].ID] {
+			if !slices.ContainsFunc(membership.Members, func(member protocol.PoolMember) bool {
+				return member.HostID == access.HostID && member.Status == "ready"
+			}) {
+				continue
+			}
 			out[i].MemberAccess = append(out[i].MemberAccess, access)
+			// Shared and eligibility follow verified per-host access. Clustered iSCSI
+			// already names its hosts in the registration.
+			if protocol.IsPoolSharedStorage(out[i]) && !protocol.IsClusteredISCSI(out[i]) && access.HostID != out[i].HostID && access.Generation == out[i].Generation && access.Identity != "" && access.Error == "" && access.Readable && access.Writable && access.QEMUWritable && access.Locking && !slices.Contains(out[i].Capabilities.EligibleHostIDs, access.HostID) {
+				out[i].Capabilities.EligibleHostIDs = append(out[i].Capabilities.EligibleHostIDs, access.HostID)
+				out[i].Capabilities.Shared = true
+			}
 		}
 	}
 	return out

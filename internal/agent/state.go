@@ -55,7 +55,6 @@ type State struct {
 	// authenticated Controller v2 preflight. It prevents a package upgrade from
 	// sending new storage fields to a strict v1 Controller.
 	StorageProtocolReady bool `json:"storage_protocol_ready,omitempty"`
-	BackupProtocolReady  bool `json:"backup_protocol_ready,omitempty"`
 	// ZFSProvisionProtocolReady is the narrower Controller acknowledgement for
 	// ZFS-only inventory and commands. It resets on Controller replacement.
 	ZFSProvisionProtocolReady bool `json:"zfs_provision_protocol_ready,omitempty"`

@@ -225,8 +225,8 @@ func TestManagedWorkerDoesNotReconcileClusteredReplayAfterAdmissionRefusal(t *te
 func placementMembership(t *testing.T, s *Store, generation uint64) protocol.PoolMembership {
 	t.Helper()
 	membership := protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: generation, Members: []protocol.PoolMember{
-		{HostID: s.State.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: generation, Status: "ready"},
-		{HostID: "member-b", CertificateSHA256: strings.Repeat("b", 64), Generation: generation, Status: "ready"},
+		{HostID: s.State.HostID, Hostname: s.State.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: generation, Status: "ready"},
+		{HostID: "member-b", Hostname: "member-b", CertificateSHA256: strings.Repeat("b", 64), Generation: generation, Status: "ready"},
 	}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,26 @@ import (
 const nexMountMarker = "# Managed by Nex Core; do not edit\n"
 
 var errStorageNotMounted = errors.New("remote storage is not mounted")
+
+// keyedLock is one waiter-at-a-time lock per key whose wait ends with the caller's context.
+// A holder stuck on a hung server blocks only callers of the same key. The key set is
+// bounded by the validated registration and repository IDs.
+type keyedLock struct{ slots sync.Map }
+
+func (k *keyedLock) lock(ctx context.Context, key string) (unlock func(), err error) {
+	v, _ := k.slots.LoadOrStore(key, make(chan struct{}, 1))
+	slot := v.(chan struct{})
+	select {
+	case slot <- struct{}{}:
+		return func() { <-slot }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// remotePreparation keeps one mount's preparation and rollback ordered. It is per mount, not
+// global, so a hung share cannot stall every other NFS or SMB preparation on the host.
+var remotePreparation keyedLock
 
 const nfsVolumesPath = "/proc/fs/nfsfs/volumes"
 
@@ -69,10 +90,15 @@ func systemdMountUnit(path string) string {
 	return b.String() + ".mount"
 }
 
-func prepareNFS(ctx context.Context, s protocol.StorageRegistration) (access storageAccess, retErr error) {
+func prepareNFS(ctx context.Context, s protocol.StorageRegistration, extraOptions string) (access storageAccess, retErr error) {
 	if err := protocol.ValidateStoredStorageRegistration(s, false); err != nil || s.StorageKind() != protocol.StorageKindNFS {
 		return storageAccess{}, errors.New("invalid NFS storage registration")
 	}
+	unlock, err := remotePreparation.lock(ctx, s.ID)
+	if err != nil {
+		return storageAccess{}, err
+	}
+	defer unlock()
 	v := s.Source.NFS
 	if s.Identity.NFS != nil && (s.Identity.NFS.Server != v.Server || s.Identity.NFS.Export != v.Export) {
 		return storageAccess{}, errors.New("NFS identity does not match registration")
@@ -80,7 +106,7 @@ func prepareNFS(ctx context.Context, s protocol.StorageRegistration) (access sto
 	source := v.Server + ":" + v.Export
 	_, unitPath := remoteUnitPath(s)
 	_, unitAlreadyPresent := os.Lstat(unitPath)
-	path, err := prepareRemote(ctx, s, source, "nfs4", "vers=4,hard,_netdev")
+	path, err := prepareRemote(ctx, s, source, "nfs4", "vers=4,hard,_netdev"+extraOptions)
 	if err != nil {
 		return storageAccess{}, err
 	}
@@ -121,9 +147,20 @@ func inspectNFS(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 }
 
 func prepareSMB(ctx context.Context, s protocol.StorageRegistration) (access storageAccess, retErr error) {
+	return prepareSMBWithAdmission(ctx, s, "", nil)
+}
+
+// prepareSMBWithAdmission runs admit on the selected directory only after the share marker
+// matches, so a wrong share is never claimed, and inside the rollback of a new mount.
+func prepareSMBWithAdmission(ctx context.Context, s protocol.StorageRegistration, extraOptions string, admit func(string) error) (access storageAccess, retErr error) {
 	if err := protocol.ValidateStoredStorageRegistration(s, false); err != nil || s.StorageKind() != protocol.StorageKindSMB {
 		return storageAccess{}, errors.New("invalid SMB storage registration")
 	}
+	unlock, err := remotePreparation.lock(ctx, s.ID)
+	if err != nil {
+		return storageAccess{}, err
+	}
+	defer unlock()
 	credential, err := credentialFile(ctx, s)
 	if err != nil {
 		return storageAccess{}, err
@@ -139,7 +176,7 @@ func prepareSMB(ctx context.Context, s protocol.StorageRegistration) (access sto
 	}
 	// Map all server files to the account that libvirt runs QEMU as. This also makes disks
 	// created by Core visible to QEMU without widening the share to every local account.
-	options := smbMountOptions(credential, uid, gid)
+	options := smbMountOptions(uid, gid, credential) + extraOptions
 	unit, unitPath := remoteUnitPath(s)
 	oldUnit, oldUnitErr := os.ReadFile(unitPath)
 	_, unitAlreadyPresent := os.Lstat(unitPath)
@@ -204,6 +241,11 @@ func prepareSMB(ctx context.Context, s protocol.StorageRegistration) (access sto
 		}
 		access.Path, access.Total, access.Available, access.ReadOnly = dataPath, data.Total, data.Available, data.ReadOnly
 	}
+	if admit != nil {
+		if err := admit(dataPath); err != nil {
+			return storageAccess{}, err
+		}
+	}
 	if err = qemuStorageAccess(ctx, dataPath); err != nil {
 		return storageAccess{}, err
 	}
@@ -246,7 +288,7 @@ func inspectSMB(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 	return access, nil
 }
 
-func smbMountOptions(credential, uid, gid string) string {
+func smbMountOptions(uid, gid, credential string) string {
 	return "vers=3.1.1,seal,cache=strict,credentials=" + credential + ",uid=" + uid + ",gid=" + gid + ",file_mode=0600,dir_mode=0700,_netdev"
 }
 
@@ -440,7 +482,7 @@ func smbAccess(s protocol.StorageRegistration, v *protocol.SMBStorageSource, pat
 	return smbIdentity(s, v, path, source, a)
 }
 
-func smbPathAccess(path, source string) (storageAccess, error) {
+var smbPathAccess = func(path, source string) (storageAccess, error) {
 	return storagePathAccess(path, "smb:"+source, false)
 }
 
@@ -475,11 +517,11 @@ func smbIdentity(s protocol.StorageRegistration, v *protocol.SMBStorageSource, p
 	return a, nil
 }
 
-func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, fstype, options string) (string, error) {
+func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, fstype, options string) (path string, retErr error) {
 	if !storageID.MatchString(s.ID) || source == "" || strings.ContainsAny(source, "%\x00\r\n") {
 		return "", errors.New("invalid remote storage source")
 	}
-	path := remoteMountPath(s)
+	path = remoteMountPath(s)
 	if err := ensureStorageMountRoot(); err != nil {
 		return "", err
 	}
@@ -489,9 +531,22 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 	unit, unitPath := remoteUnitPath(s)
 	content := remoteUnit(source, path, fstype, options)
 	allowed, _ := ctx.Value(storageRemountAllowedKey{}).(bool)
-	changed, old, err := replaceManagedMountUnit(unitPath, content, allowed)
+	old, created, err := replaceManagedMountUnit(unitPath, content, allowed)
+	changed := old != nil
 	if err != nil {
 		return "", err
+	}
+	if created {
+		defer func() {
+			if retErr == nil {
+				return
+			}
+			cleanupCtx, cancel := context.WithTimeout(storageCleanupContext(ctx), 20*time.Second)
+			defer cancel()
+			if cleanupErr := detachRemote(cleanupCtx, s); cleanupErr != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("%w: clean up failed remote mount: %v", ErrStorageRollbackUncertain, cleanupErr))
+			}
+		}()
 	}
 	if _, err := nativeRun(ctx, "systemctl", "daemon-reload"); err != nil {
 		if changed {
@@ -502,8 +557,9 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 		return "", err
 	}
 	if !changed {
+		started := time.Now()
 		if _, err := nativeRun(ctx, "systemctl", "enable", "--now", unit); err != nil {
-			return "", err
+			return "", withMountJournal(ctx, unit, started, err)
 		}
 		return path, nil
 	}
@@ -521,6 +577,23 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 	}
 	return path, nil
 }
+
+// withMountJournal adds the mount helper's own message to a failed unit start; systemctl
+// itself only says "Job failed". Only lines since this attempt began are used, so an earlier
+// attempt's messages are never reported as this one's, and the text is bounded.
+func withMountJournal(ctx context.Context, unit string, since time.Time, err error) error {
+	out, _ := nativeRun(ctx, "journalctl", "-u", unit, "--since", "@"+strconv.FormatInt(since.Unix(), 10), "-n", "5", "--no-pager", "-o", "cat")
+	tail := strings.TrimSpace(string(out))
+	if len(tail) > mountJournalLimit {
+		tail = strings.ToValidUTF8(tail[:mountJournalLimit], "") + "…"
+	}
+	if tail != "" {
+		return fmt.Errorf("%w: %s", err, tail)
+	}
+	return err
+}
+
+const mountJournalLimit = 1024
 
 // ensureStorageMountRoot repairs only Nex's configured local mount-root. It never chmods a
 // mounted repository leaf or administrator path; service UMask=0077 must not hide mounts from QEMU.
@@ -579,6 +652,7 @@ func restoreManagedMountUnit(ctx context.Context, path string, old []byte, unit 
 	return nil
 }
 
+// remoteUnit renders a mount unit.
 func remoteUnit(source, path, fstype, options string) []byte {
 	return []byte(nexMountMarker + "[Unit]\nAfter=network-online.target\nWants=network-online.target\nBefore=libvirtd.service\n\n[Mount]\nWhat=" + source + "\nWhere=" + path + "\nType=" + fstype + "\nOptions=" + options + "\n\n[Install]\nWantedBy=multi-user.target\n")
 }
@@ -614,31 +688,34 @@ func writeManagedMountUnit(path string, content []byte) error {
 }
 
 // replaceManagedMountUnit updates only an existing Nex unit. It returns its previous contents
-// for rollback; callers must not restart it until Core has blocked repository dependencies.
-func replaceManagedMountUnit(path string, content []byte, allowRemount bool) (bool, []byte, error) {
+// for rollback, non-nil only when it rewrote the unit; callers must not restart it until Core has blocked repository dependencies.
+func replaceManagedMountUnit(path string, content []byte, allowRemount bool) (old []byte, created bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return false, nil, err
+		return nil, false, err
 	}
-	old, err := os.ReadFile(path)
+	old, err = os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil, writeManagedMountUnit(path, content)
+		if err := writeManagedMountUnit(path, content); err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
 	}
 	if err != nil {
-		return false, nil, err
+		return nil, false, err
 	}
 	if !strings.HasPrefix(string(old), nexMountMarker) {
-		return false, nil, errors.New("refusing to replace an existing mount unit")
+		return nil, false, errors.New("refusing to replace an existing mount unit")
 	}
 	if string(old) == string(content) {
-		return false, nil, nil
+		return nil, false, nil
 	}
 	if !allowRemount {
-		return false, nil, errors.New("storage mount change requires Core to block repository dependencies")
+		return nil, false, errors.New("storage mount change requires Core to block repository dependencies")
 	}
 	if err := atomicWrite(path, content); err != nil {
-		return false, nil, err
+		return nil, false, err
 	}
-	return true, old, nil
+	return old, false, nil
 }
 
 func verifyRemoteMount(ctx context.Context, path, source, fstype string, required []string) error {

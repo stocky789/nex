@@ -197,7 +197,7 @@ func validateManagedSnapshotRevertReservation(command protocol.Command, record m
 }
 
 func snapshotRevertCurrentName(ctx context.Context, vmID string) (string, error) {
-	b, err := managedVirsh(ctx, "snapshot-current", vmID, "--name")
+	b, err := managedSnapshotProbe(ctx, "snapshot-current", vmID, "--name")
 	if err != nil {
 		return "", err
 	}
@@ -315,11 +315,14 @@ func (e *ManagedEngine) snapshotRevertIntent(ctx context.Context, command protoc
 	}
 	nativeDigest, err := e.verifiedSnapshotRevertTargetDigest(ctx, js, targetJournal)
 	if err != nil {
-		return managedSnapshotRevertRecord{}, errors.New("selected native snapshot metadata cannot be verified")
+		return managedSnapshotRevertRecord{}, err
 	}
 	nativeXML, _, err := readManagedNativeSnapshotXML(ctx, command.VM.ID, managedSnapshotNativeName(command.Snapshot.SnapshotID))
+	if err != nil {
+		return managedSnapshotRevertRecord{}, err
+	}
 	// Description is optional on create; libvirt omits the element when unset. CreationTime is required identity.
-	if err != nil || nativeXML.CreationTime == "" {
+	if nativeXML.CreationTime == "" {
 		return managedSnapshotRevertRecord{}, errors.New("selected native snapshot metadata cannot be read")
 	}
 	targetDescriptorDigest, err := protocol.PoolVMSnapshotDescriptorSHA256(*command.Snapshot.Target)
@@ -730,17 +733,23 @@ func (e *ManagedEngine) observeSnapshotRevert(ctx context.Context, js []managedJ
 	if record == nil {
 		return managedSnapshotObservation{}, nil, errors.New("snapshot revert intent is unavailable")
 	}
-	state, err := managedVirsh(ctx, "domstate", j.Command.VM.ID)
-	if err != nil || strings.TrimSpace(string(state)) != "shut off" {
+	state, err := managedSnapshotProbe(ctx, "domstate", j.Command.VM.ID)
+	if err != nil {
+		return managedSnapshotObservation{}, nil, err
+	}
+	if strings.TrimSpace(string(state)) != "shut off" {
 		return managedSnapshotObservation{}, nil, errors.New("VM must remain stopped during snapshot revert")
 	}
-	info, err := managedVirsh(ctx, "dominfo", j.Command.VM.ID)
-	if err != nil || !autostartDisabled(info) {
+	info, err := managedSnapshotProbe(ctx, "dominfo", j.Command.VM.ID)
+	if err != nil {
+		return managedSnapshotObservation{}, nil, err
+	}
+	if !autostartDisabled(info) {
 		return managedSnapshotObservation{}, nil, errors.New("VM native autostart must remain disabled during snapshot revert")
 	}
-	raw, err := managedVirsh(ctx, "dumpxml", j.Command.VM.ID, "--inactive")
+	raw, err := managedSnapshotProbe(ctx, "dumpxml", j.Command.VM.ID, "--inactive")
 	if err != nil {
-		return managedSnapshotObservation{}, nil, errors.New("persistent VM definition is unavailable after snapshot revert")
+		return managedSnapshotObservation{}, nil, err
 	}
 	var actual, expected managedDomain
 	if xml.Unmarshal(raw, &actual) != nil || xml.Unmarshal(record.TargetDomain, &expected) != nil || actual.UUID != j.Command.VM.ID || expected.UUID != j.Command.VM.ID {
@@ -1041,11 +1050,7 @@ func (e *ManagedEngine) revertStoppedSnapshot(
 			}
 		}
 		if err != nil {
-			if cleanupErr := e.removePreflightSnapshot(ctx, command.OperationID); cleanupErr != nil {
-				return protocol.Result{OperationID: command.OperationID, Status: "needs_attention", Error: errors.Join(err, cleanupErr).Error(), ObservedAt: time.Now().UTC()}, nil
-			}
-			result.Error = err.Error()
-			return result, nil
+			return e.failSnapshotPreflight(ctx, result, command.OperationID, err)
 		}
 		j.RecoveryStage, j.Stage = "local-intent", "snapshot-revert-local-intent"
 		if err = e.saveSnapshotUnderLock(ctx, j, false); err != nil {

@@ -52,19 +52,7 @@ func (c *Controller) backupHost(tx *sql.Tx, pool, host string) error {
 		return err
 	}
 	if master != host {
-		if err := c.managedHost(tx, pool, master); err != nil {
-			return err
-		}
-	}
-	for _, target := range []string{host, master} {
-		var raw string
-		if err := tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", target).Scan(&raw); err != nil {
-			return err
-		}
-		var capabilities []string
-		if json.Unmarshal([]byte(raw), &capabilities) != nil || !slices.Contains(capabilities, protocol.BackupCapability) {
-			return fmt.Errorf("host does not support backup-v1; upgrade Nex Core")
-		}
+		return c.managedHost(tx, pool, master)
 	}
 	return nil
 }
@@ -80,22 +68,15 @@ func (c *Controller) backupMasterHost(tx *sql.Tx, pool, target string) (string, 
 	return master, nil
 }
 
-// placementHost only verifies that both Core peers understand the master-owned
-// placement protocol. Resource availability and VM admission are Core's decision.
+// placementHost only verifies that the target host is managed in the pool. Resource
+// availability and VM admission are Core's decision.
 func (c *Controller) placementHost(tx *sql.Tx, pool, host string) error {
 	if err := c.managedHost(tx, pool, host); err != nil {
 		return err
 	}
-	var raw, masterRaw, master string
-	if err := tx.QueryRow("SELECT coalesce(c.capabilities,'[]'),p.master_host_id,coalesce(mc.capabilities,'[]') FROM pools p LEFT JOIN host_capabilities c ON c.host_id=? LEFT JOIN host_capabilities mc ON mc.host_id=p.master_host_id WHERE p.id=?", host, pool).Scan(&raw, &master, &masterRaw); err != nil {
+	var master string
+	if err := tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil {
 		return fmt.Errorf("selected pool not found")
-	}
-	var caps, masterCaps []string
-	if json.Unmarshal([]byte(raw), &caps) != nil || !slices.Contains(caps, protocol.PoolVMPlacementCapability) {
-		return fmt.Errorf("the selected host does not support master-owned VM placement; upgrade Nex Core")
-	}
-	if json.Unmarshal([]byte(masterRaw), &masterCaps) != nil || !slices.Contains(masterCaps, protocol.PoolVMPlacementCapability) {
-		return fmt.Errorf("the pool master does not support master-owned VM placement; upgrade Nex Core")
 	}
 	// Presentation only: a host the master reports as drained is not offered as a placement
 	// target, so the operator sees the reason here instead of waiting for it. The Controller
@@ -159,10 +140,18 @@ func (c *Controller) replayResource(w http.ResponseWriter, tx *sql.Tx, requestID
 		switch {
 		case cmd.BackupPolicy != nil:
 			targetMatches = cmd.BackupPolicy.ID == pool[1]
+		case cmd.PolicyDelete != nil:
+			targetMatches = cmd.PolicyDelete.PolicyID == pool[1]
 		case cmd.BackupRepository != nil:
 			targetMatches = cmd.BackupRepository.ID == pool[1]
 		case cmd.VM != nil:
 			targetMatches = cmd.VM.ID == pool[1]
+		case cmd.ReleaseRetained != nil:
+			targetMatches = cmd.ReleaseRetained.VMID == pool[1]
+		case cmd.ForgetRepository != nil:
+			targetMatches = cmd.ForgetRepository.RepositoryID == pool[1]
+		case cmd.OrphanCleanup != nil:
+			targetMatches = cmd.OrphanCleanup.RepositoryID == pool[1]
 		default:
 			targetMatches = false
 		}
@@ -183,6 +172,7 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 	switch {
 	case cmd.Storage != nil:
 		v := *cmd.Storage
+		v.CredentialReceipt, v.CredentialRequestID = "", ""
 		v.Status = op.Status
 		v.Error = op.Error
 		return v
@@ -201,6 +191,8 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"vm_id": cmd.Power.VMID, "action": cmd.Power.Action, "operation": op}
 	case cmd.Delete != nil:
 		return map[string]any{"vm_id": cmd.Delete.VMID, "delete_disks": cmd.Delete.DeleteDisks, "operation": op}
+	case cmd.ReleaseRetained != nil:
+		return map[string]any{"vm_id": cmd.ReleaseRetained.VMID, "operation": op}
 	case cmd.VMMedia != nil:
 		return map[string]any{"vm_id": cmd.VMMedia.VMID, "action": cmd.VMMedia.Action, "media_id": cmd.VMMedia.MediaID, "operation": op}
 	case cmd.StorageLifecycle != nil:
@@ -238,6 +230,8 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return response
 	case cmd.BackupRepository != nil:
 		return map[string]any{"repository_id": cmd.BackupRepository.ID, "name": cmd.BackupRepository.Name, "operation": op}
+	case cmd.PolicyDelete != nil:
+		return map[string]any{"policy_id": cmd.PolicyDelete.PolicyID, "operation": op}
 	case cmd.BackupPolicy != nil:
 		out := map[string]any{"policy_id": cmd.BackupPolicy.ID, "name": cmd.BackupPolicy.Name, "operation": op}
 		if cmd.VM != nil {
@@ -272,20 +266,6 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 	}
 }
 
-// resourceRowResponse projects a stored registration, filling in the Controller's own row key
-// for one that failed without a Core-allocated ID. A typed repository's identity is Core's to
-// mint, so a registration still in flight is honestly answered with an empty id — but a
-// registration the host refused will never get one, and with an empty id it could not be
-// addressed at all, not even to discard it.
-func resourceRowResponse(rowID string, cmd protocol.Command, op protocol.Operation) any {
-	if op.Status == "failed" && cmd.Storage != nil && cmd.Storage.ID == "" {
-		s := *cmd.Storage
-		s.ID = rowID
-		cmd.Storage = &s
-	}
-	return resourceResponse(cmd, op)
-}
-
 // registrationApplied reports whether a stored registration command is the mirror of
 // something a host has reported as applied. The mirroring passes rewrite the command's
 // status, so this is the Controller's own evidence that the resource exists on a host —
@@ -314,7 +294,8 @@ func registrationApplied(raw string) bool {
 // The guard is narrow on purpose: only a row whose operation failed *and* whose command no host
 // has reported as applied is discardable, so this can never delete the projection of a live
 // pool resource. Anything else is left to the caller's ordinary relayed-removal path.
-func (c *Controller) discardFailedRegistration(w http.ResponseWriter, user, id, kind string) bool {
+func (c *Controller) discardFailedRegistration(w http.ResponseWriter, user, id string) bool {
+	const kind = "network-register"
 	tx, err := c.db.Begin()
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "storage unavailable")
@@ -369,7 +350,12 @@ func (c *Controller) listResources(w http.ResponseWriter, kind string) {
 			fail(w, 500, "resource decode failed")
 			return
 		}
-		out = append(out, resourceRowResponse(rowID, cmd, op))
+		// A refused typed registration is only this Controller's replay record; the failure stays in
+		// the operation history, so it is not listed as a repository.
+		if op.Status == "failed" && strings.HasPrefix(rowID, "pending-storage-") && !registrationApplied(raw) {
+			continue
+		}
+		out = append(out, resourceResponse(cmd, op))
 	}
 	if rows.Err() != nil {
 		fail(w, 500, "resource read failed")
@@ -549,7 +535,7 @@ func (c *Controller) networkLifecycle(w http.ResponseWriter, r *http.Request, us
 	// A registration the master refused published nothing on any host, so discarding it is
 	// local and takes no body. Answered before the removal body is even read, exactly as
 	// deleteMedia answers a failed import.
-	if action == "remove" && identifierValid(id) && c.discardFailedRegistration(w, user, id, "network-register") {
+	if action == "remove" && identifierValid(id) && c.discardFailedRegistration(w, user, id) {
 		return
 	}
 	var body resourceLifecycleAPIRequest
@@ -580,10 +566,6 @@ func (c *Controller) networkLifecycle(w http.ResponseWriter, r *http.Request, us
 	}
 	if err = c.managedHost(tx, body.PoolID, master); err != nil {
 		fail(w, http.StatusConflict, err.Error())
-		return
-	}
-	if !hostSupportsCapability(tx, master, protocol.PoolResourceRemovalCapability) {
-		fail(w, http.StatusConflict, "the pool master does not support removing pool networks yet; upgrade Nex Core")
 		return
 	}
 	var raw, status string
@@ -1025,14 +1007,15 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 		rows.Close()
 	}
-	// An adopted needs_attention outcome the host no longer reports was settled there (an
-	// interrupted entry re-observed, or a pending command the restarted agent finished).
-	// Snapshot work requires explicit owner settlement; a missing observation proves nothing.
-	settled := []any{stamp(), host, "adopt-outcome:" + host + ":%"}
+	observed := make([]any, 0, len(m.Outcomes))
 	for _, o := range m.Outcomes {
-		settled = append(settled, "adopt-outcome:"+host+":"+o.OperationID)
+		observed = append(observed, "adopt-outcome:"+host+":"+o.OperationID)
 	}
-	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ('snapshot-create','snapshot-revert','snapshot-delete','snapshot-metadata','backup-now','backup-restore-as-new','backup-restore-replace','backup-test-restore','backup-repository-register','backup-repository-test','backup-policy-upsert','backup-policy-pause','backup-policy-run-now','backup-protect','backup-catalog-import','backup-catalog-rebuild','backup-test-verify','backup-test-cleanup') AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
+	// A Core-queued mirror stays dispatched only while Core reports it. Once Core has been
+	// silent for a grace period its outcome is unknown, not succeeded: flag it for the
+	// operator and leave the Core journal as the authority.
+	silent := append([]any{stamp(), host, "adopt-outcome:" + host + ":%", time.Now().UTC().Add(-adoptedQueuedGrace).Format(time.RFC3339Nano)}, observed...)
+	if _, err := tx.Exec("UPDATE operations SET status='needs_attention',error='Core no longer reports this queued operation; check the host history for its outcome',updated_at=? WHERE host_id=? AND status='dispatched' AND request_id LIKE ? AND updated_at<? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", silent...); err != nil {
 		return err
 	}
 	for _, o := range m.Outcomes {
@@ -1061,10 +1044,22 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 				return err
 			}
 		}
+		// Every matching queued observation refreshes the silence clock, even when
+		// Core's reason is unchanged. Observing queued work is not a settlement.
+		if knownOwnOperation && o.Status == "queued" {
+			if _, err = tx.Exec("UPDATE operations SET error=CASE WHEN status='needs_attention' THEN error ELSE ? END,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status IN ('queued','dispatched','needs_attention')", clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind); err != nil {
+				return err
+			}
+		}
 		// Adopted tasks are passive mirrors: only Core moves them, and they are never
 		// dispatched by this Controller. Terminal history must not regress to queued.
+		if known[requestID] && o.Status == "queued" {
+			if _, err = tx.Exec("UPDATE operations SET error=CASE WHEN status='needs_attention' THEN error ELSE ? END,updated_at=? WHERE host_id=? AND kind=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", clip(o.Error, 4096), stamp(), host, o.Kind, requestID); err != nil {
+				return err
+			}
+		}
 		if known[requestID] && o.Status != "queued" {
-			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE host_id=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), host, requestID); err != nil {
+			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE host_id=? AND kind=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), host, o.Kind, requestID); err != nil {
 				return err
 			}
 		}
@@ -1090,8 +1085,14 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 				continue
 			}
 		}
+		// Core already holds a queued outcome, so the mirror is never Controller-queued:
+		// that would make the agent's result for it a 409 and block the host's queue.
+		status := o.Status
+		if status == "queued" {
+			status = "dispatched"
+		}
 		now := stamp()
-		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", controllerID, host, o.Kind, requestID, o.Status, clip(o.Error, 4096), now, now, "system"); err != nil {
+		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", controllerID, host, o.Kind, requestID, status, clip(o.Error, 4096), now, now, "system"); err != nil {
 			return err
 		}
 		known[controllerID], known[requestID] = true, true
@@ -1112,18 +1113,22 @@ func adoptedBackupOperationID(host, coreOperationID string) string {
 	return "backup-" + base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
-func snapshotOutcomeKind(kind string) bool {
-	return kind == "snapshot-create" || kind == "snapshot-revert" || kind == "snapshot-delete" || kind == "snapshot-metadata"
+var snapshotOutcomeKinds = []string{"snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata"}
+
+var backupOutcomeKinds = []string{
+	"backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore",
+	"backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup",
+	"backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now",
+	"backup-protect", "backup-catalog-import", "backup-catalog-rebuild",
+	"backup-test-verify", "backup-test-cleanup",
 }
 
-func backupOutcomeKind(kind string) bool {
-	return kind == "backup-now" || kind == "backup-restore-as-new" ||
-		kind == "backup-restore-replace" || kind == "backup-test-restore" ||
-		kind == "backup-repository-register" || kind == "backup-repository-test" ||
-		kind == "backup-policy-upsert" || kind == "backup-policy-pause" || kind == "backup-policy-run-now" ||
-		kind == "backup-protect" || kind == "backup-catalog-import" || kind == "backup-catalog-rebuild" ||
-		kind == "backup-test-verify" || kind == "backup-test-cleanup"
-}
+func snapshotOutcomeKind(kind string) bool { return slices.Contains(snapshotOutcomeKinds, kind) }
+
+func backupOutcomeKind(kind string) bool { return slices.Contains(backupOutcomeKinds, kind) }
+
+// adoptedQueuedGrace is how long Core may stay silent about a queued mirror before it needs attention.
+const adoptedQueuedGrace = 10 * time.Minute
 
 // adoptAppliances rebuilds the appliances rows from the host's deploy journal. A row is
 // inserted when the host observes the VM through healthy libvirt; a row held by a revoked
@@ -1198,7 +1203,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "vm-release-retained", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false

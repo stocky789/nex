@@ -1,0 +1,37 @@
+{
+  "summary": "A member backup run pending 12 hours settles needs_attention and frees the backup slot; master promotion adopts a backup repository it cannot reach as offline instead of refusing.",
+  "paths": [
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/agent/backup_authority_transfer.go",
+    "internal/agent/backup_run_deadline_test.go",
+    "internal/agent/backup_peer_credentials_test.go",
+    "docs/guide/backup-now.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-bounded-backup-run-promotion-repository.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators see the stalled-run reason and an offline repository after a master change.",
+    "pages": ["docs/guide/backup-now.md", "docs/guide/pool-authority-and-recovery.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No endpoint or field changes: run settlement gains stage run_deadline, and promotion no longer refuses on an unreachable repository.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Owner-approved behavior change inside the backup recovery plan; no milestone changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "The backup run record (created_at, status, stage, error) and the repository record's health/access on the pool master.",
+    "reason": "Existing durable records only; a fresh Controller reads them through the existing run and repository inventory."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent; no lab run.",
+    "evidence": ["internal/agent/backup_run_deadline_test.go", "internal/agent/backup_peer_credentials_test.go", "docs/BUG_LEDGER.md"]
+  }
+}

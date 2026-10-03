@@ -56,14 +56,14 @@ func TestPoolHostDrainedRefusesManagedStart(t *testing.T) {
 		t.Fatalf("a host that is in no pool was refused: %v", err)
 	}
 	running := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{
-		{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
 	}}
 	writeGuardPoolRecords(t, dir, "host-a", running)
 	if err := poolHostDrained(dir); err != nil {
 		t.Fatalf("a host that is not drained was refused: %v", err)
 	}
 	drained := running
-	drained.Members = []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", Maintenance: true}}
+	drained.Members = []protocol.PoolMember{{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", Maintenance: true}}
 	writeGuardPoolRecords(t, dir, "host-a", drained)
 	err := poolHostDrained(dir)
 	if err == nil || !strings.Contains(err.Error(), "maintenance mode") {
@@ -88,8 +88,8 @@ func TestPoolHostDrainedRefusesManagedStart(t *testing.T) {
 func TestPoolHostDrainedReadsMemberReplica(t *testing.T) {
 	dir := t.TempDir()
 	peerMembership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 4, Members: []protocol.PoolMember{
-		{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 4, Status: "ready"},
-		{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready"},
+		{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 4, Status: "ready"},
+		{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready"},
 	}}
 	writeGuardPoolRecords(t, dir, "host-b", peerMembership)
 	replicaMembership := peerMembership
@@ -114,7 +114,7 @@ func TestStorageGuardRefusesAManagedGuestOnADrainedHost(t *testing.T) {
 	dir := t.TempDir()
 	const vm = "11111111-1111-4111-8111-111111111111"
 	writeGuardPoolRecords(t, dir, "host-a", protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{
-		{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", Maintenance: true},
+		{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", Maintenance: true},
 	}})
 	domain := `<domain><uuid>` + vm + `</uuid><devices><disk type="file" device="disk"><source file="/var/lib/storage/nex-vms/` + vm + `/disk.qcow2"/></disk></devices></domain>`
 	err := StorageGuard(t.Context(), dir, strings.NewReader(domain))
@@ -199,8 +199,8 @@ func TestPoolHostRestrictedRequiresCurrentBootAuthorityConfirmation(t *testing.T
 	poolHostBootID = func() (string, error) { return "11111111-1111-4111-8111-111111111111", nil }
 	t.Cleanup(func() { poolHostBootID = previous })
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{
-		{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+		{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
 	}}
 	write := func(marker any) {
 		t.Helper()

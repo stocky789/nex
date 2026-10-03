@@ -1,0 +1,354 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Root-owned, serialized demo deployment. Accept one SHA and gzip docker-save on stdin."""
+import fcntl
+import bz2
+import gzip
+import hashlib
+import io
+import json
+import lzma
+import os
+from pathlib import Path, PurePosixPath
+import re
+import select
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+
+DOCKER = '/usr/bin/docker'
+STATE = Path('/var/lib/nex-demo')
+RUNTIME = Path('/run/nex-demo')
+CONTAINER = 'nex-demo'
+UID = 64050
+MAX_ARCHIVE = 768 * 1024 * 1024
+MAX_MEMBERS = 4096
+# Docker decompresses compressed layers on load; bound what they can inflate to.
+MAX_INFLATED = 1024 * 1024 * 1024
+MAX_IMAGE_SIZE = 1024 * 1024 * 1024
+ARCHIVE_IDLE_TIMEOUT = 30
+ARCHIVE_TOTAL_TIMEOUT = 600
+TAG = re.compile(r'^nex-demo:[0-9a-f]{40}$')
+
+
+def command(*args, check=True):
+    return subprocess.run(args, check=check, text=True, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, timeout=120)
+
+
+def image_config_id(tag):
+    if command(DOCKER, 'image', 'inspect', tag, check=False).returncode != 0:
+        return None
+    # Docker's containerd store reports a manifest/index ID, not the config ID.
+    # Export the config bytes so classic and containerd stores compare identically.
+    with tempfile.TemporaryFile(dir=STATE) as saved:
+        subprocess.run((DOCKER, 'image', 'save', tag), stdout=saved,
+                       stderr=subprocess.PIPE, check=True, timeout=120)
+        saved.seek(0)
+        with tarfile.open(fileobj=saved, mode='r:') as archive:
+            manifest = json.load(archive.extractfile('manifest.json'))
+            entry = next(item for item in manifest if item.get('RepoTags') == [tag])
+            config = archive.extractfile(entry['Config']).read()
+    return 'sha256:' + hashlib.sha256(config).hexdigest()
+
+
+def current_image():
+    result = command(DOCKER, 'container', 'inspect', '--format', '{{.Config.Image}}', CONTAINER,
+                     check=False)
+    if result.returncode != 0:
+        return None
+    tag = result.stdout.strip()
+    if not TAG.fullmatch(tag):
+        raise ValueError('existing nex-demo container does not use a validated demo release')
+    if command(DOCKER, 'image', 'inspect', tag, check=False).returncode != 0:
+        raise ValueError('current demo release image is missing; cannot guarantee rollback')
+    return tag
+
+
+class ArchiveInput(io.RawIOBase):
+    def __init__(self, source):
+        super().__init__()
+        self.fd = source.fileno()
+        self.total_deadline = time.monotonic() + ARCHIVE_TOTAL_TIMEOUT
+        self.idle_deadline = time.monotonic() + ARCHIVE_IDLE_TIMEOUT
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        remaining = min(self.total_deadline, self.idle_deadline) - time.monotonic()
+        if remaining <= 0 or not select.select([self.fd], [], [], remaining)[0]:
+            raise TimeoutError('image archive reception deadline exceeded')
+        count = os.readv(self.fd, [buffer])
+        if count:
+            self.idle_deadline = time.monotonic() + ARCHIVE_IDLE_TIMEOUT
+        return count
+
+
+def receive_archive(temporary):
+    # Bound both stalled connections and senders that trickle bytes indefinitely.
+    with io.BufferedReader(ArchiveInput(sys.stdin.buffer)) as source, \
+            gzip.GzipFile(fileobj=source) as stream, (temporary / 'image.tar').open('wb') as output:
+        total = 0
+        while chunk := stream.read(1024 * 1024):
+            total += len(chunk)
+            if total > MAX_ARCHIVE:
+                raise ValueError('image archive exceeds 768 MiB uncompressed')
+            output.write(chunk)
+
+
+def inflated_size(archive, member, budget):
+    """Return the layer's decompressed size, aborting as soon as it exceeds budget."""
+    with archive.extractfile(member) as raw:
+        head = raw.read(6)
+        raw.seek(0)
+        if head.startswith(b'\x28\xb5\x2f\xfd'):
+            raise ValueError('zstd-compressed image layers are not supported')
+        if head.startswith(b'\x1f\x8b'):
+            stream = gzip.GzipFile(fileobj=raw)
+        elif head.startswith(b'\xfd7zXZ'):
+            stream = lzma.LZMAFile(raw)
+        elif head.startswith(b'BZh'):
+            stream = bz2.BZ2File(raw)
+        else:
+            return member.size
+        total = 0
+        while chunk := stream.read(1024 * 1024):
+            total += len(chunk)
+            if total > budget:
+                raise ValueError('image layers inflate beyond the allowed size')
+        return total
+
+
+def import_image(release, temporary, current=None):
+    path = temporary / 'image.tar'
+    expected = 'nex-demo:' + release
+    with tarfile.open(path, mode='r:') as archive:
+        names = set()
+        for member in archive:
+            if len(names) >= MAX_MEMBERS:
+                raise ValueError('image archive has too many members')
+            name = PurePosixPath(member.name)
+            if name.is_absolute() or '..' in name.parts or member.name in names:
+                raise ValueError('unsafe or duplicate archive path')
+            if not member.isfile() and not member.isdir():
+                raise ValueError('image archive contains a link or special file')
+            names.add(member.name)
+        manifest_member = archive.getmember('manifest.json')
+        if not manifest_member.isfile() or manifest_member.size > 65536:
+            raise ValueError('invalid image manifest')
+        manifest = json.load(archive.extractfile(manifest_member))
+        if not isinstance(manifest, list) or len(manifest) != 1:
+            raise ValueError('image archive must contain exactly one image')
+        entry = manifest[0]
+        if entry.get('RepoTags') != [expected]:
+            raise ValueError('image archive must contain only the requested immutable tag')
+        config_member = archive.getmember(entry['Config'])
+        if not config_member.isfile() or config_member.size > 1024 * 1024:
+            raise ValueError('invalid image configuration')
+        config_bytes = archive.extractfile(config_member).read()
+        config = json.loads(config_bytes)
+        if config.get('os') != 'linux' or config.get('architecture') != 'amd64':
+            raise ValueError('expected a Linux amd64 image')
+        if config.get('config', {}).get('Volumes'):
+            raise ValueError('image-declared volumes are forbidden')
+        labels = config.get('config', {}).get('Labels') or {}
+        if labels.get('org.opencontainers.image.revision') != release:
+            raise ValueError('image revision label does not match the release')
+        layers = entry.get('Layers')
+        if not isinstance(layers, list) or not layers:
+            raise ValueError('image has no layers')
+        inflated = 0
+        for layer in layers:
+            layer_member = archive.getmember(layer)
+            if not layer_member.isfile():
+                raise ValueError('invalid image layer')
+            inflated += inflated_size(archive, layer_member, MAX_INFLATED - inflated)
+        expected_id = 'sha256:' + hashlib.sha256(config_bytes).hexdigest()
+        # Repack only the validated classic Docker manifest/config/layers. OCI
+        # index annotations or legacy repositories cannot introduce extra tags.
+        validated = temporary / 'validated.tar'
+        config_name = expected_id.removeprefix('sha256:') + '.json'
+        normalized = {'Config': config_name, 'RepoTags': [expected],
+                      'Layers': [f'layer-{index}.tar' for index in range(len(layers))]}
+        manifest_bytes = json.dumps([normalized]).encode()
+        sizes = [len(config_bytes), len(manifest_bytes)]
+        sizes.extend(archive.getmember(layer).size for layer in layers)
+        # Include every reference, headers, padding, end markers and record padding.
+        output_size = 1024 + sum(512 + ((size + 511) // 512) * 512 for size in sizes)
+        output_size = ((output_size + tarfile.RECORDSIZE - 1) // tarfile.RECORDSIZE) * tarfile.RECORDSIZE
+        if output_size > MAX_ARCHIVE:
+            raise ValueError('repacked image archive exceeds 768 MiB')
+        with tarfile.open(validated, mode='w') as output:
+            for name, data in ((config_name, config_bytes),
+                               ('manifest.json', manifest_bytes)):
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                output.addfile(member, io.BytesIO(data))
+            for name, layer in zip(normalized['Layers'], layers):
+                source_member = archive.getmember(layer)
+                member = tarfile.TarInfo(name)
+                member.size = source_member.size
+                output.addfile(member, archive.extractfile(source_member))
+    existing_id = image_config_id(expected)
+    if existing_id == expected_id:
+        return expected
+    if existing_id is not None:
+        if expected == current:
+            # Re-run of the running release: builds are not byte-reproducible, so
+            # keep the image that is already serving and rollback-able.
+            return expected
+        raise ValueError('refusing to overwrite an immutable release tag')
+    command(DOCKER, 'image', 'load', '--input', str(validated))
+    try:
+        size = int(command(DOCKER, 'image', 'inspect', '--format', '{{.Size}}', expected).stdout)
+        if image_config_id(expected) != expected_id:
+            raise ValueError('loaded image does not match the validated archive')
+        if size > MAX_IMAGE_SIZE:
+            raise ValueError('loaded image exceeds the allowed size')
+    except BaseException:
+        command(DOCKER, 'image', 'rm', expected, check=False)
+        raise
+    return expected
+
+
+def remove_container():
+    # Missing container is normal for a first deployment or failed startup.
+    command(DOCKER, 'container', 'rm', '--force', CONTAINER, check=False)
+    if command(DOCKER, 'container', 'inspect', CONTAINER, check=False).returncode == 0:
+        raise RuntimeError('could not remove the existing demo container')
+    (RUNTIME / 'demo.sock').unlink(missing_ok=True)
+
+
+def start(tag):
+    command(DOCKER, 'run', '--detach', '--name', CONTAINER,
+            '--label', 'org.nex.demo=true', '--restart', 'unless-stopped',
+            '--stop-timeout', '5', '--network', 'none', '--read-only',
+            '--user', '64050:64050', '--cap-drop', 'ALL',
+            '--security-opt', 'no-new-privileges=true', '--pids-limit', '64',
+            '--memory', '192m', '--memory-swap', '192m', '--cpus', '1',
+            '--ulimit', 'nofile=1024:1024',
+            '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777',
+            '--mount', 'type=bind,src=/run/nex-demo,dst=/run/demo',
+            '--log-driver', 'json-file', '--log-opt', 'max-size=5m',
+            '--log-opt', 'max-file=3', '--entrypoint', '/app/nex-demo', tag,
+            '-socket', '/run/demo/demo.sock', '-ui-dir', '/app/web',
+            '-docs-dir', '/app/docs',
+            '-source-archive', '/app/source.tar.gz', '-public-origin', public_origin())
+
+
+def public_origin():
+    path = Path('/etc/nex-demo/deploy.json')
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError('deploy.json must be a root-owned regular file with mode 0600')
+    origin = json.loads(path.read_text())['NEX_DEMO_ORIGIN']
+    if not re.fullmatch(r'https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', origin):
+        raise ValueError('NEX_DEMO_ORIGIN must be a fixed HTTPS origin without port or path')
+    return origin
+
+
+def healthy():
+    for _ in range(30):
+        result = command('/usr/bin/curl', '--silent', '--show-error', '--fail',
+                         '--max-time', '1', '--unix-socket', str(RUNTIME / 'demo.sock'),
+                         'http://localhost/healthz', check=False)
+        running = command(DOCKER, 'container', 'inspect', '--format', '{{.State.Running}}',
+                          CONTAINER, check=False)
+        if result.returncode == 0 and running.stdout.strip() == 'true':
+            return True
+        time.sleep(1)
+    return False
+
+
+def save_state(current, previous):
+    path = STATE / 'releases.json'
+    temporary = STATE / 'releases.json.new'
+    with temporary.open('w') as file:
+        file.write(json.dumps({'current': current, 'previous': previous}) + '\n')
+        os.fchmod(file.fileno(), 0o600)
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temporary, path)
+    directory = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def interrupted(signum, frame):
+    raise KeyboardInterrupt('deployment interrupted')
+
+
+def main():
+    if os.geteuid() != 0 or len(sys.argv) != 2 or not re.fullmatch('[0-9a-f]{40}', sys.argv[1]):
+        raise ValueError('usage: sudo nex-demo-deploy <40-character lowercase commit SHA> < image.tar.gz')
+    os.umask(0o077)
+    public_origin()
+    for path, uid in ((STATE, 0), (RUNTIME, UID)):
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError(f'{path} must be a real owner-only directory with UID {uid}')
+    if not RUNTIME.is_mount():
+        raise ValueError('/run/nex-demo must be the dedicated bounded tmpfs mount')
+    with (STATE / 'deploy.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # The lock excludes other deployers, so leftovers are from killed ones.
+        for stale in STATE.glob('import-*'):
+            shutil.rmtree(stale, ignore_errors=True)
+        signal.signal(signal.SIGTERM, interrupted)
+        with tempfile.TemporaryDirectory(prefix='import-', dir=STATE) as directory:
+            temporary = Path(directory)
+            receive_archive(temporary)
+            # Reception must finish before any Docker command or release mutation.
+            previous = current_image()
+            old_retained = None
+            if (STATE / 'releases.json').exists():
+                old_retained = json.loads((STATE / 'releases.json').read_text()).get('previous')
+                if old_retained is not None and not TAG.fullmatch(old_retained):
+                    raise ValueError('invalid retained release state')
+            target = import_image(sys.argv[1], temporary, previous)
+        changed = False
+        try:
+            # Mark before removal so interruption also restores the previous release.
+            changed = True
+            remove_container()
+            start(target)
+            if not healthy():
+                raise RuntimeError('candidate did not become healthy within 60 seconds')
+            retained = previous if previous != target else old_retained
+            save_state(target, retained)
+            changed = False
+        finally:
+            if changed:
+                # Do not allow a second cancellation to interrupt rollback.
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+                remove_container()
+                if previous is not None:
+                    start(previous)
+                    if not healthy():
+                        raise RuntimeError('candidate failed AND previous release rollback is unhealthy')
+                    print(f'nex-demo-deploy: rolled back to {previous}', file=sys.stderr)
+                else:
+                    print('nex-demo-deploy: failed first release removed; no prior release', file=sys.stderr)
+                if target not in (previous, old_retained):
+                    command(DOCKER, 'image', 'rm', target, check=False)
+        if old_retained and old_retained not in (target, retained):
+            command(DOCKER, 'image', 'rm', old_retained, check=False)
+        print(f'nex-demo-deploy: healthy {target}; retained {retained or "no previous release"}')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (Exception, KeyboardInterrupt) as error:
+        # Do not print Docker output; it can include archive-controlled metadata.
+        print(f'nex-demo-deploy: {error}', file=sys.stderr)
+        sys.exit(1)

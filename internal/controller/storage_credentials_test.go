@@ -3,6 +3,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -53,6 +54,28 @@ func TestCredentialBrokerScopesAndAcknowledgesCoreReceipt(t *testing.T) {
 	}
 	if _, err = b.offer(v); err != nil {
 		t.Fatalf("same acknowledged request did not recover receipt: %v", err)
+	}
+}
+
+func TestCredentialBrokerReportsCoreRefusalAndAllowsResend(t *testing.T) {
+	b := newCredentialBroker()
+	v := testStorageCredentialRequest()
+	offer, err := b.offer(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = b.redeem(offer.Handle, v.HostID); err != nil {
+		t.Fatal(err)
+	}
+	refusal := protocol.StorageCredentialReceipt{RequestID: v.RequestID, RegistrationRequestID: v.RegistrationRequestID, PoolID: v.PoolID, HostID: v.HostID, Status: "failed", Error: "send it again with a new request id"}
+	if err = b.acknowledge(offer.Handle, v.HostID, refusal); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := b.wait(v.RequestID); ok || got.Error != refusal.Error {
+		t.Fatalf("wait %#v %v", got, ok)
+	}
+	if next, err := b.offer(v); err != nil || next.Handle == offer.Handle {
+		t.Fatalf("refused request id not offered afresh: %#v %v", next, err)
 	}
 }
 
@@ -124,5 +147,51 @@ func TestCredentialReceiptObservationReplacesOnlyReportingHost(t *testing.T) {
 	}
 	if got, ok := b.eligibleReceipts("pool-2", "host-2"); !ok || len(got) != 1 || got[0] != other {
 		t.Fatalf("other host receipt was changed %#v %v", got, ok)
+	}
+}
+
+func TestCredentialReceiptMirrorBoundIsPerHostAndKeepsLiveReceipts(t *testing.T) {
+	b := newCredentialBroker()
+	receipts := func(host string, n int, status string) []protocol.StorageCredentialReceipt {
+		out := make([]protocol.StorageCredentialReceipt, n)
+		for i := range out {
+			out[i] = protocol.StorageCredentialReceipt{Receipt: fmt.Sprintf("%s-%s-%d", host, status, i), RequestID: fmt.Sprintf("%s-%d", status, i), PoolID: "pool-1", HostID: host, Status: status}
+		}
+		return out
+	}
+	b.observeReceipts("host-1", receipts("host-1", 1024, "ready"))
+	live := protocol.StorageCredentialReceipt{Receipt: "live", RequestID: "live-request", PoolID: "pool-1", HostID: "host-2", Status: "ready"}
+	b.observeReceipts("host-2", append(receipts("host-2", 1100, "retired"), live))
+	if _, ok := b.receipt("host-2", "live-request", "pool-1", "", ""); !ok {
+		t.Fatal("tombstones or another host's receipts crowded out a live receipt")
+	}
+	if _, ok := b.receipt("host-1", "ready-1023", "pool-1", "", ""); !ok {
+		t.Fatal("another host's report evicted this host's receipts")
+	}
+}
+
+// The credential receipt is write-only: a registration response must not echo it.
+func TestStorageRegistrationResponseOmitsCredentialReceipt(t *testing.T) {
+	s := protocol.StorageRegistration{CredentialReceipt: "receipt-1", CredentialRequestID: "request-1"}
+	b, err := json.Marshal(resourceResponse(protocol.Command{Storage: &s}, protocol.Operation{Status: "queued"}))
+	if err != nil || strings.Contains(string(b), "credential_") {
+		t.Fatalf("response echoes the receipt: %s, %v", b, err)
+	}
+}
+
+func TestDeliveredCredentialOfferIsNotOfferedAgain(t *testing.T) {
+	b := newCredentialBroker()
+	offer, err := b.offer(storageCredentialRequest{RequestID: "req-1", RegistrationRequestID: "reg-1", PoolID: "pool", HostID: "host"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.offers("host"); len(got) != 1 {
+		t.Fatalf("fresh offer not listed: %v", got)
+	}
+	if _, err := b.redeem(offer.Handle, "host"); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.offers("host"); len(got) != 0 {
+		t.Fatalf("redeemed offer listed again, so an unacknowledged handoff is retried and refused every report: %v", got)
 	}
 }

@@ -30,6 +30,8 @@ import { rememberSignedIn, signedInBefore } from "./session";
 import { applyTheme, themeKey, watchSystemTheme } from "./theme";
 import type { API, Audit, Data, Host, Operation, Pool, Session, Site } from "./types";
 
+declare const __NEX_DEMO__: boolean;
+
 export type { API, Audit, Check, Data, Host, Operation, Pool, Site } from "./types";
 
 // The scope the top bar filters by: a site and an optional pool; "*" explicitly means all pools.
@@ -474,20 +476,18 @@ function App() {
         api<VM[]>("vms"), api<Storage[]>("storage"), api<Network[]>("networks"), api<Media[]>("media"),
       ]);
       if (isCurrent()) {
-        // The notice bar only carries text, not a link (its operation id just tracks a queued
-        // task so the notice clears once that task resolves); a failed task is already resolved,
-        // so the id goes in the text itself instead of triggering that same clear-on-resolve effect.
-        // One call per poll: several failures in the same poll become one notice, not a series
-        // that only leaves the last one visible.
+        // A failed task becomes a persistent action error that carries the task id in its text; it clears on the
+        // next navigation or action. One call per poll: several failures in the same poll become one message,
+        // not a series that only leaves the last one visible.
         const failures = newFailures(previousOperations.current, operations || []);
         const hostnameOf = (o: Operation) => hosts?.find((h) => h.id === o.host_id)?.hostname || o.host_id;
         if (failures.length === 1) {
           const o = failures[0];
           const verb = o.status === "failed" ? "failed" : "needs attention";
-          setNotice(`${operationLabel(o.kind)} on ${hostnameOf(o)} ${verb} (task ${o.id}). ${o.error ?? ""}`.trim());
+          setActionError(`${operationLabel(o.kind)} on ${hostnameOf(o)} ${verb} (task ${o.id}). ${o.error ?? ""}`.trim());
         } else if (failures.length > 1) {
           const items = failures.map((o) => `${operationLabel(o.kind)} on ${hostnameOf(o)} (${o.id})`).join(", ");
-          setNotice(`${failures.length} tasks failed: ${items}.`);
+          setActionError(`${failures.length} tasks failed: ${items}.`);
         }
         previousOperations.current = operations || [];
         const next = {
@@ -677,9 +677,16 @@ function App() {
       <main className="login">
         <Brand />
         <div className="login-card">
-          <p className="eyebrow">NEX CONTROLLER</p>
-          <h1>Connect to Nex Controller</h1>
-          <p>Sign in to manage your sites, pools and hosts.</p>
+          <p className="eyebrow">{__NEX_DEMO__ ? "NEX CONTROLLER DEMO" : "NEX CONTROLLER"}</p>
+          <h1>{__NEX_DEMO__ ? "Explore the Nex demo" : "Connect to Nex Controller"}</h1>
+          <p>{__NEX_DEMO__ ? "Browse fictional sites, pools and hosts. This demo is read-only." : "Sign in to manage your sites, pools and hosts."}</p>
+          {__NEX_DEMO__ && <aside className="demo-login-credentials" aria-label="Demo login credentials">
+            <strong>Sign in with these demo credentials</strong>
+            <dl>
+              <dt>Username</dt><dd><code>demo</code></dd>
+              <dt>Password</dt><dd><code>demo</code></dd>
+            </dl>
+          </aside>}
           {(error || actionError) && (
             <p className="alert" role="alert">
               {actionError || error}
@@ -722,7 +729,7 @@ function App() {
             </button>
           </form>
           <p className="help">
-            Use the administrator account created on your controller.
+            {__NEX_DEMO__ ? "No registration needed. Use demo for both fields above." : "Use the administrator account created on your controller."}
           </p>
         </div>
         <footer>
@@ -887,7 +894,7 @@ function App() {
               openHostConsole={openHostConsole} onRefreshInventory={refreshInventory} onReenroll={() => open("reenroll")} onRevoke={() => open("revoke")} />
             : kind === "storage" || kind === "networks" ? <><h1 className="sr-only">{kind === "storage" ? "Storage" : "Networks"}</h1>{!pool && <p className="empty">Choose a pool in the scope menu to see its {kind}.</p>}</>
             : section ? <SettingsHead section={section} pool={pool} master={masterHost} hostCount={scopedHosts.length} />
-            : kind === "backups" ? <LazyBackups api={api} data={data} pool={pool} busy={busy} unavailable={Boolean(error)} reload={reload} onNotice={setNotice} vmFilter={new URLSearchParams(search).get("vm") || undefined} flow={new URLSearchParams(search).get("flow") || undefined} />
+            : kind === "backups" ? <LazyBackups key={pool?.id} api={api} data={data} pool={pool} busy={busy} unavailable={Boolean(error)} reload={reload} onNotice={setNotice} vmFilter={new URLSearchParams(search).get("vm") || undefined} flow={new URLSearchParams(search).get("flow") || undefined} />
             : kind === "containers" ? <LazyContainers />
             : kind === "tasks" ? <LazyTasks data={data} upload={upload} onCancelUpload={cancelUpload} />
             : kind === "events" ? <LazyEvents entries={data.audit} data={data} conditions={attentionItems(data, data.hosts, data.vms, data.storage.filter(s => !s.tombstone), update?.core_available_version)} />

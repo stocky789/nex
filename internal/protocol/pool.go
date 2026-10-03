@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // PoolWitnessClusterName is the stable Corosync cluster name used in qdevice CSRs.
@@ -27,6 +29,9 @@ func PoolWitnessClusterName(poolID string) string {
 // host.  Nothing rewrites it afterwards, so it is the member's join time.
 type PoolMember struct {
 	HostID string `json:"host_id"`
+	// Hostname is reported by this Core when it initialises or joins a pool. Members of
+	// pools created before hostnames were reported omit it; nothing backfills it.
+	Hostname string `json:"hostname,omitempty"`
 	// SanlockHostID is assigned once by the pool master and remains stable for this
 	// membership identity. Sanlock host IDs are 1..2000; zero means this legacy member
 	// cannot participate in storage leases.
@@ -133,6 +138,13 @@ type PoolMember struct {
 	FenceCredentialVersion uint64 `json:"fence_credential_version,omitempty"`
 }
 
+// ValidPoolHostname accepts a printable display name: operators see it, and a member
+// reports its own, so control, format (bidi) and edge whitespace characters are refused.
+func ValidPoolHostname(name string) bool {
+	return name != "" && strings.TrimSpace(name) == name && len(name) <= 200 && utf8.ValidString(name) &&
+		!strings.ContainsFunc(name, func(r rune) bool { return !unicode.IsPrint(r) })
+}
+
 // PoolMembership is retained by the master and copied to a member only after the member
 // proves the master's certificate-bound identity.  Generation prevents an old peer request
 // from resurrecting an ejected member.
@@ -216,38 +228,9 @@ func (c PoolStorageLeaseConfig) Valid(poolID string) error {
 	return nil
 }
 
-// PoolJoinCapability gates the Controller-driven join: the brokered invitation envelope
-// below, the pool-join command and the reported join status.  A Core without it can
-// neither issue an invitation nor be told to join, and the Controller says so instead of
-// falling back to a partial exchange.
-const PoolJoinCapability = "pool-join-v1"
-
 // DefaultPoolPeerPort is the port a Core's pool-peer listener binds unless configured
 // otherwise; a Controller assumes it only for a host that does not report its peer origin.
 const DefaultPoolPeerPort = 9444
-
-// PoolMaintenanceCapability gates the drain flag: the maintenance command and the two
-// PoolMember fields above.  A Controller talking to a master without it offers no toggle,
-// because the refusal that makes the flag mean anything lives in the master.
-const PoolMaintenanceCapability = "pool-maintenance-v1"
-
-// PoolAuthorityReplicaCapability gates the master's signed authority replica: the peer
-// push/ack below, the member's stored copy and the reported replica generation.  A master
-// with it and a member without it records that member at replica generation 0 with an
-// upgrade-required reason; the master never degrades to an unsigned or partial copy.
-const PoolAuthorityReplicaCapability = "pool-authority-replica-v2"
-
-// PoolBackupPagedAuthorityCapability permits bounded, signed backup authority pages.
-const PoolBackupPagedAuthorityCapability = "pool-backup-authority-pages-v1"
-
-// PoolAuthorityTransferCapability gates a planned master change and a member eject: the
-// transfer command, the two peer endpoints below and the reported transfer status.  It is
-// required on the master, on the target and on every ready member, because a member that
-// cannot re-point would keep following a host that is no longer the pool master.
-const PoolAuthorityTransferCapability = "pool-authority-transfer-v1"
-
-// PoolWitnessCapability gates Core's native Corosync qdevice witness enrollment and status.
-const PoolWitnessCapability = "pool-witness-v1"
 
 // PoolWitnessCandidate is a same-site qnetd CA advertised by the Controller. An empty
 // Address identifies the Controller itself; Core derives its qnetd endpoint from the
@@ -1214,14 +1197,12 @@ type PoolAuthorityReplica struct {
 	FenceCredentials []PoolWrappedFenceCredential `json:"fence_credentials,omitempty"`
 	// WitnessCredentials contains a separately sealed native PKCS#12 bundle for each member.
 	WitnessCredentials []PoolWrappedWitnessCredential `json:"witness_credentials,omitempty"`
-	// BackupAuthority carries durable backup repositories, policy/schedule definitions,
-	// retained run history and catalog index entries for master takeover. Full NFS
-	// recovery-point payloads are never embedded. Covered by ContentDigest and signature;
-	// not a PoolReplicaSections entry so older section layout stays compatible when empty.
-	BackupAuthority *PoolBackupAuthority `json:"backup_authority,omitempty"`
-	BackupManifest  *PoolBackupManifest  `json:"backup_manifest,omitempty"`
-	Sections        []PoolReplicaSection `json:"sections"`
-	Signature       string               `json:"signature,omitempty"`
+	// BackupManifest binds the paged backup authority (repositories, policy/schedule
+	// definitions, retained runs, catalog index) for master takeover. Full NFS
+	// recovery-point payloads are never embedded. Covered by ContentDigest and signature.
+	BackupManifest *PoolBackupManifest  `json:"backup_manifest,omitempty"`
+	Sections       []PoolReplicaSection `json:"sections"`
+	Signature      string               `json:"signature,omitempty"`
 }
 
 // SigningBytes is everything but the signature: the per-member fields are deliberately
@@ -1262,6 +1243,10 @@ func (r PoolAuthorityReplica) SectionDigests() ([]PoolReplicaSection, error) {
 	return out, nil
 }
 
+// ErrPoolAuthorityReplicaSections is returned for a replica that declares fewer or more
+// sections than this build defines, as one written by an older build does.
+var ErrPoolAuthorityReplicaSections = errors.New("pool authority replica does not declare every section")
+
 // VerifySections proves the stored sections are the ones the signature covers and that
 // none of them is missing.  A replica that declares fewer sections is refused, not used.
 func (r PoolAuthorityReplica) VerifySections() error {
@@ -1270,7 +1255,7 @@ func (r PoolAuthorityReplica) VerifySections() error {
 		return err
 	}
 	if len(r.Sections) != len(want) {
-		return errors.New("pool authority replica does not declare every section")
+		return ErrPoolAuthorityReplicaSections
 	}
 	for i, section := range r.Sections {
 		if section.Name != want[i].Name || section.SHA256 != want[i].SHA256 {
@@ -1314,12 +1299,8 @@ func (r PoolAuthorityReplica) Valid() error {
 	if err := ValidatePoolResourceMutations(r.ResourceMutations); err != nil {
 		return err
 	}
-	if r.BackupManifest != nil {
-		if r.BackupAuthority != nil || r.BackupManifest.Valid() != nil {
-			return errors.New("pool authority replica backup manifest is invalid")
-		}
-	} else if r.BackupAuthority != nil && r.BackupAuthority.Valid() != nil {
-		return errors.New("pool authority replica backup authority is invalid")
+	if r.BackupManifest != nil && r.BackupManifest.Valid() != nil {
+		return errors.New("pool authority replica backup manifest is invalid")
 	}
 	return r.VerifySections()
 }
@@ -1642,12 +1623,6 @@ func PoolWatchdogBound(timeoutSeconds int) time.Duration {
 	return bound
 }
 
-// PoolHostFencingCapability gates the pool's Host fencing setting: the command that changes
-// it, the watchdog each host reports about itself and the prerequisite checklist the master
-// reports with its membership.  A Controller talking to a master without it offers no switch,
-// because the setting that means anything is the master's.
-const PoolHostFencingCapability = "pool-host-fencing-v1"
-
 // PoolFenceCheck is one host's non-destructive read of another host's fence device: the
 // management controller's own report of which machine it manages and whether that machine is
 // powered on, over the recorded profile and the replicated credential.  Nothing on this path
@@ -1818,12 +1793,6 @@ const (
 	PoolClusterDegraded     = "degraded"
 )
 
-// PoolWatchdogClusterCapability gates the pool-owned Corosync/Pacemaker cluster: Core forming
-// it, the arming rollout across its hosts and the cluster state reported above.  A master
-// without it forms no cluster, so a Controller shows the setting without the cluster line
-// rather than inventing one.
-const PoolWatchdogClusterCapability = "pool-watchdog-cluster-v1"
-
 // PoolWatchdogClusterHosts is the largest pool Nex Core forms a watchdog cluster for.  It is
 // not a votequorum limit — votequorum scales far past this — but the largest cluster this code
 // has been exercised on.  A pool above it is reported and left unarmed; no host is ever
@@ -1939,6 +1908,9 @@ func (m PoolMembership) Valid() error {
 		_, hexErr := hex.DecodeString(member.CertificateSHA256)
 		if member.HostID == "" || seen[member.HostID] || len(member.CertificateSHA256) != 64 || hexErr != nil || member.Generation != m.Generation || (member.Status != "ready" && member.Status != "pending" && member.Status != "failed" && member.Status != "ejected") {
 			return errors.New("invalid pool member record")
+		}
+		if member.Hostname != "" && !ValidPoolHostname(member.Hostname) {
+			return errors.New("invalid pool member hostname")
 		}
 		if member.SanlockHostID > PoolSanlockMaxHostID || member.SanlockHostID != 0 && leaseIDs[member.SanlockHostID] ||
 			m.StorageLease != nil && member.SanlockHostID == 0 {

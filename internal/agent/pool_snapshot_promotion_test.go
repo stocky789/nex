@@ -4,12 +4,16 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
 )
 
 func TestSnapshotReserveAndSettlementReplicateBeforeAcknowledgementAndPromotion(t *testing.T) {
@@ -82,6 +86,79 @@ func TestSnapshotReserveAndSettlementReplicateBeforeAcknowledgementAndPromotion(
 	adopted := poolVMRecords(t, owner)[labVMA]
 	if len(adopted.Snapshots) != 1 || !reflect.DeepEqual(adopted.Snapshots[0], descriptor) {
 		t.Fatalf("promotion did not adopt the acknowledged snapshot catalog: %#v", adopted)
+	}
+}
+
+// The owner cannot tell a master that saved the reservation and lost the reply from one
+// that saved nothing, so every ambiguous failure must keep the owner's intent for an exact
+// re-drive instead of aborting it and stranding the master's pending reservation.
+func TestSnapshotReservationWithLostReplyIsUnconfirmedAndRedrivesExactly(t *testing.T) {
+	lab := promotionLab(t, 1)
+	master, owner := lab.host("master-1"), lab.host("member-1")
+	spec := labSpec(labVMA, owner.State.HostID)
+	writePoolVMRecord(t, master, labOwnedVM(labVMA, owner.State.HostID))
+	writeAppliedPoolVMSpec(t, owner, spec)
+	command := protocol.Command{OperationID: "snapshot-lost-reply", Kind: "snapshot-create", VM: &spec, Snapshot: &protocol.VMSnapshotRequest{Name: "lost-reply"}}
+	createdAt := time.Date(2026, 10, 1, 1, 2, 3, 0, time.UTC)
+	intent := strings.Repeat("e", 64)
+
+	lab.drop(master.State.HostID, "POST:"+poolVMPath+labVMA)
+	if _, err := ReservePoolVMSnapshot(context.Background(), owner, command, 1, intent, createdAt); !errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
+		t.Fatalf("a lost reservation reply must keep the owner intent for a re-drive: %v", err)
+	}
+	if state, err := loadPoolVMs(master); err != nil || state.VMs[labVMA].PendingRecovery == nil {
+		t.Fatalf("master did not keep the saved reservation: %#v (%v)", state.VMs[labVMA], err)
+	}
+	lab.drop(master.State.HostID, "")
+	reservation, err := ReservePoolVMSnapshot(context.Background(), owner, command, 1, intent, createdAt)
+	if err != nil {
+		t.Fatalf("exact re-drive: %v", err)
+	}
+	if state, err := loadPoolVMs(master); err != nil || state.VMs[labVMA].PendingRecovery == nil || *state.VMs[labVMA].PendingRecovery != reservation {
+		t.Fatalf("re-drive changed the master reservation: %#v (%v)", state.VMs[labVMA], err)
+	}
+}
+
+// Once the master settles a delete it drops the target from its catalog. If the owner then
+// missed the acknowledgement, its re-drive must resume from the journaled target instead of
+// failing "target not found" and leaving its own journal unsettled (and the VM undeletable).
+func TestSnapshotDeleteRedriveAfterMasterSettledUsesJournaledTarget(t *testing.T) {
+	lab := promotionLab(t, 1)
+	master, owner := lab.host("master-1"), lab.host("member-1")
+	spec := labSpec(labVMA, owner.State.HostID)
+	writePoolVMRecord(t, master, labOwnedVM(labVMA, owner.State.HostID))
+	writeAppliedPoolVMSpec(t, owner, spec)
+	t.Setenv("PATH", t.TempDir()) // no virsh: the engine must fail after it has taken the journal over
+
+	const snapshotID = "snapshot-gone"
+	target := protocol.PoolVMSnapshot{ID: snapshotID, VMID: labVMA, Name: "gone", CreatedAt: time.Date(2026, 10, 1, 1, 2, 3, 0, time.UTC),
+		SpecSHA256: strings.Repeat("a", 64), DiskIdentitySHA256: strings.Repeat("b", 64)}
+	bound := protocol.Command{OperationID: "snapshot-delete-redrive", Kind: "snapshot-delete", VM: &spec,
+		Snapshot: &protocol.VMSnapshotRequest{SnapshotID: snapshotID, Target: &target}}
+	data, err := json.Marshal(map[string]any{
+		"command": bound, "result": protocol.Result{OperationID: bound.OperationID, Status: "pending"},
+		"stage": "snapshot-delete-preflight", "recovery_stage": "preflight",
+		"snapshot_delete": map[string]any{"target_snapshot_id": snapshotID, "created_at": target.CreatedAt},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := filepath.Join(owner.dir, "managed-vms", bound.OperationID+".json")
+	if err := os.WriteFile(journal, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The owner's admitted command never carries the target; the master catalog no longer lists it.
+	admitted := bound
+	admitted.Snapshot = &protocol.VMSnapshotRequest{SnapshotID: snapshotID}
+	identity := copyState(owner.State)
+	identity.Journal = map[string]JournalEntry{admitted.OperationID: {Order: 1, Status: "pending", Command: &admitted}}
+	result, err := executeStoppedSnapshot(context.Background(), owner.dir, identity, admitted)
+	if strings.Contains(result.Error, ErrSnapshotTargetNotFound.Error()) || err != nil && strings.Contains(err.Error(), ErrSnapshotTargetNotFound.Error()) {
+		t.Fatalf("re-drive lost its journaled target: %+v %v", result, err)
+	}
+	if _, statErr := os.Stat(journal); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("re-drive never reached the engine with the journaled command: %+v %v (%v)", result, err, statErr)
 	}
 }
 

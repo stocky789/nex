@@ -63,6 +63,44 @@ func TestBackupAuthorityPinsPermitSamePointButRequireUniqueOperations(t *testing
 	}
 }
 
+func TestBackupAuthorityRejectsMalformedOrphanCleanup(t *testing.T) {
+	stamp := time.Now().UTC()
+	valid := BackupOrphanCleanup{
+		OperationID: "orph-1",
+		Request: OrphanCleanupRequest{
+			RepositoryID: "repo-1", VMIDs: []string{"vm-gone"}, Confirmation: "delete 1 recovery points",
+			RecoveryPoints: 1,
+		},
+		Status: "succeeded", Points: []BackupOrphanPointResult{
+			{RecoveryPointID: "point-1", VMID: "vm-gone", Status: "deleted"},
+		},
+		UpdatedAt: stamp,
+	}
+	if err := (PoolBackupAuthority{OrphanCleanups: []BackupOrphanCleanup{valid}}).Valid(); err != nil {
+		t.Fatalf("valid orphan cleanup refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*BackupOrphanCleanup){
+		"empty request":          func(c *BackupOrphanCleanup) { c.Request = OrphanCleanupRequest{} },
+		"bad status":             func(c *BackupOrphanCleanup) { c.Status = "pending" },
+		"oversized error":        func(c *BackupOrphanCleanup) { c.Error = strings.Repeat("e", 4097) },
+		"zero updated_at":        func(c *BackupOrphanCleanup) { c.UpdatedAt = time.Time{} },
+		"bad point status":       func(c *BackupOrphanCleanup) { c.Points[0].Status = "running" },
+		"missing point vmid":     func(c *BackupOrphanCleanup) { c.Points[0].VMID = "" },
+		"oversized point reason": func(c *BackupOrphanCleanup) { c.Points[0].Reason = strings.Repeat("r", 4097) },
+	} {
+		cleanup := valid
+		cleanup.Points = append([]BackupOrphanPointResult(nil), valid.Points...)
+		mutate(&cleanup)
+		if err := (PoolBackupAuthority{OrphanCleanups: []BackupOrphanCleanup{cleanup}}).Valid(); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	dup := PoolBackupAuthority{OrphanCleanups: []BackupOrphanCleanup{valid, valid}}
+	if err := dup.Valid(); err == nil {
+		t.Fatal("duplicate orphan cleanup operation was accepted")
+	}
+}
+
 func TestBackupScheduleDSTGapIsSkippedAndRepeatRunsOnce(t *testing.T) {
 	// America/New_York 2026-03-08 spring forward: 02:30 local does not exist.
 	rule := BackupScheduleRule{Frequency: BackupScheduleDaily, Hour: 2, Minute: 30}
@@ -152,5 +190,52 @@ func TestBackupRunAcceptsScheduledMissedStatus(t *testing.T) {
 	}
 	if err := run.Valid(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Retention rules are a union: a point survives if any rule keeps it, and
+// age-protected points do not count toward keep_latest.
+func TestRetentionRulesAreAUnion(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	point := func(id string, age time.Duration, protected bool) BackupRecoveryPoint {
+		return BackupRecoveryPoint{ID: id, SourceVMID: "vm-1", CapturedAt: now.Add(-age), Protected: protected}
+	}
+	points := []BackupRecoveryPoint{
+		point("fresh", time.Hour, false), point("newest-old", 48*time.Hour, false),
+		point("older", 72*time.Hour, false), point("marked", 96*time.Hour, true), point("oldest", 120*time.Hour, false),
+	}
+	_, prune := RetentionEligiblePrune(points, "vm-1", BackupRetention{KeepLatest: 1, ProtectNewerThan: 24 * time.Hour}, now, nil)
+	var ids []string
+	for _, p := range prune {
+		ids = append(ids, p.ID)
+	}
+	if strings.Join(ids, ",") != "older,oldest" {
+		t.Fatalf("pruned %v; want the two unprotected points beyond keep_latest, which skips the age-protected one", ids)
+	}
+}
+
+func TestPoolBackupManifestBoundsRecordCountsByBytes(t *testing.T) {
+	const totalBytes = 500_000_000
+	valid := PoolBackupManifest{SHA256: strings.Repeat("a", 64), TotalBytes: totalBytes, PageCount: totalBytes/PoolBackupPageLimit + 1}
+	// Retained histories are not capped at a fixed number of records.
+	valid.History, valid.Catalog = 150_000, 150_000
+	if err := valid.Valid(); err != nil {
+		t.Fatalf("large retained record counts were refused: %v", err)
+	}
+	for name, edit := range map[string]func(*PoolBackupManifest){
+		"history beyond the bytes": func(m *PoolBackupManifest) { m.History = m.TotalBytes/5 + 1 },
+		"counts that sum past bytes": func(m *PoolBackupManifest) {
+			m.History, m.Catalog, m.Pins = m.TotalBytes/10, m.TotalBytes/10, m.TotalBytes/10
+		},
+		"negative orphan cleanups":     func(m *PoolBackupManifest) { m.OrphanCleanups = -1 },
+		"more repositories than cap":   func(m *PoolBackupManifest) { m.Repositories = PoolBackupMaxRepositories + 1 },
+		"more definitions than cap":    func(m *PoolBackupManifest) { m.Definitions = PoolBackupMaxDefinitions + 1 },
+		"pages larger than page limit": func(m *PoolBackupManifest) { m.PageCount = 1 },
+	} {
+		m := valid
+		edit(&m)
+		if m.Valid() == nil {
+			t.Fatalf("%s: manifest accepted: %+v", name, m)
+		}
 	}
 }

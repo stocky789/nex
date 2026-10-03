@@ -62,3 +62,111 @@
   .pool-member-detail dd { margin-bottom: 6px; }
   .pool-check { white-space: normal; }
 }
+
+/* Backups: one filter row above the table, and row actions in a single right-aligned line. */
+.row-actions.inline { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 6px; width: auto; white-space: nowrap; }
+.row-actions.inline > * { flex: none; white-space: nowrap; }
+.row-actions.inline select { width: 150px; min-height: 26px; }
+:is(.backup-jobs, .backup-points, .backup-repos) th:last-child { width: 1%; }
+
+/* Backup jobs: one tbody per job; its VMs expand underneath. */
+.job-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.job-toolbar-end { display: flex; gap: 12px; margin-left: auto; font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { min-height: 26px; padding: 2px 10px; font-size: 12px; }
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--select); color: var(--text); }
+.chip .count { margin-left: 6px; }
+.jobs tbody.job + tbody.job { border-top: 1px solid var(--line-soft); }
+.job-row { cursor: pointer; }
+.job-row:hover { background: var(--sunken); }
+.job-name { display: flex; align-items: flex-start; gap: 6px; }
+.job-name small, .job-vm-name small { display: block; }
+.job-vm { background: var(--canvas); animation: job-vm-in .18s cubic-bezier(.25, 1, .5, 1); }
+.job-vm:hover { background: var(--sunken); }
+.job-vm-name { padding-left: 30px; font-weight: 600; }
+.job-error { max-width: 36ch; white-space: normal; }
+.empty-state { display: grid; justify-items: start; gap: 6px; padding: 12px 0 4px; }
+.empty-state p { margin: 0; color: var(--muted); max-width: 60ch; }
+@keyframes job-vm-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .job-vm { animation: none; } }
+
+/* Restore and back-up steps: one column, so summaries and buttons keep their natural size. */
+.stack { display: grid; gap: 10px; align-content: start; }
+.stack > .actions { justify-content: flex-start; }
+
+/* Optional Panel footer stays outside the scrolling body. */
+.slideover-footer { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line-soft); background: var(--panel); }
+.slideover-footer > .actions { flex: 1; justify-content: flex-end; }
+.slideover-footer button { min-height: 36px; }
+.slideover-footer :is(p, .note, .why) { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+
+/* Backups shares the console's list/sidebar and selected-item panel vocabulary. */
+.backup-workspace { min-width: 0; }
+.backup-workspace .slideover { transition-duration: 180ms; }
+.backup-tabs { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-bottom: 12px; border-bottom: 1px solid var(--line-soft); }
+.backup-tabs button { min-height: 36px; padding: 6px 0; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); transition: color 150ms ease-out, border-color 150ms ease-out; }
+.backup-tabs button:hover:not(:disabled) { color: var(--text); }
+.backup-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.backup-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; align-items: start; }
+.backup-filters { display: grid; align-content: start; gap: 12px; min-width: 0; padding: 12px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--panel); }
+.backup-filters :is(input[type="search"], select) { width: 100%; min-width: 0; }
+.backup-filter-toggle { display: none; }
+.backup-list { min-width: 0; }
+.backup-workspace .job-toolbar { gap: 8px 12px; }
+.backup-workspace .job-toolbar-end { flex-wrap: wrap; }
+.backup-workspace :is(.backup-points, .backup-jobs) { width: 100%; }
+.backup-workspace :is(.backup-points, .backup-jobs) th { position: sticky; top: 0; z-index: 1; background: var(--panel); }
+.backup-workspace :is(.backup-points, .backup-jobs) :is(th, td) { vertical-align: middle; }
+.backup-workspace :is(.backup-points, .backup-jobs) tbody tr { transition: background-color 150ms ease-out; }
+.backup-workspace :is(.backup-points, .backup-jobs) tbody tr:hover { background: var(--sunken); }
+.backup-workspace :is(.backup-points, .backup-jobs) tr:is(.sel, [aria-selected="true"]) { background: var(--select); }
+.backup-primary { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.backup-meta { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.backup-workspace .backup-row-detail { display: none; }
+.backup-row-open { min-height: 36px; white-space: nowrap; }
+.backup-workspace .backup-loading { display: grid; align-content: start; min-height: 160px; margin: 0; padding: 12px 10px; color: var(--muted); background: var(--canvas); }
+.backup-steps { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0 0 14px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); list-style: none; color: var(--muted); font-size: 12px; }
+.backup-steps [aria-current="step"] { color: var(--text); font-weight: 600; }
+.backup-panel { min-width: 0; padding-top: 12px; }
+.backup-panel :is(p, .why, .note) { overflow-wrap: anywhere; }
+.backup-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 4px 10px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--panel); cursor: pointer; transition: background-color 150ms ease-out, border-color 150ms ease-out; }
+.backup-choice:hover { background: var(--sunken); }
+.backup-choice:has(input:checked) { border-color: var(--accent); background: var(--select); }
+.backup-choice:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; }
+.backup-choice input[type="radio"] { grid-column: 1; grid-row: 1 / span 2; margin-top: 2px; }
+.backup-choice > :not(input) { grid-column: 2; min-width: 0; overflow-wrap: anywhere; }
+.backup-choice :is(small, .help, .backup-meta) { color: var(--muted); font-weight: 400; }
+.backup-summary { min-width: 0; }
+.backup-summary dd { min-width: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 900px) {
+  .backup-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .backup-filter-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; }
+  .backup-filters { display: none; }
+  .backup-filters.open { display: grid; }
+}
+
+@media (max-width: 600px) {
+  .backup-workspace :is(.backup-points, .backup-jobs).records { min-width: 0; table-layout: fixed; }
+  .backup-workspace :is(.backup-points, .backup-jobs) .backup-secondary { display: none; }
+  .backup-workspace :is(.backup-points, .backup-jobs) :is(th, td) { padding: 8px 6px; white-space: normal; overflow-wrap: anywhere; }
+  .backup-workspace :is(.backup-points, .backup-jobs) th:last-child { width: 82px; }
+  .backup-workspace :is(.backup-points, .backup-jobs) .badge { white-space: normal; }
+  .backup-workspace .backup-row-detail { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
+  .backup-workspace .job-name { gap: 4px; }
+  .backup-workspace .job-name > span { min-width: 0; }
+  .backup-workspace .job-vm-name { padding-left: 6px; }
+  .backup-workspace .row-actions.inline { flex-wrap: wrap; white-space: normal; }
+  .backup-workspace .row-actions.inline > * { max-width: 100%; white-space: normal; }
+  .backup-workspace :is(button, .chip), .backup-panel button { min-height: 36px; }
+  .backup-workspace .job-toolbar-end { width: 100%; margin-left: 0; }
+  .backup-panel .backup-summary { grid-template-columns: minmax(0, 1fr); }
+  .backup-panel .backup-summary dt { padding-bottom: 0; border-bottom: 0; }
+  .backup-panel .backup-summary dd { padding-top: 2px; }
+  .slideover-footer { padding: 10px 14px; }
+  .slideover-footer > .actions { flex-wrap: wrap; gap: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backup-tabs button, .backup-choice, .backup-workspace :is(.backup-points, .backup-jobs) tbody tr { transition: none; }
+}

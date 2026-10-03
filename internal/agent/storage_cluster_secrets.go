@@ -137,6 +137,7 @@ func clusterSecretDir(s *Store) (string, error) {
 	return dir, nil
 }
 
+// clusterSecretKey returns the random 32-byte receipt key stored privately beside the receipts, creating it once.
 func clusterSecretKey(s *Store) ([]byte, error) {
 	dir, err := clusterSecretDir(s)
 	if err != nil {

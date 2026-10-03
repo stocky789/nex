@@ -12,7 +12,7 @@ from playwright.sync_api import sync_playwright
 
 CSP = ("default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; "
        "form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; "
-       "script-src 'none'; style-src 'self'")
+       "script-src 'self'; style-src 'self'")
 HEADERS = {
     'content-security-policy': CSP,
     'referrer-policy': 'no-referrer',
@@ -24,6 +24,7 @@ SITE_HOST = 'nexvirtualization.com'
 # default is a reserved documentation address (RFC 5737), so an unconfigured run
 # fails to connect instead of reaching an unintended host.
 RESOLVE_IP = os.environ.get('NEX_WEBSITE_RESOLVE_IP', '198.51.100.10')
+RESOLVE_RULE = f'MAP {SITE_HOST} {RESOLVE_IP}'
 
 
 def page_url(base, path):
@@ -53,7 +54,7 @@ def main():
     errors, requests, responses, results = [], [], [], []
 
     with sync_playwright() as pw:
-        launch_args = ([f'--host-resolver-rules=MAP {SITE_HOST} {RESOLVE_IP}']
+        launch_args = ([f'--host-resolver-rules={RESOLVE_RULE}']
                        if args.resolve else [])
         browser = pw.chromium.launch(headless=True, args=launch_args)
         for width in (1440, 360):
@@ -95,12 +96,14 @@ def main():
             page.wait_for_url('**/gallery/')
             assert gallery_response and gallery_response.status == 200
             assert_headers(gallery_response, require_hsts)
-            gallery = page.locator('main figure img')
+            # The slider's dark overlay is intentionally decorative (alt="").
+            gallery = page.locator('main figure img:not(.dark)')
             assert gallery.count() >= 4
             for image in gallery.all():
                 image.scroll_into_view_if_needed()
                 image.evaluate('image => image.decode()')
                 assert image.get_attribute('alt') and image.evaluate('image => image.naturalWidth > 0')
+            assert page.locator('.theme-slider input').first.is_enabled()
             page.screenshot(path=str(args.evidence / f'gallery-{width}.png'), full_page=True)
             results.append(f'{width}px homepage keyboard FAQ and gallery images')
             context.close()
@@ -115,6 +118,7 @@ def main():
         assert page.locator('details').first.get_attribute('open') is not None
         assert page.goto(page_url(args.url, '/gallery/'), wait_until='load').status == 200
         assert page.locator('main figure img').count() >= 4
+        assert page.locator('.theme-slider input').first.is_disabled()
         results.append('JavaScript-disabled homepage, FAQ and gallery')
         context.close()
 

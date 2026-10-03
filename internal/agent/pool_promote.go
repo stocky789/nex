@@ -1078,7 +1078,11 @@ func verifiedPoolPromotionReplica(s *Store, state poolPeerState, verdict *protoc
 		return nil
 	}
 	if err = replica.Valid(); err != nil {
-		poolPromotionBlocked(verdict, "replica-integrity", "blocked", err.Error(), nil, nil)
+		reason := err.Error()
+		if errors.Is(err, protocol.ErrPoolAuthorityReplicaSections) {
+			reason = "this host's stored pool authority replica predates this build; it cannot be promoted until the pool master pushes a new one"
+		}
+		poolPromotionBlocked(verdict, "replica-integrity", "blocked", reason, nil, nil)
 		return nil
 	}
 	if err = verifyPoolAuthorityReplica(state.CAPEM, replica); err != nil {
@@ -1338,7 +1342,7 @@ func advancePoolPromotion(ctx context.Context, s *Store, record *poolTransferRec
 	case "activate":
 		return activatePromotedPoolAuthority(ctx, s, record, timeout)
 	case "catalog-rebuild":
-		return reconcilePoolBackupCatalogAfterAuthorityAdopt(s, record)
+		return reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx, s, record)
 	case "repoint":
 		return repointPoolMembers(ctx, s, record, timeout)
 	}
@@ -1496,7 +1500,7 @@ func activatePromotedPoolAuthority(ctx context.Context, s *Store, record *poolTr
 	if err = automaticPoolPromotionFenceEnabled(s, record); err != nil {
 		return err
 	}
-	_, err = adoptPoolAuthorityFromReplica(s, stored.Replica, record)
+	_, err = adoptPoolAuthorityFromReplica(ctx, s, stored.Replica, record)
 	return err
 }
 

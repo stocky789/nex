@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -523,8 +524,8 @@ func TestCrossCoreLockProbeRejectsUnexpectedModeEchoAndReleasesLease(t *testing.
 
 func TestPoolStorageMutationFenceRejectsReservation(t *testing.T) {
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 2, Members: []protocol.PoolMember{
-		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"},
-		{HostID: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 2, Status: "ready"},
+		{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"},
+		{HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 2, Status: "ready"},
 	}}
 	state := poolStorageState{Storage: map[string]protocol.StorageRegistration{}, Access: map[string]map[string]protocol.PoolStorageAccess{}, Reservations: map[string]map[string]string{}, Mutations: map[string]string{}}
 	state.Reservations["repo-1"] = map[string]string{"member-1": "vm-1"}
@@ -571,7 +572,7 @@ func TestPoolReservationKeepsLiveOperationWhenLaterOperationFails(t *testing.T) 
 	if state.Reservations["repo-1"]["member-1"] != "vm-live" {
 		t.Fatalf("live reservation lost: %#v", state.Reservations)
 	}
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := beginPoolStorageMutationState(&state, membership, "master-1", "repo-1", "detach"); err == nil {
 		t.Fatal("mutation ignored surviving live reservation")
 	}
@@ -579,7 +580,7 @@ func TestPoolReservationKeepsLiveOperationWhenLaterOperationFails(t *testing.T) 
 
 func TestPoolMasterDoesNotReconcileItsOwnStorage(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -771,7 +772,7 @@ func TestMemberReconcilePostsLaterAccessAfterEarlierDeadline(t *testing.T) {
 	joinPeerMember(t, master, member)
 	storages := []protocol.StorageRegistration{
 		{ID: "first", PoolID: "pool-1", HostID: "master-1", Kind: protocol.StorageKindNFS, Generation: 1, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/first"}}},
-		{ID: "later", PoolID: "pool-1", HostID: "master-1", Kind: protocol.StorageKindNFS, Generation: 1, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/later"}}},
+		{ID: "later", PoolID: "pool-1", HostID: "master-1", Kind: protocol.StorageKindNFS, Generation: 1, Capabilities: protocol.StorageCapabilities{EligibleHostIDs: []string{"master-1"}}, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/later"}}},
 	}
 	dir := filepath.Join(master.dir, "managed-vms")
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -860,6 +861,12 @@ func TestMemberReconcilePostsLaterAccessAfterEarlierDeadline(t *testing.T) {
 	reported = PoolStorageMemberAccess(master, storages)
 	if len(reported[1].MemberAccess) != 1 || reported[1].MemberAccess[0].Identity != "fresh-healthy" || reported[1].MemberAccess[0].Error != "" {
 		t.Fatalf("new authenticated access was not projected after repair: %#v", reported[1].MemberAccess)
+	}
+	if caps := reported[1].Capabilities; !caps.Shared || !slices.Equal(caps.EligibleHostIDs, []string{reported[1].HostID, member.State.HostID}) {
+		t.Fatalf("verified member access did not make the repository shared and eligible: %#v", caps)
+	}
+	if reported[0].Capabilities.Shared {
+		t.Fatalf("repository without verified member access reported shared: %#v", reported[0].Capabilities)
 	}
 }
 
@@ -950,7 +957,7 @@ func TestPoolStorageReconcileDoesNotStartLaterRepositoryAfterShutdown(t *testing
 
 func TestMemberReconcileCheckReportsFailureThenFreshRecovery(t *testing.T) {
 	s := peerStore(t, "member-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}, {HostID: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}, {HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -1214,7 +1221,7 @@ func TestReportProjectsCoreMembershipForControllerAdoption(t *testing.T) {
 	s := testStore(t)
 	s.State = identity
 	s.State.PoolID = "pool-1"
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: identity.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: identity.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: identity.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: identity.HostID, Hostname: identity.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -1229,7 +1236,7 @@ func TestReportProjectsCoreMembershipForControllerAdoption(t *testing.T) {
 
 func TestPoolStorageMutationFenceRetainsUncertainOutcome(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{CAKeyPEM: "master-key", Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -1458,5 +1465,85 @@ func TestPoolStorageReservationIsRefusedDuringVMRecovery(t *testing.T) {
 	}
 	if state.Reservations[storage.ID][member.State.HostID] != "" {
 		t.Fatalf("refused reservation was recorded: %#v", state.Reservations[storage.ID])
+	}
+}
+
+// PoolStorageMemberAccess once held poolStorageMu while taking poolPeerMu, the reverse of
+// every other path (peer then storage), so the two deadlocked the master.
+func TestPoolStorageMemberAccessKeepsPeerBeforeStorageLockOrder(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	poolPeerMu.Lock()
+	returned := make(chan struct{})
+	go func() {
+		PoolStorageMemberAccess(master, nil)
+		close(returned)
+	}()
+	time.Sleep(100 * time.Millisecond) // let it block on the peer lock
+	locked := make(chan struct{})
+	go func() {
+		poolStorageMu.Lock() // a peer-then-storage caller already holds peer, then needs storage
+		poolStorageMu.Unlock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(2 * time.Second):
+		poolPeerMu.Unlock() // release so the leaked goroutines finish
+		t.Fatal("deadlock: PoolStorageMemberAccess holds poolStorageMu while waiting for poolPeerMu")
+	}
+	poolPeerMu.Unlock()
+	<-returned
+}
+
+func TestPoolStorageMemberAccessDropsNonreadyEligibility(t *testing.T) {
+	for _, status := range []string{"ejected", "pending", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+			joinPeerMember(t, master, member)
+			storage := []protocol.StorageRegistration{{ID: "repo-1", HostID: master.State.HostID, Kind: protocol.StorageKindNFS, Generation: 1}}
+			storage[0].Capabilities.EligibleHostIDs = []string{master.State.HostID}
+			access := protocol.PoolStorageAccess{RepositoryID: "repo-1", HostID: member.State.HostID, Generation: 1, Identity: "verified", Readable: true, Writable: true, QEMUWritable: true, Locking: true}
+			master.poolStorageAccess = map[string]map[string]protocol.PoolStorageAccess{"repo-1": {member.State.HostID: access}}
+			healthy := PoolStorageMemberAccess(master, storage)
+			if !healthy[0].Capabilities.Shared || !slices.Equal(healthy[0].Capabilities.EligibleHostIDs, []string{master.State.HostID, member.State.HostID}) {
+				t.Fatalf("healthy member did not contribute eligibility: %#v", healthy[0])
+			}
+			if storage[0].Capabilities.Shared || !slices.Equal(storage[0].Capabilities.EligibleHostIDs, []string{master.State.HostID}) || storage[0].MemberAccess != nil {
+				t.Fatalf("projection mutated caller storage: %#v", storage[0])
+			}
+			setMemberStatus(t, master, member.State.HostID, status)
+			// A prior report is also safe to project again after membership changes.
+			reported := PoolStorageMemberAccess(master, healthy)
+			if reported[0].Capabilities.Shared || !slices.Equal(reported[0].Capabilities.EligibleHostIDs, []string{master.State.HostID}) || len(reported[0].MemberAccess) != 0 {
+				t.Fatalf("%s member retained shared access: %#v", status, reported[0])
+			}
+			if !healthy[0].Capabilities.Shared || !slices.Equal(healthy[0].Capabilities.EligibleHostIDs, []string{master.State.HostID, member.State.HostID}) || len(healthy[0].MemberAccess) != 1 {
+				t.Fatalf("reprojection mutated caller report: %#v", healthy[0])
+			}
+			setMemberStatus(t, master, member.State.HostID, "ready")
+			access.Generation++
+			master.poolStorageAccess["repo-1"][member.State.HostID] = access
+			stale := PoolStorageMemberAccess(master, healthy)
+			if stale[0].Capabilities.Shared || !slices.Equal(stale[0].Capabilities.EligibleHostIDs, []string{master.State.HostID}) {
+				t.Fatalf("stale generation retained eligibility: %#v", stale[0])
+			}
+		})
+	}
+}
+
+func TestPoolStorageMemberAccessPreservesLocalAndClusteredCapabilities(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	storage := []protocol.StorageRegistration{
+		{ID: "local-1", HostID: master.State.HostID, Kind: protocol.StorageKindLocal},
+		{ID: "cluster-1", HostID: master.State.HostID, Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2", EligibleHostIDs: []string{"master-1", "member-1", "member-2"}}}},
+	}
+	storage[0].Capabilities.EligibleHostIDs = []string{master.State.HostID}
+	storage[1].Capabilities.EligibleHostIDs = []string{"master-1", "member-1", "member-2"}
+	storage[1].Capabilities.Shared = true
+	reported := PoolStorageMemberAccess(master, storage)
+	for i := range storage {
+		if reported[i].Capabilities.Shared != storage[i].Capabilities.Shared || !slices.Equal(reported[i].Capabilities.EligibleHostIDs, storage[i].Capabilities.EligibleHostIDs) {
+			t.Fatalf("native eligibility changed for %s: %#v", storage[i].ID, reported[i].Capabilities)
+		}
 	}
 }

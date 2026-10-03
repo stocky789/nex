@@ -23,8 +23,8 @@ func TestJoinedMemberNetworkProjectionFollowsJoinedPool(t *testing.T) {
 	a.report(memberCert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: caps, Inventory: &protocol.Inventory{Managed: hostDefaults(member.HostID)}})
 
 	membership := protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+		{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: member.HostID, Hostname: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
 	}}
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: caps, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership}}})
 	joined := hostDefaults(member.HostID)

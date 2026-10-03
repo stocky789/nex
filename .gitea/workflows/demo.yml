@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+name: Demo
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  # Never cancel a live deploy or its rollback. PRs have separate ref groups.
+  group: nex-demo-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  demo:
+    if: github.server_url != 'https://github.com' # github.com runs github.yml only
+    # Heavy verification shares the runner with phase1/release. Cancelling it is
+    # harmless: nothing is deployed until the separate deploy job below.
+    concurrency:
+      group: nex-shared-runner
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - uses: https://github.com/actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Check backend and current Controller UI
+        run: |
+          go test -race -timeout 5m ./internal/demo ./cmd/nex-demo
+          python3 -m unittest discover -s tests -p 'test_demo_archive.py'
+          npm --prefix web ci
+          npm --prefix web run typecheck
+      - name: Build immutable demo image and extract exact smoke artifacts
+        env:
+          RELEASE: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
+          docker build --platform linux/amd64 -f packaging/demo/Dockerfile \
+            --build-arg "NEX_DEMO_REVISION=$RELEASE" --tag "nex-demo:$RELEASE" .
+          python3 tests/integration/demo_deploy_image.py --image "nex-demo:$RELEASE"
+          mkdir -p .cache/demo-web .cache/demo-docs
+          candidate=$(docker create "nex-demo:$RELEASE")
+          trap 'docker rm -f "$candidate" >/dev/null' EXIT
+          docker cp "$candidate:/app/nex-demo" .cache/nex-demo
+          docker cp "$candidate:/app/web/." .cache/demo-web/
+          docker cp "$candidate:/app/docs/." .cache/demo-docs/
+          docker cp "$candidate:/app/source.tar.gz" .cache/demo-source.tar.gz
+          chmod 755 .cache/nex-demo
+      - name: Verify the real UI against the shipped read-only adapter
+        run: |
+          python3 -m venv .cache/demo-qa-venv
+          .cache/demo-qa-venv/bin/pip install playwright==1.62.0
+          .cache/demo-qa-venv/bin/python -m playwright install --with-deps chromium
+          .cache/demo-qa-venv/bin/python tests/integration/demo_browser.py \
+            --binary .cache/nex-demo --ui-dir .cache/demo-web --docs-dir .cache/demo-docs --source-archive .cache/demo-source.tar.gz
+  deploy:
+    # Separate concurrency group: phase1/release cancel-in-progress must never
+    # cancel a live deploy or its rollback. Re-running the same SHA is idempotent.
+    # Uses the Docker image built by the demo job on this runner's Docker daemon.
+    needs: [demo]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.server_url != 'https://github.com'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: nex-demo-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # No secrets are read for PR verification. Required secrets fail, never skip,
+      # on main publication. Use isolated disposable runners for untrusted PRs.
+      - name: Deploy main through the fixed healthchecked wrapper
+        env:
+          NEX_DEPLOY_HOST: ${{ secrets.NEX_DEMO_DEPLOY_HOST }}
+          NEX_DEPLOY_USER: ${{ secrets.NEX_DEMO_DEPLOY_USER }}
+          NEX_DEPLOY_KEY: ${{ secrets.NEX_DEMO_DEPLOY_KEY }}
+          NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEMO_DEPLOY_KNOWN_HOSTS }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: scripts/demo-ci-deploy.sh

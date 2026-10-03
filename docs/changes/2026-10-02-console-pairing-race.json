@@ -1,0 +1,37 @@
+{
+  "summary": "Fix duplicate console host-tunnel admission during HTTP and browser handshakes",
+  "paths": [
+    "internal/controller/console.go",
+    "internal/controller/console_test.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/qa/2026-10-02-backup-review-fixes.md",
+    "docs/qa/2026-10-02-console-pairing-race.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Existing VM/host console instructions already require single-use tickets, a fresh ticket on each retry, and automatic reconnect without stopping running guests. No UI or operator steps changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The existing agentConsole host-mTLS upgrade and shared VM/host browser-console streams promise one host tunnel per ticket. Admission now atomically consumes that right before upgrade, including the browser dequeue window. Payloads, authentication, statuses, expiry and Controller/Core compatibility are unchanged; reference descriptions are clarified.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "A previously implemented console bug is corrected; no phase, feature or acceptance milestone changes status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The admission flag is process-local console-session exclusion. No new durable state, pool setting or identity is introduced; guest execution and durable VM records remain on Core. Controller replacement ends only the transient console connection."
+  },
+  "verification": {
+    "method": "Forced real TCP handshake interleavings failed before the fix and passed ten race-detector repetitions after it, retaining actual WebSocket/RFB relay and refusal checks. Final runtime, suite and documentation evidence and simulation limits are recorded in the QA report; no remote CI or native console certification is claimed.",
+    "evidence": ["internal/controller/console_test.go", "docs/qa/2026-10-02-console-pairing-race.md"]
+  }
+}

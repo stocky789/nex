@@ -32,7 +32,7 @@ http {
         # beneath it may be a symlink.
         disable_symlinks on from=$document_root;
 
-        add_header Content-Security-Policy "default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'none'; style-src 'self'" always;
+        add_header Content-Security-Policy "default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'self'; style-src 'self'" always;
         add_header Referrer-Policy "no-referrer" always;
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;

@@ -7,7 +7,7 @@ const humanize = (s: string) => capitalize(s.replaceAll(/[-_.]+/g, " ").trim());
 
 const operations: Record<string, string> = {
   "refresh-inventory": "Refresh inventory", "vm-create": "Create VM", "vm-update": "Edit VM", "vm-delete": "Delete VM",
-  "vm-power": "VM power", "vm-start": "Start VM", "start-vm": "Start VM", "vm-media": "Change VM media",
+  "vm-power": "VM power", "vm-start": "Start VM", "start-vm": "Start VM", "vm-media": "Change VM media", "vm-release-retained": "Release retained original",
   "iso-import": "Import ISO", "media-remove": "Remove ISO",
   "storage-register": "Register storage", "storage-update": "Update storage", "storage-recheck": "Recheck storage",
   "storage-detach": "Detach storage", "storage-zfs-provision": "Provision ZFS storage", "storage-zfs-replace": "Replace ZFS disk",
@@ -17,7 +17,8 @@ const operations: Record<string, string> = {
   "pool-join": "Join pool", "pool-maintenance": "Maintenance mode", "pool-transfer": "Change pool master",
   "pool-promote": "Promote pool master", "pool-fence-profile": "Fence profile", "pool-host-fencing": "Host fencing",
   "pool-bmc-provisioning": "BMC provisioning", enroll: "Enroll host",
-  "backup-repository-register": "Register backup repository", "backup-repository-test": "Test backup repository",
+  "backup-repository-register": "Register backup repository", "backup-repository-test": "Test backup repository", "backup-repository-forget": "Forget backup repository", "backup-orphan-cleanup": "Delete orphaned backups",
+  "backup-policy-upsert": "Save backup job", "backup-policy-pause": "Pause or resume backup job", "backup-policy-delete": "Delete backup job", "backup-policy-run-now": "Run backup job now",
   "backup-now": "Back up now", "backup-restore-as-new": "Restore as new",
   "backup-restore-replace": "Restore replace", "backup-test-restore": "Test restore",
   "backup-protect": "Protect recovery point", "backup-catalog-import": "Import recovery points",

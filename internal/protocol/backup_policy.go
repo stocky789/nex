@@ -104,25 +104,26 @@ func (o BackupPolicyVMOverride) Valid() error {
 
 // BackupPolicy is one master-owned job/schedule definition under pool-backup-policies.json.
 type BackupPolicy struct {
-	ID             string                   `json:"id"`
-	ScheduleID     string                   `json:"schedule_id"`
-	PoolID         string                   `json:"pool_id"`
-	Name           string                   `json:"name"`
-	Enabled        bool                     `json:"enabled"`
-	Paused         bool                     `json:"paused"`
-	RepositoryID   string                   `json:"repository_id"`
-	CaptureMode    string                   `json:"capture_mode"`
-	TimeZone       string                   `json:"time_zone"`
-	Rule           BackupScheduleRule       `json:"rule"`
-	VMIDs          []string                 `json:"vm_ids"`
-	Retention      BackupRetention          `json:"retention"`
-	Limits         BackupPolicyLimits       `json:"limits,omitempty"`
-	Overrides      []BackupPolicyVMOverride `json:"overrides,omitempty"`
-	Revision       uint64                   `json:"revision"`
-	NextDispatchAt time.Time                `json:"next_dispatch_at,omitempty"`
-	LastDispatchAt time.Time                `json:"last_dispatch_at,omitempty"`
-	CreatedAt      time.Time                `json:"created_at,omitempty"`
-	UpdatedAt      time.Time                `json:"updated_at,omitempty"`
+	ID               string                   `json:"id"`
+	ScheduleID       string                   `json:"schedule_id"`
+	PoolID           string                   `json:"pool_id"`
+	Name             string                   `json:"name"`
+	Enabled          bool                     `json:"enabled"`
+	Paused           bool                     `json:"paused"`
+	RepositoryID     string                   `json:"repository_id"`
+	CaptureMode      string                   `json:"capture_mode"`
+	TimeZone         string                   `json:"time_zone"`
+	Rule             BackupScheduleRule       `json:"rule"`
+	VMIDs            []string                 `json:"vm_ids"`
+	Retention        BackupRetention          `json:"retention"`
+	Limits           BackupPolicyLimits       `json:"limits,omitempty"`
+	Overrides        []BackupPolicyVMOverride `json:"overrides,omitempty"`
+	Revision         uint64                   `json:"revision"`
+	ExpectedRevision *uint64                  `json:"expected_revision,omitempty"`
+	NextDispatchAt   time.Time                `json:"next_dispatch_at,omitempty"`
+	LastDispatchAt   time.Time                `json:"last_dispatch_at,omitempty"`
+	CreatedAt        time.Time                `json:"created_at,omitempty"`
+	UpdatedAt        time.Time                `json:"updated_at,omitempty"`
 }
 
 func (p BackupPolicy) Valid() error {
@@ -299,9 +300,10 @@ func RetentionEligiblePrune(points []BackupRecoveryPoint, vmID string, retention
 	return keep, prune
 }
 
-// PoolBackupAuthority is the bounded replica section for master takeover of backup
-// repositories, job/schedule definitions, retained runs, and catalog index entries.
-// Full NFS recovery-point payloads are never embedded; catalog carries index only.
+// PoolBackupAuthority is the replica section for master takeover of backup repositories,
+// job/schedule definitions, retained runs, catalog index entries, pins, receipts and
+// orphan cleanups. It is replicated in pages bound by PoolBackupManifest. Recovery-point
+// payloads are never embedded; the catalog carries the index only.
 type PoolBackupAuthority struct {
 	Repositories     []BackupRepository      `json:"repositories,omitempty"`
 	Definitions      []BackupPolicy          `json:"definitions,omitempty"`
@@ -309,7 +311,8 @@ type PoolBackupAuthority struct {
 	Catalog          []BackupRecoveryPoint   `json:"catalog,omitempty"`
 	Pins             []BackupRestorePin      `json:"pins,omitempty"`
 	MetadataReceipts []BackupMetadataReceipt `json:"metadata_receipts,omitempty"`
-	// Compact refs stay for observation and older readers; derived from Definitions/History.
+	OrphanCleanups   []BackupOrphanCleanup   `json:"orphan_cleanups,omitempty"`
+	// Compact refs are for observation only; derived from Definitions/History.
 	Policies []BackupPolicyRef `json:"policies,omitempty"`
 	Runs     []BackupRunRef    `json:"runs,omitempty"`
 }
@@ -317,37 +320,42 @@ type PoolBackupAuthority struct {
 const PoolBackupPageLimit = 256 << 10
 const PoolBackupBundleLimit = 64 << 20
 
+// Core refuses more repositories or policies than these.
+const (
+	PoolBackupMaxRepositories = 256
+	PoolBackupMaxDefinitions  = 1000
+)
+
 // PoolBackupManifest binds every byte of a paged authority to the signed replica.
 type PoolBackupManifest struct {
-	SHA256           string   `json:"sha256"`
-	PageSHA256       []string `json:"page_sha256"`
-	PageBytes        []int    `json:"page_bytes"`
-	TotalBytes       int      `json:"total_bytes"`
-	Repositories     int      `json:"repositories"`
-	Definitions      int      `json:"definitions"`
-	History          int      `json:"history"`
-	Catalog          int      `json:"catalog"`
-	Pins             int      `json:"pins"`
-	MetadataReceipts int      `json:"metadata_receipts"`
+	SHA256           string `json:"sha256"`
+	PageCount        int    `json:"page_count"`
+	TotalBytes       int    `json:"total_bytes"`
+	Repositories     int    `json:"repositories"`
+	Definitions      int    `json:"definitions"`
+	History          int    `json:"history"`
+	Catalog          int    `json:"catalog"`
+	Pins             int    `json:"pins"`
+	MetadataReceipts int    `json:"metadata_receipts"`
+	OrphanCleanups   int    `json:"orphan_cleanups"`
 }
 
 func (m PoolBackupManifest) Valid() error {
-	if !lowerSHA256(m.SHA256) || m.TotalBytes <= 0 || m.TotalBytes > PoolBackupBundleLimit ||
-		len(m.PageSHA256) == 0 || len(m.PageSHA256) != len(m.PageBytes) || len(m.PageSHA256) > 1024 ||
-		m.Repositories < 0 || m.Repositories > 256 || m.Definitions < 0 || m.Definitions > 1000 ||
-		m.History < 0 || m.History > 100000 || m.Catalog < 0 || m.Catalog > 100000 ||
-		m.Pins < 0 || m.Pins > 100000 || m.MetadataReceipts < 0 || m.MetadataReceipts > 100000 {
+	if !lowerSHA256(m.SHA256) || m.TotalBytes <= 0 ||
+		m.Repositories < 0 || m.Repositories > PoolBackupMaxRepositories || m.Definitions < 0 || m.Definitions > PoolBackupMaxDefinitions ||
+		m.History < 0 || m.Catalog < 0 || m.Pins < 0 || m.MetadataReceipts < 0 || m.OrphanCleanups < 0 ||
+		m.PageCount <= 0 || m.PageCount > m.TotalBytes/5+1 || m.TotalBytes/m.PageCount > PoolBackupPageLimit ||
+		(m.TotalBytes/m.PageCount == PoolBackupPageLimit && m.TotalBytes%m.PageCount != 0) {
 		return errors.New("backup authority manifest exceeds bound or is invalid")
 	}
-	total := 0
-	for i, hash := range m.PageSHA256 {
-		if !lowerSHA256(hash) || m.PageBytes[i] <= 0 || m.PageBytes[i] > PoolBackupPageLimit {
-			return errors.New("backup authority page digest is invalid")
+	// Retained records are uncapped, but each is a frame of at least five bytes, so a
+	// manifest cannot claim more records than its bytes can hold.
+	room := m.TotalBytes / 5
+	for _, count := range []int{m.Repositories, m.Definitions, m.History, m.Catalog, m.Pins, m.MetadataReceipts, m.OrphanCleanups} {
+		if count > room {
+			return errors.New("backup authority manifest exceeds bound or is invalid")
 		}
-		total += m.PageBytes[i]
-	}
-	if total != m.TotalBytes {
-		return errors.New("backup authority page sizes do not match")
+		room -= count
 	}
 	return nil
 }
@@ -363,6 +371,20 @@ type BackupPolicyRef struct {
 	UpdatedAt  time.Time `json:"updated_at,omitempty"`
 }
 
+// DeleteBackupPolicyRequest removes a backup policy definition from the pool master.
+// Confirmation is the policy name. Recovery points, run history and repository data are kept.
+type DeleteBackupPolicyRequest struct {
+	PolicyID     string `json:"policy_id"`
+	Confirmation string `json:"confirmation"`
+}
+
+func (r DeleteBackupPolicyRequest) Valid() error {
+	if !ValidSnapshotOperationID(r.PolicyID) || len(r.Confirmation) > 256 {
+		return errors.New("delete backup policy request is invalid")
+	}
+	return nil
+}
+
 // BackupRunRef is a compact committed or unresolved run reference for observation.
 type BackupRunRef struct {
 	OperationID  string    `json:"operation_id"`
@@ -375,8 +397,7 @@ type BackupRunRef struct {
 }
 
 func (a PoolBackupAuthority) Valid() error {
-	if len(a.Repositories) > 256 || len(a.Definitions) > 1000 || len(a.History) > 100000 ||
-		len(a.Catalog) > 100000 || len(a.Pins) > 100000 || len(a.Policies) > 1000 || len(a.Runs) > 100000 || len(a.MetadataReceipts) > 100000 {
+	if len(a.Repositories) > PoolBackupMaxRepositories || len(a.Definitions) > PoolBackupMaxDefinitions || len(a.Policies) > PoolBackupMaxDefinitions {
 		return errors.New("backup authority exceeds bound")
 	}
 	seenRepo, seenDef, seenHist, seenCat := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -417,6 +438,13 @@ func (a PoolBackupAuthority) Valid() error {
 			return errors.New("backup authority metadata receipt is invalid")
 		}
 		seenReceipt[receipt.OperationID] = true
+	}
+	seenCleanup := map[string]bool{}
+	for _, cleanup := range a.OrphanCleanups {
+		if cleanup.Valid() != nil || seenCleanup[cleanup.OperationID] {
+			return errors.New("backup authority orphan cleanup is invalid")
+		}
+		seenCleanup[cleanup.OperationID] = true
 	}
 	seenP, seenR := map[string]bool{}, map[string]bool{}
 	for _, p := range a.Policies {

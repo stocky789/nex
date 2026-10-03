@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -140,6 +141,7 @@ type managedJournal struct {
 	BackupTPMRootAbsent     bool                                `json:"backup_tpm_root_absent,omitempty"`
 	BackupTPMManifestSHA256 string                              `json:"backup_tpm_manifest_sha256,omitempty"`
 	BackupTPMPreviousSHA256 string                              `json:"backup_tpm_previous_sha256,omitempty"`
+	RetainedTPM             []managedRetainedTPM                `json:"retained_tpm"`
 	// DiskChains is ordered with Disks; each chain is its active head followed by every
 	// backing image. Paths stay in this host journal and never cross the Core API.
 	DiskChains      [][]string      `json:"disk_chains,omitempty"`
@@ -211,6 +213,8 @@ type ejectCleanupReapply struct {
 	MembershipGeneration uint64
 }
 
+const managedJournalMaxBytes = 1 << 20
+
 func (e *ManagedEngine) save(j managedJournal) error {
 	if j.projectionView {
 		path := filepath.Join(e.stateDir, j.Command.OperationID+".json")
@@ -223,15 +227,14 @@ func (e *ManagedEngine) save(j managedJournal) error {
 			DiskChains: cloneDiskChains(j.DiskChains), Domain: append([]byte(nil), j.Domain...),
 			Targets: append([]string(nil), j.Targets...), MediaTarget: j.MediaTarget, DriversTarget: j.DriversTarget,
 		}
-		b, err := json.Marshal(current)
-		if err != nil {
-			return err
-		}
-		return atomicWrite(path, b)
+		j = current
 	}
 	b, err := json.Marshal(j)
 	if err != nil {
 		return err
+	}
+	if len(b) > managedJournalMaxBytes {
+		return errors.New("managed journal exceeds 1 MiB")
 	}
 	return atomicWrite(filepath.Join(e.stateDir, j.Command.OperationID+".json"), b)
 }
@@ -511,19 +514,15 @@ func (e *ManagedEngine) VMHasPoolSharedStorageHistory(ctx context.Context, vmID 
 // compares the whole command, so a caller that derives part of it from state the first
 // attempt already changed has to reuse what that attempt wrote instead of recomputing it.
 func (e *ManagedEngine) JournaledCommand(operationID string) (protocol.Command, bool) {
-	if operationID == "" {
+	if !identifier.MatchString(operationID) {
 		return protocol.Command{}, false
 	}
-	js, err := e.journals()
+	// A journal is named for its operation, so read that one file, not the whole directory.
+	j, err := e.readJournal(operationID + ".json")
 	if err != nil {
 		return protocol.Command{}, false
 	}
-	for i := range js {
-		if js[i].Command.OperationID == operationID {
-			return js[i].Command, true
-		}
-	}
-	return protocol.Command{}, false
+	return j.Command, true
 }
 
 // CreateStartOutcome returns the exact automatic-start result recorded with a
@@ -690,15 +689,31 @@ func (e *ManagedEngine) FailedVMUpdateEvidence(ctx context.Context, vmID, operat
 	// while making the abort binding explicit to the pool owner.
 	return VMUpdateEvidence{OperationID: operationID, Status: "failed", Previous: *previous, Current: attempted}, nil
 }
+
+// validatedJournals maps a journal path to the SHA-256 of the bytes that last passed the
+// validation below. Validation is a pure function of name and content, so settled journals
+// are not re-validated on every report pass; any rewrite changes the hash and revalidates.
+// ponytail: entries for deleted journals linger (a hash each); prune if journals are ever deleted in bulk.
+var validatedJournals sync.Map
+
+// journalValidations counts full validations; tests assert the cache holds.
+var journalValidations atomic.Int64
+
 func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 	var j managedJournal
-	b, err := readSmall(filepath.Join(e.stateDir, name), 1<<20)
+	path := filepath.Join(e.stateDir, name)
+	b, err := readSmall(path, managedJournalMaxBytes)
 	if err != nil {
 		return j, err
 	}
 	if err = json.Unmarshal(b, &j); err != nil {
 		return j, err
 	}
+	sum := sha256.Sum256(b)
+	if prev, ok := validatedJournals.Load(path); ok && prev == sum {
+		return j, nil
+	}
+	journalValidations.Add(1)
 	if err = validateManaged(j.Command); err != nil || name != j.Command.OperationID+".json" || j.Result.OperationID != j.Command.OperationID {
 		return j, errors.New("invalid managed journal identity or command")
 	}
@@ -876,19 +891,6 @@ func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 			return j, err
 		}
 	}
-	if j.BackupRestore && j.Command.Kind == "vm-create" && j.Command.VM != nil && j.Stage == "allocating" && j.Result.Status == "pending" &&
-		j.BackupManifestSHA256 == "" && len(j.BackupDisks) == 0 && len(j.Domain) == 0 && j.BackupTPMManifestSHA256 == "" &&
-		len(j.Disks) > 0 && len(j.Disks) == len(j.Command.VM.Disks) && len(j.Targets) == len(j.Disks) && len(j.DiskChains) == len(j.Disks) {
-		unallocated := true
-		for _, chain := range j.DiskChains {
-			if chain != nil {
-				unallocated = false
-			}
-		}
-		if unallocated {
-			j.DiskChains = nil // Older restore journals reserved heads before disk copying.
-		}
-	}
 	if j.Command.Kind != "snapshot-create" && j.Command.Kind != "snapshot-revert" && j.Command.Kind != "snapshot-delete" {
 		if _, err := managedDiskChains(j); err != nil {
 			return j, err
@@ -899,6 +901,7 @@ func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 	default:
 		return j, errors.New("invalid managed journal result")
 	}
+	validatedJournals.Store(path, sum)
 	return j, nil
 }
 
@@ -1177,6 +1180,14 @@ func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch f
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
+		// Failed preparations discard unbound secrets; peer receipts remain retryable.
+		if j.Result.Status == "failed" && c.Kind == "storage-register" && c.Storage.CredentialReceipt != "" && !storageCredentialAttached(js, c.Storage.CredentialReceipt) {
+			retryPeer := c.Storage.CredentialRequestID == PoolStorageCredentialRequestID(c.Storage.ID, c.Storage.Generation)
+			if cleanupErr := removeStorageCredential(filepath.Dir(e.stateDir), c.Storage.CredentialReceipt, c.Storage.PoolID, c.Storage.HostID, false, retryPeer); cleanupErr != nil {
+				j.Result.Status = "needs_attention"
+				j.Result.Error = errors.Join(err, fmt.Errorf("release failed registration credential: %w", cleanupErr)).Error()
+			}
+		}
 	}
 	return j.Result, e.save(j)
 }
@@ -1206,13 +1217,27 @@ func recoveryReservationRefusal(js []managedJournal, c protocol.Command) error {
 	return nil
 }
 
+// ErrSnapshotReservationUnconfirmed is returned by a snapshot reserve callback when the
+// pool master may have saved the reservation without acknowledging it. The operation
+// must stay retryable: abandoning it strands the master's reservation.
+var ErrSnapshotReservationUnconfirmed = errors.New("snapshot reservation is saved but not yet acknowledged by the pool")
+
 // retainedSnapshotDeleteRefusal keeps captured points attached to their VM.
 // The check runs under operations.lock, which serializes it with snapshot
 // intent persistence and native capture.
 func retainedSnapshotDeleteRefusal(js []managedJournal, vmID string) error {
+	settled := func(j managedJournal, kind string) bool {
+		return j.Command.Kind == kind && j.Command.VM != nil && j.Command.VM.ID == vmID &&
+			j.RecoverySettled && j.RecoveryStage == "completed" && j.RecoveryOutcome == "completed" && j.Result.Status == "succeeded"
+	}
+	deleted := map[string]bool{}
 	for _, j := range js {
-		if j.Command.Kind == "snapshot-create" && j.Command.VM != nil && j.Command.VM.ID == vmID &&
-			j.RecoverySettled && j.RecoveryStage == "completed" && j.RecoveryOutcome == "completed" && j.Result.Status == "succeeded" {
+		if settled(j, "snapshot-delete") {
+			deleted[j.Command.Snapshot.SnapshotID] = true
+		}
+	}
+	for _, j := range js {
+		if settled(j, "snapshot-create") && !deleted[j.Command.OperationID] {
 			return errors.New("VM has retained snapshots; delete those snapshots before deleting the VM")
 		}
 	}
@@ -1731,6 +1756,8 @@ func managedResourceID(c protocol.Command) string {
 		return "vm-delete:" + c.OperationID
 	case "vm-media":
 		return "vm-media:" + c.OperationID
+	case "vm-release-retained":
+		return "vm-release-retained:" + c.OperationID
 	}
 	return ""
 }
@@ -1742,7 +1769,7 @@ func validateManaged(c protocol.Command) error {
 		return errors.New("invalid operation ID")
 	}
 	count := 0
-	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Snapshot != nil, c.Power != nil, c.Delete != nil, c.VMMedia != nil, c.StorageLifecycle != nil, c.ResourceLifecycle != nil, c.CredentialRetire != nil, c.ZFSProvision != nil} {
+	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Snapshot != nil, c.Power != nil, c.Delete != nil, c.VMMedia != nil, c.ReleaseRetained != nil, c.StorageLifecycle != nil, c.ResourceLifecycle != nil, c.CredentialRetire != nil, c.ZFSProvision != nil} {
 		if present {
 			count++
 		}
@@ -1914,6 +1941,11 @@ func validateManaged(c protocol.Command) error {
 		if m.Action == "eject" && m.MediaID != "" {
 			return errors.New("eject must not name media")
 		}
+	case "vm-release-retained":
+		if c.ReleaseRetained == nil || c.ReleaseRetained.Valid() != nil || !uuidPattern.MatchString(c.ReleaseRetained.VMID) {
+			return errors.New("invalid VM identity or release confirmation")
+		}
+		id, pool, host = c.ReleaseRetained.VMID, c.ReleaseRetained.PoolID, c.ReleaseRetained.HostID
 	default:
 		return errors.New("unsupported managed command")
 	}
@@ -2500,8 +2532,13 @@ func storageContentDependencies(js []managedJournal, id string) []string {
 		}
 	}
 	// A succeeded wipe delete removed every retained path of its VM (managedDeleteDiskPaths).
-	wiped := map[string]bool{}
+	wiped, released := map[string]bool{}, map[string]bool{}
 	for _, j := range js {
+		if j.Command.Kind == "vm-release-retained" && j.Result.Status == "succeeded" {
+			for _, path := range j.Retained {
+				released[path] = true
+			}
+		}
 		if j.Command.Kind == "vm-delete" && j.Result.Status == "succeeded" && j.Command.Delete != nil && j.Command.Delete.DeleteDisks {
 			wiped[j.Command.Delete.VMID] = true
 		}
@@ -2535,7 +2572,7 @@ func storageContentDependencies(js []managedJournal, id string) []string {
 		s, err := managedStorage(js, id)
 		if err == nil {
 			for _, path := range j.Retained {
-				if path == s.Path || strings.HasPrefix(path, s.Path+"/") {
+				if !released[path] && (path == s.Path || strings.HasPrefix(path, s.Path+"/")) {
 					out = append(out, "retained disk for VM "+vmID)
 					break
 				}
@@ -3463,6 +3500,8 @@ func managedIdentity(c protocol.Command) (string, string) {
 		return c.Delete.VMID, ""
 	case "vm-media":
 		return c.VMMedia.VMID, ""
+	case "vm-release-retained":
+		return c.ReleaseRetained.VMID, ""
 	}
 	return "", ""
 }
@@ -4018,6 +4057,8 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 		return e.update(ctx, j, js)
 	case "vm-delete":
 		return e.deleteVM(ctx, j, js)
+	case "vm-release-retained":
+		return e.releaseRetainedOriginals(ctx, j, js)
 	}
 	return errors.New("unsupported managed command")
 }
@@ -6234,6 +6275,18 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (r prot
 			j.Result.Error = err.Error()
 		}
 	}
+	if j.Command.Kind == "vm-release-retained" {
+		// Releasing is idempotent: files already unlinked are skipped, so an interrupted request is safely run again.
+		js, err := e.journals()
+		if err != nil {
+			return j.Result, err
+		}
+		if err = e.apply(ctx, &j, js, nil); err == nil {
+			j.Result.Status, j.Result.Error = "succeeded", ""
+		} else {
+			j.Result.Error = err.Error()
+		}
+	}
 	if j.Command.Kind == "iso-import" && j.MediaPath != "" {
 		if err := verifyISO(j.MediaPath, journalMedia(j)); err == nil {
 			j.Result.Status = "succeeded"
@@ -6307,7 +6360,7 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 			}
 			return errors.New("an earlier interrupted delete for this VM is still unresolved: " + r.Error)
 		}
-		if id == req.VMID && (old.Command.Kind == "vm-create" || old.Command.Kind == "vm-update" || old.Command.Kind == "vm-power" || old.Command.Kind == "vm-media" || old.Command.Kind == "vm-delete") {
+		if id == req.VMID && vmChangeKind(old.Command.Kind) {
 			return errors.New("a change, power, media or delete request for this VM is still unresolved")
 		}
 	}
@@ -6325,14 +6378,45 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 	cur.DiskChains = chains
 	paths := managedDeleteDiskPaths(js, cur)
 	j.Retained = append([]string{}, paths...)
+	// The vTPM state a restore replace kept is key material of this VM; it goes with the VM,
+	// bound to the trees the earlier edits recorded, like the live TPM state.
+	if j.RetainedTPM, err = collectRetainedTPM(ctx, req.VMID, js); err != nil {
+		return err
+	}
 	j.Stage = "undefining"
 	if err := e.verifyManagedDeleteFiles(ctx, js, *j); err != nil {
+		return err
+	}
+	if err := verifyRetainedTPM(ctx, req.VMID, j.RetainedTPM, js); err != nil {
 		return err
 	}
 	if err = e.save(*j); err != nil {
 		return err
 	}
 	return e.finishDelete(ctx, j, js, true)
+}
+
+// vmChangeKind names the operations that may not overlap a delete or a release of retained
+// originals of the same VM while one of them is pending or needs attention.
+func vmChangeKind(kind string) bool {
+	switch kind {
+	case "vm-create", "vm-update", "vm-power", "vm-media", "vm-delete":
+		return true
+	}
+	return false
+}
+
+// unresolvedVMChange reports another pending or needs_attention change of vmID.
+func unresolvedVMChange(js []managedJournal, operationID, vmID string) bool {
+	for _, old := range js {
+		if old.Command.OperationID == operationID || (old.Result.Status != "pending" && old.Result.Status != "needs_attention") {
+			continue
+		}
+		if id, _ := managedIdentity(old.Command); id == vmID && vmChangeKind(old.Command.Kind) {
+			return true
+		}
+	}
+	return false
 }
 
 // finishDelete runs the effects of a delete whose disk list is already journaled: undefine
@@ -6367,6 +6451,10 @@ func (e *ManagedEngine) finishDelete(ctx context.Context, j *managedJournal, js 
 	if defined[strings.ToLower(req.VMID)] {
 		return errors.New("VM domain is still defined after undefine")
 	}
+	if err := removeRetainedTPMTrees(ctx, req.VMID, j.RetainedTPM, js); err != nil {
+		return err
+	}
+	j.RetainedTPM = nil
 	if req.DeleteDisks {
 		j.Stage = "wiping"
 		if err := e.save(*j); err != nil {
@@ -6506,6 +6594,13 @@ func managedDeleteDiskPaths(js []managedJournal, cur managedJournal) []string {
 			}
 		}
 	}
+	// Earlier revisions also name files a later snapshot delete already unlinked (an overlay
+	// no chain uses any more); only the current chain must still exist.
+	addIfPresent := func(path string) {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			add(path)
+		}
+	}
 	for _, j := range js {
 		if j.Result.Status != "succeeded" {
 			continue
@@ -6513,23 +6608,23 @@ func managedDeleteDiskPaths(js []managedJournal, cur managedJournal) []string {
 		switch {
 		case j.Command.VM != nil && j.Command.VM.ID == cur.Command.VM.ID:
 			for _, path := range j.Retained {
-				add(path)
+				addIfPresent(path)
 			}
 			if chains, err := managedDiskChains(j); err == nil {
 				for _, chain := range chains {
 					for _, path := range chain {
-						add(path)
+						addIfPresent(path)
 					}
 				}
 			}
 		case j.Command.Delete != nil && j.Command.Delete.VMID == cur.Command.VM.ID:
 			for _, path := range j.Retained {
-				add(path)
+				addIfPresent(path)
 			}
 			if chains, err := managedDiskChains(j); err == nil {
 				for _, chain := range chains {
 					for _, path := range chain {
-						add(path)
+						addIfPresent(path)
 					}
 				}
 			}

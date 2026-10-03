@@ -515,7 +515,10 @@ func TestReportSkipsRejectedCredentialOffersWithoutStopping(t *testing.T) {
 				return
 			}
 			mu.Lock()
-			acknowledged[r.URL.Path] = true
+			acknowledged[r.URL.Path] = receipt.Status == "ready"
+			if receipt.Status == "failed" && receipt.Error == "" {
+				t.Error("refusal sent without a reason")
+			}
 			mu.Unlock()
 			json.NewEncoder(w).Encode(receipt)
 		default:
@@ -537,8 +540,9 @@ func TestReportSkipsRejectedCredentialOffersWithoutStopping(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !acknowledged["/api/v1/agent/storage/credentials/offer-good/ack"] || len(acknowledged) != 1 {
-		t.Fatalf("only the valid offer should be acknowledged: %v", acknowledged)
+	// The conflicting offer is answered with a failed receipt so the operator sees why.
+	if !acknowledged["/api/v1/agent/storage/credentials/offer-good/ack"] || acknowledged["/api/v1/agent/storage/credentials/offer-conflict/ack"] || len(acknowledged) != 2 {
+		t.Fatalf("only the valid offer should be acknowledged ready, the conflict refused: %v", acknowledged)
 	}
 	receipts, err := vmhost.StorageCredentialReceipts(s.dir)
 	if err != nil || len(receipts) != 2 {

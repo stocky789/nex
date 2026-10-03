@@ -490,7 +490,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	if v.Inventory != nil && v.Inventory.Managed != nil {
 		managed := v.Inventory.Managed
 		if managed.PoolVMSnapshotsReported || managed.RecoveryReservationsReported ||
-			managed.BackupRepositoriesReported || managed.BackupCatalogReported || managed.BackupRunsReported ||
+			managed.BackupRepositoriesReported ||
 			managed.BackupPoliciesReported {
 			if managed.Membership == nil || managed.Membership.Valid() != nil || managed.Membership.MasterHostID != host {
 				fail(w, 400, "snapshot authority must be reported by the pool master")
@@ -559,9 +559,6 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	// A v2 Core asks for this acknowledgement before it advertises the repository
 	// capability. v1 peers receive their original response shape unchanged.
 	if v.Version == protocol.Version {
-		if slices.Contains(v.Capabilities, protocol.BackupCapability) {
-			out.BackupSupport = &protocol.BackupSupport{Capability: protocol.BackupCapability}
-		}
 		if slices.Contains(v.Capabilities, protocol.DetectedOSCapability) {
 			supported := true
 			out.DetectedOS = &supported
@@ -597,11 +594,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	if v.Version == protocol.Version && slices.Contains(v.Capabilities, protocol.StorageClusterCapability) {
 		out.StorageClusterRequests = c.takeStorageClusters(host)
 	}
-	// The one brokered round trip serves two actions now: an invitation, which needs the
-	// join capability, and a promotion preflight, which needs the transfer one. A host that
-	// advertises either can be asked, and the broker only ever holds a request addressed to
-	// it; a host that advertises neither is never asked anything.
-	if v.Version == protocol.Version && (slices.Contains(v.Capabilities, protocol.PoolJoinCapability) || slices.Contains(v.Capabilities, protocol.PoolAuthorityTransferCapability)) {
+	// The one brokered round trip serves two actions: an invitation and a promotion
+	// preflight. The broker only ever holds a request addressed to this host.
+	if v.Version == protocol.Version {
 		out.PoolRequests = c.takePoolRequests(host)
 	}
 	if v.Sequence > seq && v.Inventory != nil && v.Inventory.Managed != nil {
@@ -648,11 +643,11 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			fail(w, 409, "operation has not been delivered")
 			return
 		}
-		// Backup work and ZFS provision can settle after an earlier uncertain
-		// result. Their later result comes from the same authenticated Core and
-		// operation ID; backup runs and storage projections alone never settle it.
+		// Backup work, ZFS provision and promotion can settle after an earlier
+		// uncertain result. Their later result comes from the same authenticated
+		// Core and operation ID, after Core has reconciled its durable outcome.
 		recovered := status == "needs_attention" && (res.Status == "succeeded" || res.Status == "failed") &&
-			(kind == "storage-zfs-provision" && res.Status == "succeeded" || backupOutcomeKind(kind))
+			(kind == "storage-zfs-provision" && res.Status == "succeeded" || (kind == "pool-promote" || kind == "pool-transfer") && res.Status == "succeeded" || backupOutcomeKind(kind))
 		if status == "dispatched" || recovered {
 			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=?", res.Status, res.Error, stamp(), res.OperationID); err != nil || c.audit(tx, "host:"+host, "operation."+res.Status, res.OperationID) != nil {
 				fail(w, 500, "result storage failed")
@@ -699,7 +694,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				return
 			}
 			if managed := v.Inventory.Managed; managed != nil && (managed.PoolVMSnapshotsReported || managed.RecoveryReservationsReported ||
-				managed.BackupRepositoriesReported || managed.BackupCatalogReported || managed.BackupRunsReported ||
+				managed.BackupRepositoriesReported ||
 				managed.BackupPoliciesReported) {
 				var pool, master string
 				if err = tx.QueryRow("SELECT h.pool_id,p.master_host_id FROM hosts h JOIN pools p ON p.id=h.pool_id WHERE h.id=?", host).Scan(&pool, &master); err != nil {
@@ -719,18 +714,6 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				for _, repo := range managed.BackupRepositories {
 					if repo.PoolID != pool {
 						fail(w, 400, "backup repository belongs to another pool")
-						return
-					}
-				}
-				for _, point := range managed.BackupCatalog {
-					if point.PoolID != pool {
-						fail(w, 400, "backup recovery point belongs to another pool")
-						return
-					}
-				}
-				for _, run := range managed.BackupRuns {
-					if run.PoolID != pool {
-						fail(w, 400, "backup run belongs to another pool")
 						return
 					}
 				}
@@ -765,6 +748,23 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				if err == nil {
 					err = c.cleanupJoinedAutoPool(tx, host, formerPool, merged)
 				}
+				// A prior Controller may have acknowledged Core's recovered result
+				// without settling the row. The candidate's fresh durable done report
+				// still identifies the exact operation after an upgrade.
+				if err == nil && v.Inventory.Managed != nil {
+					promotion := v.Inventory.Managed.Promotion
+					if promotion != nil && promotion.Stage == "done" && promotion.Status == "succeeded" && promotion.OperationID != "" {
+						var updated sql.Result
+						updated, err = tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE id=? AND host_id=? AND kind='pool-promote' AND status='needs_attention'", stamp(), promotion.OperationID, host)
+						if err == nil {
+							var count int64
+							count, err = updated.RowsAffected()
+							if err == nil && count == 1 {
+								err = c.audit(tx, "host:"+host, "operation.succeeded", promotion.OperationID)
+							}
+						}
+					}
+				}
 			}
 			// Managed definitions are mirrored into managed_resources. Keep only the
 			// master-owned membership and ZFS outcomes needed for host status here.
@@ -795,8 +795,6 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 					PoolVMSnapshots: merged.Managed.PoolVMSnapshots, PoolVMSnapshotsReported: merged.Managed.PoolVMSnapshotsReported,
 					RecoveryReservations: merged.Managed.RecoveryReservations, RecoveryReservationsReported: merged.Managed.RecoveryReservationsReported,
 					BackupRepositories: merged.Managed.BackupRepositories, BackupRepositoriesReported: merged.Managed.BackupRepositoriesReported,
-					BackupCatalog: merged.Managed.BackupCatalog, BackupCatalogReported: merged.Managed.BackupCatalogReported,
-					BackupRuns: merged.Managed.BackupRuns, BackupRunsReported: merged.Managed.BackupRunsReported,
 					BackupPolicies: merged.Managed.BackupPolicies, BackupPoliciesReported: merged.Managed.BackupPoliciesReported,
 					ISODownloads: merged.Managed.ISODownloads, DetectedOS: merged.Managed.DetectedOS}
 			} else {

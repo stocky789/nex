@@ -3,7 +3,9 @@ package vmhost
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -28,7 +30,6 @@ var replaceCutoverCapacity = managedCapacity
 var replaceCutoverPrepareDirs = managedRepositorySubdir
 
 var ErrRestorePlacementUncertain = errors.New("restore placement requires observation before retry")
-var ErrRestoreManifestUnbound = errors.New("retained restore allocation lacks manifest binding")
 var ErrRestoreAllocationJournalUnavailable = errors.New("restore allocation journal is unavailable")
 
 // RestoreAsNewAllocating identifies an exact retained restore that can resume
@@ -48,9 +49,6 @@ func (e *ManagedEngine) RestoreAsNewAllocating(operationID string, spec protocol
 		if j.Command.Kind != "vm-create" || !j.BackupRestore || j.Command.VM == nil ||
 			!reflect.DeepEqual(*j.Command.VM, spec) || !slices.Equal(j.BackupFirmware, firmware) {
 			return false, errors.New("restore allocation intent differs from retained journal")
-		}
-		if j.Stage == "allocating" && j.Result.Status == "pending" && j.BackupManifestSHA256 == "" && len(j.BackupDisks) == 0 {
-			return false, ErrRestoreManifestUnbound
 		}
 		if j.BackupManifestSHA256 != manifestSHA || !slices.Equal(j.BackupDisks, artifacts) {
 			return false, errors.New("restore allocation point differs from retained journal")
@@ -73,122 +71,6 @@ func (e *ManagedEngine) RestoreAsNewAllocating(operationID string, spec protocol
 func validRestoreManifestSHA(digest string) bool {
 	decoded, err := hex.DecodeString(digest)
 	return err == nil && len(decoded) == 32 && hex.EncodeToString(decoded) == digest
-}
-
-// BindLegacyRestoreAsNewAllocating upgrades an older allocating journal only
-// when every local and placed artifact still proves the same immutable point.
-// It never copies, replaces, or defines a VM.
-func (e *ManagedEngine) BindLegacyRestoreAsNewAllocating(ctx context.Context, operationID string, spec protocol.VMCreateSpec, localDir, manifestSHA string, artifacts []protocol.BackupDiskArtifact, firmware []protocol.BackupFirmwareArtifact) error {
-	if e == nil || !protocol.ValidSnapshotOperationID(operationID) || !uuidPattern.MatchString(spec.ID) || !validRestoreManifestSHA(manifestSHA) ||
-		localDir != filepath.Join(filepath.Dir(e.stateDir), "backup-restore", operationID) || len(artifacts) != len(spec.Disks) {
-		return errors.New("legacy restore binding arguments are invalid")
-	}
-	if err := protocol.ValidateVMSpec(spec); err != nil {
-		return err
-	}
-	if err := ValidateBackupFirmwareForRestore(protocol.BackupManifest{CapturedSpec: &spec, Firmware: firmware}); err != nil {
-		return err
-	}
-	if !filepath.IsAbs(e.stateDir) || filepath.Clean(e.stateDir) == "/" {
-		return errors.New("managed state requires an absolute non-root directory")
-	}
-	real, err := filepath.EvalSymlinks(e.stateDir)
-	if err != nil || real != e.stateDir {
-		return errors.New("managed state must not use symlinks")
-	}
-	real, err = filepath.EvalSymlinks(localDir)
-	if err != nil || real != localDir {
-		return errors.New("legacy restore staging must not use symlinks")
-	}
-	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlock(lock)
-	js, err := e.journals()
-	if err != nil {
-		return err
-	}
-	var journal *managedJournal
-	for i := range js {
-		if js[i].Command.OperationID == operationID {
-			journal = &js[i]
-		}
-	}
-	if journal == nil || journal.Command.Kind != "vm-create" || !journal.BackupRestore || journal.Command.VM == nil ||
-		!reflect.DeepEqual(*journal.Command.VM, spec) || !slices.Equal(journal.BackupFirmware, firmware) ||
-		journal.Stage != "allocating" || journal.Result.Status != "pending" || journal.BackupManifestSHA256 != "" ||
-		len(journal.BackupDisks) != 0 || len(journal.Domain) != 0 || journal.BackupTPMManifestSHA256 != "" ||
-		len(journal.Disks) != len(artifacts) || len(journal.Targets) != len(artifacts) {
-		return errors.New("legacy restore allocation cannot be bound")
-	}
-	ids, err := managedVirsh(ctx, "list", "--all", "--uuid")
-	if err != nil {
-		return err
-	}
-	if slices.Contains(strings.Fields(string(ids)), spec.ID) {
-		return errors.New("legacy restore VM is already defined")
-	}
-	if _, err := os.Lstat(filepath.Join(backupTPMStateRoot, spec.ID)); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("legacy restore has unexpected TPM effects")
-	}
-	if _, err := os.Lstat(filepath.Join(e.stateDir, operationID+".xml")); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("legacy restore has an unobserved native definition file")
-	}
-	byTarget := make(map[string]protocol.BackupDiskArtifact, len(artifacts))
-	for _, artifact := range artifacts {
-		if artifact.Valid() != nil || artifact.Target == "" {
-			return errors.New("legacy restore disk descriptor is invalid")
-		}
-		if _, exists := byTarget[artifact.Target]; exists {
-			return errors.New("legacy restore disk target is repeated")
-		}
-		byTarget[artifact.Target] = artifact
-		if err := exactRestoreFile(filepath.Join(localDir, artifact.Filename), artifact.SHA256, artifact.Size); err != nil {
-			return err
-		}
-	}
-	for i, target := range journal.Targets {
-		artifact, ok := byTarget[target]
-		if !ok {
-			return errors.New("legacy restore disk target differs")
-		}
-		if err := exactRestoreFile(journal.Disks[i], artifact.SHA256, artifact.Size); err != nil {
-			return err
-		}
-	}
-	for _, artifact := range firmware {
-		if artifact.Valid() != nil {
-			return errors.New("legacy restore firmware descriptor is invalid")
-		}
-		if err := exactRestoreFile(filepath.Join(localDir, artifact.Filename), artifact.SHA256, artifact.Size); err != nil {
-			return err
-		}
-		if artifact.Kind == "nvram" {
-			if err := verifyRestoreNVRAM(ctx, restoreNVRAMPath(spec, operationID, false), artifact); err != nil {
-				return err
-			}
-		}
-	}
-	journal.BackupManifestSHA256 = manifestSHA
-	journal.BackupDisks = append([]protocol.BackupDiskArtifact(nil), artifacts...)
-	return e.save(*journal)
-}
-
-func exactRestoreFile(path, digest string, size int64) error {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("legacy restore artifact is missing or unsafe")
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Nlink != 1 {
-		return errors.New("legacy restore artifact has hardlink aliases")
-	}
-	sum, gotSize, err := fileSHA256(path)
-	if err != nil || sum != digest || gotSize != size {
-		return errors.New("legacy restore artifact differs from immutable point")
-	}
-	return nil
 }
 
 // ReconcileRestoredAsNew observes a retained registration after an uncertain
@@ -296,6 +178,10 @@ func (e *ManagedEngine) CleanupTestRestoredVM(ctx context.Context, createOperati
 			refused.Error = "test restore replay identity is incomplete"
 			return refused, nil
 		}
+		if e.testRestoreGone(ctx, createOperationID, expectedSpec) {
+			refused.Status = "succeeded"
+			return refused, nil
+		}
 		creator, err := e.readJournal(createOperationID + ".json")
 		if err != nil || creator.Command.VM == nil {
 			refused.Error = "test restore creator journal is unavailable"
@@ -350,6 +236,27 @@ func (e *ManagedEngine) CleanupTestRestoredVM(ctx context.Context, createOperati
 		return e.observer()(ctx, *creator, "shut off")
 	}
 	return e.execute(ctx, command, nil, nil, nil, guard)
+}
+
+// testRestoreGone reports that a test restore has nothing left to delete: it
+// failed before saving its creator journal (registration journals first, so no
+// effects exist, provided the domain is confirmed absent), or its VM was removed by other means and left no native trace.
+func (e *ManagedEngine) testRestoreGone(ctx context.Context, createOperationID string, identity protocol.VMCreateSpec) bool {
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return false
+	}
+	defer unlock(lock)
+	creator, err := e.readJournal(createOperationID + ".json")
+	if errors.Is(err, os.ErrNotExist) {
+		// Without a journal only the identity's native traces can be checked.
+		defined := domains(ctx)
+		_, tpmErr := os.Lstat(filepath.Join(backupTPMStateRoot, identity.ID))
+		return defined != nil && !defined[strings.ToLower(identity.ID)] && errors.Is(tpmErr, os.ErrNotExist)
+	}
+	vm := creator.Command.VM
+	return err == nil && vm != nil && vm.ID == identity.ID && vm.PoolID == identity.PoolID && vm.HostID == identity.HostID &&
+		testRestoreNativeAbsent(ctx, creator) == nil
 }
 
 // VerifyTestRestoredVM observes the exact successful test restore while holding
@@ -1068,8 +975,8 @@ func verifyJournalRestoreFirmware(ctx context.Context, j managedJournal) error {
 }
 
 // BuildRestoreReplaceSpec rebuilds the original VM identity from a captured recovery-point
-// specification: same UUID/name/host, remapped storage, cleared media, disconnected NICs,
-// and the next definition revision. The guest stays stopped after cutover.
+// specification: same UUID/name/host, remapped storage, cleared media, the current VM's
+// NICs and MACs, and the next definition revision. The guest stays stopped after cutover.
 func BuildRestoreReplaceSpec(current, captured protocol.VMCreateSpec, req protocol.RestoreReplaceRequest) (protocol.VMCreateSpec, error) {
 	if err := req.Valid(); err != nil {
 		return protocol.VMCreateSpec{}, err
@@ -1091,7 +998,7 @@ func BuildRestoreReplaceSpec(current, captured protocol.VMCreateSpec, req protoc
 	out.MediaID = ""
 	out.DriversMediaID = ""
 	out.Boot.MediaBootOrder = 0
-	out.NICs = nil
+	out.NICs = current.NICs
 	disks := make([]protocol.VMDisk, len(captured.Disks))
 	hasBoot := false
 	for i, d := range captured.Disks {
@@ -1112,7 +1019,7 @@ func BuildRestoreReplaceSpec(current, captured protocol.VMCreateSpec, req protoc
 }
 
 // ApplyExclusiveReplaceCutover places restored disks beside the retained originals, switches
-// the managed definition to those files, and leaves the guest shut off with disconnected NICs.
+// the managed definition to those files, and leaves the guest shut off with the current NICs.
 // Failures before virsh define leave originals as the live definition; failures after return
 // ReplaceCutoverError with the exact stage.
 func (e *ManagedEngine) ApplyExclusiveReplaceCutover(ctx context.Context, operationID string, spec protocol.VMCreateSpec, localDir string, artifacts []protocol.BackupDiskArtifact, firmware ...protocol.BackupFirmwareArtifact) (retErr error) {
@@ -1316,7 +1223,16 @@ func (e *ManagedEngine) ApplyExclusiveReplaceCutover(ctx context.Context, operat
 		return errors.New("replace TPM tree differs from its reserved intent")
 	}
 	j.BackupTPMManifestSHA256 = tpmDigest
-	domain, err := managedDomainXML(spec, nil, disks, diskTargets, mediaTarget, "", driversTarget, "", leases)
+	nets := make([]protocol.NetworkRegistration, len(spec.NICs))
+	for i, nic := range spec.NICs {
+		if nets[i], err = managedNetwork(js, nic.NetworkID); err != nil {
+			return err
+		}
+		if err = verifyNetwork(ctx, nets[i]); err != nil {
+			return err
+		}
+	}
+	domain, err := managedDomainXML(spec, nets, disks, diskTargets, mediaTarget, "", driversTarget, "", leases)
 	if err != nil {
 		return err
 	}
@@ -1424,4 +1340,199 @@ func replaceCutoverDiskPlan(js []managedJournal, cur managedJournal, spec protoc
 		disks[i] = path
 	}
 	return targets, disks, retained, nil
+}
+
+// managedRetainedTPM binds a wiping intent to the tree validated before deletion.
+// Remaining entries must still match after an interrupted RemoveAll.
+type managedRetainedTPM struct {
+	OperationID string                      `json:"operation_id"`
+	Manifest    managedSnapshotFileManifest `json:"manifest"`
+}
+
+// releaseRetainedOriginals deletes the disk files and vTPM state that restore replace and VM
+// edits kept beside a stopped VM. It only removes files no live disk chain uses, verified the
+// way a VM delete verifies them, and is safe to run again after an interruption.
+func (e *ManagedEngine) releaseRetainedOriginals(ctx context.Context, j *managedJournal, js []managedJournal) error {
+	req := *j.Command.ReleaseRetained
+	cur, err := managedCurrent(js, req.VMID)
+	if err != nil {
+		return errors.New("VM not found on this host")
+	}
+	if cur.Command.VM.Name != req.Confirmation {
+		return errors.New("confirmation must be the VM's name")
+	}
+	if cur.Command.VM.PoolID != req.PoolID || cur.Command.VM.HostID != req.HostID {
+		return errors.New("VM pool or host does not match this host's record")
+	}
+	if unresolvedVMChange(js, j.Command.OperationID, req.VMID) {
+		return errors.New("a change, power, media or delete request for this VM is still unresolved")
+	}
+	if state, err := ManagedVMState(ctx, req.VMID); err != nil || state != "shut off" {
+		return errors.New("stop the VM before releasing its retained originals")
+	}
+	if retainedSnapshotDeleteRefusal(js, req.VMID) != nil {
+		return errors.New("VM has retained snapshots; delete them before releasing retained originals")
+	}
+	chains, err := e.diskChains(ctx, js, cur)
+	if err != nil {
+		return err
+	}
+	if j.Stage == "wiping" && j.RetainedTPM == nil && slices.ContainsFunc(js, func(old managedJournal) bool {
+		return old.Command.Kind == "vm-update" && old.Command.VM != nil && old.Command.VM.ID == req.VMID &&
+			old.Result.Status == "succeeded" && old.BackupTPMPreviousSHA256 != ""
+	}) {
+		return errors.New("retained original TPM wiping intent was not recorded; inspect it on the host")
+	}
+	admitted := j.Stage == "wiping"
+	previousFiles, previousTPM, previousStage := j.Retained, j.RetainedTPM, j.Stage
+	defer func() {
+		if !admitted {
+			j.Retained, j.RetainedTPM, j.Stage = previousFiles, previousTPM, previousStage
+		}
+	}()
+	if j.Stage != "wiping" {
+		var files []string
+		for _, old := range js {
+			if old.Command.Kind != "vm-update" || old.Command.VM == nil || old.Command.VM.ID != req.VMID || old.Result.Status != "succeeded" {
+				continue
+			}
+			for _, path := range old.Retained {
+				if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+					continue
+				}
+				if !slices.Contains(files, path) && !slices.ContainsFunc(chains, func(chain []string) bool { return slices.Contains(chain, path) }) {
+					files = append(files, path)
+				}
+			}
+		}
+		tpm, err := collectRetainedTPM(ctx, req.VMID, js)
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 && len(tpm) == 0 {
+			return errors.New("VM has no retained original disks")
+		}
+		j.Retained, j.RetainedTPM = files, tpm
+	}
+	if len(j.Retained) == 0 && len(j.RetainedTPM) == 0 {
+		return errors.New("retained original wiping intent has no recorded targets")
+	}
+	// Never widen an admitted wiping intent by rediscovering retained targets.
+	files := j.Retained
+	if slices.ContainsFunc(chains, func(chain []string) bool {
+		return slices.ContainsFunc(files, func(path string) bool { return slices.Contains(chain, path) })
+	}) {
+		return errors.New("retained original disk is now used by the VM")
+	}
+	if err := verifyRetainedTPM(ctx, req.VMID, j.RetainedTPM, js); err != nil {
+		return err
+	}
+	if len(files) > 0 {
+		check := managedJournal{Command: protocol.Command{Delete: &protocol.VMDeleteRequest{VMID: req.VMID, DeleteDisks: true}}, Retained: files, Stage: "wiping"}
+		if err := e.verifyManagedDeleteFiles(ctx, js, check); err != nil {
+			return err
+		}
+	}
+	j.Stage = "wiping"
+	if err := e.save(*j); err != nil {
+		return err
+	}
+	admitted = true
+	if err := wipeManagedDisks(files); err != nil {
+		return err
+	}
+	for _, target := range j.RetainedTPM {
+		if err := removeRetainedTPM(restoreTPMPath(req.VMID, target.OperationID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var removeRetainedTPM = os.RemoveAll
+
+// collectRetainedTPM freezes the pre-replace vTPM trees that earlier successful edits of vmID
+// kept, each bound to the manifest its journal recorded. A tree already gone is skipped.
+func collectRetainedTPM(ctx context.Context, vmID string, js []managedJournal) ([]managedRetainedTPM, error) {
+	tpm := []managedRetainedTPM{}
+	for _, old := range js {
+		if old.Command.Kind != "vm-update" || old.Command.VM == nil || old.Command.VM.ID != vmID ||
+			old.Result.Status != "succeeded" || old.BackupTPMPreviousSHA256 == "" {
+			continue
+		}
+		if !protocol.ValidSnapshotOperationID(old.Command.OperationID) {
+			return nil, errors.New("retained original TPM operation is invalid")
+		}
+		kept, err := managedSnapshotManifest(ctx, restoreTPMPath(vmID, old.Command.OperationID))
+		if err != nil || kept.Exists && kept.SHA256 != old.BackupTPMPreviousSHA256 {
+			return nil, errors.New("retained original TPM state changed; inspect it on the host")
+		}
+		if kept.Exists {
+			tpm = append(tpm, managedRetainedTPM{OperationID: old.Command.OperationID, Manifest: kept})
+		}
+	}
+	return tpm, nil
+}
+
+// removeRetainedTPMTrees removes admitted retained vTPM trees after proving each is still the
+// tree its journal recorded; an interrupted removal resumes with only what remains of it.
+func removeRetainedTPMTrees(ctx context.Context, vmID string, targets []managedRetainedTPM, js []managedJournal) error {
+	if err := verifyRetainedTPM(ctx, vmID, targets, js); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if err := removeRetainedTPM(restoreTPMPath(vmID, target.OperationID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifyRetainedTPM(ctx context.Context, vmID string, targets []managedRetainedTPM, js []managedJournal) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	if !uuidPattern.MatchString(vmID) || !filepath.IsAbs(backupTPMStateRoot) || filepath.Clean(backupTPMStateRoot) != backupTPMStateRoot {
+		return errors.New("retained original TPM target is invalid")
+	}
+	for dir := backupTPMStateRoot; ; dir = filepath.Dir(dir) {
+		info, err := os.Lstat(dir)
+		if err != nil && !(dir == backupTPMStateRoot && errors.Is(err, os.ErrNotExist)) ||
+			err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return errors.New("retained original TPM path is unsafe")
+		}
+		if filepath.Dir(dir) == dir {
+			break
+		}
+	}
+	for _, target := range targets {
+		if !protocol.ValidSnapshotOperationID(target.OperationID) || !target.Manifest.Exists || !validManagedSnapshotManifest(target.Manifest) {
+			return errors.New("retained original TPM wiping intent is invalid")
+		}
+		encoded, err := json.Marshal(target.Manifest.Files)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(encoded)
+		if hex.EncodeToString(digest[:]) != target.Manifest.SHA256 || !slices.ContainsFunc(js, func(old managedJournal) bool {
+			return old.Command.OperationID == target.OperationID && old.Command.Kind == "vm-update" &&
+				old.Command.VM != nil && old.Command.VM.ID == vmID && old.Result.Status == "succeeded" &&
+				old.BackupTPMPreviousSHA256 == target.Manifest.SHA256
+		}) {
+			return errors.New("retained original TPM wiping intent differs from its validated tree")
+		}
+		remaining, err := managedSnapshotManifest(ctx, restoreTPMPath(vmID, target.OperationID))
+		if err != nil {
+			return errors.New("retained original TPM state changed; inspect it on the host")
+		}
+		for _, file := range remaining.Files {
+			index, found := slices.BinarySearchFunc(target.Manifest.Files, file.RelativePath, func(entry managedSnapshotFileMetadata, path string) int {
+				return strings.Compare(entry.RelativePath, path)
+			})
+			if !found || target.Manifest.Files[index] != file {
+				return errors.New("retained original TPM state changed; inspect it on the host")
+			}
+		}
+	}
+	return nil
 }

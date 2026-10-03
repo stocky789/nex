@@ -1,0 +1,406 @@
+{
+  "date": "2026-10-01",
+  "scope": "Controller-only backup workspace presentation; existing Core API contracts and durable records unchanged",
+  "environment": {
+    "frontend": "nex-controller-ui@0.1.0",
+    "interactiveBrowser": "Chrome/150.0.7871.24",
+    "regressionBrowser": "Chromium/151.0.7922.34",
+    "playwright": "1.62.0",
+    "inventory": "Fictional Core API responses served to the actual built React UI on loopback; no real host writes"
+  },
+  "artifactSHA256": {
+    "web/dist/app.js": "c64f7114bd4e07eb5d014e5e2bc475d1a5359841132f0d3366ae3aa910fb03d3",
+    "web/dist/app.css": "a521469220b1c69a01e4efcab8067fc4f6d7e05a7d53f55a4d683208f343f564"
+  },
+  "interactiveScenarios": [
+    {
+      "scenario": "Desktop list views",
+      "result": "Separate compact jobs and points views; one contextual row opener per point"
+    },
+    {
+      "scenario": "Inspect then back up now",
+      "result": "Inspection issues no POST; backup destination/review footer; 503 freezes controls and retains exact request before queued response"
+    },
+    {
+      "scenario": "Restore as new exact retry",
+      "result": "409 freezes choices/cancel and retains target VM ID, name and destination; exact retry queues"
+    },
+    {
+      "scenario": "Replace original VM",
+      "result": "Wrong exact name and stale VM block review; fresh shut-off source passes; final review says current NICs/MACs retained; original_vm_id and confirm_replace submitted"
+    },
+    {
+      "scenario": "Test restore and cleanup selection",
+      "result": "Test choice queues isolated new VM identity; wrong cleanup VM ID blocked; exact vm-test queues cleanup for its own point/repository"
+    },
+    {
+      "scenario": "Missing source and verification action",
+      "result": "Missing source disables Replace but leaves Restore as new available; failed-verification request identifies exact test VM/point/repository"
+    },
+    {
+      "scenario": "Responsive/theme matrix",
+      "result": "Both views inspected at 1440x900, 1024x768 and 390x844 in light/dark; no page overflow",
+      "captures": [
+        {
+          "viewport": "1440x900",
+          "view": "jobs",
+          "theme": "light",
+          "geometry": {
+            "overflow": 0,
+            "theme": "light",
+            "summaryDisplay": "none"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/1440-jobs-light.webp"
+        },
+        {
+          "viewport": "1440x900",
+          "view": "points",
+          "theme": "light",
+          "geometry": {
+            "overflow": 0,
+            "theme": "light",
+            "summaryDisplay": "none"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/1440-points-light.webp"
+        },
+        {
+          "viewport": "1440x900",
+          "view": "jobs",
+          "theme": "dark",
+          "geometry": {
+            "overflow": 0,
+            "theme": "dark",
+            "summaryDisplay": "none"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/1440-jobs-dark.webp"
+        },
+        {
+          "viewport": "1440x900",
+          "view": "points",
+          "theme": "dark",
+          "geometry": {
+            "overflow": 0,
+            "theme": "dark",
+            "summaryDisplay": "none"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/1440-points-dark.webp"
+        },
+        {
+          "viewport": "1024x768",
+          "view": "jobs",
+          "theme": "light",
+          "geometry": {
+            "overflow": 0,
+            "theme": "light",
+            "summaryDisplay": "none"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/1024-jobs-light.webp"
+        },
+        {
+          "viewport": "1024x768",
+          "view": "points",
+          "theme": "light",
+          "geometry": {
+            "overflow": 0,
+            "theme": "light",
+            "summaryDisplay": "none"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/1024-points-light.webp"
+        },
+        {
+          "viewport": "1024x768",
+          "view": "jobs",
+          "theme": "dark",
+          "geometry": {
+            "overflow": 0,
+            "theme": "dark",
+            "summaryDisplay": "none"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/1024-jobs-dark.webp"
+        },
+        {
+          "viewport": "1024x768",
+          "view": "points",
+          "theme": "dark",
+          "geometry": {
+            "overflow": 0,
+            "theme": "dark",
+            "summaryDisplay": "none"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/1024-points-dark.webp"
+        },
+        {
+          "viewport": "390x844",
+          "view": "jobs",
+          "theme": "light",
+          "geometry": {
+            "overflow": 0,
+            "theme": "light",
+            "summaryDisplay": "block"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/390-jobs-light.webp"
+        },
+        {
+          "viewport": "390x844",
+          "view": "points",
+          "theme": "light",
+          "geometry": {
+            "overflow": 0,
+            "theme": "light",
+            "summaryDisplay": "block"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/390-points-light.webp"
+        },
+        {
+          "viewport": "390x844",
+          "view": "jobs",
+          "theme": "dark",
+          "geometry": {
+            "overflow": 0,
+            "theme": "dark",
+            "summaryDisplay": "block"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/390-jobs-dark.webp"
+        },
+        {
+          "viewport": "390x844",
+          "view": "points",
+          "theme": "dark",
+          "geometry": {
+            "overflow": 0,
+            "theme": "dark",
+            "summaryDisplay": "block"
+          },
+          "path": "docs/qa/2026-10-01-backup-ui/390-points-dark.webp"
+        }
+      ]
+    },
+    {
+      "scenario": "Keyboard views, job state and weekly creation",
+      "result": "ArrowRight/Home move view and focus; Paused filter survives view switches; empty coverage and empty weekly days block progression; review shows selected names and UTC schedule; 503 freezes Back/Close and exact retry preserves body"
+    },
+    {
+      "scenario": "Expanded job controls and repository change",
+      "result": "Contextual repository switch retains exact revision/body after 503; missing task keeps intent; Pause and per-VM Run now remain reachable; View points opens scoped recovery view"
+    },
+    {
+      "scenario": "Loading, failed reads and reconnect",
+      "result": "Delayed jobs show Loading rather than empty; 503 run reads show unknown counts/results and hide cleanup with a point-history alert; 503 catalog read reports unavailable, not zero; clearing failures restores lists"
+    },
+    {
+      "scenario": "Empty jobs and missing prerequisites",
+      "result": "Empty job view offers Create; creation explains missing repository and links Settings; Next stays disabled; recovery view distinguishes no repositories from failed inventory"
+    },
+    {
+      "scenario": "Phone filters, fixed footer and reduced motion",
+      "result": "Filters disclosure narrows Core catalog to VM and collapses; full-width restore body scrolls without moving footer; all footer controls at least 36px; reduced-motion makes transition-property none for views/choices/panel; review reachable",
+      "geometry": {
+        "overflow": 0,
+        "panelWidth": 390,
+        "buttonHeights": [
+          36,
+          36
+        ],
+        "choiceHeights": [
+          82.84375,
+          100.84375,
+          82.84375
+        ],
+        "bodyScroll": 314
+      },
+      "reducedMotion": {
+        "matched": true,
+        "transitions": [
+          {
+            "property": "none",
+            "duration": "0s"
+          },
+          {
+            "property": "none",
+            "duration": "0s"
+          },
+          {
+            "property": "none",
+            "duration": "0.18s"
+          },
+          {
+            "property": "none",
+            "duration": "0s"
+          },
+          {
+            "property": "none",
+            "duration": "0s"
+          },
+          {
+            "property": "none",
+            "duration": "0s"
+          }
+        ]
+      }
+    },
+    {
+      "scenario": "Pagination and normal browser health",
+      "result": "Load more grows the visible catalog from 8 to the Core-reported 14; normal session has no console/page errors or failed fetch/XHR"
+    },
+    {
+      "scenario": "Definite permission refusal",
+      "result": "Simulated HTTP 403 shows the refusal, unfreezes Back/Close and permits destination correction without a queued operation; actual authorization was not exercised",
+      "observations": {
+        "error": "Administrator access required",
+        "backEnabled": true,
+        "closeEnabled": true,
+        "destinationEditable": true
+      }
+    },
+    {
+      "scenario": "Unavailable repositories in job panel",
+      "result": "A simulated 503 repository read is visible inside job creation without a registration link or enabled Next; unknown inventory is not presented as empty.",
+      "observations": {
+        "insidePanel": "Repository inventory unavailable: Error: Pool master is temporarily unreachable. Backup outcome is unknown.",
+        "registrationLinks": 0,
+        "nextEnabled": false
+      }
+    }
+  ],
+  "normalSessionHealth": {
+    "fetchXHRCount": 16,
+    "statusCounts": {
+      "200": 16
+    },
+    "consoleErrors": 0,
+    "pageErrors": 0
+  },
+  "regressions": {
+    "beforeCandidate": [
+      {
+        "check": "retained-metadata",
+        "passed": false
+      },
+      {
+        "check": "draft-route",
+        "passed": false
+      },
+      {
+        "check": "uncertain-job",
+        "passed": false
+      },
+      {
+        "check": "repository-focus",
+        "passed": false
+      },
+      {
+        "check": "phone-layout",
+        "passed": false
+      }
+    ],
+    "beforeFinalReview": [
+      {
+        "check": "retained-metadata",
+        "passed": true
+      },
+      {
+        "check": "draft-route",
+        "passed": true
+      },
+      {
+        "check": "uncertain-job",
+        "passed": true
+      },
+      {
+        "check": "repository-focus",
+        "passed": true
+      },
+      {
+        "check": "phone-layout",
+        "passed": true
+      },
+      {
+        "check": "backup-refusal",
+        "passed": false
+      },
+      {
+        "check": "repository-inventory",
+        "passed": false
+      },
+      {
+        "check": "repository-poll-focus",
+        "passed": false
+      }
+    ],
+    "finalCandidate": [
+      {
+        "check": "retained-metadata",
+        "passed": true
+      },
+      {
+        "check": "draft-route",
+        "passed": true
+      },
+      {
+        "check": "uncertain-job",
+        "passed": true
+      },
+      {
+        "check": "repository-focus",
+        "passed": true
+      },
+      {
+        "check": "phone-layout",
+        "passed": true
+      },
+      {
+        "check": "backup-refusal",
+        "passed": true
+      },
+      {
+        "check": "repository-inventory",
+        "passed": true
+      },
+      {
+        "check": "repository-poll-focus",
+        "passed": true
+      }
+    ]
+  },
+  "frontendChecks": {
+    "typecheck": "passed",
+    "tests": "passed",
+    "build": "passed"
+  },
+  "repositoryChecks": {
+    "apiReference": "index.html, local.html and peer.html are current",
+    "privacy": "passed (1 test)",
+    "documentationGate": "passed after correcting a retired test citation"
+  },
+  "captureMetadata": {
+    "webp": {
+      "capturesInspected": 20,
+      "chunks": [
+        "VP8 "
+      ],
+      "EXIF": false,
+      "XMP": false
+    },
+    "png": {
+      "capturesInspected": 2,
+      "chunks": [
+        "IHDR",
+        "IDAT",
+        "IEND"
+      ],
+      "text": false,
+      "EXIF": false
+    }
+  },
+  "netImplementationLines": 393,
+  "limits": [
+    "No native capture, restore cutover, disk deletion, boot verification or application recovery was executed.",
+    "Authentication, authorization and CSRF were simulated; real Core enforcement was not exercised.",
+    "Remote CI was not run.",
+    "Raster captures are ignored by repository policy and remain local evidence."
+  ],
+  "verificationStages": {
+    "walkthrough": "Comprehensive interactive walkthrough before the final review corrections; normal-session health belongs to this stage.",
+    "finalCandidate": "Responsive captures refreshed on the final bundle; unavailable-repository interaction and the complete eight-case regression suite passed after final corrections."
+  }
+}

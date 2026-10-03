@@ -2,7 +2,7 @@
 
 ## Status
 
-Development build 0.4.18 of Nex Controller. The console replaces the earlier desktop layout
+Development build 0.4.19 of Nex Controller. The console replaces the earlier desktop layout
 (toolbar, resource tree, detail tabs and bottom task strip) with a labelled rail, a top bar,
 filterable lists with slide-over panels, a pool **Overview**, operational **Storage** and
 **Networks** screens and pool **Settings**. Every workflow reachable before remains reachable;
@@ -42,10 +42,11 @@ flows are available in matching development builds.
    - **Networks** (`#/networks`) — the pool's guest networks with **Name**, **VLAN**, **Uplink**,
      **Host access**, **VMs**, **Status** and **Actions**. The **VMs** count links to the VM list
      filtered to that network (`#/vms?network=<name>`).
-   - **Backups** (`#/backups`) — recovery points with VM/repository filters, **Back up now**,
-     **Restore as new**, **Replace**, **Protect**, **Test restore**, and **Policies**.
-     covers schedules and retention; test-restore recording remains gated. Register destinations under
-     **Settings** → **Backup repositories**.
+   - **Backups** (`#/backups`) — two views: **Backup jobs** (schedules and retention, each job
+     expanding to its VMs) and **Recovery points** (VM and repository filters). **Back up now**
+     starts a backup; a selected recovery point offers **Restore…** (choose restore as new or
+     replace the original VM), **Protect** and **Test restore**; **Repositories** opens the
+     destinations. Register destinations under **Settings** → **Backup repositories**.
    - Pinned at the bottom: **Tasks** (`#/tasks`), **Events** (`#/events`) and **Settings**
      (`#/settings`, which opens its **Overview** section).
 
@@ -119,8 +120,8 @@ flows are available in matching development builds.
    Home) to restore the default width. Press Escape or select the close button (×) to close the
    panel; the list stays where it was and, on **VMs**, the keyboard focus returns to the row. A
    panel link can be copied and opened directly.
-9. On **VMs**, use the filter sidebar: search by name, IP address or tag, the **Group by host**
-   switch, the **Status**, **Pool**, **Host**, **Guest OS**, **Network** and **Tags** facets with counts,
+9. On **VMs**, use the filter sidebar: search by name, IP address or tag, the **Group by**
+   buttons (**None**, **Host** or **Tag**; a VM with several tags appears under each), the **Status**, **Pool**, **Host**, **Guest OS**, **Network** and **Tags** facets with counts,
    **Clear filters**, and **Customize columns**. The view buttons **All**, **Running**,
    **Needs attention** and **Stopped** show their counts. See [Control VM power](vm-power.md)
    for the checkbox bulk actions and [Tag virtual machines](tag-virtual-machines.md) for tags.
@@ -137,7 +138,10 @@ flows are available in matching development builds.
     progress and a **Cancel** button while it runs. There is no retry button: a failed task links
     to where its action can be sent again (*Open <VM>*, **Open Storage**, **Open Networks**,
     **Open the ISO library** or the host it ran on). Notices after a request carry a **Tasks**
-    link, and **Overview** → **Recent tasks** has **History**.
+    link, and **Overview** → **Recent tasks** has **History**. A task that is still dispatched
+    but not moving, such as a backup waiting for its member, shows *Waiting:* and the last
+    reason Core reported (for example *member unreachable* or *waiting for an earlier backup of
+    this VM to finish*); it clears when the work moves on.
 12. Select **Events** for recorded changes and health transitions with **Event**, **Source**,
     **When** and **Result**. Each panel's **Activity** tab shows the same history for that one
     VM or host.

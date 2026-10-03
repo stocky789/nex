@@ -58,6 +58,9 @@ func TestDiscoverStorageNativeSources(t *testing.T) {
 			return []byte("Export list:\n/exports/vms *\n"), nil
 		case "smbclient":
 			i := slices.Index(a, "-A")
+			if !strings.HasPrefix(a[i+1], "/dev/shm/") {
+				t.Fatal("credential file is not on tmpfs:", a[i+1])
+			}
 			info, e := os.Stat(a[i+1])
 			if e != nil || info.Mode().Perm() != 0600 {
 				t.Fatal("credential file")

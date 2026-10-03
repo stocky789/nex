@@ -1,0 +1,67 @@
+{
+  "summary": "An administrator can list a repository's orphaned recovery points (VM not in the pool master's VM inventory) and delete chosen VMs' points from the destination and catalog; Core plans, deletes and records per-point results.",
+  "paths": [
+    "internal/protocol/backup_dr.go",
+    "internal/protocol/protocol.go",
+    "internal/agent/backup_orphans.go",
+    "internal/agent/backup_orphans_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/agent/usage_history_channel.go",
+    "internal/agent/backup_forget.go",
+    "internal/controller/backups.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/backup_adoption_test.go",
+    "internal/localcore/backup.go",
+    "internal/localcore/service.go",
+    "internal/localcore/backup_test.go",
+    "web/src/backup-orphans.tsx",
+    "web/src/backup-orphans.test.mjs",
+    "web/src/backup-repositories.tsx",
+    "web/src/labels.ts",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/guide/backup-repositories.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-30-orphaned-backup-cleanup.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators get the Orphaned backups workflow: what counts as an orphan, protected and in-use handling, typed confirmation, results and recovery.",
+    "pages": [
+      "docs/guide/backup-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "New Controller routes GET .../backup-repositories/{repo_id}/orphans, POST .../orphan-cleanups and GET .../orphan-cleanups/{request_id}; Core command backup-orphan-cleanup; channel query GET /backup-orphans; Core-local routes for the same three. Administrator session, Origin and CSRF on the POST; the command is validated and receipted on the master, so a request_id replays its recorded outcome and a changed payload is 409.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Completes repository space management inside the current backup slice; no milestone or acceptance gate changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "pool-backup-orphan-cleanups/<request_id>.json (plan and per-point results) beside pool-backup-catalog/ on the pool master, plus the existing metadata receipt; the orphan set is derived on the master from pool-vms.json and the catalog, and the deletion goes through the existing retention delete.",
+    "reason": "Core decides what is an orphan from its own durable VM inventory and records the plan and outcomes; Controller keeps only the operation row and relays the master's query and record, so a fresh Controller shows the same list and results. Limitation: the cleanup record is not among the records copied to a promoted master; the receipt is, and a repeat there re-plans against current counts."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent (real master and member from the transfer lab, real filesystem backend with published points) covering grouping and sizes, a VM on an unreachable member not being an orphan, a missing inventory refusing, a member refusing the query, wrong confirmation and count mismatch refusals, a still-present VM refusing, deletion of selected groups with destination data removed, protected skipped by default and deleted with include_protected, pinned points always skipped, replay and changed-payload conflict, interrupted-run resume from the plan, a re-created VM skipped, and other VMs' points untouched; making every point an orphan made the test fail. Controller route test for CSRF, authentication, validation, queueing, replay and conflict; local route test. Web unit test, tsc and npm test. No browser walkthrough, real NFS/SMB/S3/SFTP destination, promoted-master run or multi-host lab was run.",
+    "evidence": [
+      "internal/agent/backup_orphans_test.go",
+      "internal/controller/backup_adoption_test.go",
+      "internal/localcore/backup_test.go",
+      "web/src/backup-orphans.test.mjs"
+    ]
+  }
+}

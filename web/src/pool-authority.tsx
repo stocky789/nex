@@ -30,13 +30,10 @@ export type AuthorityMember = {
   host_id: string; name?: string; role: "master" | "member"; status?: string; connection?: string;
   peer_origin?: string; replica?: { generation: number; acknowledged_generation: number } | null;
   transfer?: Transfer | null;
-  // This member's own advertised pool-authority-transfer-v1, so a master change whose target
-  // could not perform one is not offered at all.
-  transfer_supported?: boolean;
 };
 export type AuthorityReport = {
   pool_id: string; pool_name: string; master_host_id: string; master_connection: string;
-  generation: number; authoritative: boolean; transfer_supported?: boolean;
+  generation: number; authoritative: boolean;
   authority?: Authority | null; transfer?: Transfer | null; last_transfer?: LastTransfer | null;
   master_conflict?: string[]; members?: AuthorityMember[];
 };
@@ -170,9 +167,6 @@ export function masterConflictText(report: AuthorityReport) {
   return `${names} report${claimants.length === 1 ? "s" : ""} being the pool master of this pool, at no newer generation than ${hostName(report, report.master_host_id)}, which this Controller still treats as the master. Nothing is changed while they disagree: check both hosts before you act.`;
 }
 
-function upgradeHost(report: AuthorityReport) {
-  return hostName(report, report.master_host_id);
-}
 function notCurrent(report: AuthorityReport) {
   return `The pool master is ${report.master_connection}, so this membership is not current; reload when it reports again.`;
 }
@@ -181,10 +175,6 @@ function notCurrent(report: AuthorityReport) {
 export function masterChangeBlock(report: AuthorityReport, member: AuthorityMember) {
   if (member.role === "master") return "This host is already the pool master.";
   if (!report.authoritative) return notCurrent(report);
-  if (report.transfer_supported === false) return `Changing the pool master needs pool-authority-transfer-v1 on the pool master, the selected host and every ready member; upgrade ${upgradeHost(report)}.`;
-  // The selected host's own advertised capability. An absent field is an older projection,
-  // not a "no", so only an explicit false withdraws the action.
-  if (member.transfer_supported === false) return `Changing the pool master needs pool-authority-transfer-v1 on ${member.name || member.host_id}; upgrade it before making it the pool master.`;
   if (transferInProgress(report.transfer)) return "Another pool authority transfer is already in progress on this pool.";
   if (member.status !== "ready" || !member.peer_origin) return "Only a ready member with a peer endpoint can become the pool master.";
   if (member.connection !== "fresh") return "The selected host must be fresh and active to become the pool master.";
@@ -195,7 +185,6 @@ export function masterChangeBlock(report: AuthorityReport, member: AuthorityMemb
 export function ejectBlock(report: AuthorityReport, member: AuthorityMember) {
   if (member.role === "master") return "The pool master cannot be ejected; change the pool master first.";
   if (!report.authoritative) return notCurrent(report);
-  if (report.transfer_supported === false) return `Ejecting a member needs pool-authority-transfer-v1 on the pool master and every ready member; upgrade ${upgradeHost(report)}.`;
   if (transferInProgress(report.transfer)) return "Another pool authority transfer is already in progress on this pool.";
   return "";
 }

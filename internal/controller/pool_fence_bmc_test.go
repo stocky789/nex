@@ -100,15 +100,14 @@ func withTx(t *testing.T, l *joinLab, fn func(*sql.Tx) error) error {
 // check a fence profile does. The Controller keeps nothing of its own about it.
 func TestBMCProvisioningIsRelayedToTheMasterThatOwnsTheRecord(t *testing.T) {
 	l := newJoinLab(t)
-	// The same membership and capability a fence profile needs, because it takes the same
-	// check: this is a field of the record the master owns.
+	// The same membership a fence profile needs, because it takes the same check: this is a
+	// field of the record the master owns.
 	membership := selfMembership(l.master.id, l.master.pool)
 	membership.Generation = 2
 	membership.Members[0].Generation = 2
 	membership.Members = append(membership.Members, protocol.PoolMember{
 		HostID: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC()})
 	l.master.inv.Managed.Membership = membership
-	l.master.caps = append(l.master.caps, protocol.PoolAuthorityTransferCapability)
 	l.send(&l.master, nil)
 	path := "/api/v1/pools/" + l.master.pool + "/members/" + l.member.id + "/bmc-provisioning"
 	var accepted promotionAcceptance
@@ -179,23 +178,8 @@ func TestHostFencingIsRelayedAndTheChecklistIsMirrored(t *testing.T) {
 	l.master.inv.Managed.Membership = membership
 	l.send(&l.master, nil)
 
-	// A master too old for the setting offers no switch, and the request names the upgrade
-	// rather than half-applying anything.
-	var older map[string]any
-	read(t, l.a.call("GET", "/api/v1/pools/"+l.master.pool+"/members", nil, nil, 200), &older)
-	if older["host_fencing_supported"] != false {
-		t.Fatalf("a master without the capability was offered the switch: %+v", older["host_fencing_supported"])
-	}
-	l.a.call("POST", "/api/v1/pools/"+l.master.pool+"/host-fencing", map[string]any{"request_id": "old-1", "enabled": false}, nil, 409)
-
-	l.master.caps = append(l.master.caps, protocol.PoolHostFencingCapability)
-	l.send(&l.master, nil)
-
 	var view map[string]any
 	read(t, l.a.call("GET", "/api/v1/pools/"+l.master.pool+"/members", nil, nil, 200), &view)
-	if view["host_fencing_supported"] != true {
-		t.Fatalf("the master's capability did not reach the client: %+v", view["host_fencing_supported"])
-	}
 	fence, _ := view["fence"].(map[string]any)
 	if fence == nil || fence["host_fencing"] != true || fence["total"] != float64(1) {
 		t.Fatalf("the pool's fencing summary did not reach the client: %+v", view["fence"])

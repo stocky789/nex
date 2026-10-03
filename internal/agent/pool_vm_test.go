@@ -4,6 +4,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -410,7 +412,7 @@ func TestLocalStorageStartUsesRecoveryAdmissionWhileEmergencyStopSkipsMaster(t *
 	// The same host must still be able to reduce power when the master is gone.
 	maintenanceMembership(t, s, "host-b",
 		maintenanceMember("host-a", false),
-		protocol.PoolMember{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready", PeerOrigin: "https://127.0.0.1:1"},
+		protocol.PoolMember{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready", PeerOrigin: "https://127.0.0.1:1"},
 	)
 	stop := start
 	stop.OperationID, stop.Power.Action = "stop-1", "force-stop"
@@ -1013,7 +1015,7 @@ func TestPoolVMFirstLocalToSharedUpdateSeedsOnlyExactMemberInventory(t *testing.
 
 func TestPoolVMLocalFirstLocalToSharedUpdateSeedsExactInventory(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -1787,7 +1789,7 @@ func TestClusteredVMStopOnlyBypassesLostQuorumWithoutPermitOrOwnerChange(t *test
 func sharedMediaVMStore(t *testing.T) (*Store, *protocol.VMCreateSpec) {
 	t.Helper()
 	s := peerStore(t, "host-a", "pool-1")
-	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}}); err != nil {
+	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	storage := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-a", Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports", Directory: "guests"}}, Generation: 1}
@@ -2420,5 +2422,57 @@ func TestPoolVMUpdateCommitKeepsTagsInMasterRecord(t *testing.T) {
 	}
 	if got := mustLoadPoolVMs(t, s).VMs[vm].Spec.Tags; !slices.Equal(got, next.Tags) {
 		t.Fatalf("master record tags = %v", got)
+	}
+}
+
+func TestUnacknowledgedMasterReservationStaysRetryable(t *testing.T) {
+	saved := &http.Response{StatusCode: http.StatusConflict, Header: http.Header{poolSnapshotSavedHeader: {"1"}}, Body: io.NopCloser(strings.NewReader("master wording may change"))}
+	err := snapshotReservationRefusal(saved, "refused")
+	if !errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
+		t.Fatalf("saved-but-unacknowledged reservation must stay retryable: %v", err)
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped == nil || unwrapped.Error() != "refused" {
+		t.Fatalf("the refusal cause was dropped from the chain: %v", unwrapped)
+	}
+	lost := &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("reply lost"))}
+	if err := snapshotReservationRefusal(lost, "refused"); !errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
+		t.Fatalf("a server error may follow a saved reservation and must stay retryable: %v", err)
+	}
+	// Message text carries no meaning: only the marker the master sets does.
+	refused := &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader("snapshot state was saved but is not yet acknowledged by every ready member"))}
+	if err := snapshotReservationRefusal(refused, "refused"); errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
+		t.Fatalf("a plain refusal must not be retryable: %v", err)
+	}
+}
+
+// A delete or release request is admitted only for the VM the request names, this host and its
+// pool: poolSharedVM prefers a command's VM definition, so a command carrying both a VM and a
+// different delete target must not be admitted against the wrong VM.
+func TestPoolVMDeleteMatchesOwnerChecksVMIdentity(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	const vmID, otherID = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	v := poolVMTestSpec(vmID, s.State.HostID)
+	del := func(id, pool, host string) protocol.Command {
+		return protocol.Command{Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: id, PoolID: pool, HostID: host}}
+	}
+	release := func(id, pool, host string) protocol.Command {
+		return protocol.Command{Kind: "vm-release-retained", ReleaseRetained: &protocol.VMReleaseRetainedRequest{VMID: id, PoolID: pool, HostID: host, Confirmation: "x"}}
+	}
+	for name, build := range map[string]func(id, pool, host string) protocol.Command{"delete": del, "release": release} {
+		if !poolVMDeleteMatchesOwner(s, build(vmID, s.State.PoolID, s.State.HostID), *v) {
+			t.Fatalf("%s: the owner's own request was refused", name)
+		}
+		for label, cmd := range map[string]protocol.Command{
+			"another VM":   build(otherID, s.State.PoolID, s.State.HostID),
+			"another pool": build(vmID, "pool-2", s.State.HostID),
+			"another host": build(vmID, s.State.PoolID, "host-b"),
+		} {
+			if poolVMDeleteMatchesOwner(s, cmd, *v) {
+				t.Fatalf("%s for %s was admitted", name, label)
+			}
+		}
+	}
+	if poolVMDeleteMatchesOwner(s, protocol.Command{Kind: "vm-delete"}, *v) {
+		t.Fatal("a delete without its request was admitted")
 	}
 }

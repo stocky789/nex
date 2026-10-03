@@ -3,6 +3,7 @@ package vmhost
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +53,419 @@ func TestVerifyBackupRepositoryRejectsWrongMountedSource(t *testing.T) {
 	}
 	if err := VerifyBackupRepository(context.Background(), repo); err == nil {
 		t.Fatal("backup repository must reject a different mounted NFS source")
+	}
+}
+
+func TestPrepareBackupRepositoryMigratesLegacyNFSHardeningOptions(t *testing.T) {
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
+	}
+	registration := backupStorageRegistration(repo)
+	path := remoteMountPath(registration)
+	unit, unitPath := remoteUnitPath(registration)
+	source := repo.Source.Server + ":" + repo.Source.Export
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev")
+	if err := os.WriteFile(unitPath, legacy, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	restarted := false
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "findmnt":
+			return []byte(source + " nfs4 rw,vers=4,hard,nosuid,nodev,noexec " + path + "\n"), nil
+		case "systemctl":
+			if len(args) > 0 && args[0] == "restart" && args[len(args)-1] == unit {
+				restarted = true
+			}
+			return nil, nil
+		}
+		return nil, nil
+	}
+	ctx := allowBackupNFSHardeningRemount(context.Background(), registration)
+	if !storageRemountAllowed(ctx) {
+		t.Fatal("legacy hardening-only unit did not allow remount")
+	}
+	if _, err := prepareRemote(ctx, registration, source, "nfs4", "vers=4,hard,_netdev"+backupNFSHardeningOpts); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(unitPath)
+	if err != nil || !strings.Contains(string(got), "Options=vers=4,hard,_netdev,nosuid,nodev,noexec\n") {
+		t.Fatalf("legacy unit was not migrated: %s, %v", got, err)
+	}
+	if !restarted {
+		t.Fatal("hardening migrate did not restart the mount unit")
+	}
+	if err := os.WriteFile(unitPath, legacy, 0644); err != nil {
+		t.Fatal(err)
+	}
+	restarted = false
+	_, _ = PrepareBackupRepository(context.Background(), repo)
+	got, err = os.ReadFile(unitPath)
+	if err != nil || !strings.Contains(string(got), "Options=vers=4,hard,_netdev,nosuid,nodev,noexec\n") {
+		t.Fatalf("PrepareBackupRepository did not migrate legacy hardening options: %s, %v", got, err)
+	}
+	if !restarted {
+		t.Fatal("PrepareBackupRepository did not remount the migrated hardening unit")
+	}
+	foreign := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev,soft")
+	if err := os.WriteFile(unitPath, foreign, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if storageRemountAllowed(allowBackupNFSHardeningRemount(context.Background(), registration)) {
+		t.Fatal("non-hardening option change allowed remount")
+	}
+	if _, err := PrepareBackupRepository(context.Background(), repo); err == nil || !strings.Contains(err.Error(), "block repository dependencies") {
+		t.Fatalf("non-hardening option change was migrated: %v", err)
+	}
+}
+
+func TestSMBBackupRegistrationUsesSealedMountAndPrivateCredential(t *testing.T) {
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups", Directory: "pool-1"},
+		SMBIdentity:   &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)},
+		CredentialRef: "receipt-1",
+	}
+	registration := backupStorageRegistration(repo)
+	if registration.Kind != protocol.StorageKindSMB || registration.Source.SMB != repo.SMBSource ||
+		registration.Identity.SMB != repo.SMBIdentity || registration.CredentialReceipt != repo.CredentialRef ||
+		registration.Source.NFS != nil {
+		t.Fatalf("incorrect SMB backup storage registration: %+v", registration)
+	}
+	repo.SMBIdentity.Server = "other.example.test"
+	repo.MountPath = remoteMountPath(registration)
+	if err := VerifyBackupRepository(context.Background(), repo); err == nil {
+		t.Fatal("backup repository must reject a changed SMB source before mount access")
+	}
+}
+
+func TestBackupFilesystemPublicationProbe(t *testing.T) {
+	root := t.TempDir()
+	stale, recent := filepath.Join(root, ".nex-backup-probe-crashed"), filepath.Join(root, ".nex-backup-probe-running")
+	for _, dir := range []string{stale, recent} {
+		if err := os.MkdirAll(filepath.Join(dir, "artifact"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := probeBackupFilesystemPublication(root); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(recent) {
+		t.Fatalf("publication probe left stale or removed live entries: %v, %v", entries, err)
+	}
+	if err := probeBackupFilesystemPublication(filepath.Join(root, "absent")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing repository root must fail: %v", err)
+	}
+}
+
+// tempBackupSMBCredentialRoot keeps the sealed credential directory inside the test.
+func tempBackupSMBCredentialRoot(t *testing.T) string {
+	t.Helper()
+	previous := backupSMBCredentialRoot
+	backupSMBCredentialRoot = filepath.Join(t.TempDir(), "backup-smb-credentials")
+	t.Cleanup(func() { backupSMBCredentialRoot = previous })
+	return backupSMBCredentialRoot
+}
+
+func TestPrepareSMBBackupRefusesForeignOwnerBeforePublicationProbe(t *testing.T) {
+	root := t.TempDir()
+	if err := ClaimBackupRepositoryOwner(root, "foreign-repo", "foreign-pool"); err != nil {
+		t.Fatal(err)
+	}
+	previousPrepare, previousProbe := prepareBackupSMB, probeBackupPublication
+	t.Cleanup(func() { prepareBackupSMB, probeBackupPublication = previousPrepare, previousProbe })
+	called := false
+	prepareBackupSMB = func(context.Context, protocol.StorageRegistration, string) (storageAccess, error) {
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	probeBackupPublication = func(string) error { called = true; return nil }
+	_, err := PrepareBackupRepository(context.Background(), protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
+		CredentialRef: "receipt-1",
+	})
+	if err == nil || called {
+		t.Fatalf("foreign-owned repository was probed: err=%v called=%v", err, called)
+	}
+}
+
+func TestPrepareSMBBackupRefusesExistingForeignOwnerBeforeNativeMountWork(t *testing.T) {
+	previousRoot, previousRun := storageMountRoot, nativeRun
+	storageMountRoot = t.TempDir()
+	t.Cleanup(func() { storageMountRoot, nativeRun = previousRoot, previousRun })
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups", Directory: "selected"},
+		CredentialRef: "receipt-1",
+	}
+	root := filepath.Join(remoteMountPath(backupStorageRegistration(repo)), repo.SMBSource.Directory)
+	if err := ClaimBackupRepositoryOwner(root, "foreign-repo", "foreign-pool"); err != nil {
+		t.Fatal(err)
+	}
+	nativeCalls := 0
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		nativeCalls++
+		return nil, errors.New("native mount work should not begin")
+	}
+	credentialRoot := tempBackupSMBCredentialRoot(t)
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err == nil || nativeCalls != 0 {
+		t.Fatalf("foreign owner was touched before refusal: err=%v native calls=%d", err, nativeCalls)
+	}
+	if _, err := os.Stat(filepath.Join(credentialRoot, repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("foreign owner caused credential materialization: %v", err)
+	}
+	ownerRepo, ownerPool, err := ReadBackupRepositoryOwner(root)
+	if err != nil || ownerRepo != "foreign-repo" || ownerPool != "foreign-pool" {
+		t.Fatalf("foreign owner changed: %q %q %v", ownerRepo, ownerPool, err)
+	}
+}
+
+func TestPrepareSMBBackupRefusesForeignOwnerDiscoveredAfterMount(t *testing.T) {
+	previousRun, previousMount, previousUnits := nativeRun, storageMountRoot, storageUnitRoot
+	base := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(base, "mounts"), filepath.Join(base, "units")
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = previousRun, previousMount, previousUnits })
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups", Directory: "selected"},
+		CredentialRef: "receipt-1",
+	}
+	mount := remoteMountPath(backupStorageRegistration(repo))
+	root := filepath.Join(mount, repo.SMBSource.Directory)
+	probeCalls := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "id":
+			return []byte("1000\n"), nil
+		case "findmnt":
+			return []byte("//smb.example.test/backups cifs rw,vers=3.1.1,seal,cache=strict,uid=1000,gid=1000,file_mode=0600,dir_mode=0700 " + mount + "\n"), nil
+		case "systemctl":
+			if len(args) > 0 && args[0] == "enable" {
+				if err := ClaimBackupRepositoryOwner(root, "foreign-repo", "foreign-pool"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return nil, nil
+		case "runuser":
+			probeCalls++
+			return nil, errors.New("QEMU probe must not touch a foreign repository")
+		}
+		return nil, errors.New("unexpected native command")
+	}
+	tempBackupSMBCredentialRoot(t)
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err == nil {
+		t.Fatal("foreign owner discovered after mount was accepted")
+	}
+	if probeCalls != 0 {
+		t.Fatalf("QEMU probed foreign repository %d times", probeCalls)
+	}
+	if _, err := os.Stat(filepath.Join(mount, smbMarkerName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("share marker was written before owner proof: %v", err)
+	}
+}
+
+func TestVerifySMBBackupRefusesForeignOwnerBeforePublicationProbe(t *testing.T) {
+	root := t.TempDir()
+	if err := ClaimBackupRepositoryOwner(root, "foreign-repo", "foreign-pool"); err != nil {
+		t.Fatal(err)
+	}
+	previousInspect, previousProbe := inspectBackupSMB, probeBackupPublication
+	t.Cleanup(func() { inspectBackupSMB, probeBackupPublication = previousInspect, previousProbe })
+	inspectBackupSMB = func(context.Context, protocol.StorageRegistration) (storageAccess, error) {
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	called := false
+	probeBackupPublication = func(string) error { called = true; return nil }
+	err := VerifyBackupRepository(context.Background(), protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
+		SMBIdentity:   &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)},
+		CredentialRef: "receipt-1", MountPath: root,
+	})
+	if err == nil || called {
+		t.Fatalf("foreign-owned repository was probed: err=%v called=%v", err, called)
+	}
+}
+
+func TestVerifySMBBackupReadSkipsPublicationProbe(t *testing.T) {
+	root := t.TempDir()
+	if err := ClaimBackupRepositoryOwner(root, "repo-1", "pool-1"); err != nil {
+		t.Fatal(err)
+	}
+	previousInspect, previousQEMU, previousProbe := inspectBackupSMB, probeBackupQEMUAccess, probeBackupPublication
+	t.Cleanup(func() {
+		inspectBackupSMB, probeBackupQEMUAccess, probeBackupPublication = previousInspect, previousQEMU, previousProbe
+	})
+	inspectBackupSMB = func(context.Context, protocol.StorageRegistration) (storageAccess, error) {
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	qemuCalls, publicationCalls := 0, 0
+	probeBackupQEMUAccess = func(context.Context, string) error { qemuCalls++; return nil }
+	probeBackupPublication = func(string) error { publicationCalls++; return errors.New("repository is read-only") }
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
+		SMBIdentity:   &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)},
+		CredentialRef: "receipt-1", MountPath: root,
+	}
+	if err := VerifyBackupRepositoryRead(context.Background(), repo); err != nil {
+		t.Fatalf("read verification: %v", err)
+	}
+	if qemuCalls != 0 || publicationCalls != 0 {
+		t.Fatalf("read verification wrote to repository: QEMU=%d publication=%d", qemuCalls, publicationCalls)
+	}
+	if err := VerifyBackupRepository(context.Background(), repo); err == nil {
+		t.Fatal("writable verification accepted denied publication")
+	}
+	if qemuCalls != 1 || publicationCalls != 1 {
+		t.Fatalf("writable verification skipped probes: QEMU=%d publication=%d", qemuCalls, publicationCalls)
+	}
+	repo.SMBIdentity.MarkerID = strings.Repeat("b", 32)
+	if err := VerifyBackupRepositoryRead(context.Background(), repo); err == nil {
+		t.Fatal("read verification accepted wrong share marker")
+	}
+}
+
+func TestPrepareBackupRepositorySMBSealsCredentialFile(t *testing.T) {
+	root, credentialRoot := t.TempDir(), tempBackupSMBCredentialRoot(t)
+	var seen string
+	previousPrepare := prepareBackupSMB
+	t.Cleanup(func() { prepareBackupSMB = previousPrepare })
+	prepareBackupSMB = func(ctx context.Context, registration protocol.StorageRegistration, _ string) (storageAccess, error) {
+		credential, err := credentialFile(ctx, registration)
+		if err != nil {
+			return storageAccess{}, err
+		}
+		info, err := os.Stat(credential)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("credential mode: %v, %v", info, err)
+		}
+		if data, err := os.ReadFile(credential); err != nil || string(data) != "username=backup\npassword=private-example-secret\ndomain=EXAMPLE\n" {
+			t.Fatalf("credential body: %q, %v", data, err)
+		}
+		seen = credential
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, CredentialRef: "receipt-1",
+	}
+	creds := protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret", Domain: "EXAMPLE"}
+	for i := 0; i < 2; i++ {
+		prepared, err := PrepareBackupRepositorySMB(context.Background(), repo, creds)
+		if err != nil || prepared.MountPath != root || prepared.SMBIdentity == nil {
+			t.Fatalf("prepare %d: %+v, %v", i, prepared, err)
+		}
+		if seen != filepath.Join(credentialRoot, repo.CredentialRef) {
+			t.Fatalf("mount read %q, not the sealed credential file", seen)
+		}
+	}
+	if err := DetachBackupRepository(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(seen); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sealed credential survived detach: %v", err)
+	}
+	for _, domain := range []string{"EX,AMPLE", "EX=AMPLE", "EX\nAMPLE", "EX AMPLE"} {
+		bad := creds
+		bad.Domain = domain
+		if _, err := PrepareBackupRepositorySMB(context.Background(), repo, bad); err == nil {
+			t.Fatalf("domain %q accepted", domain)
+		}
+	}
+}
+
+// Regression for BUG-0751: preparing a mount that already uses the sealed file must not seal again.
+func TestPrepareBackupRepositorySMBKeepsSealedFileOfMountedRepository(t *testing.T) {
+	root, credentialRoot := t.TempDir(), tempBackupSMBCredentialRoot(t)
+	previousUnits, previousPrepare := storageUnitRoot, prepareBackupSMB
+	storageUnitRoot = t.TempDir()
+	t.Cleanup(func() { storageUnitRoot, prepareBackupSMB = previousUnits, previousPrepare })
+	prepareBackupSMB = func(context.Context, protocol.StorageRegistration, string) (storageAccess, error) {
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, CredentialRef: "receipt-1",
+	}
+	registration := backupStorageRegistration(repo)
+	_, unitPath := remoteUnitPath(registration)
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	sealed := filepath.Join(credentialRoot, repo.CredentialRef)
+	unit := remoteUnit("//smb.example.test/backups", remoteMountPath(registration), "cifs", smbMountOptions("1000", "1000", sealed))
+	if err := os.WriteFile(unitPath, unit, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(credentialRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sealed, []byte("already written"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(sealed); err != nil || string(got) != "already written" {
+		t.Fatalf("prepare rewrote the file: %q %v", got, err)
+	}
+}
+
+func TestPrepareBackupRepositorySMBRejectsCredentialRotationBeforeWritingMaterial(t *testing.T) {
+	credentialRoot := tempBackupSMBCredentialRoot(t)
+	previousUnits := storageUnitRoot
+	storageUnitRoot = t.TempDir()
+	t.Cleanup(func() { storageUnitRoot = previousUnits })
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
+		CredentialRef: "new-receipt",
+	}
+	registration := backupStorageRegistration(repo)
+	_, unitPath := remoteUnitPath(registration)
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldUnit := remoteUnit("//smb.example.test/backups", remoteMountPath(registration), "cifs",
+		smbMountOptions("1000", "1000", filepath.Join(credentialRoot, "old-receipt")))
+	if err := os.WriteFile(unitPath, oldUnit, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "new-secret"}); err == nil {
+		t.Fatal("mounted repository accepted credential rotation without a dependency-safe remount")
+	}
+	if data, err := os.ReadFile(unitPath); err != nil || string(data) != string(oldUnit) {
+		t.Fatalf("failed rotation changed the mount unit: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(credentialRoot, repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed rotation materialized new credentials: %v", err)
 	}
 }
 
@@ -742,10 +1158,10 @@ func TestBuildRestoreAsNewSpecUsesNewIdentityAndDisconnectedNICs(t *testing.T) {
 	}
 }
 
-func TestBuildRestoreReplaceSpecKeepsIdentityAndDisconnectsNICs(t *testing.T) {
+func TestBuildRestoreReplaceSpecKeepsIdentityAndCurrentNICs(t *testing.T) {
 	current := managedTestVM()
 	current.Revision = 3
-	current.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio"}}
+	current.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio", MAC: "52:54:00:aa:bb:01"}}
 	captured := managedTestVM()
 	captured.Boot.Firmware = "bios"
 	captured.MediaID = ""
@@ -763,8 +1179,8 @@ func TestBuildRestoreReplaceSpecKeepsIdentityAndDisconnectsNICs(t *testing.T) {
 	if got.ID != current.ID || got.Name != current.Name || got.HostID != current.HostID || got.PoolID != current.PoolID {
 		t.Fatalf("must keep original identity: %#v", got)
 	}
-	if got.Revision != 4 || len(got.NICs) != 0 || got.StartAfterCreate || got.Autostart || got.MediaID != "" {
-		t.Fatalf("replace must bump revision and disconnect: %#v", got)
+	if got.Revision != 4 || !reflect.DeepEqual(got.NICs, current.NICs) || got.StartAfterCreate || got.Autostart || got.MediaID != "" {
+		t.Fatalf("replace must bump revision and keep the current NICs and MAC: %#v", got)
 	}
 	if got.Disks[0].StorageID != req.StorageID {
 		t.Fatalf("storage remap: %#v", got.Disks)
@@ -780,6 +1196,7 @@ func TestApplyExclusiveReplaceCutoverPlacesNewDisksAndRetainsOriginals(t *testin
 	vm := managedTestVM()
 	vm.Boot.Firmware = "bios"
 	vm.MediaID = ""
+	vm.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio", MAC: "52:54:00:aa:bb:cc"}}
 	vm.Boot.MediaBootOrder = 0
 	vm.Disks = []protocol.VMDisk{{StorageID: "s", Name: "disk", SizeGiB: 1, Bus: "virtio", BootOrder: 1}}
 	vmDir := filepath.Join(storageRoot, "nex-vms", vm.ID)
@@ -794,6 +1211,13 @@ func TestApplyExclusiveReplaceCutoverPlacesNewDisksAndRetainsOriginals(t *testin
 	if err := e.save(managedJournal{
 		Command:        protocol.Command{OperationID: "storage-1", Kind: "storage-register", Storage: &storage},
 		AppliedStorage: &storage, Result: protocol.Result{OperationID: "storage-1", Status: "succeeded"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	network := protocol.NetworkRegistration{ID: "n", PoolID: vm.PoolID, HostID: vm.HostID, Kind: "network", Source: "guest-net"}
+	if err := e.save(managedJournal{
+		Command: protocol.Command{OperationID: "network-1", Kind: "network-register", Network: &network},
+		Result:  protocol.Result{OperationID: "network-1", Status: "succeeded"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -841,6 +1265,7 @@ domstate) echo 'shut off';;
 define) exit 0;;
 autostart) exit 0;;
 dominfo) echo 'Autostart: disable';;
+net-list) echo guest-net;;
 *) exit 0;;
 esac`)
 	fakeCommand(t, "qemu-img", `case "$*" in
@@ -903,8 +1328,8 @@ esac`)
 	if !foundRetained {
 		t.Fatalf("original must be listed as retained: %#v", cur.Retained)
 	}
-	if len(cur.Command.VM.NICs) != 0 {
-		t.Fatalf("NICs must be disconnected: %#v", cur.Command.VM.NICs)
+	if len(cur.Command.VM.NICs) != 1 || cur.Command.VM.NICs[0].MAC != "52:54:00:aa:bb:cc" || !strings.Contains(string(cur.Domain), "52:54:00:aa:bb:cc") {
+		t.Fatalf("replace must keep the NIC and MAC end to end: %#v", cur.Command.VM.NICs)
 	}
 }
 
@@ -1014,6 +1439,10 @@ func TestRefuseOnlineBackupAdmissionUEFIAndQuiesced(t *testing.T) {
 	if reason := RefuseOnlineBackupAdmission(protocol.BackupCaptureOnline, vm, "running"); reason != "" {
 		t.Fatal(reason)
 	}
+	vm.Boot.TPM = protocol.TPM20
+	if reason := RefuseOnlineBackupAdmission(protocol.BackupCaptureOnline, vm, "running"); reason == "" {
+		t.Fatal("online backup of a BIOS guest with a TPM must be refused")
+	}
 }
 
 func TestRegisterRestoredAsNewRefusesInvalidInputs(t *testing.T) {
@@ -1086,122 +1515,6 @@ func TestReconcileRestoredAsNewObservesRetainedIntentOnly(t *testing.T) {
 	if err != nil || result.Status != "succeeded" || !called {
 		t.Fatalf("defined restore observation: result=%#v err=%v called=%v", result, err, called)
 	}
-}
-
-func TestBindLegacyRestoreAllocationRequiresCompleteExistingArtifacts(t *testing.T) {
-	e := NewManaged(filepath.Join(t.TempDir(), "managed-vms"))
-	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	vm := managedTestVM()
-	vm.Boot.Firmware, vm.MediaID, vm.NICs = "bios", "", nil
-	op := "legacy-restore-1"
-	localDir := filepath.Join(filepath.Dir(e.stateDir), "backup-restore", op)
-	if err := os.MkdirAll(localDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	placed := filepath.Join(t.TempDir(), "disk-0.qcow2")
-	payload := []byte("original restored disk")
-	sum := sha256.Sum256(payload)
-	artifact := protocol.BackupDiskArtifact{Target: "vda", Filename: "vda.qcow2", Format: "qcow2", Size: int64(len(payload)), SHA256: hex.EncodeToString(sum[:])}
-	if err := os.WriteFile(placed, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	journal := managedJournal{Command: protocol.Command{OperationID: op, Kind: "vm-create", VM: &vm},
-		Stage: "allocating", Result: protocol.Result{OperationID: op, Status: "pending"},
-		BackupRestore: true, Disks: []string{placed}, Targets: []string{"vda"}}
-	if err := e.save(journal); err != nil {
-		t.Fatal(err)
-	}
-	fakeCommand(t, "virsh", `case "$3" in list) exit 0;; *) exit 1;; esac`)
-	manifestSHA := strings.Repeat("a", 64)
-	if _, err := e.RestoreAsNewAllocating(op, vm, manifestSHA, []protocol.BackupDiskArtifact{artifact}, nil); !errors.Is(err, ErrRestoreManifestUnbound) {
-		t.Fatalf("legacy journal must require binding: %v", err)
-	}
-	bind := func() error {
-		return e.BindLegacyRestoreAsNewAllocating(context.Background(), op, vm, localDir, manifestSHA, []protocol.BackupDiskArtifact{artifact}, nil)
-	}
-	if err := bind(); err == nil {
-		t.Fatal("missing local artifact was accepted")
-	}
-	if err := os.WriteFile(filepath.Join(localDir, artifact.Filename), payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(placed, []byte("replaced disk"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := bind(); err == nil {
-		t.Fatal("changed placed disk was accepted")
-	}
-	if err := os.WriteFile(placed, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := bind(); err != nil {
-		t.Fatalf("exact legacy artifacts should bind: %v", err)
-	}
-	if allocating, err := e.RestoreAsNewAllocating(op, vm, manifestSHA, []protocol.BackupDiskArtifact{artifact}, nil); err != nil || !allocating {
-		t.Fatalf("bound allocation should resume: allocating=%v err=%v", allocating, err)
-	}
-	if _, err := e.RestoreAsNewAllocating(op, vm, strings.Repeat("c", 64), []protocol.BackupDiskArtifact{artifact}, nil); err == nil {
-		t.Fatal("changed recovery point was accepted after binding")
-	}
-}
-
-func TestReadLegacyAllocatingRestoreWithReservedEmptyDiskChain(t *testing.T) {
-	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
-	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	vm := managedTestVM()
-	j := managedJournal{Command: protocol.Command{OperationID: "legacy-chain-1", Kind: "vm-create", VM: &vm},
-		Result: protocol.Result{OperationID: "legacy-chain-1", Status: "pending"}, Stage: "allocating", BackupRestore: true,
-		Disks: []string{"/some/disk-0.qcow2"}, Targets: []string{"vda"}, DiskChains: [][]string{nil}}
-	check := func(accepted bool) {
-		t.Helper()
-		if err := e.save(j); err != nil {
-			t.Fatal(err)
-		}
-		got, err := e.readJournal("legacy-chain-1.json")
-		if accepted && (err != nil || len(got.DiskChains) != 0) {
-			t.Fatalf("exact legacy allocation should normalize empty chains: %+v %v", got.DiskChains, err)
-		}
-		if !accepted && err == nil {
-			t.Fatal("malformed non-allocation disk chain was accepted")
-		}
-	}
-	check(true)
-	j.BackupRestore = false
-	check(false)
-	j.BackupRestore = true
-	j.Stage = "defined"
-	check(false)
-	j.Stage, j.Result.Status = "allocating", "succeeded"
-	check(false)
-	j.Result.Status = "pending"
-	j.BackupManifestSHA256 = strings.Repeat("a", 64)
-	check(false)
-	j.BackupManifestSHA256 = ""
-	j.BackupDisks = []protocol.BackupDiskArtifact{{Target: "vda"}}
-	check(false)
-	j.BackupDisks = nil
-	j.Domain = []byte("<domain/>")
-	check(false)
-	j.Domain = nil
-	j.BackupTPMManifestSHA256 = strings.Repeat("a", 64)
-	check(false)
-	j.BackupTPMManifestSHA256 = ""
-	j.Targets = nil
-	check(false)
-	j.Targets = []string{"vda"}
-	j.Disks = append(j.Disks, "/some/disk-1.qcow2")
-	j.DiskChains = append(j.DiskChains, nil)
-	j.Targets = append(j.Targets, "vdb")
-	check(false)
-	j.Disks, j.DiskChains, j.Targets = j.Disks[:1], j.DiskChains[:1], j.Targets[:1]
-	j.DiskChains = [][]string{{}}
-	check(false)
-	j.DiskChains = [][]string{{"/different/disk-0.qcow2"}}
-	check(false)
 }
 
 func TestRestoreAsNewTargetAbsentRequiresNoNativeEffects(t *testing.T) {
@@ -1461,5 +1774,226 @@ func TestVerifyFailedTestRestoreKeepsOriginWhenDiskIsDamaged(t *testing.T) {
 	}
 	if err := e.VerifyTestRestoredVM(context.Background(), "test-damaged-1", vm, false); err == nil {
 		t.Fatal("failed verification accepted a reused UUID")
+	}
+}
+
+func TestPrepareBackupSMBChecksMarkerBeforeClaimAndDropsNewUnitOnFailure(t *testing.T) {
+	oldRun, oldMount, oldUnit, oldAccess, oldProbe := nativeRun, storageMountRoot, storageUnitRoot, smbPathAccess, probeBackupPublication
+	t.Cleanup(func() {
+		nativeRun, storageMountRoot, storageUnitRoot, smbPathAccess, probeBackupPublication = oldRun, oldMount, oldUnit, oldAccess, oldProbe
+	})
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	credentials := filepath.Join(root, "credentials")
+	if err := os.MkdirAll(credentials, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credentials, "receipt-1"), []byte("username=backup\npassword=example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), storageCredentialRootKey{}, credentials)
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, CredentialRef: "receipt-1"}
+	path := remoteMountPath(backupStorageRegistration(repo))
+	_, unitPath := remoteUnitPath(backupStorageRegistration(repo))
+	// QEMU runs as this test's account, so everything after the publication probe succeeds.
+	uid, gid := strconv.Itoa(os.Getuid()), strconv.Itoa(os.Getgid())
+	var unit string
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "id" && args[0] == "-u":
+			return []byte(uid + "\n"), nil
+		case name == "id":
+			return []byte(gid + "\n"), nil
+		case name == "findmnt":
+			return []byte("//smb.example.test/backups cifs rw,vers=3.1.1,seal,cache=strict,uid=" + uid + ",gid=" + gid + ",file_mode=0600,dir_mode=0700 " + path + "\n"), nil
+		case name == "systemctl" && args[0] == "enable":
+			raw, _ := os.ReadFile(unitPath)
+			unit = string(raw)
+		}
+		return nil, nil
+	}
+	smbPathAccess = func(path, _ string) (storageAccess, error) { return storageAccess{Path: path}, nil }
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := smbMarker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo.SMBIdentity = &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)}
+	if _, err := PrepareBackupRepository(ctx, repo); err == nil {
+		t.Fatal("a share with another marker was accepted")
+	}
+	if _, err := os.Lstat(filepath.Join(path, backupOwnerMarkerName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owner was claimed on a share with another marker: %v", err)
+	}
+	if !strings.Contains(unit, "nosuid,nodev,noexec") {
+		t.Fatalf("backup mount is not restricted to data: %s", unit)
+	}
+
+	repo.SMBIdentity.MarkerID = marker
+	probeBackupPublication = func(string) error { return errors.New("rename is unsupported") }
+	if _, err := PrepareBackupRepository(ctx, repo); err == nil {
+		t.Fatal("repository that failed its publication probe was accepted")
+	}
+	if _, err := os.Lstat(unitPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed first registration left its mount unit: %v", err)
+	}
+}
+
+// A stalled unprotect that read an older marker must not remove a newer one.
+func TestStaleBackupUnprotectKeepsNewerMarker(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, backupProtectMarkerName)
+	if err := WriteBackupProtectMarker(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBackupProtectMarker(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	newer, err := os.ReadFile(marker)
+	if err != nil || bytes.Equal(stale, newer) {
+		t.Fatalf("protect did not write a unique marker: %v", err)
+	}
+	if err := removeBackupProtectMarkerIfUnchanged(marker, stale); err == nil {
+		t.Fatal("stale unprotect was not refused")
+	}
+	if got, err := os.ReadFile(marker); err != nil || !bytes.Equal(got, newer) || !ReadBackupProtectMarker(dir) {
+		t.Fatalf("newer marker was lost: %q %v", got, err)
+	}
+	if err := WriteBackupProtectMarker(dir, false); err != nil || ReadBackupProtectMarker(dir) {
+		t.Fatal("unprotect did not remove the marker:", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("unprotect left files: %v", entries)
+	}
+}
+
+// Regression for BUG-0751: a marker that cannot be judged is put back, never deleted.
+func TestBackupUnprotectKeepsUnreadableMarker(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, backupProtectMarkerName)
+	if err := os.Mkdir(marker, 0700); err != nil { // reading a directory fails
+		t.Fatal(err)
+	}
+	if err := removeBackupProtectMarkerIfUnchanged(marker, []byte("old")); err == nil {
+		t.Fatal("unreadable marker was treated as unchanged")
+	}
+	if info, err := os.Lstat(marker); err != nil || !info.IsDir() {
+		t.Fatalf("marker was lost: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("leftover files: %v", entries)
+	}
+}
+
+// A crash between rename-aside and restore leaves the only copy of a marker as .rm-*.
+// Scan puts it back; unprotect removes a leftover only when it matches the current marker.
+func TestBackupProtectMarkerSweepSettlesLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, backupProtectMarkerName)
+	if err := WriteBackupProtectMarker(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := os.ReadFile(marker)
+	if err := os.Rename(marker, marker+".rm-a"); err != nil {
+		t.Fatal(err)
+	}
+	if ReadBackupProtectMarker(dir) {
+		t.Fatal("test setup: point should look unprotected")
+	}
+	if err := sweepBackupProtectMarkers(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(marker); err != nil || !bytes.Equal(got, want) || !ReadBackupProtectMarker(dir) {
+		t.Fatalf("marker not restored: %v", err)
+	}
+	// Identical leftover beside the marker is removed; a different one is kept.
+	if err := os.WriteFile(marker+".rm-b", want, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker+".rm-c", []byte("other"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBackupProtectMarker(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := filepath.Glob(marker + "*")
+	if len(left) != 1 || left[0] != marker+".rm-c" {
+		t.Fatalf("leftovers after unprotect: %v", left)
+	}
+}
+
+// An online backup stages a qcow2 per disk on the images filesystem the guests run from. It is
+// refused before backup-begin when the staging images could not fit, instead of filling the
+// filesystem and pausing the guests.
+func TestCaptureOnlineDisksRefusesWhenWorkDirectoryCannotHoldTheDisks(t *testing.T) {
+	const vmID = "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	log := filepath.Join(t.TempDir(), "virsh.log")
+	t.Setenv("VMHOST_LOG", log)
+	fakeCommand(t, "virsh", `echo "$3" >> "$VMHOST_LOG"; case "$3" in domblkinfo) printf 'Capacity:       %s\n' 10737418240;; *) exit 0;; esac`)
+	workDir := t.TempDir()
+	disks := []BackupDiskSource{{Target: "vda", Source: "/srv/vda.qcow2"}, {Target: "vdb", Source: "/srv/vdb.qcow2"}}
+	destinations := map[string]string{"vda": filepath.Join(workDir, "vda.qcow2"), "vdb": filepath.Join(workDir, "vdb.qcow2")}
+	previous := onlineBackupFreeBytes
+	t.Cleanup(func() { onlineBackupFreeBytes = previous })
+
+	onlineBackupFreeBytes = func(string) (uint64, error) { return 20 << 30, nil } // the 20 GiB of disks, but no headroom
+	err := CaptureOnlineDisks(context.Background(), vmID, disks, destinations)
+	if err == nil || !strings.Contains(err.Error(), "free beside the running guests") || errors.Is(err, ErrOnlineBackupUncertain) {
+		t.Fatalf("a work directory without headroom was accepted or reported uncertain: %v", err)
+	}
+	if calls, _ := os.ReadFile(log); strings.Contains(string(calls), "backup-begin") {
+		t.Fatalf("backup-begin ran although the staging images could not fit: %q", calls)
+	}
+
+	onlineBackupFreeBytes = func(string) (uint64, error) { return 30 << 30, nil }
+	if err := checkOnlineBackupSpace(context.Background(), vmID, disks, workDir); err != nil {
+		t.Fatalf("20 GiB of disks with 10 GiB of headroom was refused: %v", err)
+	}
+}
+
+// Only work directories of operations that are no longer unsettled are swept, and only once no
+// domain may still have a backup job writing.
+func TestSweepOnlineBackupWork(t *testing.T) {
+	root := t.TempDir()
+	previous := onlineBackupLocalRoot
+	onlineBackupLocalRoot = root
+	t.Cleanup(func() { onlineBackupLocalRoot = previous })
+	for _, name := range []string{"settled-op", "running-op"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name, "vda.qcow2"), []byte("image"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unsettled := func(op string) bool { return op == "running-op" }
+	const vmID = "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	t.Setenv("VMHOST_VM_ID", vmID)
+
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_VM_ID";; domjobinfo) printf 'Job type: 1\n';; *) exit 2;; esac`)
+	if err := SweepOnlineBackupWork(context.Background(), unsettled); err == nil {
+		t.Fatal("swept while a backup job could still be writing")
+	}
+	if !fileExists(filepath.Join(root, "settled-op")) {
+		t.Fatal("a work directory was removed without proof that no job is writing")
+	}
+
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_VM_ID";; domjobinfo) printf 'Job type: 0\n';; *) exit 2;; esac`)
+	if err := SweepOnlineBackupWork(context.Background(), unsettled); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(root, "settled-op")) {
+		t.Fatal("settled operation's staging images were kept")
+	}
+	if !fileExists(filepath.Join(root, "running-op", "vda.qcow2")) {
+		t.Fatal("an unsettled operation's work directory was swept")
 	}
 }

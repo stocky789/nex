@@ -321,6 +321,9 @@ reports its own access. On **Storage**, wait for that member's **Host access** l
 QEMU-writable and locking — before VMs placed on it can select the repository. **Pending** means the
 member has not checked the current registration yet. A failed, stale or missing report is not overridable: fix the
 member's export/share, identity, QEMU permissions, capacity or locking and wait for recheck.
+Only current **ready** pool members with access reported for the current repository
+generation are eligible. An old successful observation does not make a joining,
+ejecting, failed or removed member a usable target.
 
 ISO library entries imported onto that shared repository also reach joined members after the
 repository is healthy there: the member verifies the file digest and reports access. Import the
@@ -503,16 +506,10 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   Controller database reappears at the host's next report. Deleting the file on the host by hand is
   not supported. An import that is still `queued` or `dispatched` belongs to its host task; wait for
   the task to end before removing the entry.
-- **A registration the host refused stays in the list:** a repository registration whose task shows
-  **failed** was never created anywhere. It is only Nex Controller's record of the request, so its
-  row offers **Discard failed registration** and nothing else — no Recheck, no Update, no Detach.
-  Discarding it deletes only that record, asks no host to do anything, and keeps the task and the
-  audit history. Its identifier is Nex Controller's own request key (it begins `pending-storage-`),
-  not a repository ID: Nex Core allocates repository IDs and Nex Controller never invents one, so a
-  registration that is still queued or dispatched has no identifier at all yet. If a host has since
-  reported that repository as applied, the discard is refused with *a host reports this registration
-  as applied, so it is not a failed request record; remove it on the host instead of discarding it*
-  — use **Detach** for that one.
+- **A registration the host refused is not listed:** a repository registration whose task shows
+  **failed** was never created anywhere, so no repository row is kept for it. Read the reason in
+  **Tasks**, fix the cause and register again. Re-sending the same request returns the same failed
+  result; a new registration uses a new request.
 - **Detach is refused:** remove or complete the listed VM/media dependency, or wait for Core to
   reconcile an uncertain operation. Do not register the same source under another name.
 - **A master NFS/SMB update, rotation or detach is refused for a member workload:** a member still

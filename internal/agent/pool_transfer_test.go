@@ -28,10 +28,13 @@ import (
 // every step of a master change runs over the real mTLS peer transport with real
 // certificates, real membership pinning and real signatures.
 type transferLab struct {
-	t      *testing.T
-	hosts  []*Store
-	origin map[string]string
-	fail   map[string]*atomic.Value
+	t             *testing.T
+	hosts         []*Store
+	origin        map[string]string
+	fail          map[string]*atomic.Value
+	pageDataBytes atomic.Int64
+	// intercept, when set to a func(hostID string, r *http.Request), runs before each peer request.
+	intercept atomic.Value
 	// off are the hosts this lab has powered off. A fenced host is not executing, so it
 	// neither writes authority nor starts a guest, and the invariant counters below must
 	// not count its on-disk state as a running writer.
@@ -135,6 +138,23 @@ func (l *transferLab) serve(host *Store) {
 	l.fail[host.State.HostID] = drop
 	handler := PoolPeerHandler(host)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == poolBackupPagePath {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "invalid page request", http.StatusBadRequest)
+				return
+			}
+			var upload struct {
+				Data []byte `json:"data"`
+			}
+			if json.Unmarshal(body, &upload) == nil {
+				l.pageDataBytes.Add(int64(len(upload.Data)))
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		if hook, ok := l.intercept.Load().(func(string, *http.Request)); ok {
+			hook(host.State.HostID, r)
+		}
 		path, _ := drop.Load().(string)
 		onlyMethod := ""
 		if strings.HasPrefix(path, "POST:") {
@@ -713,7 +733,7 @@ func TestPoolTransferAbortRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	caller, _ := poolMemberByID(peerState(t, target).Membership, "master-1")
-	if _, err := activatePoolAuthority(target, caller, protocol.PoolTransferRequest{OperationID: "op-abort-2", Action: "activate", Notice: notice}); err == nil {
+	if _, err := activatePoolAuthority(context.Background(), target, caller, protocol.PoolTransferRequest{OperationID: "op-abort-2", Action: "activate", Notice: notice}); err == nil {
 		t.Fatal("an aborted activation was performed later")
 	}
 	lab.requireSingleMaster("at the end", "master-1")
@@ -1304,7 +1324,7 @@ func TestAdoptPoolAuthorityRollsBackVMsWhenPeerSaveFails(t *testing.T) {
 		return errors.New("test injected save failure")
 	}
 	t.Cleanup(func() { poolTransferFailSavePeerAfterVMAdopt = nil })
-	if _, err := adoptPoolAuthorityFromReplica(target, replica.Replica, record); err == nil {
+	if _, err := adoptPoolAuthorityFromReplica(context.Background(), target, replica.Replica, record); err == nil {
 		t.Fatal("activation should fail when the peer-state write fails")
 	}
 	after := poolVMRecords(t, target)
@@ -1334,7 +1354,7 @@ func TestHandedOffActivateFailureNamesRecovery(t *testing.T) {
 	if record == nil || !record.HandedOff {
 		t.Fatalf("hand-off record = %#v", record)
 	}
-	if record.LastError == "" || !strings.Contains(record.LastError, "handed to member-1") || !strings.Contains(record.LastError, "cancel the transfer") || !strings.Contains(record.LastError, "powering off") {
+	if record.LastError == "" || !strings.Contains(record.LastError, "handed to member-1") || !strings.Contains(record.LastError, "wait") || !strings.Contains(record.LastError, "do not power off") {
 		t.Fatalf("handed-off activation error = %q", record.LastError)
 	}
 }
@@ -1429,10 +1449,11 @@ func TestInheritedPendingBackupNeedsAttentionAndKeepsPin(t *testing.T) {
 		MetadataReceipts: []protocol.BackupMetadataReceipt{{OperationID: "pending-metadata", Kind: "backup-protect",
 			IntentSHA256: strings.Repeat("a", 64), Status: "pending", ObservedAt: now}},
 	}
-	root, _, err := stagePoolBackupAuthorityActivation(s, inheritedBackupAuthority(authority), 2)
+	root, _, release, err := stagePoolBackupAuthorityActivation(s, authority, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	peer := peerState(t, s)
 	peer.BackupActiveRoot = root
 	if err := savePoolPeer(s, peer); err != nil {
@@ -1453,7 +1474,7 @@ func TestInheritedPendingBackupNeedsAttentionAndKeepsPin(t *testing.T) {
 	if authority.History[0].Status != "pending" || authority.MetadataReceipts[0].Status != "pending" {
 		t.Fatal("signed source authority was changed")
 	}
-	if err := unsettledBackupTransferRefusal(s); err != nil {
+	if err := unsettledBackupTransferRefusal(s, "promote", "member-1"); err != nil {
 		t.Fatalf("retained uncertain history blocked a later planned transfer: %v", err)
 	}
 }

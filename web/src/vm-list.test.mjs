@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The VMs screen: honest status for VMs on stale hosts, views, search, saved columns, bulk power
-// skips, and the panel's tag editor gate. run with: node src/vm-list.test.mjs
+// The VMs screen: honest stale status, views, search, saved columns, bulk skips, and bounded
+// flat-list row construction with complete tag grouping. Run with: node src/vm-list.test.mjs
 import { bundleTestModule } from "./test-helpers.mjs";
-import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const { VMList, statusOf, needsAttention, views, matches, hiddenColumns, bulkSkip, bulkSnapSkip } = await import(bundleTestModule(new URL("./vm-list.tsx", import.meta.url), "vm-list", true));
-assert.match(readFileSync(new URL("./vm-list.tsx", import.meta.url), "utf8"), /request submitted for \$\{total\} VM/);
-assert.match(readFileSync(new URL("./vm-list.tsx", import.meta.url), "utf8"), /setBulkSnapIDs/);
 
 const host = { id: "h1", pool_id: "p1", hostname: "node-1", connection: "fresh", revoked: false, capabilities: ["vm-power-v1", "managed-vm-v1", "vm-update-v1", "console-v1"], inventory: null };
 const stale = { ...host, id: "h2", hostname: "node-2", connection: "stale" };
@@ -41,22 +38,6 @@ assert.match(bulkSnapSkip(web, host), /stop it first/);
 assert.match(bulkSnapSkip(lost, stale), /freshly connected/);
 assert.match(bulkSnapSkip(vm("ctl", { protected: true }), host), /Controller appliance/);
 assert.match(bulkSnapSkip(vm("stale-vm", { state: "shut off", freshness: "stale" }), host), /current VM state is unknown/);
-const snapSrc = readFileSync(new URL("./vm-list.tsx", import.meta.url), "utf8");
-assert.match(snapSrc, /requests\.current = \{\}/);
-assert.match(snapSrc, /requests\.current\[vm\.id\] \?\?= snapRequestID\(\)/, "bulk snapshot reuses one request_id per VM until success");
-assert.match(snapSrc, /delete requests\.current\[vm\.id\]/, "bulk snapshot drops the held request_id only after success");
-assert.match(snapSrc, /sentAny\.current = true/, "bulk snapshot records success outside React state before close");
-assert.match(snapSrc, /onClose=\{\(\) => onDone\(sentAny\.current\)\}/, "bulk snapshot onDone does not close over a stale sent array");
-assert.match(snapSrc, /const nameLocked = sent\.length > 0 \|\| working/, "name stays editable when every request failed");
-assert.doesNotMatch(snapSrc, /nameLocked = sent\.length > 0 \|\| Object\.keys\(errors\)/, "errors alone must not lock the snapshot name");
-
-const panelSnapSrc = readFileSync(new URL("./vm-snapshots.tsx", import.meta.url), "utf8");
-assert.match(panelSnapSrc, /requests\.current\[key\] \?\?= rid\(prefix\)/, "panel snapshot actions reuse request_id until success");
-assert.match(panelSnapSrc, /if \(vm\.protected\) return "Controller appliance/, "protected appliance VMs block snapshot actions");
-assert.match(panelSnapSrc, /confirmError/, "confirm dialog keeps its own error, not the create form error");
-assert.match(panelSnapSrc, /loadGen\.current/, "snapshot list load ignores stale responses after a VM switch");
-assert.match(panelSnapSrc, /if \(ok\) \{\s*setName\(""\);\s*setDescription\(""\);/, "create form clears only after a successful request");
-assert.match(panelSnapSrc, /if \(ok\) setEditID\(""\)/, "rename exits edit only after success");
 
 const data = { sites: [], pools: [{ id: "p1", name: "pool-1", site_id: "s", master_host_id: "h1" }], hosts: [host, stale], operations: [], audit: [], vms: [web, off, lost], storage: [], networks: [], media: [] };
 const props = { data, vms: data.vms, pool: data.pools[0], api: async () => ({}), reload: async () => {}, busy: false, unavailable: false, loading: false, onNotice() {}, onCreateVM() {},
@@ -64,7 +45,7 @@ const props = { data, vms: data.vms, pool: data.pools[0], api: async () => ({}),
 const list = renderToStaticMarkup(createElement(VMList, props));
 assert.match(list, /<span class="badge warn">Unknown<\/span>/, "the stale VM row says Unknown");
 assert.match(list, /Needs attention<span class="count warn">1<\/span>/);
-assert.match(list, /<span class="tag">web<\/span>/);
+assert.match(list, /<span class="tag" style="--tag-hue:\d+">web<\/span>/);
 assert.match(list, /Tags<svg/, "the Tags facet is offered");
 
 // The panel keeps phase-gated actions visible and disabled, and a stale host's VM says why.
@@ -81,10 +62,52 @@ assert.equal((failing.match(/badge warn">Unknown</g) || []).length, 4, "three ro
 assert.match(failing, /class="sm primary" disabled="" title="Controller inventory could not be loaded/);
 assert.match(failing, /class="sm tool-start" title="Controller inventory could not be loaded/);
 
-// Above 40 rows the ungrouped table virtualizes: spacer pads and only a window of rows.
-const many = Array.from({ length: 50 }, (_, i) => vm(`vm-${i}`));
-const virt = renderToStaticMarkup(createElement(VMList, { ...props, vms: many, data: { ...data, vms: many, hosts: [host] } }));
-assert.match(virt, /class="virtual-pad"/, "large lists use virtual spacer rows");
-assert.ok((virt.match(/<tr>/g) || []).length < 60, "not every VM row is in the markup");
+// Reading memory happens while constructing a row, even if that JSX is later discarded.
+// Both untagged and multi-tag inventories must construct only the displayed virtual window.
+const rowIDs = markup => [...markup.matchAll(/<tr\b[^>]*data-vm="([^"]+)"/g)].map(match => match[1]);
+for (const tags of [[], ["web", "blue"]]) {
+  let constructions = 0;
+  const many = Array.from({ length: 1000 }, (_, i) => vm(`vm-${i}`, {
+    spec: { ...spec, tags, memory: { mode: "dedicated", get size_mib() { constructions++; return 2048; } } },
+  }));
+  const virtualList = renderToStaticMarkup(createElement(VMList, { ...props, vms: many, data: { ...data, vms: many, hosts: [host] } }));
+  const visible = rowIDs(virtualList);
+  assert.match(virtualList, /class="virtual-pad"/, "large flat lists preserve space for offscreen VMs");
+  assert.ok(visible.length > 0 && visible.length < many.length / 10, "the visible window is bounded independently of inventory size");
+  assert.deepEqual(visible, many.slice(0, visible.length).map(v => v.id), "the window starts with consecutive inventory rows");
+  assert.equal(constructions, visible.length, `flat ${tags.length ? "multi-tag" : "untagged"} inventory must not construct offscreen rows`);
+}
+
+// Exercise the actual group and search handlers; React's server renderer applies their state
+// updates before producing the final markup, without a DOM or replacing component source.
+const descendants = node => Array.isArray(node) ? node.flatMap(descendants) : node?.props ? [node, ...descendants(node.props.children)] : [];
+function TagGroupedList({ listProps, query }) {
+  const tree = VMList(listProps);
+  const elements = descendants(tree);
+  const tag = elements.find(element => element.type === "button" && element.props.children === "Tag");
+  assert.ok(tag, "the Tag grouping action is available");
+  if (!tag.props["aria-pressed"]) tag.props.onClick();
+  const search = elements.find(element => element.type === "input" && element.props.type === "search");
+  if (search.props.value !== query) search.props.onChange({ target: { value: query } });
+  return tree;
+}
+const groupedVMs = Array.from({ length: 1000 }, (_, i) => vm(`matching-${i}`, {
+  spec: { ...spec, tags: i % 3 === 0 ? [] : i % 3 === 1 ? ["web"] : ["web", "blue"] },
+}));
+const inventory = [...groupedVMs, vm("outside", { spec: { ...spec, tags: ["unmatched"] } })];
+const grouped = renderToStaticMarkup(createElement(TagGroupedList, {
+  listProps: { ...props, vms: inventory, data: { ...data, vms: inventory, hosts: [host] } }, query: "matching",
+}));
+const tbody = grouped.match(/<tbody>([\s\S]*?)<\/tbody>/)[1];
+const groups = [...tbody.matchAll(/<tr class="group">([\s\S]*?)<\/tr>([\s\S]*?)(?=<tr class="group">|$)/g)];
+assert.equal(groups.length, 3, "matching VMs appear in both tag groups and the untagged group");
+for (const [index, name] of ["blue", "web", "No tags"].entries()) {
+  const members = groupedVMs.filter(v => name === "No tags" ? !v.spec.tags.length : v.spec.tags.includes(name));
+  assert.ok(groups[index][1].includes(name), "tag groups stay sorted with untagged VMs last");
+  assert.deepEqual(rowIDs(groups[index][2]), members.map(v => v.id), `${name} includes every matching VM, including rows outside the flat virtual window`);
+  assert.ok(groups[index][1].includes(`(${members.length})`), "each header reports its full matching count");
+}
+assert.doesNotMatch(tbody, /data-vm="outside"|unmatched|class="virtual-pad"/, "grouping honors search and does not virtualize its tree");
+assert.equal(groups[1][1].match(/--tag-hue:(\d+)/)[1], list.match(/--tag-hue:(\d+)/)[1], "group headers preserve the tag's row colour");
 
 console.log("vm-list ok");

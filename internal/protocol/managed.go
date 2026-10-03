@@ -15,16 +15,7 @@ import (
 )
 
 const ManagedVMCapability = "managed-vm-v1"
-
-// PoolVMPlacementCapability means Core requires the pool master to approve every
-// VM definition placement using a fresh authenticated target-host preflight.
-const PoolVMPlacementCapability = "pool-vm-placement-v1"
 const CPUBaselineCapability = "vm-cpu-baseline-v1"
-
-// PoolResourceRemovalCapability means Core accepts network-remove, network-update and
-// media-remove: pool VLAN networks and imported ISOs can be removed (and networks renamed)
-// on the pool master, with a durable tombstone members converge to.
-const PoolResourceRemovalCapability = "pool-resource-removal-v1"
 
 // ResourceLifecycleRequest removes an existing pool VLAN network or imported ISO, or renames
 // a network. Registration deliberately remains the legacy Command.Network/Command.Media shape,
@@ -182,9 +173,9 @@ type ZFSPoolScan struct {
 // ZFSPoolDevice is one leaf of the vdev tree, named as the pool was created: the
 // /dev/disk/by-id path for a provisioned repository.
 type ZFSPoolDevice struct {
-	Name           string `json:"name"`
-	Path           string `json:"path,omitempty"`
-	State          string `json:"state"`
+	Name  string `json:"name"`
+	Path  string `json:"path,omitempty"`
+	State string `json:"state"`
 	// Parent is "replacing" or "spare" when this leaf sits under an in-flight
 	// replacement or activated-spare vdev; empty for an ordinary data leaf.
 	Parent         string `json:"parent,omitempty"`

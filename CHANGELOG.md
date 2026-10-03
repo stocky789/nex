@@ -6,12 +6,111 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.18` →
-> Debian `0.4.18`).
+> development software. Builds use the newest numbered changelog heading (`0.4.19` →
+> Debian `0.4.19`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.19] — 2026-10-02
+
+### Major Feature
+
+- Backups can now go to an SMB3 share, an S3-compatible bucket or an SFTP server as well
+  as NFS. Each destination is checked for identity, access and ownership when it is
+  registered and by a periodic health check; credentials are delivered to Core once and
+  kept only on the pool's hosts.
+
+### Minor Feature
+
+- A public, read-only Controller demo now uses the current interface with fictional
+  VMs, storage and backup inventory. Container deployment rebuilds and checks the
+  demo from Git before publishing, without connecting visitors to real hosts. Its
+  login card displays the demo credentials, with expanded VM/host inventory, colorful
+  workload tags and clearly simulated pool quorum details.
+- Backups now separates backup jobs from recovery points. Inspect a point before
+  choosing how to restore it, with searchable filters and compact phone layouts.
+- Backup and restore panels now have named steps, a fixed action footer and clearer
+  restore choices. Expanded jobs keep Pause, repository changes and per-VM actions
+  together; drafts and exact retry selections stay intact while navigating, including
+  after following the Tasks link.
+- A backup repository can now be forgotten from Settings. Nex removes the repository, its
+  recovery-point list, its run history and its saved credentials from the pool; nothing is
+  deleted from the destination, and registering it again brings its recovery points back.
+  An interrupted forget resumes when the same request is sent again.
+- Backups of VMs that were deleted from the pool can now be cleaned up from a backup
+  repository's **Orphaned backups** panel. Nex lists only VMs that are truly gone from the pool,
+  frees their space on the destination, and skips protected or in-use backups unless told otherwise.
+- A backup job can now be deleted from the Backups page. Its recovery points and history stay.
+- A VM's retained original disks and vTPM state left by a restore-replace can be released
+  from the VM's Definition tab.
+
+### Bug Fixes
+
+- Backup and restore deadlines no longer let recovery remove staging files or release
+  reservations while the original worker is still running. Missing member outcomes
+  and vanished Core tasks remain uncertain until Core supplies a real outcome.
+- SFTP retries now sync reused artifacts, preserve protection during marker refresh,
+  reject symlinked delete targets and release failed owner claims. S3 releases ambiguous
+  failed claims without reclaiming missing owners for existing repositories.
+- Failed SMB3 credential replacements restore previous access when rollback is confirmed
+  and keep both credentials when uncertain; failed member preparation remains retryable.
+- Repository forgetting resumes interrupted work, refuses unresolved runs and removes
+  only an exact stale member registration. Registration probes and peer delivery no
+  longer block the Core service loop.
+- Core restarts preserve saved registration outcomes without preparing the destination
+  again. Interrupted replacement rollback retains its pending or uncertain outcome and
+  credentials, including when the final receipt cannot be written.
+- Returning members with large stale repository inventories can be cleaned in bounded
+  pages without dropping current registrations or treating incomplete reads as absence.
+- Console tickets now accept only one host tunnel, including simultaneous handshakes
+  and the interval before the browser upgrade finishes.
+- Large orphan-cleanup results replicate in bounded frames, page collection preserves
+  acknowledged and live uploads, and catalog rebuilds preserve concurrent protection,
+  verification and newly published points. Shared storage excludes nonready members.
+- Interrupted retained-vTPM releases resume their exact validated deletion intent;
+  retained-release retries cannot silently target another VM.
+- Repository replacement retries preserve confirmation and credentials across failed
+  polls; pool changes clear old drafts. Backup history loads independently of inventory,
+  deleted-VM overrides are removed on repository changes, and flat VM lists avoid
+  constructing hidden tag-group rows.
+- Demo stacked CPU charts now show per-core and per-vCPU samples. Interrupted archive
+  uploads time out without holding the deployment lock indefinitely.
+- Forgetting a repository no longer refuses for missed or finished runs, rechecks for new work
+  after unmounting, and cannot be raced by a catalog import. Deleting a backup job is refused
+  while any of its runs still needs attention. A scheduler run no longer stops at one job whose
+  VM left the pool, and a due backup on a busy repository is recorded instead of dropped.
+- A slow or hung backup destination no longer stalls other backups, protection changes or pool
+  authority writes, and one damaged recovery point no longer blocks a rebuild or the deletion of
+  other points. The pool master now checks every artifact of a member's backup before it appears
+  in the catalog.
+- A member's backup or restore request that arrives while the master is checking the repository is
+  retried instead of being reported as never started. A master change is no longer blocked by work
+  of a member that already left.
+- Snapshots of a VM missing from libvirt now fail cleanly instead of retrying forever, deleting a
+  VM now removes vTPM state kept by a restore-replace, and online backups to S3 or SFTP check for
+  free space before starting.
+- Backup credential handling no longer runs the key tool once per credential on every report,
+  cleans up orphaned and legacy plaintext credential files after an upgrade, and a hung mount
+  no longer blocks registering other repositories.
+- The Backups page keeps protection and test state current for rows loaded with **Load more**,
+  and the demo deployment now rejects oversized or compressed-bomb images and no longer loops when
+  restarted after a crash.
+
+### Miscellaneous
+
+- Repository privacy checks now also scan binary files for private build paths.
+- **Upgrade:** this release is a hard cutover with no compatibility layer. Update the Controller first,
+  then update and restart Nex Core on every host in the same window. An upgraded Controller
+  refuses an unrestarted 0.4.18 Core master with a 400 that names the unknown field, and that
+  host stays stale until its Core restarts. A Core that does not report a hostname is refused
+  when joining a pool, with the reason shown; existing members' hostnames are not backfilled.
+- **Upgrade:** pin state written by earlier releases for unfinished restores is refused with an error naming
+  the file; finish or clean up those restores on the old release first.
+- **Upgrade:** Core's SMB3 mount password is stored root-only at `/var/lib/nex-core-agent/backup-smb-credentials/`
+  (not sealed and not relocated by `--state-dir`); the encrypted S3, SFTP and SMB3 credential
+  receipts are sealed with a per-host key, and a lost key is no longer recreated while receipts exist.
 
 ## [0.4.18] — 2026-09-28
 

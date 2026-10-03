@@ -4,8 +4,10 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 
@@ -95,6 +97,11 @@ func UpsertPoolBackupPolicy(s *Store, policy protocol.BackupPolicy) (protocol.Ba
 	if _, err := GetPoolBackupRepository(s, policy.RepositoryID); err != nil {
 		return protocol.BackupPolicy{}, err
 	}
+	// A forget in progress has already counted the repository's jobs; a new one would
+	// point at a repository that is about to be gone.
+	if backupRepositoryRemoving(s, policy.RepositoryID) {
+		return protocol.BackupPolicy{}, ErrBackupConflict
+	}
 	membership, err := Membership(s)
 	if err != nil {
 		return protocol.BackupPolicy{}, ErrBackupUnavailable
@@ -115,6 +122,9 @@ func UpsertPoolBackupPolicy(s *Store, policy protocol.BackupPolicy) (protocol.Ba
 	}
 	now := time.Now().UTC()
 	if existing, ok := state.Policies[policy.ID]; ok {
+		if policy.ExpectedRevision == nil || *policy.ExpectedRevision != existing.Revision {
+			return protocol.BackupPolicy{}, ErrBackupConflict
+		}
 		if existing.ScheduleID != policy.ScheduleID {
 			return protocol.BackupPolicy{}, ErrBackupConflict
 		}
@@ -128,11 +138,15 @@ func UpsertPoolBackupPolicy(s *Store, policy protocol.BackupPolicy) (protocol.Ba
 			policy.LastDispatchAt = existing.LastDispatchAt
 		}
 	} else {
+		if policy.ExpectedRevision != nil {
+			return protocol.BackupPolicy{}, ErrBackupConflict
+		}
 		if policy.Revision == 0 {
 			policy.Revision = 1
 		}
 		policy.CreatedAt = now
 	}
+	policy.ExpectedRevision = nil
 	if policy.Enabled && !policy.Paused {
 		next, err := protocol.NextBackupOccurrence(policy.Rule, policy.TimeZone, now)
 		if err != nil {
@@ -244,6 +258,7 @@ func PoolBackupAuthorityRefs(s *Store) (*protocol.PoolBackupAuthority, error) {
 	for _, repo := range reposState.Repositories {
 		repo.Access = protocol.StorageAccess{}
 		repo.MemberAccess = nil
+		repo.Health = protocol.BackupRepositoryHealth{}
 		repos = append(repos, repo)
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].ID < repos[j].ID })
@@ -308,13 +323,115 @@ func PoolBackupAuthorityRefs(s *Store) (*protocol.PoolBackupAuthority, error) {
 	sort.Slice(auth.MetadataReceipts, func(i, j int) bool {
 		return auth.MetadataReceipts[i].OperationID < auth.MetadataReceipts[j].OperationID
 	})
+	if auth.OrphanCleanups, err = listOrphanCleanups(s); err != nil {
+		return nil, err
+	}
 
 	if err := auth.Valid(); err != nil {
 		return nil, err
 	}
 	if len(auth.Repositories) == 0 && len(auth.Definitions) == 0 && len(auth.History) == 0 &&
-		len(auth.Catalog) == 0 && len(auth.Pins) == 0 && len(auth.Policies) == 0 && len(auth.Runs) == 0 && len(auth.MetadataReceipts) == 0 {
+		len(auth.Catalog) == 0 && len(auth.Pins) == 0 && len(auth.Policies) == 0 && len(auth.Runs) == 0 && len(auth.MetadataReceipts) == 0 && len(auth.OrphanCleanups) == 0 {
 		return nil, nil
 	}
 	return auth, nil
+}
+
+// Walk one durable record at a time for v2 replica construction. Directory
+// entries are sorted by os.ReadDir, so unchanged host state has stable bytes.
+func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool, error) {
+	nonempty := false
+	visit := func(kind byte, record any) error {
+		nonempty = true
+		return emit(kind, record)
+	}
+	repos, err := loadPoolBackupRepositories(s)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range slices.Sorted(maps.Keys(repos.Repositories)) {
+		repo := repos.Repositories[id]
+		repo.Access, repo.MemberAccess, repo.Health = protocol.StorageAccess{}, nil, protocol.BackupRepositoryHealth{}
+		if err := visit(1, repo); err != nil {
+			return false, err
+		}
+	}
+	policies, err := loadPoolBackupPolicies(s)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range slices.Sorted(maps.Keys(policies.Policies)) {
+		if err := visit(2, policies.Policies[id]); err != nil {
+			return false, err
+		}
+	}
+	for _, group := range []struct {
+		kind    byte
+		path    string
+		corrupt string
+	}{
+		{3, poolBackupRunsPath(s), "backup run record is corrupt"},
+		{4, poolBackupCatalogPath(s), "backup catalog entry is corrupt"},
+		{6, poolBackupReceiptsPath(s), "backup metadata receipt is corrupt"},
+		{7, orphanCleanupsPath(s), "orphaned backup cleanup record is corrupt"},
+	} {
+		entries, err := os.ReadDir(group.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(group.path, entry.Name()))
+			if errors.Is(err, os.ErrNotExist) {
+				continue // Pruned since the listing; an unlocked sizing walk just omits it.
+			}
+			if err != nil {
+				return false, err
+			}
+			// Every record is named for its ID; a mismatch means the file is corrupt.
+			var record any
+			var valid error
+			var id string
+			switch group.kind {
+			case 3:
+				var run protocol.BackupRun
+				err = json.Unmarshal(raw, &run)
+				record, valid, id = run, run.Valid(), run.OperationID
+			case 4:
+				var point protocol.BackupRecoveryPoint
+				err = json.Unmarshal(raw, &point)
+				record, valid, id = point, point.Valid(), point.ID
+			case 6:
+				var receipt protocol.BackupMetadataReceipt
+				err = json.Unmarshal(raw, &receipt)
+				record, valid, id = receipt, receipt.Valid(), receipt.OperationID
+			case 7:
+				var cleanup protocol.BackupOrphanCleanup
+				err = json.Unmarshal(raw, &cleanup)
+				record, valid, id = cleanup, cleanup.Valid(), cleanup.OperationID
+			}
+			if err != nil || valid != nil || id+".json" != entry.Name() {
+				return false, errors.New(group.corrupt)
+			}
+			err = visit(group.kind, record)
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+	pins, err := loadPoolBackupPins(s)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range slices.Sorted(maps.Keys(pins.Pins)) {
+		if err := visit(5, pins.Pins[id]); err != nil {
+			return false, err
+		}
+	}
+	return nonempty, nil
 }

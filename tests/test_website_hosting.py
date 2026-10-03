@@ -98,7 +98,7 @@ class WebsiteHosting(unittest.TestCase):
             connection.close()
 
     def assert_headers(self, headers):
-        self.assertEqual(headers['Content-Security-Policy'], "default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'none'; style-src 'self'")
+        self.assertEqual(headers['Content-Security-Policy'], "default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'self'; style-src 'self'")
         self.assertEqual(headers['Strict-Transport-Security'], 'max-age=31536000')
         self.assertEqual(headers['X-Content-Type-Options'], 'nosniff')
         self.assertEqual(headers['X-Frame-Options'], 'DENY')

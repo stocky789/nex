@@ -24,9 +24,7 @@ Limits in this build:
 
 - An administrator session in Nex Controller (the browser needs its session and CSRF token; both
   are handled by the UI). Every removal and rename is audited.
-- The pool master must be **freshly connected** and report the `pool-resource-removal-v1`
-  capability. An older master leaves the buttons disabled with *"This Nex Core cannot remove pool
-  networks or ISOs yet; upgrade Nex Core."*
+- The pool master must be **freshly connected**.
 - No VM in the pool, on any host, may still use the resource — **including a shut-off VM**. A VM
   definition that names the network on a NIC, or the ISO in either CD drive, is enough to refuse
   the removal. Detach or eject it in each VM first (see
@@ -54,12 +52,10 @@ Limits in this build:
 
 ### Discard a registration the pool master refused
 
-A pool VLAN network or a storage repository the pool master **refused** to register was never
-created on any host. It is only Nex Controller's record of the request, so it is not removed — it is
+A pool VLAN network the pool master **refused** to register was never created on any host. It is only Nex Controller's record of the request, so it is not removed — it is
 **discarded**, exactly as a failed ISO import already was.
 
-1. With the pool chosen in the scope menu, select **Networks** (for a network) or **Storage** (for
-   a repository) in the rail and
+1. With the pool chosen in the scope menu, select **Networks** in the rail and
    find the row whose task shows **failed**.
 2. Its only action is **Discard failed registration**. Rename, Remove, Recheck, Update and Detach
    are not offered on a failed row, because there is nothing on a host to act on.
@@ -69,7 +65,7 @@ created on any host. It is only Nex Controller's record of the request, so it is
 If a host has since reported that registration as applied, the discard is refused with *a host
 reports this registration as applied, so it is not a failed request record; remove it on the host
 instead of discarding it* — and the row stays. That is the guard that stops a discard deleting a
-live pool resource's row. A repository a host does hold is removed with **Detach**, never with a
+live pool resource's row. A refused storage registration is not listed at all and has no Discard button; its reason is in **Tasks**. A repository a host does hold is removed with **Detach**, never with a
 discard.
 
 ### Remove a pool VLAN network
@@ -93,7 +89,7 @@ discard.
    repositories. **About removing ISOs**, below the ISO table, summarises the rules below.
 2. On a row whose transfer task shows `succeeded`, select **Remove ISO**. (A **failed** import is
    only a Controller request record; it keeps the separate **Discard failed import** action, which
-   asks no host to do anything — the same model a refused network or storage registration now
+   asks no host to do anything — the same model a refused network registration now
    follows, see [Discard a registration the pool master refused](#discard-a-registration-the-pool-master-refused).)
 3. The dialog **Remove ISO `<name>`?** states that the pool master deletes this ISO file from its
    storage, that Nex Core refuses while the ISO is in any VM's CD drive, running or stopped, and
@@ -134,9 +130,7 @@ disks are never touched by either operation.
   or reload the page;
   *Wait for Nex Core to confirm this resource before changing it.* — the registration or import has
   not succeeded yet; *The pool master is not freshly connected. Reconnect it before changing this
-  pool resource.* — see [Set up Nex Controller and enroll a host](manage-controller.md); *This Nex
-  Core cannot remove pool networks or ISOs yet; upgrade Nex Core.* — the master is older than this
-  feature ([Check and apply software updates](software-updates.md)); *A request for this resource
+  pool resource.* — see [Set up Nex Controller and enroll a host](manage-controller.md); *A request for this resource
   is already in flight. Wait for Nex Core to report its result.*
 - **A host row shows no buttons, only "Host network · created and managed on `<host>`".** That
   network was created by the host itself, not as a pool VLAN, and cannot be removed here. Removing

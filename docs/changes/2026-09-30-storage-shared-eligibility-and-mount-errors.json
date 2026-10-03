@@ -1,0 +1,42 @@
+{
+  "summary": "Stop re-offering a delivered storage credential, report the mount helper's message when a remote mount fails, and derive NFS/SMB capabilities.shared and eligible_host_ids from verified member access.",
+  "paths": [
+    "internal/controller/storage_credentials.go",
+    "internal/controller/storage_credentials_test.go",
+    "internal/vmhost/storage_mounts.go",
+    "internal/vmhost/storage_mounts_test.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-30-storage-shared-eligibility-and-mount-errors.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator step changes; the shared badge and error text now match the documented behaviour.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "GET /api/v1/storage capabilities.shared and eligible_host_ids now follow verified member access for NFS and SMB; the fields and schema are unchanged.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes; no milestone or acceptance gate changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "No new state: the fields are computed by the pool master from its in-memory member access observations over the registration in its managed journal.",
+    "reason": "A fresh Controller reads the same values from the pool master's storage inventory."
+  },
+  "verification": {
+    "method": "Focused Go tests; no real Debian 13 host, SMB server or lab run.",
+    "evidence": [
+      "internal/controller/storage_credentials_test.go",
+      "internal/vmhost/storage_mounts_test.go",
+      "internal/agent/pool_storage_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

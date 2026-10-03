@@ -257,6 +257,14 @@ func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) boo
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
+		if name, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
+			msg := "invalid JSON request: unknown field " + name
+			if strings.HasPrefix(r.URL.Path, "/api/v1/agent/") {
+				msg += "; upgrade or restart Nex Core on the reporting host"
+			}
+			fail(w, 400, msg)
+			return false
+		}
 		fail(w, 400, "invalid JSON request")
 		return false
 	}
@@ -311,7 +319,6 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("POST /api/v1/storage/{id}/update", c.admin(c.updateStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/recheck", c.admin(c.recheckStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/detach", c.admin(c.detachStorage))
-	m.HandleFunc("DELETE /api/v1/storage/{id}", c.admin(c.discardFailedStorage))
 	m.HandleFunc("POST /api/v1/storage/credentials", c.admin(c.storageCredentials))
 	m.HandleFunc("GET /api/v1/storage/credentials", c.admin(c.storageCredentialReceipts))
 	m.HandleFunc("GET /api/v1/storage/credentials/{request_id}", c.admin(c.storageCredentialStatus))
@@ -327,6 +334,7 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("POST /api/v1/vms", c.admin(c.createVM))
 	m.HandleFunc("PUT /api/v1/vms/{id}", c.admin(c.updateVM))
 	m.HandleFunc("DELETE /api/v1/vms/{id}", c.admin(c.deleteVM))
+	m.HandleFunc("POST /api/v1/vms/{id}/release-retained", c.admin(c.releaseRetainedOriginals))
 	m.HandleFunc("POST /api/v1/vms/{id}/power", c.admin(c.powerVM))
 	m.HandleFunc("POST /api/v1/vms/{id}/media", c.admin(c.mediaVM))
 	m.HandleFunc("GET /api/v1/vms/{id}/snapshots", c.admin(c.listVMSnapshots))
@@ -337,12 +345,17 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/pools/{id}/backup-repositories", c.admin(c.listBackupRepositories))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-repositories", c.admin(c.createBackupRepository))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test", c.admin(c.testBackupRepository))
+	m.HandleFunc("POST /api/v1/pools/{id}/backup-repositories/{repo_id}/forget", c.admin(c.forgetBackupRepository))
+	m.HandleFunc("GET /api/v1/pools/{id}/backup-repositories/{repo_id}/orphans", c.admin(c.orphanedBackups))
+	m.HandleFunc("POST /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups", c.admin(c.cleanupOrphanedBackups))
+	m.HandleFunc("GET /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups/{request_id}", c.admin(c.orphanCleanupResult))
 	m.HandleFunc("GET /api/v1/pools/{id}/backup-catalog", c.admin(c.listBackupCatalog))
 	m.HandleFunc("GET /api/v1/pools/{id}/backup-runs", c.admin(c.listBackupRuns))
 	m.HandleFunc("GET /api/v1/pools/{id}/backup-policies", c.admin(c.listBackupPolicies))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-policies", c.admin(c.createBackupPolicy))
 	m.HandleFunc("PUT /api/v1/pools/{id}/backup-policies/{policy_id}", c.admin(c.updateBackupPolicy))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause", c.admin(c.pauseBackupPolicy))
+	m.HandleFunc("POST /api/v1/pools/{id}/backup-policies/{policy_id}/delete", c.admin(c.deleteBackupPolicy))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now", c.admin(c.runNowBackupPolicy))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-restore", c.admin(c.restoreBackupAsNew))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-restore-replace", c.admin(c.restoreBackupReplace))
@@ -749,7 +762,13 @@ func (c *Controller) operation(w http.ResponseWriter, r *http.Request, user, csr
 }
 
 func (c *Controller) operations(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	rows, err := c.db.Query("SELECT * FROM operations ORDER BY created_at DESC LIMIT 1000")
+	// Backup requests queue on the pool master, which dispatches them to the executing host.
+	rows, err := c.db.Query(`SELECT o.id, CASE WHEN o.kind LIKE 'backup-%' THEN coalesce(
+		(SELECT coalesce(NULLIF(json_extract(command,'$.restore.host_id'),''), NULLIF(json_extract(command,'$.restore_replace.host_id'),''),
+			NULLIF(json_extract(command,'$.test_restore.host_id'),''), NULLIF(json_extract(command,'$.vm.host_id'),''))
+		 FROM managed_resources WHERE operation_id=o.id LIMIT 1), o.host_id) ELSE o.host_id END,
+		o.kind, o.request_id, o.status, o.error, o.created_at, o.updated_at, o.actor
+		FROM operations o ORDER BY o.created_at DESC LIMIT 1000`)
 	if err != nil {
 		fail(w, 500, "operation lookup failed")
 		return

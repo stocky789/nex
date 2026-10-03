@@ -17,6 +17,20 @@ CREDENTIAL = re.compile(
 )
 
 
+def privacy_findings(name, data):
+    # Executables and other binary artifacts can embed paths and credentials too.
+    text = data.decode('utf-8', errors='replace')
+    findings = []
+    for number, line in enumerate([name, *text.splitlines()]):
+        if name.startswith('docs/qa/') and OBSERVED_ID.search(line):
+            findings.append(f'{name}:{number}: observed environment identifier')
+        if HOME_PATH.search(line):
+            findings.append(f'{name}:{number}: personal home path')
+    if CREDENTIAL.search(text):
+        findings.append(f'{name}: possible credential')
+    return findings
+
+
 class RepositoryPrivacyTests(unittest.TestCase):
     def test_public_repository_has_no_private_paths_ids_or_credentials(self):
         files = subprocess.check_output(
@@ -31,16 +45,14 @@ class RepositoryPrivacyTests(unittest.TestCase):
                 data = path.read_bytes()
             else:
                 continue
-            # Images need visual review; public keyrings are binary.
-            text = '' if b'\0' in data else data.decode('utf-8', errors='replace')
-            for number, line in enumerate([name, *text.splitlines()]):
-                if name.startswith('docs/qa/') and OBSERVED_ID.search(line):
-                    findings.append(f'{name}:{number}: observed environment identifier')
-                if HOME_PATH.search(line):
-                    findings.append(f'{name}:{number}: personal home path')
-            if CREDENTIAL.search(text):
-                findings.append(f'{name}: possible credential')
+            findings.extend(privacy_findings(name, data))
         self.assertFalse(findings, '\n' + '\n'.join(findings))
+
+    def test_binary_artifacts_are_scanned_for_embedded_home_paths(self):
+        fictional_path = '/'.join(('', 'home', 'example-user', 'project', 'main.go')).encode()
+        artifact = b'\x7fELF\0\xff' + fictional_path + b'\0'
+        self.assertTrue(privacy_findings('fixture.bin', artifact))
+        self.assertFalse(privacy_findings('fixture.bin', b'\x7fELF\0\xffpublic-source/main.go\0'))
 
 
 if __name__ == '__main__':

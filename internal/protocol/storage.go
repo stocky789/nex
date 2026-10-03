@@ -353,11 +353,13 @@ func storageSMBShare(raw string) bool {
 	return strings.TrimSpace(raw) == raw && storageSMBShareName.MatchString(raw)
 }
 
-func storageSMBDomain(raw string) bool {
+// ValidSMBDomain accepts an empty domain or a plain domain/workgroup name. It is used for
+// mount credentials, so it refuses every separator or quoting character.
+func ValidSMBDomain(raw string) bool {
 	if raw == "" {
 		return true
 	}
-	return len(raw) <= 253 && strings.TrimSpace(raw) == raw && !strings.ContainsAny(raw, "/\\= \t\x00\r\n;'\"`$&|<>()")
+	return len(raw) <= 253 && strings.TrimSpace(raw) == raw && !strings.ContainsAny(raw, "/\\=, \t;'\"`$&|<>()") && !strings.ContainsFunc(raw, unicode.IsControl)
 }
 
 // ValidateStorageRegistration validates client-supplied intent as well as Core replay input.
@@ -567,7 +569,7 @@ func ValidateStorageDiscovery(v StorageDiscoveryRequest) error {
 	if v.Path != "" && !storagePath(v.Path) {
 		return errors.New("storage discovery path is invalid")
 	}
-	if v.Credentials != nil && (len(v.Credentials.Secret) > 4096 || len(v.Credentials.Username) > 253 || !storageSMBDomain(v.Credentials.Domain) || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\x00\r\n")) {
+	if v.Credentials != nil && (len(v.Credentials.Secret) > 4096 || len(v.Credentials.Username) > 253 || !ValidSMBDomain(v.Credentials.Domain) || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\x00\r\n")) {
 		return errors.New("storage discovery credentials are invalid")
 	}
 	if v.Kind == StorageKindSMB && v.Server == "" {

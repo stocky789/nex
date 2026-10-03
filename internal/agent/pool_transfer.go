@@ -115,6 +115,8 @@ type poolTransferRecord struct {
 	// Repointed are the hosts that have acknowledged the new authority, so a resumed
 	// re-point contacts only the ones that have not.
 	Repointed []string
+	// NewPoolID is the identity an ejected host takes for its own new pool.
+	NewPoolID string
 	Attempts  int
 	UpdatedAt time.Time
 }
@@ -216,6 +218,13 @@ func savePoolTransfer(s *Store, record *poolTransferRecord) error {
 	stored := *record
 	state.Transfer = &stored
 	return savePoolPeer(s, state)
+}
+
+// poolAuthorityHandedOff reports whether this host signed its pool authority away and so
+// refuses every authority write until it learns the outcome.
+func poolAuthorityHandedOff(s *Store) bool {
+	record, err := loadPoolTransfer(s)
+	return err == nil && record != nil && record.HandedOff
 }
 
 func poolTransferTerminal(stage string) bool { return stage == "done" || stage == "aborted" }
@@ -437,9 +446,6 @@ func poolTransferRPC(ctx context.Context, s *Store, origin, hostID string, reque
 		return reply, errors.New("pool peer " + hostID + " is unreachable for this transfer step")
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed {
-		return reply, errors.New("pool peer " + hostID + " does not support " + protocol.PoolAuthorityTransferCapability + "; upgrade it before changing the pool master")
-	}
 	if json.NewDecoder(io.LimitReader(response.Body, protocol.PoolTransferLimit)).Decode(&reply) != nil {
 		return reply, errors.New("pool peer " + hostID + " did not answer this transfer step")
 	}
@@ -488,9 +494,6 @@ func probePoolAuthorityQuery(ctx context.Context, s *Store, origin, hostID strin
 		return status, errors.New("pool peer " + hostID + " is unreachable")
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed {
-		return status, errors.New("pool peer " + hostID + " does not support " + protocol.PoolAuthorityTransferCapability + "; upgrade it before changing the pool master")
-	}
 	if response.StatusCode != http.StatusOK {
 		return status, errors.New("pool peer " + hostID + " refused the authority probe")
 	}
@@ -618,7 +621,8 @@ func PoolTransferHandler(s *Store) http.Handler {
 		var reply protocol.PoolTransferReply
 		switch request.Action {
 		case "activate":
-			reply, err = activatePoolAuthority(s, caller, request)
+			// The catalog import may outlast the caller's request; it keeps its own bound.
+			reply, err = activatePoolAuthority(context.WithoutCancel(r.Context()), s, caller, request)
 		case "abort":
 			reply, err = abortPoolAuthorityTarget(s, request)
 		case "repoint":
@@ -669,7 +673,7 @@ func authenticatePoolTransferPeer(s *Store, r *http.Request, action string) (pro
 // activatePoolAuthority is the target's step 4. It is idempotent by operation ID: a host
 // that already adopted the authority answers the same way, so a retry after a lost reply
 // never activates twice and never activates a second generation.
-func activatePoolAuthority(s *Store, master protocol.PoolMember, request protocol.PoolTransferRequest) (protocol.PoolTransferReply, error) {
+func activatePoolAuthority(ctx context.Context, s *Store, master protocol.PoolMember, request protocol.PoolTransferRequest) (protocol.PoolTransferReply, error) {
 	var reply protocol.PoolTransferReply
 	notice := request.Notice
 	poolPeerMu.Lock()
@@ -732,7 +736,7 @@ func activatePoolAuthority(s *Store, master protocol.PoolMember, request protoco
 		OperationID: request.OperationID, Action: "promote", Role: "target", TargetHostID: s.State.HostID,
 		Stage: "activate", AuthorityGeneration: notice.AuthorityGeneration, Notice: &notice,
 	}
-	repoint, err := adoptPoolAuthorityFromReplica(s, replica.Replica, record)
+	repoint, err := adoptPoolAuthorityFromReplica(ctx, s, replica.Replica, record)
 	if err != nil {
 		return reply, err
 	}
@@ -747,7 +751,7 @@ func activatePoolAuthority(s *Store, master protocol.PoolMember, request protoco
 // master at generation+1, in one atomic write. The caller has already established this
 // host's right to do it: a signed hand-off from the outgoing master, or a verified fence
 // proof that the outgoing master is excluded.
-func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityReplica, record *poolTransferRecord) (*protocol.PoolAuthorityNotice, error) {
+func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protocol.PoolAuthorityReplica, record *poolTransferRecord) (*protocol.PoolAuthorityNotice, error) {
 	poolPeerMu.Lock()
 	state, err := loadPoolPeer(s)
 	poolPeerMu.Unlock()
@@ -804,21 +808,14 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 	// Backup repositories, policies, retained runs and catalog index land with the same
 	// activation: the survivor must not become master with empty backup authority while
 	// the signed replica still named those jobs (Campaign B).
-	backupAuthority := replica.BackupAuthority
-	if replica.BackupManifest != nil {
-		backupAuthority, err = loadPoolBackupAuthorityPages(s, replica.BackupManifest)
-		if err != nil {
-			return nil, errors.New("the signed backup authority pages are incomplete or invalid")
-		}
-	}
-	backupAuthority = inheritedBackupAuthority(backupAuthority)
-	backupRoot, rollbackBackup, err := stagePoolBackupAuthorityActivation(s, backupAuthority, replica.Generation)
+	backupRoot, rollbackBackup, releaseBackup, err := stagePoolBackupAuthorityActivationPages(s, replica.BackupManifest, replica.Generation)
 	if err != nil {
 		poolVMMu.Lock()
 		_ = savePoolVMs(s, vmSnapshot)
 		poolVMMu.Unlock()
 		return nil, err
 	}
+	defer releaseBackup()
 	poolVMMu.Lock()
 	poolPeerMu.Lock()
 	state, err = loadPoolPeer(s)
@@ -843,7 +840,7 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 				state.MasterURL = self.PeerOrigin
 			}
 			record.Stage = "repoint"
-			if backupAuthority != nil && len(backupAuthority.Catalog) == 0 && len(backupAuthority.Repositories) > 0 {
+			if replica.BackupManifest != nil && replica.BackupManifest.Catalog == 0 && replica.BackupManifest.Repositories > 0 {
 				record.Stage = "catalog-rebuild"
 			}
 			record.UpdatedAt = time.Now().UTC()
@@ -886,8 +883,9 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 		}
 		return nil, errors.New("the pool master change could not be recorded durably")
 	}
+	releaseBackup()
 	if record.Stage == "catalog-rebuild" {
-		if err := reconcilePoolBackupCatalogAfterAuthorityAdopt(s, record); err != nil {
+		if err := reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx, s, record); err != nil {
 			return nil, err
 		}
 	}
@@ -1071,9 +1069,14 @@ func applyPoolRepoint(s *Store, caller protocol.PoolMember, request protocol.Poo
 			state.Restricted = supersededPoolRestriction(state.Restricted)
 		}
 	}
-	if record := state.Transfer; record != nil && record.Role == "source" {
+	if record := state.Transfer; record != nil && record.Role == "source" && !poolTransferTerminal(record.Stage) {
 		record.Stage, record.Status, record.Frozen, record.HandedOff = "done", "succeeded", false, false
 		record.MembershipGeneration, record.LastError = notice.Membership.Generation, ""
+		if record.OperationID != notice.OperationID {
+			// The pool moved on by another operation; this transfer did not produce it.
+			record.Stage, record.Status = "aborted", "failed"
+			record.LastError = "the pool changed master by another operation"
+		}
 		record.UpdatedAt = time.Now().UTC()
 	}
 	if err = savePoolPeer(s, state); err != nil {
@@ -1191,7 +1194,7 @@ func ExecutePoolTransfer(ctx context.Context, s *Store, cmd protocol.Command) pr
 		// a backup can be admitted between the unresolved-work check and the
 		// transfer record, or be blocked from settling by a refused transfer.
 		poolBackupAuthorityMu.Lock()
-		backupErr := unsettledBackupTransferRefusal(s)
+		backupErr := unsettledBackupTransferRefusal(s, action, v.MemberHostID)
 		if backupErr == nil {
 			backupErr = savePoolTransfer(s, record)
 		}
@@ -1438,7 +1441,7 @@ func advancePoolTransferSource(ctx context.Context, s *Store, record *poolTransf
 
 func advancePoolTransferTarget(ctx context.Context, s *Store, record *poolTransferRecord, timeout time.Duration) error {
 	if record.Stage == "catalog-rebuild" {
-		return reconcilePoolBackupCatalogAfterAuthorityAdopt(s, record)
+		return reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx, s, record)
 	}
 	if record.Stage == "repoint" {
 		return repointPoolMembers(ctx, s, record, timeout)
@@ -1470,7 +1473,7 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 	}
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
-	if err := unsettledBackupTransferRefusal(s); err != nil {
+	if err := unsettledBackupTransferRefusal(s, record.Action, record.TargetHostID); err != nil {
 		return err
 	}
 	// The master's own peer origin is what every member already uses to reach it, and what
@@ -1551,61 +1554,89 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 		poolVMMu.Unlock()
 		return err
 	}
-	return errors.New("pool authority changed while it was being frozen; retry the master change")
+	return errors.New("pool authority kept changing while it was being frozen; nothing was changed, so start the master change again")
 }
 
-func unsettledBackupTransferRefusal(s *Store) error {
-	if hasUnsettledBackup(s.State.Journal, "") {
-		return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
-	}
+// unsettledBackupTransferRefusal ignores backup operations reserved on the host being ejected
+// or on a member that is not ready: no member can settle them, and they must not pin the
+// pool. It changes nothing unless it returns nil, and then it only settles aged receipts.
+func unsettledBackupTransferRefusal(s *Store, action, targetHostID string) error {
+	unresolved := errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
 	runs, err := listPoolBackupRuns(s)
 	if err != nil {
 		return errors.New("backup run history is unavailable while freezing pool authority")
 	}
+	membership, err := Membership(s)
+	if err != nil {
+		return errors.New("pool membership is unavailable while freezing pool authority")
+	}
+	// A run whose owner cannot settle it: the ejected host, a host that left the pool, or a
+	// member that is not ready.
+	unsettleable := func(run protocol.BackupRun) bool {
+		if run.HostID == "" || run.HostID == s.State.HostID {
+			return false
+		}
+		owner, found := poolMemberByID(membership, run.HostID)
+		return action == "eject" && run.HostID == targetHostID || !found || owner.Status != "ready"
+	}
+	byID := make(map[string]protocol.BackupRun, len(runs))
 	for _, run := range runs {
-		if run.Status == "pending" {
-			return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
+		byID[run.OperationID] = run
+	}
+	// An operation whose durable run or receipt already ended succeeded or failed is
+	// settled; only its journal entry is stale, so it must not pin the pool.
+	live := map[string]JournalEntry{}
+	for id, entry := range s.State.Journal {
+		if entry.Status == "needs_attention" && backupOperationEnded(s, id) {
+			continue
+		}
+		if run, ok := byID[id]; ok && unsettleable(run) {
+			continue
+		}
+		live[id] = entry
+	}
+	if hasUnsettledBackup(live, "") {
+		return unresolved
+	}
+	for _, run := range runs {
+		if run.Status == "pending" && !unsettleable(run) {
+			return unresolved
 		}
 	}
 	receipts, err := listPoolBackupMetadataReceipts(s)
 	if err != nil {
 		return errors.New("backup operation receipts are unavailable while freezing pool authority")
 	}
+	var aged []protocol.BackupMetadataReceipt
 	for _, receipt := range receipts {
-		if receipt.Status == "pending" {
-			return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
+		if receipt.Status != "pending" {
+			continue
+		}
+		if time.Since(receipt.ObservedAt) <= peerBackupRunLimit {
+			return errors.New("backup operation is unresolved (" + receipt.OperationID + ", " + receipt.Kind + "); finish or reconcile it before changing pool authority")
+		}
+		aged = append(aged, receipt)
+	}
+	for _, receipt := range aged {
+		// Nothing has progressed it for the run limit, so it is not running work. Record the
+		// reason; promotion settles an unresolved receipt this way too.
+		receipt.Status, receipt.ObservedAt = "needs_attention", time.Now().UTC()
+		receipt.Error = "the operation did not finish within " + peerBackupRunLimit.String() + " and no longer holds up a pool master change; its outcome is unknown, so inspect the target before retrying"
+		if err := savePoolBackupMetadataReceipt(s, receipt); err != nil {
+			return errors.New("backup operation receipts could not be settled while freezing pool authority")
 		}
 	}
 	return nil
 }
 
-// A fenced promotion can inherit an operation that the old master was still
-// executing. It has the run and pin, but no execution command or proof of a
-// native outcome; never present that inherited record as work still in flight.
-func inheritedBackupAuthority(authority *protocol.PoolBackupAuthority) *protocol.PoolBackupAuthority {
-	if authority == nil {
-		return nil
+// backupOperationEnded reports whether the operation's durable run or receipt is terminal.
+func backupOperationEnded(s *Store, id string) bool {
+	ended := func(status string) bool { return status == "succeeded" || status == "failed" }
+	if run, err := loadPoolBackupRun(s, id); err == nil {
+		return ended(run.Status)
 	}
-	copy := *authority
-	copy.History = append([]protocol.BackupRun(nil), authority.History...)
-	copy.MetadataReceipts = append([]protocol.BackupMetadataReceipt(nil), authority.MetadataReceipts...)
-	now := time.Now().UTC()
-	for i := range copy.History {
-		if copy.History[i].Status == "pending" {
-			copy.History[i].Status = "needs_attention"
-			copy.History[i].Stage = "authority_transfer"
-			copy.History[i].Error = "backup outcome was unresolved when pool authority moved; inspect the target before retrying"
-			copy.History[i].UpdatedAt = now
-		}
-	}
-	for i := range copy.MetadataReceipts {
-		if copy.MetadataReceipts[i].Status == "pending" {
-			copy.MetadataReceipts[i].Status = "needs_attention"
-			copy.MetadataReceipts[i].Error = "backup outcome was unresolved when pool authority moved; inspect the target before retrying"
-			copy.MetadataReceipts[i].ObservedAt = now
-		}
-	}
-	return &copy
+	receipt, err := loadPoolBackupMetadataReceipt(s, id)
+	return err == nil && ended(receipt.Status)
 }
 
 // recordPoolMasterPeerOrigin records the master's own peer origin in its membership row if
@@ -1842,7 +1873,7 @@ func handOffPoolAuthority(ctx context.Context, s *Store, record *poolTransferRec
 	}
 	reply, err := poolTransferRPC(ctx, s, member.PeerOrigin, member.HostID, protocol.PoolTransferRequest{OperationID: record.OperationID, Action: "activate", Notice: *record.Notice}, timeout)
 	if err != nil {
-		return errors.New("pool authority was handed to " + member.HostID + " but activation did not complete; cancel the transfer or confirm powering off that host to resume authority on this host")
+		return errors.New("pool authority was handed to " + member.HostID + " but its activation is not confirmed yet; this host keeps refusing authority writes and converges by itself once that host answers, so wait and do not power off either host")
 	}
 	if !reply.Activated || reply.Notice == nil {
 		return errors.New("pool member " + member.HostID + " did not activate the pool authority")
@@ -2060,6 +2091,50 @@ func AdvancePoolAuthorityTransfer(ctx context.Context, s *Store, timeout time.Du
 	advancePoolTransfer(ctx, s, record, timeout)
 }
 
+// The transfer runs on a probe goroutine; reconcile its command receipt on Run's
+// journal-owning loop once the durable pool state shows the outcome. A candidate's
+// promotion reads its own transfer record. The old master's planned change returns before
+// the new master's answer arrives and its transfer record may be gone or replaced by then,
+// so it settles only when the pool shows the target as master and this host's source record
+// for the same operation finished: another change that made the target master is not this
+// receipt's success.
+func reconcilePoolPromotionJournal(s *Store) {
+	for id, entry := range s.State.Journal {
+		if entry.Command == nil || (entry.Command.Kind != "pool-promote" && entry.Command.Kind != "pool-transfer") || entry.Status != "needs_attention" {
+			continue
+		}
+		observed := time.Now().UTC()
+		if v := entry.Command.Pool; entry.Command.Kind == "pool-transfer" {
+			if v == nil || v.Action != "master-change" {
+				continue
+			}
+			membership, err := Membership(s)
+			if err != nil || membership.MasterHostID != v.MemberHostID {
+				continue
+			}
+			record, err := loadPoolTransfer(s)
+			if err != nil || record == nil || record.OperationID != id || record.Role != "source" || record.Stage != "done" {
+				const moved = "the target became master through another operation, not this master change"
+				if entry.Error != moved {
+					entry.Error = moved
+					s.State.Journal[id] = entry
+				}
+				continue
+			}
+		} else {
+			// Only a waiting receipt reads the transfer record under poolPeerMu.
+			record, err := loadPoolTransfer(s)
+			if err != nil || record == nil || record.OperationID != id || record.Action != "promote" ||
+				record.Stage != "done" {
+				continue
+			}
+			observed = record.UpdatedAt
+		}
+		entry.Status, entry.Error, entry.ObservedAt, entry.Acknowledged = "succeeded", "", observed, false
+		s.State.Journal[id] = entry
+	}
+}
+
 // convergePoolAuthorityFrom asks the transfer's target where authority actually is. A host
 // that handed its authority over demotes itself only on the new master's signed notice; a
 // target that never activated leaves this host frozen and honest, never a second writer.
@@ -2212,10 +2287,23 @@ func reinitializeOwnPool(ctx context.Context, s *Store, record *poolTransferReco
 	if hostname, err := osHostname(); err == nil && hostname != "" {
 		name = hostname
 	}
-	poolID := newUUID()
+	// Kept in the record, so a retry after a later step fails reuses the same identity.
+	if record.NewPoolID == "" {
+		record.NewPoolID = newUUID()
+		if err := savePoolTransfer(s, record); err != nil {
+			return persistenceError{err}
+		}
+	}
+	poolID := record.NewPoolID
 	s.State.PoolID, s.State.PoolName = poolID, name
 	if err := s.Save(); err != nil {
 		return persistenceError{err}
+	}
+	if err := eraseForeignBackupRepositories(ctx, s); err != nil {
+		return errors.New("the previous pool's backup repositories could not be detached")
+	}
+	if err := eraseForeignBackupCredentials(s); err != nil {
+		return errors.New("the previous pool's backup credentials could not be erased")
 	}
 	// A host that has never journalled anything has no scope to re-home.
 	if err := vmhost.RehomeLeavingPoolScope(filepath.Join(s.dir, "managed-vms"), poolID, s.State.HostID); err != nil && !errors.Is(err, os.ErrNotExist) {

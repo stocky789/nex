@@ -142,7 +142,11 @@ func PoolStorageCredential(stateDir, receipt string) (protocol.StorageCredential
 		}
 		var stored storedCredential
 		if json.Unmarshal(b, &stored) == nil && stored.Receipt == receipt && stored.Status == "ready" {
-			return protocol.StorageCredentials{Username: stored.Username, Secret: stored.Secret, Domain: stored.Domain}, nil
+			body, err := openMountCredential(filepath.Join(dir, receipt))
+			if c := parseSMBAuthFile(body); err == nil && c.Secret != "" {
+				return c, nil
+			}
+			return protocol.StorageCredentials{}, errors.Join(err, errors.New("storage credential is unreadable"))
 		}
 	}
 	return protocol.StorageCredentials{}, errors.New("storage credential is unavailable")

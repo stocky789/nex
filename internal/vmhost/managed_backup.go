@@ -25,11 +25,58 @@ const (
 	backupStagingPrefix    = ".staging-"
 	maxBackupManifestBytes = 1 << 20
 	maxBackupDiskArtifacts = 32
+	backupNFSHardeningOpts = ",nosuid,nodev,noexec"
 )
+
+var ErrBackupPublishUncertain = errors.New("backup publication outcome is uncertain")
 
 type backupRepositoryOwner struct {
 	Repository string `json:"repository"`
 	Pool       string `json:"pool"`
+}
+
+// prepareBackupSMB claims and probes the repository inside SMB preparation, so a failed first
+// registration removes its new mount unit. Backup repositories hold only data files.
+var prepareBackupSMB = func(ctx context.Context, registration protocol.StorageRegistration, repositoryID string) (storageAccess, error) {
+	return prepareSMBWithAdmission(ctx, registration, backupNFSHardeningOpts, func(root string) error {
+		if err := claimBackupRepositoryOwnerExact(root, repositoryID, registration.PoolID); err != nil {
+			return err
+		}
+		return probeBackupPublication(root)
+	})
+}
+var inspectBackupSMB = inspectSMB
+var probeBackupQEMUAccess = qemuStorageAccess
+var probeBackupPublication = probeBackupFilesystemPublication
+
+// nfsRootSquash explains the one refusal an operator cannot otherwise diagnose: Core writes as
+// root, so an export that squashes root denies every write.
+func nfsRootSquash(err error) error {
+	if err != nil && (errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "permission denied")) {
+		return errors.New("the NFS export denied access to the repository directory: root_squash is not supported, export it with no_root_squash (" + err.Error() + ")")
+	}
+	return err
+}
+
+// allowBackupNFSHardeningRemount lets Prepare rewrite a pre-hardening NFS backup unit when the
+// only Options change is adding nosuid,nodev,noexec. Other mount changes still require the
+// dependency-safe remount path.
+func allowBackupNFSHardeningRemount(ctx context.Context, s protocol.StorageRegistration) context.Context {
+	if s.Source.NFS == nil {
+		return ctx
+	}
+	_, unitPath := remoteUnitPath(s)
+	old, err := os.ReadFile(unitPath)
+	if err != nil {
+		return ctx
+	}
+	source := s.Source.NFS.Server + ":" + s.Source.NFS.Export
+	path := remoteMountPath(s)
+	legacy := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev")
+	if string(old) != string(legacy) {
+		return ctx
+	}
+	return allowStorageRemount(ctx)
 }
 
 func backupStorageRegistration(repo protocol.BackupRepository) protocol.StorageRegistration {
@@ -39,56 +86,167 @@ func backupStorageRegistration(repo protocol.BackupRepository) protocol.StorageR
 		Name: repo.Name, Kind: protocol.StorageKindNFS,
 		Source: protocol.StorageSource{NFS: &repo.Source},
 	}
-	if repo.Identity != nil {
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		registration.Kind = protocol.StorageKindSMB
+		registration.Source = protocol.StorageSource{SMB: repo.SMBSource}
+		registration.Identity.SMB = repo.SMBIdentity
+		registration.CredentialReceipt = repo.CredentialRef
+	} else if repo.Identity != nil {
 		registration.Identity.NFS = repo.Identity
 	}
 	return registration
 }
 
-// PrepareBackupRepository mounts the registered NFS source with Core's native
-// mount machinery and claims only the selected data directory for this pool.
+// PrepareBackupRepository mounts the registered filesystem source and claims
+// only the selected data directory for this pool.
 func PrepareBackupRepository(ctx context.Context, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
 	if err := repo.Valid(); err != nil {
 		return protocol.BackupRepository{}, err
 	}
 	registration := backupStorageRegistration(repo)
-	access, err := prepareNFS(ctx, registration)
+	var access storageAccess
+	var err error
+	switch repo.Kind {
+	case protocol.BackupRepoKindNFS:
+		ctx = allowBackupNFSHardeningRemount(ctx, registration)
+		access, err = prepareNFS(ctx, registration, backupNFSHardeningOpts)
+		err = nfsRootSquash(err)
+	case protocol.BackupRepoKindSMB3:
+		if repo.CredentialRef == "" {
+			return protocol.BackupRepository{}, errors.New("backup repository SMB credentials are unavailable")
+		}
+		root := filepath.Join(remoteMountPath(registration), repo.SMBSource.Directory)
+		if err := checkExistingBackupRepositoryOwner(root, repo.ID, repo.PoolID); err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		access, err = prepareBackupSMB(ctx, registration, repo.ID)
+	default:
+		return protocol.BackupRepository{}, errors.New("backup repository kind is unsupported")
+	}
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
 	if repo.MountPath != "" && repo.MountPath != access.Path {
-		return protocol.BackupRepository{}, errors.New("backup repository mount path differs from Core's mounted NFS source")
+		return protocol.BackupRepository{}, errors.New("backup repository mount path differs from Core's mounted source")
 	}
 	repo.MountPath = access.Path
-	repo.Identity = access.Observed.NFS
-	if err := ClaimBackupRepositoryOwner(repo.MountPath, repo.ID, repo.PoolID); err != nil {
-		if !errors.Is(err, os.ErrExist) {
-			return protocol.BackupRepository{}, err
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		repo.SMBIdentity = access.Observed.SMB
+		if repo.SMBIdentity == nil || repo.SMBIdentity.MarkerID == "" {
+			return protocol.BackupRepository{}, errors.New("backup repository SMB identity is incomplete")
 		}
-		ownerRepo, ownerPool, readErr := ReadBackupRepositoryOwner(repo.MountPath)
-		if readErr != nil || ownerRepo != repo.ID || ownerPool != repo.PoolID {
-			return protocol.BackupRepository{}, errors.New("backup repository is owned by another pool")
+	} else {
+		repo.Identity = access.Observed.NFS
+	}
+	if err := claimBackupRepositoryOwnerExact(repo.MountPath, repo.ID, repo.PoolID); err != nil {
+		if repo.Kind == protocol.BackupRepoKindNFS {
+			err = nfsRootSquash(err)
 		}
+		return protocol.BackupRepository{}, err
 	}
 	return repo, nil
 }
 
-// VerifyBackupRepository proves the exact NFS source, selected directory,
-// kernel filesystem ID, and owner before any backup or restore file access.
+// DetachBackupRepository stops and removes the mount of a filesystem backup
+// repository. The repository's data on the share is left untouched.
+func DetachBackupRepository(ctx context.Context, repo protocol.BackupRepository) error {
+	if repo.Kind != protocol.BackupRepoKindNFS && repo.Kind != protocol.BackupRepoKindSMB3 {
+		return nil
+	}
+	registration := backupStorageRegistration(repo)
+	if err := detachRemote(ctx, registration); err != nil {
+		return err
+	}
+	// The unit is gone, so the mountpoint is an empty directory; a non-empty one is left alone.
+	_ = os.Remove(remoteMountPath(registration))
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		return RemoveBackupSMBCredential(repo.CredentialRef)
+	}
+	return nil
+}
+
+func checkExistingBackupRepositoryOwner(root, repositoryID, poolID string) error {
+	ownerRepo, ownerPool, err := ReadBackupRepositoryOwner(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || ownerRepo != repositoryID || ownerPool != poolID {
+		return errors.New("backup repository is owned by another pool")
+	}
+	return nil
+}
+
+func claimBackupRepositoryOwnerExact(root, repositoryID, poolID string) error {
+	if err := ClaimBackupRepositoryOwner(root, repositoryID, poolID); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		// The marker existed when the claim was refused. If it is gone now, nothing owns the
+		// repository yet: that is a lost race to retry, not a claim.
+		if _, _, readErr := ReadBackupRepositoryOwner(root); errors.Is(readErr, os.ErrNotExist) {
+			return errors.New("backup repository owner marker disappeared while it was being claimed; try again")
+		}
+		return checkExistingBackupRepositoryOwner(root, repositoryID, poolID)
+	}
+	return nil
+}
+
+// VerifyBackupRepository proves the mounted source is writable for publication.
 func VerifyBackupRepository(ctx context.Context, repo protocol.BackupRepository) error {
-	if err := repo.Valid(); err != nil || repo.MountPath == "" || repo.Identity == nil {
+	return verifyBackupRepository(ctx, repo, true)
+}
+
+// VerifyBackupRepositoryRead proves the mounted source and owner for read access.
+func VerifyBackupRepositoryRead(ctx context.Context, repo protocol.BackupRepository) error {
+	return verifyBackupRepository(ctx, repo, false)
+}
+
+func verifyBackupRepository(ctx context.Context, repo protocol.BackupRepository, writable bool) error {
+	if err := repo.Valid(); err != nil || repo.MountPath == "" {
 		return errors.New("backup repository mount identity is incomplete")
 	}
-	access, err := inspectNFS(ctx, backupStorageRegistration(repo))
+	registration := backupStorageRegistration(repo)
+	var access storageAccess
+	var err error
+	switch repo.Kind {
+	case protocol.BackupRepoKindNFS:
+		if repo.Identity == nil {
+			return errors.New("backup repository mount identity is incomplete")
+		}
+		access, err = inspectNFS(ctx, registration)
+	case protocol.BackupRepoKindSMB3:
+		if repo.SMBIdentity == nil || repo.SMBIdentity.MarkerID == "" || repo.CredentialRef == "" {
+			return errors.New("backup repository SMB identity is incomplete")
+		}
+		access, err = inspectBackupSMB(ctx, registration)
+	default:
+		return errors.New("backup repository kind is unsupported")
+	}
 	if err != nil {
 		return err
 	}
-	if access.Path != repo.MountPath || access.Observed.NFS == nil || *access.Observed.NFS != *repo.Identity {
-		return errors.New("backup repository NFS identity changed")
+	if access.Path != repo.MountPath {
+		return errors.New("backup repository mount path changed")
 	}
 	ownerRepo, ownerPool, err := ReadBackupRepositoryOwner(repo.MountPath)
 	if err != nil || ownerRepo != repo.ID || ownerPool != repo.PoolID {
 		return errors.New("backup repository owner marker does not match")
+	}
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		observed := access.Observed.SMB
+		if observed == nil || observed.Server != repo.SMBIdentity.Server || observed.Share != repo.SMBIdentity.Share || observed.MarkerID != repo.SMBIdentity.MarkerID {
+			return errors.New("backup repository SMB identity changed")
+		}
+		if writable {
+			if err := probeBackupQEMUAccess(ctx, repo.MountPath); err != nil {
+				return err
+			}
+			if err := probeBackupPublication(repo.MountPath); err != nil {
+				return err
+			}
+		}
+	} else if access.Observed.NFS == nil || *access.Observed.NFS != *repo.Identity {
+		return errors.New("backup repository NFS identity changed")
 	}
 	return nil
 }
@@ -266,10 +424,10 @@ func PublishBackupRecoveryPoint(repoRoot string, manifest protocol.BackupManifes
 		return "", err
 	}
 	if err := os.Rename(staging, published); err != nil {
-		return "", err
+		return "", errors.Join(ErrBackupPublishUncertain, err)
 	}
 	if err := syncManagedDir(repoRoot); err != nil {
-		return "", err
+		return "", errors.Join(ErrBackupPublishUncertain, err)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
@@ -589,7 +747,8 @@ func BackupSpecAndDiskDigests(vm protocol.VMCreateSpec, disks []BackupDiskSource
 }
 
 // CaptureBackupFirmwareArtifacts copies matching NVRAM/swtpm state beside disk artifacts.
-// Online UEFI is refused before this runs; BIOS guests return an empty set.
+// Online UEFI and online TPM guests are refused before this runs (RefuseOnlineBackupAdmission);
+// BIOS guests without a TPM return an empty set.
 func CaptureBackupFirmwareArtifacts(ctx context.Context, vmID, workRoot string, running bool) ([]protocol.BackupFirmwareArtifact, error) {
 	if !uuidPattern.MatchString(vmID) || !filepath.IsAbs(workRoot) {
 		return nil, errors.New("backup firmware capture arguments are invalid")

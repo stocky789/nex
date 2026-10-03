@@ -5,7 +5,7 @@
 Available in Nex Core / Controller development builds (alpha) that include
 the Updates APIs and packaged installers. Both packages ship the Nex archive signing
 key and configure the signed APT source, so an available package is signature-verified.
-The working `0.4.18` version is not evidence of a published candidate. Updates appear once
+The working `0.4.19` version is not evidence of a published candidate. Updates appear once
 the Release workflow has published packages to the signed APT archive. Navigation on this page follows the development build 0.4.8 console layout; see
 [Navigate the Controller console](navigate-the-controller-console.md).
 
@@ -44,6 +44,12 @@ host identifies as `Nex Core <new version>` in `/etc/os-release`, the console ba
 ## Troubleshooting
 
 - Repo errors appear beside the version fields; a failed package-index refresh now says so directly. Fix connectivity or `repo_url` and check again.
+- **Upgrade order for 0.4.19 (hard cutover):** update the Controller first, then update **and
+  restart** Nex Core on every host in the same window. An upgraded Controller refuses a Core
+  master that still runs 0.4.18 with `invalid JSON request: unknown field <name>; upgrade or
+  restart Nex Core on the reporting host`, and that host stays stale in Controller (no inventory
+  or task updates) until its Core is restarted on the new build. A host that was not restarted
+  also cannot join a pool: the master refuses it until it reports a valid hostname.
 - "Package not available from …" means no configured APT source offers the package.
   Check `repo_url`, then `apt policy nex-core-local` on the host.
 - **ZFS storage reports "ZFS device discovery is unavailable" after updating a host installed

@@ -20,10 +20,10 @@ type Failure = { kind: string; id: string; name: string; error: string };
 export type JoinStatus = { operation_id?: string; stage: string; status: "pending" | "succeeded" | "failed" | "needs_attention"; error?: string; observed_at?: string };
 export type MemberOperation = { operation_id: string; action?: string; status: string; error?: string; conflict?: boolean };
 export type Guests = { known: boolean; total: number; running: number; names?: string[] };
-export type ReplicaState = "current" | "behind" | "unverified" | "refused" | "awaiting" | "unsupported" | "unknown";
+export type ReplicaState = "current" | "behind" | "unverified" | "refused" | "awaiting" | "unknown";
 export type Replica = { generation: number; digest?: string; verified: boolean; received_at?: string; acknowledged_generation: number; acknowledged_at?: string; error?: string; state: ReplicaState };
-export type Member = { host_id: string; name: string; role: "master" | "member"; status: string; error?: string; peer_origin?: string; connection: Connection; checks?: Check[]; access?: Access; failures?: Failure[]; join?: JoinStatus | null; maintenance?: boolean | null; maintenance_since?: string; guests?: Guests; last_maintenance?: MemberOperation | null; replica?: Replica | null; transfer?: Transfer | null; transfer_supported?: boolean; fence?: MemberFence | null; restricted?: Restricted | null; joined_at?: string };
-export type Report = { pool_id: string; pool_name: string; master_host_id: string; master_connection: Connection; master_seen_at?: string; generation: number; authoritative: boolean; maintenance_supported?: boolean; replica_supported?: boolean; transfer_supported?: boolean; host_fencing_supported?: boolean; fence?: FenceSummary | null; authority?: Authority | null; transfer?: Transfer | null; last_transfer?: LastTransfer | null; master_conflict?: string[]; promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: Member[] };
+export type Member = { host_id: string; name: string; role: "master" | "member"; status: string; error?: string; peer_origin?: string; connection: Connection; checks?: Check[]; access?: Access; failures?: Failure[]; join?: JoinStatus | null; maintenance?: boolean | null; maintenance_since?: string; guests?: Guests; last_maintenance?: MemberOperation | null; replica?: Replica | null; transfer?: Transfer | null; fence?: MemberFence | null; restricted?: Restricted | null; joined_at?: string };
+export type Report = { pool_id: string; pool_name: string; master_host_id: string; master_connection: Connection; master_seen_at?: string; generation: number; authoritative: boolean; fence?: FenceSummary | null; authority?: Authority | null; transfer?: Transfer | null; last_transfer?: LastTransfer | null; master_conflict?: string[]; promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: Member[] };
 type CandidateRow = { check: string; subject: string; result: "compatible" | "will_not_converge" | "refuses_join"; detail?: string };
 export type Candidate = { host_id: string; name: string; connection: Connection; eligible: boolean; rows?: CandidateRow[]; peer_address?: string; peer_port: number };
 
@@ -44,7 +44,6 @@ const replicaStates: Record<ReplicaState, { result: string; tone: Tone }> = {
   unverified: { result: "Unverified", tone: "warn" },
   refused: { result: "Failed", tone: "bad" },
   awaiting: { result: "Awaiting", tone: "neutral" },
-  unsupported: { result: "Not supported", tone: "warn" },
   unknown: { result: "Unknown", tone: "neutral" },
 };
 // PoolJoinStatus.stage is the step still to perform, so it reads as what happens next.
@@ -256,9 +255,9 @@ export function HostFencingSetting({ report, onChange, busy }: {
       <p className="help">The pool master keeps this setting and is not reporting, so it is unknown. This does not mean these hosts cannot be shut out; it means nothing here knows.</p>
     </section>;
   }
-  if (report.host_fencing_supported === false || !summary) {
+  if (!summary) {
     return <section className="pool-host-fencing"><h3>Host fencing</h3>
-      <p className="help">This pool master is too old to report the host fencing setting. Upgrade it to see and change it.</p>
+      <p className="help">The pool master has not reported the host fencing setting yet.</p>
     </section>;
   }
   return <section className="pool-host-fencing"><h3>Host fencing</h3>
@@ -309,7 +308,7 @@ export function memberChecks(member: Member, report: Report): StatusCheck[] {
   const drain = maintenanceText(member, authoritative);
   const checks = [connection, membershipCheck(member, authoritative),
     { label: "Maintenance", result: capitalize(drain.label), tone: badgeTone(drain.badge), detail: guestsText(member) }];
-  if (report.replica_supported !== false && member.role !== "master") {
+  if (member.role !== "master") {
     const replica = replicaText(member);
     checks.push(own({ label: "Authority copy", ...replica, detail: behindText(member, report) || member.replica?.error || undefined }));
   }
@@ -352,15 +351,13 @@ function convergenceCheck(member: Member, authoritative: boolean): StatusCheck {
 export function poolChecks(report: Report): StatusCheck[] {
   const authoritative = report.authoritative;
   const summary = report.fence || null;
-  const checks: StatusCheck[] = [report.replica_supported === false
-    ? { label: "Authority copies", result: "Not supported", tone: "warn" }
-    : { label: "Authority generation", result: authoritative && report.authority ? String(report.authority.generation) : "Unknown", tone: "neutral" }];
+  const checks: StatusCheck[] = [{ label: "Authority generation", result: authoritative && report.authority ? String(report.authority.generation) : "Unknown", tone: "neutral" }];
   if (!(report.members || []).length) return checks;
   if (!authoritative) return [...checks, { label: "Fencing", result: "Unknown", tone: "neutral" }, { label: "Host fencing", result: "Unknown", tone: "neutral" }];
-  if (!summary) checks.push({ label: "Fencing", result: "Not reported (upgrade pool master)", tone: "neutral" });
+  if (!summary) checks.push({ label: "Fencing", result: "Not reported", tone: "neutral" });
   else if (summary.total <= 1) checks.push({ label: "Fencing", result: "Not needed (one host)", tone: "neutral" });
   else checks.push({ label: "Fencing", result: `${summary.ready === summary.total ? "OK" : "Not ready"} (${summary.ready} of ${summary.total})`, tone: summary.ready === summary.total ? "ok" : "warn" });
-  checks.push(report.host_fencing_supported === false || !summary ? { label: "Host fencing", result: "Not reported", tone: "neutral" }
+  checks.push(!summary ? { label: "Host fencing", result: "Not reported", tone: "neutral" }
     : { label: "Host fencing", result: summary.host_fencing ? "On" : "Off", tone: "neutral" });
   if (summary?.cluster?.witness) checks.push({ label: "Witness", result: capitalize(summary.cluster.witness.state), tone: summary.cluster.witness.state === "operating" ? "ok" : "warn", detail: summary.cluster.witness.detail });
   if (summary?.cluster) checks.push({ label: "Watchdog cluster", result: capitalize(clusterStateNames[summary.cluster.state] || summary.cluster.state), tone: badgeTone(clusterBadges[summary.cluster.state] || "unknown"), detail: clusterText(report, summary.cluster) });
@@ -375,9 +372,6 @@ export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance,
   onHostFencing?: (enabled: boolean) => void; hostFencingBusy?: boolean;
 }) {
   const authoritative = report.authoritative;
-  const supported = Boolean(report.maintenance_supported);
-  // An explicit false means no member can hold a copy at all: drop the check and say it once.
-  const replicas = report.replica_supported !== false;
   const members = report.members || [];
   if (!members.length) return <p className="empty">The pool master reports no hosts yet. A host that has just enrolled appears here once its master reports the membership.</p>;
   const actions = Boolean(onMasterChange && onEject);
@@ -387,9 +381,7 @@ export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance,
       <summary>{poolChecks(report).map(check => <StatusItem key={check.label} check={check} />)}<span className="pool-more">About</span></summary>
       <div className="pool-status-detail">
         <p className="help">{fencingSummaryText(report)}</p>
-        {replicas
-          ? <p className="help">{authorityText(report)} Each member keeps a signed, read-only copy of the pool's records so the pool can be recovered if its master is lost; it is never used while the master is healthy.</p>
-          : <p className="help">The pool master does not support authority copies, so no member holds one. Upgrade the pool master to give the pool a copy of its records that survives losing the master.</p>}
+        <p className="help">{authorityText(report)} Each member keeps a signed, read-only copy of the pool's records so the pool can be recovered if its master is lost; it is never used while the master is healthy.</p>
         <HostFencingSetting report={report} onChange={onHostFencing} busy={hostFencingBusy} />
       </div>
     </details>
@@ -404,13 +396,15 @@ export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance,
       const light = version ? versionLight(version, coreAvailable) : undefined;
       return <li key={member.host_id} className="pool-member" data-host-id={member.host_id}>
         <div className="pool-member-head">
-          <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a> <Badge value={member.role} label={member.role === "master" ? "Pool master" : "Member"} />
+          {hosts.some(h => h.id === member.host_id)
+            ? <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a>
+            : <span>{member.name || member.host_id}</span>} <Badge value={member.role} label={member.role === "master" ? "Pool master" : "Member"} />
           <small className="pool-version">Nex Core {version?.replace(/^Nex Core /, "") || "not reported"}{light && light.level !== "current" && <> <Badge value="warning" label="Update" /></>}</small>
           {/* When the host joined, as the pool master records it. */}
           <small className="muted">Joined {member.joined_at ? <time dateTime={member.joined_at} title={date(member.joined_at)}>{relativeTime(member.joined_at)}</time> : "—"}</small>
           {actions && <MemberActions report={report} member={member} onMasterChange={() => onMasterChange!(member)} onEject={() => onEject!(member)} blockedReason={blockedReason}
             extra={<>
-              {onMaintenance && supported && <button type="button" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={!authoritative || Boolean(blockedReason) || busyHost === member.host_id || maintenanceInFlight(member.last_maintenance)} onClick={() => onMaintenance(member)}>{member.maintenance ? "Exit maintenance" : "Enter maintenance"}</button>}
+              {onMaintenance && <button type="button" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={!authoritative || Boolean(blockedReason) || busyHost === member.host_id || maintenanceInFlight(member.last_maintenance)} onClick={() => onMaintenance(member)}>{member.maintenance ? "Exit maintenance" : "Enter maintenance"}</button>}
               <PromotionActions report={report} member={member} authoritative={authoritative}
                 onPromote={onPromote && (() => onPromote(member))} onFenceProfile={onFenceProfile && (() => onFenceProfile(member))}
                 onBMCProvisioning={onBMCProvisioning && (() => onBMCProvisioning(member))} bmcBusy={bmcBusy === member.host_id} />
@@ -432,17 +426,16 @@ export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance,
             <dd>
               {authoritative && member.maintenance && member.maintenance_since && <small>Since {member.maintenance_since}</small>}
               <small>{guestsText(member)}</small>
-              {onMaintenance && !supported && <small>Maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master.</small>}
             </dd>
-            {replicas && <><dt>Authority copy</dt>
-              <dd className="pool-replica-cell">
-                {member.role === "master" ? <small>Holds the pool records</small> : !member.replica ? <small>Not reported</small> : <>
-                  {behindText(member, report) && <small>{behindText(member, report)}</small>}
-                  {authoritative && replicaGenerations(member.replica) && <small>{replicaGenerations(member.replica)}</small>}
-                  {member.replica.error && <small className="task-error">{member.replica.error}</small>}
-                  {replicaTimes(member.replica, authoritative)}
-                </>}
-              </dd></>}
+            <dt>Authority copy</dt>
+            <dd className="pool-replica-cell">
+              {member.role === "master" ? <small>Holds the pool records</small> : !member.replica ? <small>Not reported</small> : <>
+                {behindText(member, report) && <small>{behindText(member, report)}</small>}
+                {authoritative && replicaGenerations(member.replica) && <small>{replicaGenerations(member.replica)}</small>}
+                {member.replica.error && <small className="task-error">{member.replica.error}</small>}
+                {replicaTimes(member.replica, authoritative)}
+              </>}
+            </dd>
             <dt>Convergence</dt>
             <dd>
               <small>{convergenceSummary(member, authoritative)}</small>

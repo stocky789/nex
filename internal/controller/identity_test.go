@@ -169,7 +169,7 @@ func TestReplacementControllerAcknowledgesFormerResultsAndAdoptsZFS(t *testing.T
 	site := a.site()
 	host := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: hostID, PoolID: poolID, PoolName: "Recovered pool"}, 200)
 	cert := certificate(t, host.CertificatePEM)
-	membership := protocol.PoolMembership{PoolID: poolID, MasterHostID: hostID, Generation: 1, Members: []protocol.PoolMember{{HostID: hostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: poolID, MasterHostID: hostID, Generation: 1, Members: []protocol.PoolMember{{HostID: hostID, Hostname: hostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	storage := protocol.StorageRegistration{ID: "zfs-recovered", PoolID: poolID, HostID: hostID, Name: "Recovered ZFS", Path: "/var/lib/nex-storage/zfs-recovered", Kind: protocol.StorageKindZFS, Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "nex-recovered", Dataset: "vms", MountPath: "/var/lib/nex-storage/zfs-recovered"}}, ZFSProvisioned: true, ZFSScope: "pool", Capabilities: protocol.StorageCapabilities{VMDisk: true}, ZFSHostAccess: []protocol.ZFSHostAccess{{HostID: hostID, Path: "/var/lib/nex-storage/zfs-recovered", Readable: true, Writable: true, ObservedAt: time.Now().UTC()}}}
 	response := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.ZFSProvisionCapability}, Results: []protocol.Result{{OperationID: "former-zfs-operation", Status: "succeeded"}}, Inventory: &protocol.Inventory{
 		Managed: &protocol.ManagedState{Membership: &membership, Storage: []protocol.StorageRegistration{storage}, ZFSProvisions: []protocol.ZFSProvisionHostResult{{RepositoryID: storage.ID, PoolID: poolID, Name: storage.Name, Scope: "pool", HostID: hostID, Status: "succeeded"}}},
@@ -199,8 +199,8 @@ func TestFreshControllerAdoptsOnlyCoreReportedPoolMembers(t *testing.T) {
 	master := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: masterID, PoolID: poolID, PoolName: "Core pool"}, http.StatusOK)
 	cert := certificate(t, master.CertificatePEM)
 	membership := protocol.PoolMembership{PoolID: poolID, MasterHostID: masterID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: masterID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: memberID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+		{HostID: masterID, Hostname: masterID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: memberID, Hostname: memberID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
 	}}
 	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership}}})
 	member := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: memberID, PoolID: poolID, PoolName: "Core pool"}, http.StatusOK)
@@ -235,8 +235,8 @@ func TestCoreReportedJoinMovesExistingPeerIntoMasterPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	membership := protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+		{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: member.HostID, Hostname: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
 	}}
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership}}})
 	// Membership changes the host projection, but an absent resource report must not

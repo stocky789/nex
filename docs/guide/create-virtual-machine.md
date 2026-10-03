@@ -42,9 +42,7 @@ Navigation on this page follows the development build 0.4.8 console layout; see
   enrolled host. Enrollment creates the host's pool automatically with that host as pool master. Use matching Controller, Core and web assets from this development build;
   an older agent cannot execute these operations.
 - A freshly connected, active placement host and reachable pool master with working KVM/QEMU
-  and system libvirt. Both must report the current master-owned VM placement capability; upgrade
-  Controller, then Core on the selected host and pool master if the wizard says an upgrade is
-  required.
+  and system libvirt.
 - One or more repositories registered and healthy on the placement host. The default
   **Local storage** registration at `/var/lib/libvirt/images` is a local directory created on
   install and can hold both uploaded ISOs and guest disks. A host that first connected to an
@@ -418,10 +416,8 @@ failed and uncertain transfers show their own status.
   menus. Nex draws its dropdowns inside the page in current Chromium-based browsers (Chrome,
   Brave, Edge 135 or later), where this cannot happen; in other browsers use the keyboard
   (focus the field, then Arrow keys and Enter) or a current Chromium-based browser.
-- **No selectable host or rejected capability:** reconnect the selected host, confirm it
-  belongs to this pool, and upgrade Controller followed by Core on the selected host and pool
-  master until both report master-owned VM placement. Revocation and stale connectivity block
-  new work.
+- **No selectable host:** reconnect the selected host and confirm it belongs to this pool.
+  Revocation and stale connectivity block new work.
 - **Storage check fails:** inspect the Core error, then follow the source-specific recovery
   steps in [Add VM storage repositories](storage-repositories.md). Do not point a local
   registration at a remote mount that may disappear.

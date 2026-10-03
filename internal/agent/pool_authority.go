@@ -28,6 +28,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -68,7 +70,6 @@ var poolReplicaRefusals = map[string]protocol.PoolReplicaStatus{}               
 var poolReplicaPolls = map[string]time.Time{}                                    // dir -> master last confirmed
 var poolReplicaPushing = map[string]bool{}                                       // dir -> single flight
 var poolReplicaMembership = Membership                                           // test seam: one validated snapshot per check
-var writePoolBackupPage = vmhost.AtomicWrite
 var errPoolAuthorityReplicaBusy = errors.New("pool authority replica push already in progress")
 
 // ClearPoolReplicaStateForTest drops the process-local replica observations for one store.
@@ -304,26 +305,9 @@ func buildPoolAuthorityReplicaForMembership(s *Store, membership protocol.PoolMe
 	if replica.ResourceMutations, err = poolReplicaResourceMutations(s); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
 	}
-	if replica.BackupAuthority, err = PoolBackupAuthorityRefs(s); err != nil {
+	// Only the manifest is needed here; the push stages pages it will send.
+	if replica.BackupManifest, err = encodePoolBackupAuthorityFromStore(s, nil); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
-	}
-	if replica.BackupAuthority != nil {
-		if replica.BackupManifest, err = stagePoolBackupAuthority(s, replica.BackupAuthority); err != nil {
-			return protocol.PoolAuthorityReplica{}, "", err
-		}
-		if replica.BackupManifest.TotalBytes <= protocol.PoolBackupPageLimit && len(replica.BackupAuthority.MetadataReceipts) == 0 {
-			// Preserve the v2 inline format for small, receipt-free authorities.
-			inline, marshalErr := json.Marshal(replica.BackupAuthority)
-			if marshalErr != nil {
-				return protocol.PoolAuthorityReplica{}, "", marshalErr
-			}
-			if len(inline) <= protocol.PoolBackupPageLimit {
-				replica.BackupManifest = nil
-			}
-		}
-		if replica.BackupManifest != nil {
-			replica.BackupAuthority = nil
-		}
 	}
 	if replica.Sections, err = replica.SectionDigests(); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
@@ -802,11 +786,6 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	if err = verifyPoolAuthorityReplica(state.CAPEM, replica); err != nil {
 		return protocol.PoolReplicaAck{}, err
 	}
-	if replica.BackupManifest != nil {
-		if _, err = loadPoolBackupAuthorityPages(s, replica.BackupManifest); err != nil {
-			return protocol.PoolReplicaAck{}, errors.New("pool authority replica backup pages are incomplete or invalid")
-		}
-	}
 	var localSanlockGeneration uint64
 	if replica.Membership.StorageLease != nil {
 		localSanlockGeneration, err = preparePoolStorageLeaseHost(context.Background(), s, replica.Membership, false)
@@ -820,6 +799,15 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	}
 	poolReplicaMu.Lock()
 	defer poolReplicaMu.Unlock()
+	poolBackupPushSessionMu.Lock()
+	defer poolBackupPushSessionMu.Unlock()
+	poolBackupBlobMu.Lock()
+	defer poolBackupBlobMu.Unlock()
+	if replica.BackupManifest != nil {
+		if err = walkPoolBackupAuthorityPages(s, replica.BackupManifest, nil); err != nil {
+			return protocol.PoolReplicaAck{}, errors.New("pool authority replica backup pages are incomplete or invalid")
+		}
+	}
 	current, err := loadPoolReplica(s)
 	if err != nil {
 		return protocol.PoolReplicaAck{}, errors.New("stored pool authority replica is unavailable")
@@ -865,13 +853,34 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 		return protocol.PoolReplicaAck{}, errors.New("pool authority replica could not be stored")
 	}
 	delete(poolReplicaRefusals, s.dir)
+	// The replica is stored: its push is over, and its pages must not be rewritten through a
+	// session that is still open for it.
+	if session, ok := poolBackupPushSessions[s.dir]; ok && session.generation <= replica.Generation {
+		delete(poolBackupPushSessions, s.dir)
+	}
 	poolReplicaPolls[s.dir] = record.ReceivedAt
 	return protocol.PoolReplicaAck{HostID: s.State.HostID, Generation: replica.Generation, Digest: digest,
 		SanlockHostGeneration: localSanlockGeneration, CorosyncKeyReady: corosyncKeyReady, Verified: true}, nil
 }
 
-// PoolBackupPageHandler stages a signed replica's bounded backup page. Pages are
-// untrusted until the final replica verifies the complete manifest and is saved.
+// poolBackupPushSession is the signed replica a member verified once for the
+// current push. Page requests name only its manifest SHA-256.
+type poolBackupPushSession struct {
+	manifest     *protocol.PoolBackupManifest
+	masterHostID string
+	generation   uint64
+	expires      time.Time
+}
+
+// poolBackupPushSessionTTL is how long a session lives after its last accepted page.
+var poolBackupPushSessionTTL = 10 * time.Minute
+var poolBackupPushSessions = map[string]poolBackupPushSession{} // by store dir: a member has one master
+var poolBackupPushSessionMu sync.Mutex
+
+// PoolBackupPageHandler stages backup authority pages for a push. A request with
+// the signed replica opens a session after one verification. Later page requests
+// carry only the manifest SHA-256 and are accepted for the live session.
+// Pages are untrusted until the final replica verifies the complete manifest.
 func PoolBackupPageHandler(s *Store) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		master, err := AuthenticatePoolMaster(s, r)
@@ -890,66 +899,129 @@ func PoolBackupPageHandler(s *Store) http.Handler {
 			http.Error(w, "invalid backup authority page", http.StatusBadRequest)
 			return
 		}
-		poolPeerMu.Lock()
-		state, err := loadPoolPeer(s)
-		poolPeerMu.Unlock()
-		if err != nil || state.Membership.Valid() != nil || state.CAPEM == "" ||
-			upload.Replica.PoolID != state.Membership.PoolID ||
-			upload.Replica.MasterHostID != state.Membership.MasterHostID ||
-			upload.Replica.MasterHostID != master.HostID || upload.Replica.MemberHostID != s.State.HostID ||
-			upload.Replica.Valid() != nil || verifyPoolAuthorityReplica(state.CAPEM, upload.Replica) != nil {
-			http.Error(w, "backup authority page replica is not authorized", http.StatusConflict)
-			return
-		}
-		m := upload.Replica.BackupManifest
-		if m == nil || upload.Index < -1 || upload.Index >= len(m.PageSHA256) {
-			http.Error(w, "backup authority page index is invalid", http.StatusBadRequest)
-			return
-		}
-		if upload.Index >= 0 && (len(upload.Data) != m.PageBytes[upload.Index] || poolBackupHash(upload.Data) != m.PageSHA256[upload.Index]) {
-			http.Error(w, "backup authority page digest does not match", http.StatusBadRequest)
+		if upload.Replica != nil {
+			if upload.Index != -1 || len(upload.Data) != 0 || upload.ReuseSHA256 != "" || upload.ManifestSHA256 != "" {
+				http.Error(w, "backup authority session request is invalid", http.StatusBadRequest)
+				return
+			}
+			openPoolBackupPushSession(s, w, master.HostID, *upload.Replica)
 			return
 		}
 		poolReplicaMu.Lock()
+		defer poolReplicaMu.Unlock()
+		poolBackupPushSessionMu.Lock()
+		defer poolBackupPushSessionMu.Unlock()
+		session, ok := poolBackupPushSessions[s.dir]
+		if !ok || session.manifest.SHA256 != upload.ManifestSHA256 || session.masterHostID != master.HostID || !time.Now().Before(session.expires) {
+			http.Error(w, "backup authority push session is not open", http.StatusConflict)
+			return
+		}
+		m := session.manifest
+		if upload.Index < 0 || upload.Index >= m.PageCount {
+			http.Error(w, "backup authority page index is invalid", http.StatusBadRequest)
+			return
+		}
+		if len(upload.Data) > protocol.PoolBackupPageLimit || (upload.ReuseSHA256 == "" && len(upload.Data) == 0) ||
+			(upload.ReuseSHA256 != "" && (len(upload.Data) != 0 || !validPoolBackupHash(upload.ReuseSHA256))) {
+			http.Error(w, "backup authority page digest does not match", http.StatusBadRequest)
+			return
+		}
 		current, err := loadPoolReplicaUnchecked(s)
-		poolReplicaMu.Unlock()
-		if err != nil || (current != nil && upload.Replica.Generation < current.Replica.Generation) {
+		if err != nil || (current != nil && session.generation < current.Replica.Generation) {
 			http.Error(w, "backup authority page generation is stale", http.StatusConflict)
 			return
 		}
-		if current != nil && upload.Replica.Generation == current.Replica.Generation {
-			digest, digestErr := upload.Replica.ContentDigest()
-			if digestErr != nil || digest != current.Digest {
-				http.Error(w, "backup authority page generation conflicts with the stored replica", http.StatusConflict)
-				return
-			}
-		}
-		if upload.Index == -1 {
-			if len(upload.Data) != 0 {
-				http.Error(w, "backup authority progress request has data", http.StatusBadRequest)
-				return
-			}
-			next := len(m.PageSHA256)
-			for index := range m.PageSHA256 {
-				if _, err := readPoolBackupPage(s, m, index); err != nil {
-					next = index
-					break
-				}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(poolBackupPageProgress{NextIndex: next})
-			return
-		}
 		path := poolBackupPageFile(s, m.SHA256, upload.Index)
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err == nil {
-			err = writePoolBackupPage(path, upload.Data, 0600)
+		poolBackupBlobMu.Lock()
+		defer poolBackupBlobMu.Unlock()
+		hash := upload.ReuseSHA256
+		if hash == "" {
+			hash, err = storePoolBackupBlob(s, upload.Data)
+		}
+		if err == nil {
+			err = linkPoolBackupBlob(s, hash, path)
+		}
+		if (errors.Is(err, os.ErrNotExist) || errors.Is(err, errPoolBackupBlobCorrupt)) && upload.ReuseSHA256 != "" {
+			http.Error(w, "backup authority page blob is unavailable", http.StatusNotFound)
+			return
 		}
 		if err != nil {
 			http.Error(w, "backup authority page could not be stored", http.StatusInternalServerError)
 			return
 		}
+		// Each accepted page extends the session, so a slow push is not cut off mid-way.
+		session.expires = time.Now().Add(poolBackupPushSessionTTL)
+		poolBackupPushSessions[s.dir] = session
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// openPoolBackupPushSession verifies the signed replica once, opens the session
+// and reports the first page the member still needs.
+func openPoolBackupPushSession(s *Store, w http.ResponseWriter, masterHostID string, replica protocol.PoolAuthorityReplica) {
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	poolPeerMu.Unlock()
+	if err != nil || state.Membership.Valid() != nil || state.CAPEM == "" ||
+		replica.PoolID != state.Membership.PoolID ||
+		replica.MasterHostID != state.Membership.MasterHostID ||
+		replica.MasterHostID != masterHostID || replica.MemberHostID != s.State.HostID ||
+		replica.Valid() != nil || verifyPoolAuthorityReplica(state.CAPEM, replica) != nil {
+		http.Error(w, "backup authority page replica is not authorized", http.StatusConflict)
+		return
+	}
+	m := replica.BackupManifest
+	if m == nil {
+		http.Error(w, "backup authority page index is invalid", http.StatusBadRequest)
+		return
+	}
+	poolReplicaMu.Lock()
+	current, err := loadPoolReplicaUnchecked(s)
+	defer poolReplicaMu.Unlock()
+	poolBackupPushSessionMu.Lock()
+	defer poolBackupPushSessionMu.Unlock()
+	poolBackupBlobMu.Lock()
+	defer poolBackupBlobMu.Unlock()
+	if err != nil || (current != nil && replica.Generation < current.Replica.Generation) {
+		http.Error(w, "backup authority page generation is stale", http.StatusConflict)
+		return
+	}
+	if current != nil && replica.Generation == current.Replica.Generation {
+		digest, digestErr := replica.ContentDigest()
+		if digestErr != nil || digest != current.Digest {
+			http.Error(w, "backup authority page generation conflicts with the stored replica", http.StatusConflict)
+			return
+		}
+	}
+	next := m.PageCount
+	for index := 0; index < m.PageCount; index++ {
+		// Presence is enough here; the complete root is verified once below.
+		if _, err := os.Stat(poolBackupPageFile(s, m.SHA256, index)); err != nil {
+			next = index
+			break
+		}
+	}
+	if next == m.PageCount {
+		verifyErr := verifyPoolBackupAuthorityPages(s, m)
+		var readErr *fs.PathError
+		if errors.As(verifyErr, &readErr) {
+			// A failed read is not evidence the staged root is wrong.
+			http.Error(w, "backup authority staging could not be read", http.StatusInternalServerError)
+			return
+		}
+		if verifyErr != nil {
+			err = os.RemoveAll(filepath.Join(s.dir, poolBackupPageDir, m.SHA256))
+			next = 0
+		}
+		if err != nil {
+			http.Error(w, "invalid backup authority staging could not be cleared", http.StatusInternalServerError)
+			return
+		}
+	}
+	poolBackupPushSessions[s.dir] = poolBackupPushSession{manifest: m, masterHostID: masterHostID,
+		generation: replica.Generation, expires: time.Now().Add(poolBackupPushSessionTTL)}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(poolBackupPageProgress{NextIndex: next})
 }
 
 // boundPoolPeerText bounds peer-facing text that crosses the wire or enters a check.
@@ -1007,6 +1079,13 @@ func PoolReplicaHandler(s *Store) http.Handler {
 				w.WriteHeader(http.StatusConflict)
 				_ = json.NewEncoder(w).Encode(protocol.PoolReplicaAck{HostID: s.State.HostID, Generation: replica.Generation, Error: message})
 				return
+			}
+			keep := ""
+			if replica.BackupManifest != nil {
+				keep = replica.BackupManifest.SHA256
+			}
+			if err := gcPoolBackupPages(s, keep); err != nil {
+				log.Printf("backup authority page cleanup could not complete: %v", err)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(ack)
@@ -1180,11 +1259,15 @@ func poolAuthorityReplicaAckRequired(member protocol.PoolMember) bool {
 	return member.Status == "ready" && !member.ReplicaAckExcluded
 }
 
+var advancePoolAuthorityGenerationForPush = advancePoolAuthorityGeneration
+
 // PushPoolAuthorityReplicas advances and persists this master's authority generation, then
 // pushes the current replica to every ready member that is behind. It is single-flight per
 // store, safe to call from every probe tick, and safe to retry: a member acknowledges the
 // same generation idempotently.
 func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Duration) error {
+	// The flag comes first, so at most one push per store ever waits for the backup lock;
+	// every other caller is turned away as busy instead of queueing behind it.
 	poolReplicaMu.Lock()
 	if poolReplicaPushing[s.dir] {
 		poolReplicaMu.Unlock()
@@ -1197,27 +1280,16 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 		delete(poolReplicaPushing, s.dir)
 		poolReplicaMu.Unlock()
 	}()
-	if err := reconcilePoolStorageLeaseSelection(s); err != nil {
+	// NFS and sanlock preparation is slow when a mount hangs and ctx cannot interrupt it, so
+	// it runs before the backup lock: a stalled mount delays this push, never a backup write.
+	if err := preparePoolStorageLeaseForPush(ctx, s); err != nil {
 		return err
 	}
-	membership, err := Membership(s)
+	replica, digest, err := numberPoolAuthorityReplicaForPush(ctx, s, timeout)
 	if err != nil {
 		return err
 	}
-	if membership.StorageLease != nil {
-		if _, err = preparePoolStorageLeaseHost(ctx, s, membership, true); err != nil {
-			return err
-		}
-	}
-	replica, digest, err := buildPoolAuthorityReplica(s)
-	if err != nil {
-		return err
-	}
-	generation, err := advancePoolAuthorityGeneration(s, digest)
-	if err != nil {
-		return err
-	}
-	replica.Generation = generation
+	generation := replica.Generation
 	signer, err := poolCASigner(s)
 	if err != nil {
 		return err
@@ -1269,7 +1341,69 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 	// cleared, no member can still fence-promote it, and its restart no longer has to wait
 	// for anyone.
 	ReleasePoolSelfFenceExposure(s)
+	// A member that missed this push is sent the current root next time, never an
+	// older one, so the master keeps only what it just pushed.
+	keep := ""
+	if replica.BackupManifest != nil {
+		keep = replica.BackupManifest.SHA256
+	}
+	if err := gcPoolBackupPages(s, keep); err != nil {
+		log.Printf("backup authority page cleanup could not complete: %v", err)
+	}
 	return failed
+}
+
+// preparePoolStorageLeaseForPush selects and prepares this host's storage lease. It must not
+// run under poolBackupAuthorityMu.
+var preparePoolStorageLeaseForPush = func(ctx context.Context, s *Store) error {
+	if err := reconcilePoolStorageLeaseSelection(s); err != nil {
+		return err
+	}
+	membership, err := Membership(s)
+	if err != nil {
+		return err
+	}
+	if membership.StorageLease != nil {
+		_, err = preparePoolStorageLeaseHost(ctx, s, membership, true)
+	}
+	return err
+}
+
+// lockPoolBackupAuthority takes poolBackupAuthorityMu, giving up when ctx ends so a writer
+// stuck inside the lock cannot leave a blocked push behind every probe tick.
+func lockPoolBackupAuthority(ctx context.Context) error {
+	for delay := time.Millisecond; !poolBackupAuthorityMu.TryLock(); delay = min(2*delay, 50*time.Millisecond) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return nil
+}
+
+// numberPoolAuthorityReplicaForPush builds the replica, stages its backup pages and numbers it
+// in one hold of poolBackupAuthorityMu, so the pages, the digest and the generation describe
+// one backup state. The wait for the lock is bounded by timeout.
+func numberPoolAuthorityReplicaForPush(ctx context.Context, s *Store, timeout time.Duration) (protocol.PoolAuthorityReplica, string, error) {
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	waiting, cancel := context.WithTimeout(ctx, timeout)
+	err := lockPoolBackupAuthority(waiting)
+	cancel()
+	if err != nil {
+		return protocol.PoolAuthorityReplica{}, "", errors.New("pool authority replica push could not take the backup authority lock")
+	}
+	defer poolBackupAuthorityMu.Unlock()
+	replica, digest, err := buildPoolAuthorityReplica(s)
+	if err == nil {
+		err = stagePoolBackupReplicaPages(s, replica.BackupManifest)
+	}
+	if err == nil {
+		replica.Generation, err = advancePoolAuthorityGenerationForPush(s, digest)
+	}
+	return replica, digest, err
 }
 
 // holdPoolStorageAuthorityLease acquires the single authority resource only after the
@@ -1406,9 +1540,6 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 	code := response.StatusCode
 	peerCertificates := response.TLS
 	response.Body.Close()
-	if code == http.StatusNotFound || code == http.StatusMethodNotAllowed {
-		return errors.New("pool member does not support " + protocol.PoolAuthorityReplicaCapability + "; upgrade it before relying on its replica")
-	}
 	if code != http.StatusOK || decodeErr != nil || peerCertificates == nil || len(peerCertificates.PeerCertificates) == 0 {
 		return errors.New("pool member did not report its authority replica")
 	}
@@ -1466,50 +1597,57 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 	if err = signPoolAuthorityReplica(signer, &addressed); err != nil {
 		return err
 	}
-	if addressed.BackupManifest != nil {
-		probe, probeErr := json.Marshal(poolBackupPageUpload{Replica: addressed, Index: -1})
-		if probeErr != nil {
-			return probeErr
+	if manifest := addressed.BackupManifest; manifest != nil {
+		post := func(upload poolBackupPageUpload) (*http.Response, error) {
+			body, err := json.Marshal(upload)
+			if err != nil {
+				return nil, err
+			}
+			request, err := http.NewRequestWithContext(work, http.MethodPost, strings.TrimRight(member.PeerOrigin, "/")+poolBackupPagePath, bytes.NewReader(body))
+			if err != nil {
+				return nil, err
+			}
+			request.Header.Set("Content-Type", "application/json")
+			return client.Do(request)
 		}
-		probeRequest, probeErr := http.NewRequestWithContext(work, http.MethodPost, strings.TrimRight(member.PeerOrigin, "/")+poolBackupPagePath, bytes.NewReader(probe))
-		if probeErr != nil {
-			return probeErr
-		}
-		probeRequest.Header.Set("Content-Type", "application/json")
-		probeResponse, probeErr := client.Do(probeRequest)
-		if probeErr != nil {
-			return probeErr
+		// The signed replica is sent once to open the session; pages name only its root.
+		opened, openErr := post(poolBackupPageUpload{Replica: &addressed, Index: -1})
+		if openErr != nil {
+			return openErr
 		}
 		var progress poolBackupPageProgress
-		if probeResponse.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(probeResponse.Body, 1<<12)).Decode(&progress) != nil {
-			_ = probeResponse.Body.Close()
-			return errors.New("pool member did not report backup authority page progress or does not support " + protocol.PoolBackupPagedAuthorityCapability)
+		if opened.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(opened.Body, 1<<12)).Decode(&progress) != nil {
+			_ = opened.Body.Close()
+			return errors.New("pool member did not report backup authority page progress")
 		}
-		_ = probeResponse.Body.Close()
-		if progress.NextIndex < 0 || progress.NextIndex > len(addressed.BackupManifest.PageSHA256) {
+		_ = opened.Body.Close()
+		if progress.NextIndex < 0 || progress.NextIndex > manifest.PageCount {
 			return errors.New("pool member reported invalid backup authority page progress")
 		}
-		for index := progress.NextIndex; index < len(addressed.BackupManifest.PageSHA256); index++ {
-			page, pageErr := readPoolBackupPage(s, addressed.BackupManifest, index)
+		for index := progress.NextIndex; index < manifest.PageCount; index++ {
+			page, pageErr := readPoolBackupPage(s, manifest, index)
 			if pageErr != nil {
+				forgetStagedPoolBackupRoot(s) // Verify the whole root again on the next push.
 				return pageErr
 			}
-			payload, pageErr := json.Marshal(poolBackupPageUpload{Replica: addressed, Index: index, Data: page})
-			if pageErr != nil {
-				return pageErr
+			reuseResponse, reuseErr := post(poolBackupPageUpload{ManifestSHA256: manifest.SHA256, Index: index, ReuseSHA256: poolBackupHash(page)})
+			if reuseErr != nil {
+				return reuseErr
 			}
-			pageRequest, pageErr := http.NewRequestWithContext(work, http.MethodPost, strings.TrimRight(member.PeerOrigin, "/")+poolBackupPagePath, bytes.NewReader(payload))
-			if pageErr != nil {
-				return pageErr
+			_ = reuseResponse.Body.Close()
+			if reuseResponse.StatusCode == http.StatusNoContent {
+				continue
 			}
-			pageRequest.Header.Set("Content-Type", "application/json")
-			pageResponse, pageErr := client.Do(pageRequest)
+			if reuseResponse.StatusCode != http.StatusNotFound {
+				return errors.New("pool member refused backup authority page reuse")
+			}
+			pageResponse, pageErr := post(poolBackupPageUpload{ManifestSHA256: manifest.SHA256, Index: index, Data: page})
 			if pageErr != nil {
 				return pageErr
 			}
 			_ = pageResponse.Body.Close()
 			if pageResponse.StatusCode != http.StatusNoContent {
-				return errors.New("pool member refused a backup authority page or does not support " + protocol.PoolBackupPagedAuthorityCapability)
+				return errors.New("pool member refused a backup authority page")
 			}
 		}
 	}
@@ -1535,6 +1673,7 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 		return errors.New("pool member did not acknowledge the authority replica")
 	}
 	if response.StatusCode != http.StatusOK || !ack.Verified || ack.Generation != replica.Generation || ack.Digest != digest {
+		forgetStagedPoolBackupRoot(s) // A refusal may name pages the master staged wrongly.
 		refusal := errors.New("pool member refused the authority replica")
 		if ack.Error != "" {
 			refusal = errors.New(ack.Error)
@@ -1558,6 +1697,7 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 	}
 	recordPoolReplicaPostAck(s, member.HostID, postAck)
 	recordPoolReplicaAck(s, member.HostID, postAck)
+	recordPoolReplicaObservation(s, member.HostID, postAck)
 	return nil
 }
 

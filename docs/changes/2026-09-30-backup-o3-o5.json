@@ -1,0 +1,38 @@
+{
+  "summary": "Backup repository registration records real health immediately; task history shows the executing host for backup requests relayed through the pool master.",
+  "paths": [
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_repository_s3_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/backup_adoption_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-30-backup-o3-o5.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator steps are unchanged; a new repository shows online (or offline) at once instead of unknown, and the Task history host column names the executing host.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "GET /api/v1/operations returns the executing host_id for backup-* kinds; no schema, request or Core command changes.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes; no milestone or acceptance gate changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Health is written to the existing Core repository record; the Controller only changes which stored host it displays and keeps no new data."
+  },
+  "verification": {
+    "method": "Focused Go tests for the agent and controller packages; no real S3 endpoint or multi-host lab was run.",
+    "evidence": [
+      "internal/agent/backup_repository_s3_test.go",
+      "internal/controller/backup_adoption_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

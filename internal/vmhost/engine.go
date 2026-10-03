@@ -271,7 +271,12 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return runCommand(ctx, "", name, args...)
+	return runCommand(ctx, "", nil, name, args...)
+}
+
+// runInput is run with stdin, for commands that must read a secret without it touching disk.
+func runInput(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+	return runCommand(ctx, "", stdin, name, args...)
 }
 
 // runWithDir retains the normal bounded command behavior while anchoring a child's
@@ -281,16 +286,19 @@ func runWithDir(ctx context.Context, dir *os.File, name string, args ...string) 
 	if dir == nil {
 		return nil, errors.New("working directory is unavailable")
 	}
-	output, err := runCommand(ctx, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), dir.Fd()), name, args...)
+	output, err := runCommand(ctx, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), dir.Fd()), nil, name, args...)
 	runtime.KeepAlive(dir)
 	return output, err
 }
 
-func runCommand(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+func runCommand(ctx context.Context, dir string, stdin []byte, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.WaitDelay = time.Second
 	var out, stderr cappedOutput
@@ -1403,6 +1411,11 @@ func (e *Engine) RemoveSeed(ctx context.Context, id string) error {
 
 // Check both running and persistent assignments; a pathname is not proof that
 // another libvirt domain has not been attached to the same writable image.
+// ErrOwnershipUnconfirmed means a libvirt query failed, as during a restart, so VM state or another
+// domain's storage could not be confirmed. It is transient: callers keep the operation and retry
+// rather than fail it. Only a query that succeeds and shows a conflict is a definite refusal.
+var ErrOwnershipUnconfirmed = errors.New("cannot confirm VM or domain storage state")
+
 func (e *Engine) exclusiveDisk(ctx context.Context, j journal) error {
 	return e.exclusiveDisks(ctx, j, []string{j.Disk})
 }
@@ -1421,7 +1434,7 @@ func (e *Engine) exclusiveDisks(ctx context.Context, j journal, paths []string) 
 	}
 	ids, err := e.virsh(ctx, "list", "--all", "--uuid")
 	if err != nil {
-		return err
+		return errors.Join(ErrOwnershipUnconfirmed, err)
 	}
 	if len(strings.Fields(string(ids))) > 256 {
 		return errors.New("VM ownership observation limit exceeded")
@@ -1436,11 +1449,12 @@ func (e *Engine) exclusiveDisks(ctx context.Context, j journal, paths []string) 
 		for _, args := range [][]string{{"dumpxml", id}, {"dumpxml", id, "--inactive"}} {
 			b, err := e.virsh(ctx, args...)
 			if err != nil {
-				return errors.New("cannot establish other domain storage ownership")
+				return errors.Join(ErrOwnershipUnconfirmed, fmt.Errorf("domain %s definition cannot be read: %w", id, err))
 			}
 			files, err := domainDiskSourceFiles(b)
 			if err != nil {
-				return errors.New("cannot establish other domain storage ownership")
+				// libvirt answered; a definition Core cannot parse will not parse on a retry.
+				return fmt.Errorf("domain %s definition cannot be inspected for exclusive ownership: %w", id, err)
 			}
 			for _, head := range files {
 				otherHead, statErr := os.Stat(head)

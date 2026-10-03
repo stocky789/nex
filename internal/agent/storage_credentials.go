@@ -65,11 +65,17 @@ func redeemStorageCredential(ctx context.Context, s *Store, offer protocol.Stora
 	if err != nil || handoff.Offer != offer {
 		return errors.New("invalid storage credential handoff")
 	}
+	ackPath := path + "/ack"
 	receipt, err := saveCredentialHandoff(s, handoff)
 	if err != nil {
+		// Tell the waiting operator why; the offer is spent, so only the log would otherwise know.
+		refusal := protocol.StorageCredentialReceipt{RequestID: offer.RequestID, PoolID: offer.PoolID, HostID: offer.HostID, RepositoryID: offer.RepositoryID, RegistrationRequestID: offer.RegistrationRequestID, Status: "failed", Error: err.Error()}
+		if c, cerr := client(s.State, true); cerr == nil {
+			_ = post(ctx, c, s.State.Controller, ackPath, refusal, &protocol.StorageCredentialReceipt{})
+			c.CloseIdleConnections()
+		}
 		return fmt.Errorf("storage credential persistence failed: %w", err)
 	}
-	ackPath := path + "/ack"
 	c, err = client(s.State, true)
 	if err != nil {
 		return err
@@ -118,6 +124,9 @@ func clusterCredentialReceipt(s *Store, handoff protocol.StorageCredentialHandof
 // offers use their purpose-bound marker; ordinary storage retains the existing
 // receipt path unchanged.
 func saveCredentialHandoff(s *Store, handoff protocol.StorageCredentialHandoff) (protocol.StorageCredentialReceipt, error) {
+	if strings.HasPrefix(handoff.Offer.RegistrationRequestID, "backup-credential:") {
+		return saveBackupCredential(s, handoff)
+	}
 	if cluster, ok := clusterCredentialReceipt(s, handoff); ok {
 		material := ClusterSecretMaterial{SSHPrivateKey: handoff.Credentials.SSHPrivateKey, SSHKnownHosts: handoff.Credentials.SSHKnownHosts}
 		if cluster.Kind != "fence_ssh" {

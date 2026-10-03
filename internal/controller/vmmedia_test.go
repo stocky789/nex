@@ -46,13 +46,13 @@ func TestMediaRequestsAreAuthorizedDurableAndDispatched(t *testing.T) {
 		return a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: caps, Inventory: inv, Results: results})
 	}
 	var enrolled []protocol.Result
-	for _, cmd := range report([]string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability}).Commands {
+	for _, cmd := range report([]string{protocol.ManagedVMCapability}).Commands {
 		enrolled = append(enrolled, protocol.Result{OperationID: cmd.OperationID, Status: "succeeded"})
 	}
 	if w := a.call("POST", "/api/v1/vms/"+vm+"/media", body, nil, 409); !strings.Contains(w.Body.String(), "does not support central media") {
 		t.Fatal(w.Body.String())
 	}
-	caps := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.MediaCapability}
+	caps := []string{protocol.ManagedVMCapability, protocol.MediaCapability}
 	report(caps, enrolled...)
 
 	var first map[string]any

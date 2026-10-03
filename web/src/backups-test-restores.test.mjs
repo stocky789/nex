@@ -18,3 +18,8 @@ assert.deepEqual(activeTestRestores(runs, point, vms, "other-pool"), []);
 assert.deepEqual(activeTestRestores(null, point, vms, "pool-1"), [], "missing run inventory must not expose verification or cleanup");
 assert.deepEqual(activeTestRestores(runs, point, vms.map(vm => vm.id === "test-newer" ? { ...vm, host_id: "host-3" } : vm), "pool-1").map(({ vm }) => vm.id), ["test-older"], "a same-ID VM on a different host is not the recorded test restore");
 assert.deepEqual(activeTestRestores(runs.map(run => run.operation_id === "newer" ? { ...run, host_id: "" } : run), point, vms, "pool-1").map(({ vm }) => vm.id), ["test-older"], "a run without host provenance cannot enable VM actions");
+
+const { retentionWarnings } = await import(bundleTestModule(new URL("./backups.tsx", import.meta.url), "backups-retention", true));
+const noted = { operation_id: "b1", kind: "backup-scheduled", status: "succeeded", error: "retention could not remove every expired recovery point: recovery point p0", repository_id: "repo-1", updated_at: "2026-09-05T00:00:00Z" };
+assert.deepEqual(retentionWarnings([noted, { ...noted, operation_id: "b2", error: "" }, { ...noted, operation_id: "b3", status: "failed" }, { ...noted, operation_id: "t1", kind: "backup-test-restore" }]).map(r => r.operation_id), ["b1"]);
+assert.deepEqual(retentionWarnings(null), []);

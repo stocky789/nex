@@ -1,0 +1,74 @@
+{
+  "summary": "Publish the real Controller UI as an isolated read-only public demo with fictional inventory and Git-driven container updates",
+  "paths": [
+    "cmd/nex-demo/main.go",
+    "cmd/nex-demo/main_test.go",
+    "internal/demo/server.go",
+    "internal/demo/server_test.go",
+    "internal/demo/fixtures.go",
+    "internal/demo/fixtures_test.go",
+    "internal/demo/views.go",
+    "web/build.mjs",
+    "web/src/main.tsx",
+    "web/src/demo.ts",
+    "web/src/demo.css",
+    "packaging/demo/Dockerfile",
+    "packaging/demo/Dockerfile.dockerignore",
+    "packaging/demo/build-source.py",
+    "packaging/demo/install.py",
+    "packaging/demo/nex-demo-deploy",
+    "packaging/demo/nex-demo-ssh-deploy",
+    "packaging/demo/nex-demo-docker.conf",
+    "packaging/demo/nex-demo-proxy.service.template",
+    "packaging/demo/nex-demo-socket.mount",
+    "packaging/demo/nex-demo.tmpfiles",
+    "packaging/demo/nex-demo-journal.conf",
+    "packaging/demo/nginx.conf.template",
+    "packaging/demo/README.md",
+    "scripts/demo-ci-deploy.sh",
+    ".gitea/workflows/demo.yml",
+    ".github/workflows/demo.yml",
+    "tests/integration/demo_browser.py",
+    "tests/integration/demo_deploy_image.py",
+    "tests/test_demo_archive.py",
+    "docs/API.md",
+    "docs/guide/README.md",
+    "docs/guide/explore-controller-demo.md",
+    "docs/guide/operate-controller-demo.md",
+    "docs/plans/2026-10-01-public-controller-demo.md",
+    "docs/qa/2026-10-01-public-controller-demo.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Document public demo login, fictional read-only limits, source access, automated publication, HTTPS proxy prerequisites and rollback.",
+    "pages": ["docs/guide/README.md", "docs/guide/explore-controller-demo.md", "docs/guide/operate-controller-demo.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The separate demo adapter reuses existing Controller client read routes and response shapes with restricted session login/logout. It implements no real host operations and changes no production Controller/Core or peer contract. The hosting health probe is not a pool capability; the real API reference remains authoritative for the product, not executable demo capabilities.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Public product browsing does not implement or close a Core capability or phase acceptance gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Immutable fictional fixtures and disposable signed sessions introduce no durable product state. Deployment image selection is website infrastructure metadata, not a real pool record. Controller/Core authority and replacement behavior remain unchanged."
+  },
+  "verification": {
+    "method": "Execute focused backend/security/schema checks, typecheck and exact-image browser smoke, then exercise the installed container, private proxy, firewall, SSH, corresponding-source download, publication rollback and authorized reboot. Record actual outcomes and distinguish the still owner-controlled public DNS/TLS route and first post-push Gitea run in the linked report.",
+    "evidence": [
+      "docs/qa/2026-10-01-public-controller-demo.md",
+      "internal/demo/server_test.go",
+      "internal/demo/fixtures_test.go",
+      "cmd/nex-demo/main_test.go",
+      "tests/integration/demo_browser.py",
+      "tests/integration/demo_deploy_image.py",
+      "tests/test_demo_archive.py"
+    ]
+  }
+}

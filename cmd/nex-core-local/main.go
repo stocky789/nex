@@ -142,7 +142,7 @@ func runRebuildBackupCatalog(args []string) error {
 		return err
 	}
 	defer store.Close()
-	imported, err := agent.RebuildPoolBackupCatalogFromRepository(store, *repoID)
+	imported, err := agent.RebuildPoolBackupCatalogFromRepository(context.Background(), store, *repoID)
 	if err != nil {
 		return err
 	}

@@ -32,17 +32,17 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 		return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "invalid test-restore command", ObservedAt: observed}, nil
 	}
 	if err := ensureBackupRunReserved(store, cmd); err != nil {
-		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
+		return unreservedBackupResult(store, cmd, observed, err), nil
 	}
 	req := *cmd.TestRestore
 	repo, err := GetPoolBackupRepository(store, req.RepositoryID)
 	if err != nil {
 		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 	}
-	if repo.MountPath == "" {
-		return failTestRestoreRun(store, cmd, observed, "backup repository mount path is missing"), nil
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
+		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 	}
-	pointDir := filepath.Join(repo.MountPath, req.RecoveryPointID)
 	run, err := loadPoolBackupRun(store, cmd.OperationID)
 	if err != nil {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
@@ -57,8 +57,11 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 	if manifest.CapturedSpec == nil {
 		return failTestRestoreRun(store, cmd, observed, "recovery point lacks a captured VM specification; re-backup before test restore"), nil
 	}
-	localDir := filepath.Join(store.dir, "backup-restore", cmd.OperationID)
-	if err := vmhost.CopyBackupArtifactsLocal(ctx, pointDir, localDir, manifest); err != nil {
+	localDir, err := createRestoreStaging(store, cmd.OperationID)
+	if err != nil {
+		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
+	}
+	if err := backend.CopyArtifacts(ctx, req.RecoveryPointID, localDir, manifest); err != nil {
 		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 	}
 	asNew := protocol.RestoreAsNewRequest{
@@ -71,7 +74,10 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 	}
 	engine := vmhost.NewManaged(filepath.Join(store.dir, "managed-vms"))
 	if err := requestTestRestorePlacement(ctx, store, spec, cmd.OperationID); err != nil {
-		if restorePlacementHasNoEffects(store, cmd.OperationID, spec.ID) {
+		// Staging already exists, so only the master's definite refusal proves
+		// nothing was placed: fail clean, do not leave needs_attention with a pin.
+		var refused poolVMPlacementRefusal
+		if errors.As(err, &refused) || restorePlacementHasNoEffects(store, cmd.OperationID, spec.ID) {
 			return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 		}
 		return attentionTestRestoreRun(store, cmd, observed, err.Error()), nil
@@ -90,6 +96,7 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 	}, nil); err != nil {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
 	}
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: observed}, nil
 }
 
@@ -104,6 +111,7 @@ func failTestRestoreRun(store *Store, cmd protocol.Command, observed time.Time, 
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}
 	}
 	_ = clearBackupRestorePin(store, cmd.TestRestore.RecoveryPointID, cmd.OperationID)
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: message, ObservedAt: observed}
 }
 
@@ -266,6 +274,8 @@ type testRestoreCleanupPlan struct {
 	Request protocol.TestRestoreCleanupRequest
 	RunID   string
 	VM      protocol.VMCreateSpec
+	// NeverStarted: the member never ran it, so there is no VM or disk to delete.
+	NeverStarted bool
 }
 
 func matchingTestRestoreRun(s *Store, req protocol.TestRestoreCleanupRequest) (protocol.BackupRun, error) {
@@ -276,10 +286,22 @@ func matchingTestRestoreRun(s *Store, req protocol.TestRestoreCleanupRequest) (p
 	return matchingTestRestoreRunIn(runs, req)
 }
 
+// A test restore that failed, or never started, may have left a pin or partial VM; cleaning
+// it up settles cleanly even when nothing was created.
+func testRestoreCleanable(run protocol.BackupRun) bool {
+	return run.Kind == protocol.BackupKindTestRestore && (run.Status == "succeeded" || run.Status == "failed")
+}
+
+// A member that never started a test restore holds nothing to clean, so the master settles
+// its own record of the run.
+func testRestoreNeverStarted(run protocol.BackupRun) bool {
+	return run.Status == "failed" && run.Stage == stageNotStarted
+}
+
 func matchingTestRestoreRunIn(runs []protocol.BackupRun, req protocol.TestRestoreCleanupRequest) (protocol.BackupRun, error) {
 	var match protocol.BackupRun
 	for _, run := range runs {
-		if run.Kind == protocol.BackupKindTestRestore && run.Status == "succeeded" && run.NewVMID == req.TestVMID &&
+		if testRestoreCleanable(run) && run.NewVMID == req.TestVMID &&
 			run.RecoveryPointID == req.RecoveryPointID && run.RepositoryID == req.RepositoryID {
 			if match.OperationID != "" {
 				return protocol.BackupRun{}, ErrBackupConflict
@@ -387,6 +409,10 @@ func prepareTestRestoreCleanup(s *Store, req protocol.TestRestoreCleanupRequest,
 	if err != nil {
 		return testRestoreCleanupPlan{}, err
 	}
+	if testRestoreNeverStarted(run) {
+		return testRestoreCleanupPlan{Request: req, RunID: run.OperationID, NeverStarted: true,
+			VM: protocol.VMCreateSpec{ID: req.TestVMID, PoolID: s.State.PoolID, HostID: run.HostID}}, nil
+	}
 	if run.HostID != s.State.HostID {
 		return testRestoreCleanupPlan{}, ErrBackupConflict
 	}
@@ -426,6 +452,9 @@ func prepareTestRestoreCleanup(s *Store, req protocol.TestRestoreCleanupRequest,
 }
 
 func executeTestRestoreCleanupNative(ctx context.Context, dir string, plan testRestoreCleanupPlan) error {
+	if plan.NeverStarted {
+		return nil
+	}
 	engine := vmhost.NewManaged(filepath.Join(dir, "managed-vms"))
 	sum := sha256.Sum256([]byte(plan.RunID))
 	deleteID := "test-clean-" + hex.EncodeToString(sum[:16])

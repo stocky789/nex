@@ -1,0 +1,44 @@
+{
+  "summary": "Release retained original takes the pool master's owner admission that VM delete uses; a needs_attention backup of a member that left the pool settles; orphan re-protection skips a point already gone; a same-ID repository replace over a different destination names the reason and the Controller names a wrong replace_confirmation; test fixture and web regression coverage repaired.",
+  "paths": [
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_orphans.go",
+    "internal/controller/backups.go",
+    "internal/agent/backup_test_restore_test.go",
+    "internal/agent/pool_vm_release_test.go",
+    "internal/agent/backup_orphan_reprotect_test.go",
+    "internal/agent/backup_peer_pin_adoption_test.go",
+    "internal/agent/backup_repository_identity_test.go",
+    "internal/controller/backup_adoption_test.go",
+    "web/src/backups-replace.test.mjs",
+    "docs/guide/restore-replace.md",
+    "docs/guide/backup-repositories.md",
+    "docs/changes/2026-10-01-backup-workspace-ui.json",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Release retained original is now refused by the pool master while an edit, restore or snapshot operation on the VM is unfinished, and a same-ID replace over a different destination states that reason.",
+    "pages": ["docs/guide/restore-replace.md", "docs/guide/backup-repositories.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "vm-release-retained and backup-repository-register keep their routes and bodies. The release now takes the owner admission (delete-check) VM delete takes, so it can fail with the master's 409 reasons, and the register failure text and the Controller's 400 for a wrong replace_confirmation are more specific.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrections inside the existing backup and restore phase; no gate changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "The master's durable pool VM record (pool-vm state) is what the release admission reads; a settled backup run is the master's pool-backup-runs record.",
+    "reason": "No new state. A fresh Controller re-reads the VM record, run history and repository list from the pool master."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent and internal/controller (each new regression failed with its fix reverted) and web typecheck and tests. No lab run and no browser walkthrough.",
+    "evidence": ["internal/agent/pool_vm_release_test.go", "internal/agent/backup_orphan_reprotect_test.go", "internal/agent/backup_peer_pin_adoption_test.go", "internal/agent/backup_test_restore_test.go", "internal/agent/backup_repository_identity_test.go", "internal/controller/backup_adoption_test.go", "web/src/backups-replace.test.mjs"]
+  }
+}

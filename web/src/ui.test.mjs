@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 
-const { badgeTone, Badge, Banner, MissingPanel, LoadError, LoadErrorAlert, Panel, Section, ScreenBoundary, clampSlideoverWidth, loadSlideoverWidth, saveSlideoverWidth, slideoverMinWidth, Sparkline, monotone } = await import(bundleTestModule(new URL("./ui.tsx", import.meta.url), "ui"));
+const { size, badgeTone, Badge, Banner, MissingPanel, LoadError, LoadErrorAlert, Panel, Section, ScreenBoundary, clampSlideoverWidth, loadSlideoverWidth, saveSlideoverWidth, slideoverMinWidth, Sparkline, monotone } = await import(bundleTestModule(new URL("./ui.tsx", import.meta.url), "ui"));
 
+assert.deepEqual([0, 512, 300 * 1024, 5 * 1024 ** 2, 3 * 1024 ** 3].map(size), ["0 GiB", "0.5 KiB", "300 KiB", "5 MiB", "3 GiB"], "small sizes get a fitting unit");
 for (const v of ["fresh", "healthy", "succeeded", "current", "available", "confirmed", "connected", "ready", "in_sync", "passed", "verified", "up"]) assert.equal(badgeTone(v), "ok", v);
 for (const v of ["stale", "degraded", "pending", "dispatched", "needs_attention", "behind", "unverified", "uncertain", "warning", "disconnected", "unresponsive", "timeout", "awaiting_fencing", "staged", "applied"]) assert.equal(badgeTone(v), "warn", v);
 for (const v of ["failed", "error", "revoked", "blocked", "down", "faulted", "rejected"]) assert.equal(badgeTone(v), "bad", v);

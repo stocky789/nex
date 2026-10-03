@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import type { Host, Media, Network, Storage, VM, VMSpec } from "./managed";
 import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, availableBaseline, baselineSupported, baselineUnavailable, fixedCPU, recommendedCPU, selectCPU, cpuSelectionIssue, cpuMigrationHelp, describeNetwork, driversDriveReady, effectiveBoot, mediaUsable, networkUsable, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
 import { storageUsable } from "./storage";
 import { Icon } from "./icons";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
+// A tag's colour comes from its name, so the same tag looks the same on every screen.
+export const tagStyle = (tag: string) => ({ "--tag-hue": [...tag].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7) }) as CSSProperties;
 export const tagsCapability = "vm-tags-v1";
 const tagPattern = /^[a-z0-9-]{1,32}$/;
 // The draft always carries an explicit Secure Boot and TPM choice, even for a definition
@@ -276,7 +278,7 @@ export function tagsBlocker(vm: VM, host?: Host, master?: Host, clearing = false
 
 // Tag-only saves still use PUT of the full definition. The editor re-reads the VM first so a
 // stale list mirror cannot rewrite disks, NICs or firmware while changing labels.
-export function TagEditor({ vm, host, master, api, reload, unavailable, onNotice }: { vm: VM; host?: Host; master?: Host; api: API; reload: () => Promise<void>; unavailable: boolean; onNotice: (text: string) => void }) {
+export function TagEditor({ vm, host, master, api, reload, unavailable, onNotice, known = [] }: { vm: VM; host?: Host; master?: Host; api: API; reload: () => Promise<void>; unavailable: boolean; onNotice: (text: string) => void; known?: string[] }) {
   const saved = vm.spec?.tags ?? [];
   const [tags, setTags] = useState(saved);
   const [text, setText] = useState("");
@@ -335,7 +337,7 @@ export function TagEditor({ vm, host, master, api, reload, unavailable, onNotice
   }
   return <div className="tag-editor">
     <ul className="tags" aria-label="Tags">
-      {tags.map(tag => <li key={tag} className="tag">{tag}<button type="button" className="icon-button" aria-label={`Remove tag ${tag}`} disabled={working || Boolean(editBlocker(vm, host)) || unavailable} onClick={() => setTags(tags.filter(t => t !== tag))}><Icon kind="close" size={12} /></button></li>)}
+      {tags.map(tag => <li key={tag} className="tag" style={tagStyle(tag)}>{tag}<button type="button" className="icon-button" aria-label={`Remove tag ${tag}`} disabled={working || Boolean(editBlocker(vm, host)) || unavailable} onClick={() => setTags(tags.filter(t => t !== tag))}><Icon kind="close" size={12} /></button></li>)}
       {!tags.length && <li className="muted">No tags</li>}
     </ul>
     <form onSubmit={add}>
@@ -344,6 +346,9 @@ export function TagEditor({ vm, host, master, api, reload, unavailable, onNotice
       <button disabled={addBlocked || !text.trim()}>Add</button>
       <button type="button" className="primary" disabled={saveBlocked} onClick={() => void save()}>{working ? "Saving…" : "Save tags"}</button>
     </form>
+    {!addBlocked && tags.length < 16 && known.some(t => !tags.includes(t)) && <div className="tag-suggest" aria-label="Tags in use on other VMs">
+      {known.filter(t => !tags.includes(t)).slice(0, 12).map(t => <button key={t} type="button" className="tag" style={tagStyle(t)} onClick={() => setTags([...tags, t].sort())}>+ {t}</button>)}
+    </div>}
     {error && <p className="task-error" role="alert">{error}</p>}
     {blocker && <p className="help">{blocker}</p>}
     {!supported && saved.length > 0 && <p className="help">This host no longer supports tags. Clear them to save other changes.</p>}

@@ -366,3 +366,109 @@ func err2s(err error) string {
 	}
 	return err.Error()
 }
+
+// A refused registration must not leave its plaintext credential behind until a client retires it.
+func TestFailedStorageRegistrationReleasesCredential(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	e := NewManaged(filepath.Join(state, "managed"))
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := lifecycleLocalStorage("repo-1", e.stateDir)
+	s.CredentialReceipt, s.CredentialRequestID = receipt.Receipt, handoff.Offer.RegistrationRequestID
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.Execute(context.Background(), protocol.Command{OperationID: "register-1", Kind: "storage-register", Storage: &s}, nil)
+	if err != nil || result.Status != "failed" {
+		t.Fatalf("registration = %+v, %v", result, err)
+	}
+	if _, err = os.Stat(filepath.Join(state, credentialDirectory, receipt.Receipt)); !os.IsNotExist(err) {
+		t.Fatalf("credential remains after a failed registration: %v", err)
+	}
+	if _, err = SaveStorageCredential(state, handoff); err == nil {
+		t.Fatal("failed browser registration handoff was reusable after retirement")
+	}
+}
+
+// Native preparation is simulated; credential cleanup, replay admission and the
+// managed storage projection exercise the durable member registration boundary.
+func TestPoolStorageCredentialRetryAfterFailedPreparation(t *testing.T) {
+	for _, retire := range []bool{false, true} {
+		name := "recover"
+		if retire {
+			name = "explicit-retirement"
+		}
+		t.Run(name, func(t *testing.T) {
+			state := filepath.Join(t.TempDir(), "state")
+			e := NewManaged(filepath.Join(state, "managed"))
+			path := t.TempDir()
+			const generation = 7
+			s := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "member-1", Generation: generation, Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "files.example.test", Share: "vms"}}}
+			credentials := testCredentialHandoff().Credentials
+			receipt, err := SavePoolStorageCredential(state, s.PoolID, s.HostID, s.ID, generation, credentials)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.CredentialReceipt, s.CredentialRequestID = receipt, PoolStorageCredentialRequestID(s.ID, generation)
+			identity := protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{Server: "files.example.test", Share: "vms", MarkerID: "0123456789abcdef0123456789abcdef"}}
+			access := storageAccess{Path: path, Observed: identity, Health: "healthy", Available: 2 << 30}
+			oldPrepare, oldReady := storagePrepareAtFn, managedStorageReadyFn
+			t.Cleanup(func() { storagePrepareAtFn, managedStorageReadyFn = oldPrepare, oldReady })
+			serverAvailable := false
+			storagePrepareAtFn = func(context.Context, protocol.StorageRegistration, string) (storageAccess, error) {
+				got, err := PoolStorageCredential(state, receipt)
+				if err != nil || got != credentials {
+					t.Fatal("member preparation could not read the exact delivered credential")
+				}
+				if !serverAvailable {
+					return storageAccess{}, errors.New("SMB server temporarily unavailable")
+				}
+				return access, nil
+			}
+			managedStorageReadyFn = func(context.Context, protocol.StorageRegistration, uint64) (storageAccess, error) {
+				return access, nil
+			}
+			ctx := WithPoolStorageExpectation(context.Background(), identity, generation)
+			command := protocol.Command{OperationID: "member-register-first", Kind: "storage-register", Storage: &s}
+			result, err := e.Execute(ctx, command, nil)
+			if err != nil || result.Status != "failed" || !strings.Contains(result.Error, "temporarily unavailable") {
+				t.Fatalf("first preparation = %+v, %v", result, err)
+			}
+			if _, err = os.Stat(filepath.Join(state, credentialDirectory, receipt)); !os.IsNotExist(err) {
+				t.Fatalf("failed preparation left a member secret: %v", err)
+			}
+			if retire {
+				command := protocol.Command{OperationID: "retire-member-handoff", Kind: "storage-credential-retire", CredentialRetire: &protocol.StorageCredentialRetireRequest{Receipt: receipt, PoolID: s.PoolID, HostID: s.HostID}}
+				if result, err = e.Execute(ctx, command, nil); err != nil || result.Status != "succeeded" {
+					t.Fatalf("explicit retirement = %+v, %v", result, err)
+				}
+				if _, err = SavePoolStorageCredential(state, s.PoolID, s.HostID, s.ID, generation, credentials); err == nil {
+					t.Fatal("explicitly retired peer handoff was recreated")
+				}
+				return
+			}
+			changed := credentials
+			changed.Secret += "-changed"
+			if _, err = SavePoolStorageCredential(state, s.PoolID, s.HostID, s.ID, generation, changed); err == nil {
+				t.Fatal("same generation accepted different credentials")
+			}
+			replayed, err := SavePoolStorageCredential(state, s.PoolID, s.HostID, s.ID, generation, credentials)
+			if err != nil || replayed != receipt {
+				t.Fatalf("same-generation handoff retry = %q, %v", replayed, err)
+			}
+			serverAvailable = true
+			command.OperationID = "member-register-retry"
+			if result, err = e.Execute(ctx, command, nil); err != nil || result.Status != "succeeded" {
+				t.Fatalf("recovered preparation = %+v, %v", result, err)
+			}
+			applied, checks := e.AppliedStorage()
+			if len(applied) != 1 || applied[0].ID != s.ID || applied[0].Generation != generation || applied[0].CredentialReceipt != receipt || !applied[0].CredentialPresent {
+				t.Fatalf("recovered member projection = %+v, checks = %+v", applied, checks)
+			}
+		})
+	}
+}

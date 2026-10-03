@@ -29,7 +29,15 @@ import (
 const poolJoinPath = "/api/v1/pool/join"
 
 type peerOffer struct{ URL, CAPEM, PoolID, PoolName, MasterHostID, MemberHostID, CSRHash, Token string }
-type peerJoinRequest struct{ Offer, HostID, CSRPEM string }
+type peerJoinRequest struct {
+	Offer, HostID, CSRPEM string
+	Hostname              string `json:"hostname,omitempty"`
+}
+
+// errJoinHostnameRequired is the one refusal the master states to the joiner: a Core that
+// predates hostname reporting cannot join until it is upgraded and restarted.
+var errJoinHostnameRequired = errors.New("joining Core did not report a valid hostname; upgrade and restart Nex Core on the joining host")
+
 type peerJoinResponse struct {
 	CertificatePEM string                  `json:"certificate_pem"`
 	Membership     protocol.PoolMembership `json:"membership"`
@@ -39,6 +47,13 @@ type peerJoinResponse struct {
 // joined another pool is always its pool's master; there is no separate standalone mode.
 func initPoolMaster(s *Store, state *poolPeerState) error {
 	var err error
+	hostname, err := osHostname()
+	if err != nil {
+		return err
+	}
+	if !protocol.ValidPoolHostname(hostname) {
+		return errors.New("invalid local hostname")
+	}
 	state.CAPEM, state.CAKeyPEM, state.CertificatePEM, state.KeyPEM, err = newPoolCA(s.State.HostID)
 	if err != nil {
 		return err
@@ -47,7 +62,7 @@ func initPoolMaster(s *Store, state *poolPeerState) error {
 	if err != nil {
 		return err
 	}
-	state.Membership = protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: 1, NextSanlockHostID: 2, Members: []protocol.PoolMember{{HostID: s.State.HostID, SanlockHostID: 1, CertificateSHA256: hash, Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
+	state.Membership = protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: 1, NextSanlockHostID: 2, Members: []protocol.PoolMember{{HostID: s.State.HostID, Hostname: hostname, SanlockHostID: 1, CertificateSHA256: hash, Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
 	return nil
 }
 
@@ -170,7 +185,7 @@ func PoolPeerHandler(s *Store) http.Handler {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			// A member advertises five things about itself: where it listens, which
+			// A member advertises its own observations: where it listens, which
 			// machine it is, what its own Core found on its management controller, the
 			// watchdog that machine has, and whether it has armed it. Each is sent
 			// whenever it is out of date and each is recorded on its own, so an old
@@ -301,6 +316,10 @@ func PoolPeerHandler(s *Store) http.Handler {
 			PoolBackupPageHandler(s).ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == poolBackupPeerPath+"/credentials" {
+			handlePeerBackupCredentials(s, w, r)
+			return
+		}
 		if r.URL.Path == poolBackupPeerPath || strings.HasPrefix(r.URL.Path, poolBackupPeerPath+"/") {
 			PoolBackupPeerHandler(s).ServeHTTP(w, r)
 			return
@@ -365,6 +384,10 @@ func PoolPeerHandler(s *Store) http.Handler {
 		}
 		response, err := acceptPeerJoin(s, request)
 		if err != nil {
+			if errors.Is(err, errJoinHostnameRequired) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
 			http.Error(w, "join refused", http.StatusConflict)
 			return
 		}
@@ -435,6 +458,9 @@ func ReportPoolSanlockHostGeneration(ctx context.Context, s *Store) error {
 func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error) {
 	if request.HostID == "" || len(request.HostID) > 128 || len(request.Offer) > 4096 {
 		return peerJoinResponse{}, errors.New("invalid join identity")
+	}
+	if !protocol.ValidPoolHostname(request.Hostname) {
+		return peerJoinResponse{}, errJoinHostnameRequired
 	}
 	// Check-then-bind is one critical section under this lock, which is why two concurrent
 	// redemptions cannot both admit a member. That is only sound because one process owns
@@ -523,7 +549,7 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 	if idErr != nil {
 		return peerJoinResponse{}, idErr
 	}
-	member := protocol.PoolMember{HostID: request.HostID, SanlockHostID: hostLeaseID, CertificateSHA256: hash, Generation: state.Membership.Generation, Status: "ready", ObservedAt: time.Now().UTC()}
+	member := protocol.PoolMember{HostID: request.HostID, Hostname: request.Hostname, SanlockHostID: hostLeaseID, CertificateSHA256: hash, Generation: state.Membership.Generation, Status: "ready", ObservedAt: time.Now().UTC()}
 	if replace >= 0 {
 		state.Membership.Members[replace] = member
 	} else {
@@ -930,10 +956,17 @@ func JoinPoolPeer(ctx context.Context, s *Store, masterURL, poolCAPEM, offer str
 	if fmt.Sprintf("%x", sha256.Sum256([]byte(csrPEM))) != decoded.CSRHash {
 		return errors.New("join offer is bound to a different member key")
 	}
+	hostname, err := osHostname()
+	if err != nil {
+		return err
+	}
+	if !protocol.ValidPoolHostname(hostname) {
+		return errors.New("invalid local hostname")
+	}
 	config := &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, VerifyConnection: func(c tls.ConnectionState) error { return verifyMaster(c, roots, decoded.MasterHostID) }}
 	c := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: config}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("peer redirects refused") }}
 	defer c.CloseIdleConnections()
-	body, _ := json.Marshal(peerJoinRequest{Offer: decoded.Token, HostID: s.State.HostID, CSRPEM: csrPEM})
+	body, _ := json.Marshal(peerJoinRequest{Offer: decoded.Token, HostID: s.State.HostID, Hostname: hostname, CSRPEM: csrPEM})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(masterURL, "/")+poolJoinPath, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -945,6 +978,10 @@ func JoinPoolPeer(ctx context.Context, s *Store, masterURL, poolCAPEM, offer str
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		reason, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		if text := strings.TrimSpace(strings.ToValidUTF8(string(reason), "")); text != "" {
+			return fmt.Errorf("pool master rejected join (HTTP %d): %s", resp.StatusCode, text)
+		}
 		return fmt.Errorf("pool master rejected join (HTTP %d)", resp.StatusCode)
 	}
 	var joined peerJoinResponse
@@ -1017,6 +1054,17 @@ func ResumePoolRehome(ctx context.Context, s *Store) error {
 			poolVMMu.Unlock()
 			if vmErr != nil {
 				err = errors.New("the previous pool's VM ownership records could not be cleared")
+			}
+			if err == nil {
+				err = eraseForeignBackupRepositories(ctx, s)
+			}
+			if err == nil {
+				err = eraseForeignBackupCredentials(s)
+			}
+			if err == nil {
+				if err = pullPeerBackupCredentials(ctx, s, state.MasterURL); err != nil {
+					return err
+				}
 			}
 			if err == nil {
 				poolPeerMu.Lock()

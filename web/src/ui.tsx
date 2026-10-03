@@ -6,8 +6,8 @@ import { Icon, type IconKind } from "./icons";
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "neutral";
 const tones: [Tone, string[]][] = [
-  ["ok", ["fresh", "healthy", "ok", "succeeded", "up", "verified", "passed", "current", "available", "confirmed", "connected", "ready", "in_sync", "running", "online", "met"]],
-  ["warn", ["stale", "degraded", "timeout", "dispatched", "warning", "pending", "awaiting_fencing", "needs_attention", "unverified", "uncertain", "behind", "disconnected", "unresponsive", "staged", "applied", "unmet", "arming"]],
+  ["ok", ["fresh", "healthy", "ok", "succeeded", "up", "verified", "passed", "current", "available", "confirmed", "connected", "ready", "in_sync", "running", "online", "met", "enabled"]],
+  ["warn", ["stale", "degraded", "timeout", "dispatched", "warning", "pending", "awaiting_fencing", "needs_attention", "unverified", "uncertain", "behind", "disconnected", "unresponsive", "staged", "applied", "unmet", "arming", "paused"]],
   ["bad", ["failed", "error", "revoked", "down", "blocked", "faulted", "rejected", "unavailable", "offline", "critical"]],
   ["info", ["queued", "uploading", "master", "pool master", "provisioned", "connecting"]],
 ];
@@ -16,8 +16,8 @@ export function badgeTone(value: string): Tone {
   return tones.find(([, values]) => values.includes(key))?.[0] ?? "neutral";
 }
 // The square dot-and-text badge. The dot is drawn by CSS; the text is always present.
-export function Badge({ value, label }: { value: string; label?: string }) {
-  return <span className={`badge ${badgeTone(value)}`}>{label ?? statusLabel(value)}</span>;
+export function Badge({ value, label, tone }: { value: string; label?: string; tone?: Tone }) {
+  return <span className={`badge ${tone ?? badgeTone(value)}`}>{label ?? statusLabel(value)}</span>;
 }
 export function Banner({ tone, role, children }: { tone: "info" | "warn" | "bad"; role?: "alert" | "status"; children: ReactNode }) {
   return <p className={`banner ${tone}`} role={role}>{children}</p>;
@@ -27,8 +27,12 @@ export const date = (value?: string | null) =>
   value && !value.startsWith("0001-")
     ? new Date(value).toLocaleString()
     : "Not observed";
-export const size = (value: number) =>
-  `${(value / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB`;
+export const checkedAt = (value?: string | null) =>
+  value && !value.startsWith("0001-") ? new Date(value).toLocaleString() : "Not checked";
+export const size = (value: number) => {
+  const [unit, name]: [number, string] = value > 0 && value < 1024 ** 2 ? [1024, "KiB"] : value > 0 && value < 1024 ** 3 ? [1024 ** 2, "MiB"] : [1024 ** 3, "GiB"];
+  return `${(value / unit).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${name}`;
+};
 
 // The inventory load error and its Retry. The page shows it above the screen, and an open panel
 // shows it in its body instead, since the panel covers the page's alert.
@@ -100,23 +104,27 @@ export function saveSlideoverWidth(px: number | null, store?: Pick<Storage, "set
 // closing returns focus to whatever opened it (normally the row).
 // Its tabs are one tab stop: the arrow keys, Home and End move between them and select.
 // Drag the left edge (or focus it and use the arrows) to widen or narrow; double-click resets.
-export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide, onClose, children }: {
+export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide, footer, closeDisabled = false, onClose, children }: {
   icon: IconKind; title: ReactNode; badge?: ReactNode; sub?: ReactNode; actions?: ReactNode;
-  tabs?: readonly string[]; tab?: string; onTab?: (tab: string) => void; wide?: boolean; onClose: () => void; children: ReactNode;
+  tabs?: readonly string[]; tab?: string; onTab?: (tab: string) => void; wide?: boolean;
+  footer?: ReactNode; closeDisabled?: boolean; onClose: () => void; children: ReactNode;
 }) {
   const panel = useRef<HTMLElement>(null);
   const load = useContext(LoadError);
   const id = useId();
   const close = useRef(onClose);
   close.current = onClose;
+  const closingDisabled = useRef(closeDisabled);
+  closingDisabled.current = closeDisabled;
+  // Capture before commit: opening a panel can disable its triggering control.
+  const [opener] = useState(() => typeof document === "undefined" ? null : document.activeElement as HTMLElement | null);
   const [width, setWidth] = useState<number | null>(() => loadSlideoverWidth());
   const widthRef = useRef(width);
   widthRef.current = width;
   useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
     panel.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector("dialog[open]") && !document.body.classList.contains("console-focus")) close.current();
+      if (e.key === "Escape" && !closingDisabled.current && !e.defaultPrevented && !document.querySelector("dialog[open]") && !document.body.classList.contains("console-focus")) close.current();
     };
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); opener?.focus(); };
@@ -196,7 +204,7 @@ export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide
     />
     <header>
       <h2><Icon kind={icon} size={18} />{title}{badge}</h2>
-      <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><Icon kind="close" size={18} /></button>
+      <button type="button" className="icon-button" aria-label="Close" disabled={closeDisabled} onClick={onClose}><Icon kind="close" size={18} /></button>
     </header>
     {sub && <div className="sub">{sub}</div>}
     {actions && <div className="quick">{actions}</div>}
@@ -211,6 +219,7 @@ export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide
       {tabs.map((name, i) => <button key={name} id={`${id}-tab-${i}`} type="button" role="tab" aria-selected={name === tab} aria-controls={`${id}-body`} tabIndex={name === tab ? 0 : -1} onClick={() => onTab?.(name)}>{name}</button>)}
     </div>}
     <div className="slideover-body" id={`${id}-body`} role={tabs ? "tabpanel" : undefined} aria-labelledby={tabs ? `${id}-tab-${tabs.indexOf(tab || "")}` : undefined}>{load.error && <LoadErrorAlert {...load} />}{children}</div>
+    {footer != null && <div className="slideover-footer">{footer}</div>}
   </section>;
 }
 

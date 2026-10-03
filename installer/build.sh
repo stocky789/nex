@@ -362,7 +362,7 @@ if [[ ${1:-} != --inside ]]; then
     # 1.26.1-0+deb13u1 (first on snapshot 2026-09-19) and release run 4223
     # failed apt-get source for a version the pinned sources did not have.
     source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian/20260920T000000Z/}
-    security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian-security/20260920T000000Z/}
+    security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian-security/20261001T000000Z/}
     snapshot_url_ok() {
         # Reject whitespace/control injection into sources.list; require an exact
         # immutable snapshot.debian.org archive stamp URL (trailing slash).

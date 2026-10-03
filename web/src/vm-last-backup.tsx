@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { API } from "./types";
 import { date } from "./ui";
-import { lastSuccessfulBackup } from "./backup-types";
+import { lastSuccessfulBackup, loadRecoveryPoints } from "./backup-types";
 import type { BackupRecoveryPoint } from "./backup-types";
 
 type Props = { vmID: string; poolID: string; api: API };
@@ -25,14 +25,7 @@ export function VMLastBackup({ vmID, poolID, api }: Props) {
     }
     void (async () => {
       try {
-        const catalog = await api<BackupRecoveryPoint[]>(
-          `pools/${encodeURIComponent(poolID)}/backup-catalog`,
-          "GET",
-          undefined,
-          undefined,
-          undefined,
-          controller.signal,
-        );
+        const catalog = await loadRecoveryPoints(api, poolID, { vm_id: vmID }, controller.signal);
         if (n !== gen.current || controller.signal.aborted) return;
         setPoint(lastSuccessfulBackup(catalog, vmID));
         setTested(catalog.filter(p => p.source_vm_id === vmID && p.last_tested_at).sort((a, b) => (b.last_tested_at || "").localeCompare(a.last_tested_at || ""))[0] || null);

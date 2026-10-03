@@ -20,7 +20,7 @@ func quietMasterMembers(t *testing.T, l *joinLab) poolMembersView {
 	t.Helper()
 	membership := selfMembership(l.master.id, l.master.pool)
 	membership.Generation = 2
-	membership.Members = append(membership.Members, protocol.PoolMember{HostID: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC(), PeerOrigin: "https://192.0.2.12:9444"})
+	membership.Members = append(membership.Members, protocol.PoolMember{HostID: l.member.id, Hostname: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC(), PeerOrigin: "https://192.0.2.12:9444"})
 	l.master.inv.Managed.Membership = membership
 	l.poolLabResources(l.member.id, nil,
 		[]protocol.PoolNetworkAccess{{NetworkID: "pool-vlan", HostID: l.member.id, Generation: 1, ObservedAt: time.Now().UTC(), Error: "uplink lab0 does not exist on this host"}}, nil)

@@ -1,0 +1,48 @@
+{
+  "summary": "Snapshot create/revert/delete owned by a member now converge after a lost or unconfirmed master reply: the owner keeps its local intent (needs_attention with a reason) instead of aborting, re-drives a delete from its journaled target after the master settled it, and spaces re-drives. A restore-as-new definitely refused by the master settles failed and removes its staging.",
+  "paths": [
+    "internal/vmhost/managed_snapshot.go",
+    "internal/vmhost/managed_snapshot_test.go",
+    "internal/agent/snapshot.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/agent/pool_snapshot_promotion_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_restore_refusal_test.go",
+    "docs/guide/vm-snapshots.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-snapshot-redrive-convergence.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators now see needs_attention with an actionable reason while the owner retries on its own.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No endpoint or field changes. The snapshot-reserve and snapshot-settle peer calls and snapshot task results keep their shape; only the owner's handling of an ambiguous reply and of a re-driven delete changes.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes inside the recovery plan."
+  },
+  "state": {
+    "owner": "core",
+    "record": "The owner's managed-vms journal and the pool master's VM record (pending_recovery, last_settled_recovery).",
+    "reason": "No new durable state; a fresh Controller reads the same task and VM records from the hosts."
+  },
+  "verification": {
+    "method": "Focused Go unit tests in internal/vmhost and internal/agent (in-process master and member over the peer transport, no libvirt, no lab); each new test was shown to fail with its fix reverted.",
+    "evidence": [
+      "internal/vmhost/managed_snapshot_test.go",
+      "internal/agent/pool_snapshot_promotion_test.go",
+      "internal/agent/backup_restore_refusal_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

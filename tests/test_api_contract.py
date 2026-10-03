@@ -151,6 +151,30 @@ class APIContractTests(unittest.TestCase):
         self.assertNotRegex(html, r'(?:src|href)="https?://')
         self.assertIn('aria-label="API operations"', html)
 
+    def test_backup_policy_update_requires_expected_revision(self):
+        if self.contract_file != 'openapi.json':
+            return
+        operation = self.api['paths']['/api/v1/pools/{id}/backup-policies/{policy_id}']['put']
+        request = operation['requestBody']['content']['application/json']['schema']
+        self.assertIn('expected_revision', request['required'])
+        self.assertEqual(request['properties']['expected_revision']['minimum'], 1)
+        self.assertIn('400', operation['responses'])
+        self.assertIn('409', operation['responses'])
+
+    def test_backup_history_page_contract(self):
+        if self.contract_file != 'openapi.json':
+            return
+        schemas = self.api['components']['schemas']
+        for route, page in [('backup-runs', 'BackupRunPage'), ('backup-catalog', 'BackupCatalogPage')]:
+            operation = self.api['paths']['/api/v1/pools/{id}/' + route]['get']
+            result = operation['responses']['200']['content']['application/json']['schema']
+            self.assertEqual({'$ref': '#/components/schemas/' + page}, result)
+            self.assertEqual(schemas[page]['properties']['items']['maxItems'], 64)
+            for field in ('cursor', 'generation'):
+                self.assertIn(field, {p['name'] for p in operation['parameters']})
+            for status in ('400', '409', '413', '502', '503', '504'):
+                self.assertIn(status, operation['responses'])
+
 
     def test_appliance_dto_fields_types_and_required_members(self):
         self.check_dtos('internal/controller/appliance.go', {
@@ -247,6 +271,15 @@ class PeerAPIContractTests(APIContractTests):
         return '\n'.join(p.read_text() for d in dirs for p in sorted((ROOT / d).glob('*.go'))
                          if not p.name.endswith('_test.go'))
 
+    def test_backup_peer_access_and_missing_operation_contract(self):
+        access = self.api['paths']['/api/v1/pool/backup/access']['post']
+        self.assertEqual(access['security'], [{'PoolMasterCertificate': []}])
+        self.assertEqual(access['requestBody']['content']['application/json']['schema'],
+                         {'$ref': '#/components/schemas/BackupRepository'})
+        self.assertEqual(access['responses']['200']['content']['application/json']['schema'],
+                         {'$ref': '#/components/schemas/PoolStorageAccess'})
+        self.assertIn('404', self.api['paths']['/api/v1/pool/backup/{operation_id}']['get']['responses'])
+
     def test_all_runtime_api_routes_are_documented_and_implemented(self):
         # Peer routes use prefix/suffix dispatch: path shapes come from handlers, methods from Core callers.
         source = self.go_source('internal/agent', 'internal/localcore')
@@ -273,9 +306,18 @@ class PeerAPIContractTests(APIContractTests):
             handled |= {consts[c].rstrip('/') for c in re.findall(r'r\.URL\.Path [!=]= strings\.TrimSuffix\((\w+Path), "/"\)', line)}
             handled |= set(re.findall(r'r\.URL\.Path [!=]= "(/api/v1/pool/[^"]*)"', line))
         called = set()
-        for method, expr in re.findall(r'NewRequestWithContext\(\w+, http\.Method(\w+), (.+?), (?:nil\)|bytes\.NewReader|strings\.NewReader)', source):
-            if re.fullmatch(r'\w+', expr):
-                expr = re.search(expr + r' := (.+)', source)[1]
+        for call in re.finditer(r'NewRequestWithContext\(\w+, http\.Method(\w+), (.+?), (?:nil\)|bytes\.NewReader|strings\.NewReader)', source):
+            method, expr = call.groups()
+            function = source[source.rfind('\nfunc ', 0, call.start()):call.start()]
+            seen = set()
+            while re.fullmatch(r'\w+', expr) and expr not in seen:
+                seen.add(expr)
+                assignments = re.findall(r'\b' + re.escape(expr) + r' := (.+)', function)
+                if not assignments:
+                    assignments = re.findall(r'\b' + re.escape(expr) + r' := (.+)', source)[:1]
+                if not assignments:
+                    break
+                expr = assignments[-1]
             path = ''
             for token in re.sub(r'strings\.TrimRight\([\w.]+, "/"\)\s*\+', '', expr).split('+'):
                 token = token.strip()
@@ -295,6 +337,12 @@ class PeerAPIContractTests(APIContractTests):
                     path += '{}'  # Identifier segment; a leading origin variable adds nothing.
             if path.startswith('/api/v1/pool/'):
                 called.add((method.lower(), path))
+        # Repository capability preflights share one POST helper and pass their route as a literal.
+        called.discard(('post', consts['poolBackupPeerPath'] + '{}'))
+        called.update(('post', consts['poolBackupPeerPath'] + route) for route in
+                      re.findall(r'postPeerCapability\([^\n]*"(/capability/\w+)"', source))
+        called.update(('post', consts['poolBackupPeerPath'] + route) for route in
+                      re.findall(r'(?:postPeerBackupRoute|forgetStalePeerRepository)\([^\n]*, "(/\w+)"(?:,|\))', source))
         # CPU observations share a bounded request helper and dispatch on literal
         # operation suffixes. Recover those real routes rather than treating the
         # whole suffix as an arbitrary resource identifier.
@@ -340,12 +388,17 @@ class PeerAPIContractTests(APIContractTests):
             else:
                 package, go = schema['x-go-type'].split('.')
                 body = re.search(r'type ' + go + r' struct\s*{(.*?)}\n', self.go_source('internal/' + package), re.S)[1]
-            tags = re.findall(r'`json:"([^"]+)"`', body)
-            if tags:
-                fields = {tag.split(',')[0] for tag in tags}
-                emitted = {tag.split(',')[0] for tag in tags if 'omitempty' not in tag}
-            else:  # Untagged structs marshal with Go field names.
-                fields = emitted = set(re.findall(r'(?<![.\w\[\]*])[A-Z]\w*', body))
+            fields = set()
+            emitted = set()
+            for line in body.splitlines():
+                declaration = re.match(r'\s*([A-Z]\w*(?:,\s*[A-Z]\w*)*)\s+\S+(?:\s+`json:"([^"]+)"`)?', line)
+                if not declaration:
+                    continue
+                names, tag = declaration.groups()
+                names = [tag.split(',')[0]] if tag else [name.strip() for name in names.split(',')]
+                fields.update(names)
+                if not tag or 'omitempty' not in tag:
+                    emitted.update(names)
             self.assertEqual(set(schema['properties']), fields, name)
             self.assertEqual(set(schema['required']), emitted, name)
 
@@ -480,6 +533,13 @@ class PoolJoinContractTests(unittest.TestCase):
                          {tag.split(',')[0] for tag in fields if 'omitempty' not in tag}, schema_name)
         return schema
 
+    def test_core_membership_retains_hostnames(self):
+        peer = json.loads((ROOT / 'docs/api/peer-openapi.json').read_text())
+        self.assertIn('hostname', peer['components']['schemas']['PeerJoinRequest']['properties'])
+        for contract in (self.api, self.local, peer):
+            self.assertIn('hostname', contract['components']['schemas']['PoolMember']['properties'])
+        self.assertIn('Core-owned membership', self.api['components']['schemas']['PoolMemberView']['properties']['name']['description'])
+
     def test_routes_are_admin_gated_and_documented(self):
         controller = (ROOT / 'internal/controller/controller.go').read_text()
         for method, path, handler in [('get', '/api/v1/pools/{id}/members', 'poolMembers'),
@@ -504,11 +564,9 @@ class PoolJoinContractTests(unittest.TestCase):
                                  ('/api/v1/pools/{id}/members', '/api/v1/pools/{id}/join-candidates',
                                   '/api/v1/pools/{id}/master/promote/preflight',
                                   '/api/v1/pools/{id}/members/{host_id}/bmc-probe')})
-        capability = re.search(r'PoolJoinCapability = "([^"]+)"',
-                               (ROOT / 'internal/protocol/pool.go').read_text())[1]
         self.assertGreater(len(messages), 10, 'refusal adapter found nothing: check the handler style')
         for message in messages:
-            self.assertIn(message.replace('%s', capability), documented, message)
+            self.assertIn(message, documented, message)
         # The 504 and 499 bodies are worded per relayed action. Per-action copy lives on
         # poolRequestCopyByAction; the helpers' default returns cover the join relay.
         sentences = set(re.findall(r'(?:abandoned|deadline):\s+"([^"]+)"', self.handlers))
@@ -559,11 +617,10 @@ class PoolJoinContractTests(unittest.TestCase):
                          ['content']['application/json']['schema']['$ref'],
                          '#/components/schemas/PoolResult')
 
-    def test_command_capability_and_invitation_lifetime_match_runtime(self):
+    def test_command_and_invitation_lifetime_match_runtime(self):
         command = self.api['x-commands']['pool-join']
         self.assertEqual(command['payload']['$ref'], '#/components/schemas/PoolCommand')
         protocol_source = (ROOT / 'internal/protocol/pool.go').read_text()
-        self.assertIn(re.search(r'PoolJoinCapability = "([^"]+)"', protocol_source)[1], command['capability'])
         self.assertIn('"pool-join"', (ROOT / 'internal/agent/managed.go').read_text())
         # The joining host is the command's target: it is the one pool command not sent to the master.
         self.assertEqual(re.search(r'case "pool-join":.*?return (cmd\.Pool\.\w+)',
@@ -682,8 +739,6 @@ class PoolMaintenanceContractTests(unittest.TestCase, PoolStructParityMixin):
         messages = set(re.findall(r'fail\(w, http\.Status\w+, "([^"]+)"', self.handlers))
         messages |= set(re.findall(r'fmt\.Errorf\("([^"]+)"', self.handlers))
         documented = json.dumps(self.api['paths'][self.path])
-        capability = re.search(r'PoolMaintenanceCapability = "([^"]+)"',
-                               (ROOT / 'internal/protocol/pool.go').read_text())[1]
         # maintenanceRefusal is raised by placementHost, not by this route, so it is
         # documented on the three routes that can return it.
         placement = re.search(r'return fmt\.Errorf\("(the selected host is in maintenance[^"]+)"\)',
@@ -691,7 +746,7 @@ class PoolMaintenanceContractTests(unittest.TestCase, PoolStructParityMixin):
         messages.remove(placement)
         self.assertGreater(len(messages), 5, 'refusal adapter found nothing: check the handler style')
         for message in messages:
-            self.assertIn(message.replace('%s', capability).replace('%d', '<n>'), documented, message)
+            self.assertIn(message.replace('%d', '<n>'), documented, message)
         self.assertIn('c.maintenanceRefusal(tx, pool, master, host)',
                       (ROOT / 'internal/controller/managed.go').read_text())
         for path, method in [('/api/v1/vms', 'post'), ('/api/v1/vms/{id}', 'put'),
@@ -718,12 +773,9 @@ class PoolMaintenanceContractTests(unittest.TestCase, PoolStructParityMixin):
         refusal = re.search(r'const maintenanceRefused = "([^"]+)"', core)[1]
         self.assertIn(refusal, self.api['x-commands']['pool-maintenance']['semantics'])
 
-    def test_command_and_capability_match_runtime(self):
+    def test_command_matches_runtime(self):
         command = self.api['x-commands']['pool-maintenance']
         self.assertEqual(command['payload']['$ref'], '#/components/schemas/PoolCommand')
-        capability = re.search(r'PoolMaintenanceCapability = "([^"]+)"',
-                               (ROOT / 'internal/protocol/pool.go').read_text())[1]
-        self.assertIn(capability, command['capability'])
         self.assertIn('"pool-maintenance"', (ROOT / 'internal/agent/managed.go').read_text())
         self.assertIn('pool-maintenance', self.api['components']['schemas']['Command']
                       ['properties']['kind']['enum'])
@@ -735,8 +787,6 @@ class PoolMaintenanceContractTests(unittest.TestCase, PoolStructParityMixin):
         self.assertEqual(view['properties']['maintenance']['type'], ['boolean', 'null'])
         self.assertEqual(view['properties']['guests']['$ref'], '#/components/schemas/PoolMemberGuests')
         self.assertIn('PoolMemberOperation', json.dumps(view['properties']['last_maintenance']))
-        self.assertIn('maintenance_supported',
-                      self.api['components']['schemas']['PoolMembersView']['properties'])
 
 
 class PoolAuthorityReplicaContractTests(unittest.TestCase, PoolStructParityMixin):
@@ -811,13 +861,8 @@ class PoolAuthorityReplicaContractTests(unittest.TestCase, PoolStructParityMixin
         for message in re.findall(r'errors\.New\("([^"]+)"\)', push):
             self.assertIn(message, observed, message)
 
-    def test_capability_and_member_projection(self):
-        capability = re.search(r'PoolAuthorityReplicaCapability = "([^"]+)"',
-                               (ROOT / 'internal/protocol/pool.go').read_text())[1]
+    def test_member_projection(self):
         schemas = self.api['components']['schemas']
-        self.assertIn(capability, json.dumps(schemas['PoolMembersView']['properties']['replica_supported']))
-        self.assertIn(capability, json.dumps(schemas['PoolMemberReplica']['properties']['state']))
-        self.assertIn(capability, json.dumps(schemas['PoolMember']['properties']['replica_error']))
         view = self.assert_parity(schemas, 'internal/controller/pooljoin.go',
                                   'poolMemberReplica', 'PoolMemberReplica')
         # The documented ladder is the handler's own switch, in order.
@@ -1063,8 +1108,6 @@ class PoolTransferContractTests(unittest.TestCase, PoolStructParityMixin):
         messages |= set(re.findall(r'fmt\.Errorf\("([^"]+)"', self.handlers))
         messages |= set(self.returns('poolTransferRequired'))
         messages -= set(purposes) | set(unreported) | {'%s'}
-        capability = re.search(r'PoolAuthorityTransferCapability = "([^"]+)"',
-                               (ROOT / 'internal/protocol/pool.go').read_text())[1]
         documented = json.dumps({path: self.api['paths'][path]
                                  for path in (self.MASTER, self.CANCEL, self.EJECT)})
         self.assertGreater(len(messages), 10,
@@ -1076,7 +1119,7 @@ class PoolTransferContractTests(unittest.TestCase, PoolStructParityMixin):
             elif 'has not reported its membership; %s' in text:
                 expansions = [text.replace('%s', phrase) for phrase in unreported]
             else:
-                expansions = [text.replace('%s', capability, 1).replace('%s', '<host>')]
+                expansions = [text.replace('%s', '<host>')]
             for expansion in expansions:
                 # documented is JSON, so compare against the JSON-escaped sentence: the
                 # confirmation refusals carry quotes of their own.
@@ -1108,12 +1151,9 @@ class PoolTransferContractTests(unittest.TestCase, PoolStructParityMixin):
             self.assertNotIn(text, self.api['paths'][self.EJECT]['delete']
                              ['responses']['409']['description'])
 
-    def test_command_and_capability_match_runtime(self):
+    def test_command_matches_runtime(self):
         command = self.api['x-commands']['pool-transfer']
         self.assertEqual(command['payload']['$ref'], '#/components/schemas/PoolCommand')
-        capability = re.search(r'PoolAuthorityTransferCapability = "([^"]+)"',
-                               (ROOT / 'internal/protocol/pool.go').read_text())[1]
-        self.assertIn(capability, command['capability'])
         self.assertIn('"pool-transfer"', (ROOT / 'internal/agent/managed.go').read_text())
         for schema in ('Command', 'Operation'):
             self.assertIn('pool-transfer', self.api['components']['schemas'][schema]
@@ -1184,7 +1224,7 @@ class PoolTransferContractTests(unittest.TestCase, PoolStructParityMixin):
 
     def test_member_projection_documents_the_transfer_fields(self):
         view = self.api['components']['schemas']['PoolMembersView']['properties']
-        for field in ('transfer_supported', 'authority', 'transfer', 'last_transfer',
+        for field in ('authority', 'transfer', 'last_transfer',
                       'master_conflict'):
             self.assertIn(field, view)
         self.assertIn('PoolAuthorityRecord', json.dumps(view['authority']))
@@ -1299,8 +1339,7 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
     def test_documented_refusals_are_the_literal_handler_messages(self):
         messages = set(re.findall(r'fail\(w, http\.Status\w+, "([^"]+)"', self.handlers))
         messages |= set(re.findall(r'fmt\.Errorf\("([^"]+)"', self.handlers))
-        capability = re.search(r'PoolAuthorityTransferCapability = "([^"]+)"',
-                               (ROOT / 'internal/protocol/pool.go').read_text())[1]
+        messages.discard('%s')
         documented = json.dumps({path: self.api['paths'][path]
                                  for path in (self.PREFLIGHT, self.PROMOTE, self.FENCE, self.BMC, self.BMCPROBE, self.HOSTFENCING)})
         purposes = re.findall(r'purpose = "([^"]+)"', self.handlers) + \
@@ -1316,7 +1355,7 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
                 # The one refusal whose %s is a confirmed fence host, not a capability.
                 expansions = [text.replace('%s', '<id>')]
             else:
-                expansions = [text.replace('%s', capability, 1).replace('%s', '<host>')]
+                expansions = [text.replace('%s', '<host>')]
             for expansion in expansions:
                 self.assertIn(json.dumps(expansion)[1:-1], documented, expansion)
 
@@ -1345,14 +1384,11 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
             self.assertIn(text, fence, text)
             self.assertIn(text, self.core, text)
 
-    def test_command_routing_and_capability_match_runtime(self):
+    def test_command_routing_matches_runtime(self):
         managed = (ROOT / 'internal/agent/managed.go').read_text()
-        capability = re.search(r'PoolAuthorityTransferCapability = "([^"]+)"',
-                               (ROOT / 'internal/protocol/pool.go').read_text())[1]
         for kind in ('pool-promote', 'pool-fence-profile'):
             command = self.api['x-commands'][kind]
             self.assertEqual(command['payload']['$ref'], '#/components/schemas/PoolCommand')
-            self.assertIn(capability, command['capability'])
             self.assertIn(f'"{kind}"', managed)
             for schema in ('Command', 'Operation'):
                 self.assertIn(kind, self.api['components']['schemas'][schema]
@@ -1401,7 +1437,7 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
         self.assertIn('PoolPromotionView', json.dumps(view['promotion']))
         self.assertIn('PoolTransferOperation', json.dumps(view['last_promotion']))
         member = schemas['PoolMemberView']['properties']
-        for field in ('transfer_supported', 'fence', 'restricted'):
+        for field in ('fence', 'restricted'):
             self.assertIn(field, member)
         self.assertIn('PoolRestrictedStatus', json.dumps(member['restricted']))
         self.assertIn('PoolMemberFence', json.dumps(member['fence']))
@@ -1416,7 +1452,6 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
         # A member's own report survives a stale master; a master-derived field does not.
         projection = re.search(r'\n\tfor _, member := range members \{.*?\n\t\}\n',
                                (ROOT / 'internal/controller/pooljoin.go').read_text(), re.S)[0]
-        self.assertIn('view.TransferSupported = hostSupportsTransfer(host)', projection)
         self.assertIn('view.Restricted = memberRestricted(host)', projection)
         self.assertIn('view.Fence = memberFence(member)', projection)
         self.assertLess(projection.index('view.Restricted'), projection.index('if out.Authoritative {'))

@@ -14,7 +14,7 @@ readonly partial_chain_patch_path=/recipe/partial-backing-chain.patch
 readonly qmp_depth_patch_path=/recipe/qmp-json-depth.patch
 readonly readonly_revert_patch_path=/recipe/preserve-readonly-revert-media.patch
 readonly source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian/20260920T000000Z/}
-readonly security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian-security/20260920T000000Z/}
+readonly security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian-security/20261001T000000Z/}
 readonly built_utc="$(date -u +%FT%TZ)"
 readonly recipe_sha256="$(cd /recipe && LC_ALL=C find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
 

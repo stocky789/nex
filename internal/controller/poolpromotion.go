@@ -253,9 +253,6 @@ func (c *Controller) poolPromotionCandidate(tx *sql.Tx, pool, host string, promo
 	if err := c.managedHost(tx, pool, host); err != nil {
 		return http.StatusConflict, fmt.Errorf("the promotion candidate must be fresh and active to %s", purpose)
 	}
-	if !hostSupportsCapability(tx, host, protocol.PoolAuthorityTransferCapability) {
-		return http.StatusConflict, fmt.Errorf("a fence-verified promotion needs %s on the promotion candidate; upgrade %s", protocol.PoolAuthorityTransferCapability, host)
-	}
 	if !promoting {
 		return 0, nil
 	}
@@ -370,10 +367,6 @@ func (c *Controller) setPoolHostFencing(w http.ResponseWriter, r *http.Request, 
 	master, status, err := c.freshPoolMaster(tx, pool, "change host fencing")
 	if err != nil {
 		fail(w, status, err.Error())
-		return
-	}
-	if !hostSupportsCapability(tx, master, protocol.PoolHostFencingCapability) {
-		fail(w, http.StatusConflict, fmt.Sprintf("changing host fencing needs %s on the pool master; upgrade %s", protocol.PoolHostFencingCapability, master))
 		return
 	}
 	opID := random()
@@ -615,9 +608,6 @@ func (c *Controller) poolFenceProfileTarget(tx *sql.Tx, pool, host string) (stri
 	if err != nil {
 		return "", status, err
 	}
-	if !hostSupportsCapability(tx, master, protocol.PoolAuthorityTransferCapability) {
-		return "", http.StatusConflict, fmt.Errorf("recording a fence profile needs %s on the pool master; upgrade %s", protocol.PoolAuthorityTransferCapability, master)
-	}
 	inv, err := hostInventory(tx, master)
 	if err != nil {
 		return "", http.StatusInternalServerError, fmt.Errorf("inventory unavailable")
@@ -734,11 +724,4 @@ func memberFence(member protocol.PoolMember) *poolMemberFence {
 		return nil
 	}
 	return &out
-}
-
-// hostSupportsTransfer reports one host's own advertised transfer capability, so the UI can
-// see that a promotion candidate or master-change target could not perform one before it
-// offers the action. A host that is not reporting keeps its last advertised list.
-func hostSupportsTransfer(host hostRow) bool {
-	return slices.Contains(host.capabilities, protocol.PoolAuthorityTransferCapability)
 }

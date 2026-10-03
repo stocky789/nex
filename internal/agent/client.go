@@ -209,7 +209,6 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr, controller, t
 		// A replacement Controller must acknowledge v2 support before Core sends it
 		// any repository commands or inventory extensions.
 		next.StorageProtocolReady = false
-		next.BackupProtocolReady = false
 		next.ZFSProvisionProtocolReady = false
 		next.ZFSReplaceProtocolReady = false
 		next.StorageClusterProtocolReady = false

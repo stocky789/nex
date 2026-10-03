@@ -88,3 +88,61 @@ func TestUpdatePoolVMSnapshotMetadataRequiresReplicaConfirm(t *testing.T) {
 		t.Fatal("metadata succeeded while replica push was already in flight")
 	}
 }
+
+// A background replica push in flight must delay a snapshot reservation, not fail it.
+func TestPushReplicasWaitingForBusyOutlastsBackgroundPush(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
+	poolReplicaMu.Lock()
+	poolReplicaPushing[s.dir] = true
+	poolReplicaMu.Unlock()
+	time.AfterFunc(600*time.Millisecond, func() {
+		poolReplicaMu.Lock()
+		delete(poolReplicaPushing, s.dir)
+		poolReplicaMu.Unlock()
+	})
+	if err := pushReplicasWaitingForBusy(context.Background(), s); err != nil {
+		t.Fatalf("push did not wait for the background push: %v", err)
+	}
+}
+
+// A background push that never finishes ends the wait at its bound, and a cancelled caller
+// stops waiting at once; both report the busy refusal instead of blocking the reservation.
+func TestPushReplicasWaitingForBusyIsBounded(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
+	poolReplicaMu.Lock()
+	poolReplicaPushing[s.dir] = true
+	poolReplicaMu.Unlock()
+	t.Cleanup(func() {
+		poolReplicaMu.Lock()
+		delete(poolReplicaPushing, s.dir)
+		poolReplicaMu.Unlock()
+	})
+	previous := poolPushBusyWait
+	poolPushBusyWait = 300 * time.Millisecond
+	t.Cleanup(func() { poolPushBusyWait = previous })
+
+	started := time.Now()
+	if err := pushReplicasWaitingForBusy(context.Background(), s); !errors.Is(err, errPoolAuthorityReplicaBusy) {
+		t.Fatalf("a push that never finishes = %v, want the busy refusal", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("wait outlasted its bound: %s", elapsed)
+	}
+
+	poolPushBusyWait = time.Minute
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	started = time.Now()
+	if err := pushReplicasWaitingForBusy(ctx, s); !errors.Is(err, errPoolAuthorityReplicaBusy) {
+		t.Fatalf("cancelled wait = %v, want the busy refusal", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("cancelled wait kept waiting: %s", elapsed)
+	}
+}

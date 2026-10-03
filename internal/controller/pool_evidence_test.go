@@ -61,17 +61,17 @@ func TestMemberFirstReconnectStillAdoptsTheRealMaster(t *testing.T) {
 	a := newClient(t)
 	site := a.site()
 	membership := &protocol.PoolMembership{PoolID: poolID, MasterHostID: masterID, Generation: 7, Members: []protocol.PoolMember{
-		{HostID: masterID, CertificateSHA256: labCertificateHash, Generation: 7, Status: "ready", ObservedAt: time.Now().UTC()},
-		{HostID: memberID, CertificateSHA256: labCertificateHash, Generation: 7, Status: "ready", ObservedAt: time.Now().UTC()},
+		{HostID: masterID, Hostname: masterID, CertificateSHA256: labCertificateHash, Generation: 7, Status: "ready", ObservedAt: time.Now().UTC()},
+		{HostID: memberID, Hostname: memberID, CertificateSHA256: labCertificateHash, Generation: 7, Status: "ready", ObservedAt: time.Now().UTC()},
 	}}
 	member := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: memberID, PoolID: poolID, PoolName: "Rack 1"}, 200)
 	inv := protocol.Inventory{Hostname: "core-member", AgentVersion: "0.3.5", NICs: labNICs("nex0"), Managed: &protocol.ManagedState{Membership: membership}}
-	a.report(certificate(t, member.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}, Inventory: &inv})
+	a.report(certificate(t, member.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &inv})
 
 	// The pool's own record names the master, so the master's enrollment is not held.
 	master := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), HostID: masterID, PoolID: poolID, PoolName: "Rack 1", Hostname: "core-master"}, 200)
 	masterInv := protocol.Inventory{Hostname: "core-master", AgentVersion: "0.3.5", NICs: labNICs("nex0"), Managed: &protocol.ManagedState{Membership: membership}}
-	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}, Inventory: &masterInv})
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &masterInv})
 	var recorded string
 	if err := a.c.db.QueryRow("SELECT master_host_id FROM pools WHERE id=?", poolID).Scan(&recorded); err != nil || recorded != masterID {
 		t.Fatalf("the real master was not adopted after a member-first reconnect: %s (%v)", recorded, err)
@@ -80,7 +80,7 @@ func TestMemberFirstReconnectStillAdoptsTheRealMaster(t *testing.T) {
 	rival := &protocol.PoolMembership{PoolID: poolID, MasterHostID: memberID, Generation: 7, Members: membership.Members}
 	rival.Members = append([]protocol.PoolMember(nil), membership.Members...)
 	inv.Managed.Membership = rival
-	a.report(certificate(t, member.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}, Inventory: &inv})
+	a.report(certificate(t, member.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &inv})
 	if err := a.c.db.QueryRow("SELECT master_host_id FROM pools WHERE id=?", poolID).Scan(&recorded); err != nil || recorded != masterID {
 		t.Fatalf("an equal-generation rival took the adopted pool: %s (%v)", recorded, err)
 	}
@@ -101,7 +101,7 @@ const (
 	goneMasterSecond = "7b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9"
 )
 
-var goneMasterCapabilities = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability, protocol.PoolAuthorityTransferCapability}
+var goneMasterCapabilities = []string{protocol.ManagedVMCapability}
 
 func newGoneMasterLab(t *testing.T) *goneMasterLab {
 	a := newClient(t)
@@ -111,7 +111,7 @@ func newGoneMasterLab(t *testing.T) *goneMasterLab {
 func (l *goneMasterLab) membership(master string, generation uint64, hosts ...string) *protocol.PoolMembership {
 	m := &protocol.PoolMembership{PoolID: goneMasterPool, MasterHostID: master, Generation: generation}
 	for _, id := range append([]string{goneMasterID, goneMasterFirst, goneMasterSecond}, hosts...) {
-		m.Members = append(m.Members, protocol.PoolMember{HostID: id, CertificateSHA256: labCertificateHash, Generation: generation, Status: "ready", ObservedAt: time.Now().UTC()})
+		m.Members = append(m.Members, protocol.PoolMember{HostID: id, Hostname: id, CertificateSHA256: labCertificateHash, Generation: generation, Status: "ready", ObservedAt: time.Now().UTC()})
 	}
 	return m
 }
@@ -182,6 +182,28 @@ func TestReplacementControllerWithTheMasterGoneCanPromote(t *testing.T) {
 	l.report(second, "core-second", 2, protocol.ManagedState{Membership: l.membership(goneMasterSecond, 8)})
 	if got := l.recorded(); got != goneMasterFirst {
 		t.Fatalf("an equal-generation rival took the promoted pool: %s", got)
+	}
+}
+
+func TestReplacementControllerShowsOfflineMemberNameFromCore(t *testing.T) {
+	l := newGoneMasterLab(t)
+	first := l.enroll(goneMasterFirst, "core-first", 200)
+	membership := l.membership(goneMasterID, 7)
+	membership.Members[0].Hostname = "core-former-master"
+	l.report(first, "core-first", 1, protocol.ManagedState{Membership: membership})
+
+	var view poolMembersView
+	read(t, l.a.call("GET", "/api/v1/pools/"+goneMasterPool+"/members", nil, nil, 200), &view)
+	former := memberRow(t, view, goneMasterID)
+	if former.Name != "core-former-master" || former.Connection != "unknown" {
+		t.Fatalf("a fresh Controller lost the Core-owned offline member identity: %+v", former)
+	}
+	var hosts []protocol.Host
+	read(t, l.a.call("GET", "/api/v1/hosts", nil, nil, 200), &hosts)
+	for _, host := range hosts {
+		if host.ID == goneMasterID {
+			t.Fatalf("membership must not invent an enrolled host or control identity: %+v", host)
+		}
 	}
 }
 

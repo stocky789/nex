@@ -254,7 +254,7 @@ func clusterRecoveryStore(t *testing.T) *Store {
 	s := peerStore(t, "master-1", "pool-1")
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1}
 	for i, id := range []string{"master-1", "member-1", "member-2"} {
-		membership.Members = append(membership.Members, protocol.PoolMember{HostID: id, Generation: 1, Status: "ready", CertificateSHA256: strings.Repeat(string(rune('a'+i)), 64)})
+		membership.Members = append(membership.Members, protocol.PoolMember{HostID: id, Hostname: id, Generation: 1, Status: "ready", CertificateSHA256: strings.Repeat(string(rune('a'+i)), 64)})
 	}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)

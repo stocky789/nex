@@ -1,0 +1,35 @@
+{
+  "summary": "Core refuses Release retained originals at acceptance while the pool master holds pending recovery or snapshots for the VM, or the host journals an unfinished restore, snapshot or VM operation; the Controller check stays a fast refusal.",
+  "paths": [
+    "internal/agent/backup.go",
+    "internal/agent/pool_vm_release_test.go",
+    "docs/API.md",
+    "docs/guide/restore-replace.md",
+    "docs/changes/2026-10-01-release-retained-core-admission.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The guide already says the request is refused while a restore, edit or snapshot is unfinished; Core now enforces that for the host-local route too."
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "vm-release-retained and its two routes gain a synchronous 409 from Core admission; no field changes.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Closes a Core-authority gap inside the existing restore phase."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Reads the pool master's existing VM owner record and the host journal; adds no durable state."
+  },
+  "verification": {
+    "method": "Focused Go test run against a seeded master store; no lab run.",
+    "evidence": [
+      "internal/agent/pool_vm_release_test.go"
+    ]
+  }
+}

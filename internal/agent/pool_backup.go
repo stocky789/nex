@@ -7,11 +7,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -19,15 +26,25 @@ import (
 )
 
 var poolBackupAuthorityMu sync.Mutex
+var backupHealthActive sync.Map // one filesystem probe per repository and state directory, including timed-out probes
+var backupMemberAccessMu sync.Mutex
+var backupMemberAccess = map[string]map[string]map[string]protocol.PoolStorageAccess{} // by state directory
 
 var verifyBackupRepository = vmhost.VerifyBackupRepository
+var verifyBackupRepositoryRead = vmhost.VerifyBackupRepositoryRead
 var prepareBackupRepositoryNative = vmhost.PrepareBackupRepository
+var prepareBackupRepositorySMBNative = vmhost.PrepareBackupRepositorySMB
+var detachBackupRepositoryNative = vmhost.DetachBackupRepository
+var removeBackupSMBCredentialNative = vmhost.RemoveBackupSMBCredential
+var prepareBackupRepositorySFTPNative = prepareSFTPBackupRepository
 
 const (
 	poolBackupRepositoriesFile = "pool-backup-repositories.json"
 	poolBackupCatalogDir       = "pool-backup-catalog"
 	poolBackupRunsDir          = "pool-backup-runs"
 	poolBackupReceiptsDir      = "pool-backup-receipts"
+	backupHealthInterval       = time.Minute
+	backupHealthFreshness      = 2 * backupHealthInterval
 )
 
 var (
@@ -36,6 +53,8 @@ var (
 	ErrBackupNotFound     = errors.New("backup operation not found")
 	ErrBackupUnavailable  = errors.New("backup state is unavailable on this host")
 	ErrBackupRepoNotFound = errors.New("backup repository not found")
+	// ErrBackupCredentialInUse refuses replacing a credential this host can still read.
+	ErrBackupCredentialInUse = errors.New("this repository already has a working credential; confirm replacing it with the repository ID, or forget the repository first")
 )
 
 type poolBackupRepositoriesState struct {
@@ -70,6 +89,8 @@ func loadPoolBackupMetadataReceipt(s *Store, operationID string) (protocol.Backu
 	return receipt, nil
 }
 
+var writeBackupMetadataReceipt = vmhost.AtomicWrite
+
 func savePoolBackupMetadataReceipt(s *Store, receipt protocol.BackupMetadataReceipt) error {
 	receipt.Error = resultError(receipt.Error)
 	if err := receipt.Valid(); err != nil {
@@ -87,13 +108,16 @@ func savePoolBackupMetadataReceipt(s *Store, receipt protocol.BackupMetadataRece
 		return err
 	}
 	if err := os.MkdirAll(poolBackupReceiptsPath(s), 0700); err != nil {
-		return err
+		return persistenceError{err}
 	}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
-		return err
+		return persistenceError{err}
 	}
-	return vmhost.AtomicWrite(filepath.Join(poolBackupReceiptsPath(s), receipt.OperationID+".json"), raw, 0600)
+	if err := writeBackupMetadataReceipt(filepath.Join(poolBackupReceiptsPath(s), receipt.OperationID+".json"), raw, 0600); err != nil {
+		return persistenceError{err}
+	}
+	return nil
 }
 
 func listPoolBackupMetadataReceipts(s *Store) ([]protocol.BackupMetadataReceipt, error) {
@@ -109,7 +133,7 @@ func listPoolBackupMetadataReceipts(s *Store) ([]protocol.BackupMetadataReceipt,
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		receipt, err := loadPoolBackupMetadataReceipt(s, stringsTrimSuffixJSON(entry.Name()))
+		receipt, err := loadPoolBackupMetadataReceipt(s, strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return nil, err
 		}
@@ -141,16 +165,27 @@ func savePoolBackupRepositories(s *Store, state poolBackupRepositoriesState) err
 	if state.Repositories == nil {
 		state.Repositories = map[string]protocol.BackupRepository{}
 	}
+	for id, repo := range state.Repositories {
+		repo.MemberAccess = nil
+		state.Repositories[id] = repo
+	}
 	if err := checkPoolBackupAuthorityCapacity(s, func(auth *protocol.PoolBackupAuthority) {
 		auth.Repositories = auth.Repositories[:0]
 		for _, repo := range state.Repositories {
 			repo.Access = protocol.StorageAccess{}
 			repo.MemberAccess = nil
+			repo.Health = protocol.BackupRepositoryHealth{}
 			auth.Repositories = append(auth.Repositories, repo)
 		}
 	}); err != nil {
 		return err
 	}
+	return writePoolBackupRepositories(s, state)
+}
+
+// writePoolBackupRepositories persists state whose authority capacity is already checked,
+// or whose change cannot grow the authority.
+func writePoolBackupRepositories(s *Store, state poolBackupRepositoriesState) error {
 	b, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -158,17 +193,8 @@ func savePoolBackupRepositories(s *Store, state poolBackupRepositoriesState) err
 	return vmhost.AtomicWrite(poolBackupRepositoriesPath(s), b, 0600)
 }
 
-// UpsertPoolBackupRepository registers or updates an NFS backup destination on the master.
-func UpsertPoolBackupRepository(s *Store, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
-	prepared, err := prepareBackupRepository(context.Background(), repo)
-	if err != nil {
-		return protocol.BackupRepository{}, err
-	}
-	return upsertPoolBackupRepositoryPrepared(s, repo, prepared)
-}
-
 func prepareBackupRepository(ctx context.Context, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
-	if err := repo.Valid(); err != nil {
+	if err := repo.Valid(); err != nil || repo.Kind != protocol.BackupRepoKindNFS {
 		return protocol.BackupRepository{}, ErrBackupInvalid
 	}
 	if repo.MountPath != "" || repo.Identity != nil {
@@ -177,13 +203,194 @@ func prepareBackupRepository(ctx context.Context, repo protocol.BackupRepository
 	return prepareBackupRepositoryNative(ctx, repo)
 }
 
-func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.BackupRepository) (protocol.BackupRepository, error) {
-	if repo.Valid() != nil || prepared.Valid() != nil || !reflect.DeepEqual(repo.Source, prepared.Source) ||
-		repo.ID != prepared.ID || repo.PoolID != prepared.PoolID || prepared.MountPath == "" || prepared.Identity == nil {
+// A non-empty replaceID (the typed repository ID) registers over an existing repository, replacing its
+// credential or, for SFTP, its pinned host key; the destination's owner marker must still match.
+func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo protocol.BackupRepository, operationID, replaceID string, mutation *backupRepositoryMutation) (prepared protocol.BackupRepository, prepErr error) {
+	ownedMutation := false
+	defer func() {
+		if ownedMutation {
+			mutation.release()
+		}
+	}()
+	defer func() {
+		if prepErr != nil {
+			return
+		}
+		if backupCredentialKind(prepared.Kind) {
+			// Native preparation already probed with the operation's credential.
+			// The normal backend resolver requires the not-yet-committed row.
+			now := time.Now().UTC()
+			prepared.Health = protocol.BackupRepositoryHealth{Status: "online", ObservedAt: now}
+			prepared.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: now}
+		} else {
+			prepared = checkBackupRepositoryAccessForStore(ctx, s, prepared)
+		}
+	}()
+	poolBackupAuthorityMu.Lock()
+	if mutation == nil {
+		var err error
+		mutation, err = reserveBackupRepositoryMutation(s, repo.ID)
+		if err != nil {
+			poolBackupAuthorityMu.Unlock()
+			return protocol.BackupRepository{}, err
+		}
+		ownedMutation = true
+	}
+	locked := true
+	defer func() {
+		if locked {
+			poolBackupAuthorityMu.Unlock()
+		}
+	}()
+	if backupRepositoryMutationBusy(s, repo.ID, mutation) {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
+	membership, err := Membership(s)
+	if err != nil || membership.MasterHostID != s.State.HostID || membership.PoolID != repo.PoolID {
+		return protocol.BackupRepository{}, ErrBackupUnavailable
+	}
+	if err := requirePoolAuthorityWritable(s); err != nil {
+		return protocol.BackupRepository{}, err
+	}
+	if repo.Kind == protocol.BackupRepoKindNFS && (repo.Valid() != nil || repo.MountPath != "" || repo.Identity != nil) {
+		return protocol.BackupRepository{}, ErrBackupInvalid
+	}
+	replace := replaceID != ""
+	if replace && replaceID != repo.ID {
+		return protocol.BackupRepository{}, ErrBackupInvalid
+	}
+	var existingRepository *protocol.BackupRepository
+	if existing, err := GetPoolBackupRepository(s, repo.ID); err == nil {
+		if err := backupReplacementError(s, existing, repo, replace); err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		existingRepository = &existing
+		if repo.Kind == protocol.BackupRepoKindNFS {
+			if existing.Identity == nil || existing.MountPath == "" {
+				return protocol.BackupRepository{}, ErrBackupUnavailable
+			}
+			repo.Identity, repo.MountPath = existing.Identity, existing.MountPath
+			poolBackupAuthorityMu.Unlock()
+			locked = false
+			return prepareBackupRepositoryNative(ctx, repo)
+		}
+	} else if !errors.Is(err, ErrBackupRepoNotFound) || replace {
+		return protocol.BackupRepository{}, err
+	}
+	poolBackupAuthorityMu.Unlock()
+	locked = false
+	if repo.Kind == protocol.BackupRepoKindNFS {
+		return prepareBackupRepository(ctx, repo)
+	}
+	if repo.Kind == protocol.BackupRepoKindSFTP {
+		if repo.Valid() != nil || repo.MountPath != "" || repo.Identity != nil || repo.SMBIdentity != nil || repo.RemoteIdentity != nil || repo.CredentialRef == "" {
+			return protocol.BackupRepository{}, ErrBackupInvalid
+		}
+		credentials, err := ResolveBackupCredentialForRegistration(s, repo, operationID)
+		if err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		if replace {
+			// Verify-only: an existing destination is never claimed again, only checked.
+			repo.RemoteIdentity = &protocol.BackupRemoteIdentity{Fingerprint: sftpIdentity(repo.SFTPSource, credentials.Username)}
+		}
+		return prepareBackupRepositorySFTPNative(ctx, repo, s.dir, credentials)
+	}
+	if repo.Kind == protocol.BackupRepoKindS3 {
+		if repo.Valid() != nil || repo.MountPath != "" || repo.Identity != nil || repo.SMBIdentity != nil || repo.RemoteIdentity != nil || repo.CredentialRef == "" {
+			return protocol.BackupRepository{}, ErrBackupInvalid
+		}
+		credentials, err := ResolveBackupCredentialForRegistration(s, repo, operationID)
+		if err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		if existingRepository != nil {
+			repo.RemoteIdentity = existingRepository.RemoteIdentity
+			if repo.RemoteIdentity == nil {
+				return protocol.BackupRepository{}, ErrBackupUnavailable
+			}
+		}
+		return prepareS3BackupRepository(ctx, s, repo, credentials)
+	}
+	if repo.Kind != protocol.BackupRepoKindSMB3 || repo.Valid() != nil || repo.MountPath != "" || repo.Identity != nil || repo.SMBIdentity != nil {
+		return protocol.BackupRepository{}, ErrBackupInvalid
+	}
+	credentials, err := ResolveBackupCredentialForRegistration(s, repo, operationID)
+	if err != nil {
+		return protocol.BackupRepository{}, err
+	}
+	if existingRepository != nil {
+		repo.SMBIdentity = existingRepository.SMBIdentity
+	}
+	return prepareBackupRepositorySMBNative(ctx, repo, credentials)
+}
+
+func prepareBackupRepositoryForAdoption(ctx context.Context, s *Store, repo protocol.BackupRepository, mutation *backupRepositoryMutation) (protocol.BackupRepository, error) {
+	poolBackupAuthorityMu.Lock()
+	if s != nil && mutation == nil {
+		var err error
+		mutation, err = reserveBackupRepositoryMutation(s, repo.ID)
+		if err != nil {
+			poolBackupAuthorityMu.Unlock()
+			return protocol.BackupRepository{}, err
+		}
+		defer mutation.release()
+	}
+	busy := backupRepositoryMutationBusy(s, repo.ID, mutation)
+	poolBackupAuthorityMu.Unlock()
+	if busy {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
+	if repo.Kind == protocol.BackupRepoKindNFS {
+		if repo.Valid() != nil || repo.Identity == nil || repo.MountPath != "" {
+			return protocol.BackupRepository{}, ErrBackupInvalid
+		}
+		return prepareBackupRepositoryNative(ctx, repo)
+	}
+	if repo.Kind == protocol.BackupRepoKindSFTP {
+		if repo.Valid() != nil || repo.MountPath != "" || repo.Identity != nil || repo.SMBIdentity != nil || repo.RemoteIdentity == nil || repo.CredentialRef == "" {
+			return protocol.BackupRepository{}, ErrBackupInvalid
+		}
+		credentials, err := ResolveBackupCredentialForAdoption(s, repo)
+		if err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		return prepareBackupRepositorySFTPNative(ctx, repo, s.dir, credentials)
+	}
+	if repo.Kind == protocol.BackupRepoKindS3 {
+		if repo.Valid() != nil || repo.MountPath != "" || repo.Identity != nil || repo.SMBIdentity != nil || repo.RemoteIdentity == nil || repo.CredentialRef == "" {
+			return protocol.BackupRepository{}, ErrBackupInvalid
+		}
+		credentials, err := ResolveBackupCredentialForAdoption(s, repo)
+		if err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		return prepareS3BackupRepository(ctx, s, repo, credentials)
+	}
+	// An adopted SMB repository carries the pool's share identity, so preparation only
+	// verifies that marker and never creates a new one on a different share.
+	expected := repo.SMBIdentity
+	repo.SMBIdentity = nil
+	if repo.Identity != nil || !validPeerSMBIdentity(repo, expected) {
+		return protocol.BackupRepository{}, ErrBackupInvalid
+	}
+	credentials, err := ResolveBackupCredentialForAdoption(s, repo)
+	if err != nil {
+		return protocol.BackupRepository{}, err
+	}
+	repo.SMBIdentity = expected
+	return prepareBackupRepositorySMBNative(ctx, repo, credentials)
+}
+
+func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.BackupRepository, replace bool, mutation *backupRepositoryMutation) (protocol.BackupRepository, error) {
+	if !preparedBackupRepositoryMatches(repo, prepared) {
 		return protocol.BackupRepository{}, ErrBackupInvalid
 	}
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
+	if backupRepositoryMutationBusy(s, repo.ID, mutation) {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
 	membership, err := Membership(s)
 	if err != nil || membership.MasterHostID != s.State.HostID || membership.PoolID != repo.PoolID {
 		return protocol.BackupRepository{}, ErrBackupUnavailable
@@ -196,31 +403,212 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
+	if existing, ok := state.Repositories[repo.ID]; ok {
+		if err := backupReplacementError(s, existing, repo, replace); err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		if repo.Kind == protocol.BackupRepoKindNFS && !reflect.DeepEqual(existing.Identity, repo.Identity) {
+			return protocol.BackupRepository{}, ErrBackupUnavailable
+		}
+	}
+	if existing, ok := state.Repositories[repo.ID]; ok && repo.Kind == protocol.BackupRepoKindSMB3 &&
+		!samePeerSMBIdentity(existing.SMBIdentity, repo.SMBIdentity) {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
+	// An SFTP identity includes the host key and user, so a confirmed replacement changes it; the owner marker was verified instead.
+	if existing, ok := state.Repositories[repo.ID]; ok && existing.RemoteIdentity != nil && !reflect.DeepEqual(existing.RemoteIdentity, repo.RemoteIdentity) &&
+		!(replace && repo.Kind == protocol.BackupRepoKindSFTP) {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
 	now := time.Now().UTC()
 	if existing, ok := state.Repositories[repo.ID]; ok {
-		if !reflect.DeepEqual(existing.Source, repo.Source) && existing.Generation > 0 {
-			// Same ID with a different NFS source is a deliberate update; bump generation.
-			repo.Generation = existing.Generation + 1
-			repo.CreatedAt = existing.CreatedAt
-		} else {
-			repo.Generation = existing.Generation
-			if repo.Generation == 0 {
-				repo.Generation = 1
+		repo.CreatedAt = existing.CreatedAt
+		repo.LastHealthTransition = existing.LastHealthTransition
+		if repo.Health.Status != existing.Health.Status &&
+			(repo.Health.Status == "offline" || repo.Health.Status == "online" && existing.Health.Status == "offline") {
+			status := "recovered"
+			if repo.Health.Status == "offline" {
+				status = "offline"
 			}
-			repo.CreatedAt = existing.CreatedAt
+			repo.LastHealthTransition = &protocol.BackupRepositoryHealthTransition{Status: status, At: repo.Health.ObservedAt, Error: repo.Health.Error}
 		}
 	} else {
-		if repo.Generation == 0 {
-			repo.Generation = 1
-		}
 		repo.CreatedAt = now
 	}
 	repo.UpdatedAt = now
+	if backupCredentialKind(repo.Kind) {
+		if _, err := localBackupCredential(s, repo); err != nil {
+			return protocol.BackupRepository{}, ErrBackupUnavailable
+		}
+	}
 	state.Repositories[repo.ID] = repo
 	if err := savePoolBackupRepositories(s, state); err != nil {
 		return protocol.BackupRepository{}, err
 	}
+	if backupCredentialKind(repo.Kind) {
+		if err := retireSupersededBackupCredentials(s, repo); err != nil {
+			return protocol.BackupRepository{}, ErrBackupUnavailable
+		}
+	}
 	return repo, nil
+}
+
+// A successful native replacement may still fail its durable owner commit.
+// Restore the prior mount only while the repository still names that prior record.
+func rollbackBackupRepositoryRegistration(ctx context.Context, s *Store, request BackupRequest) error {
+	if request.PreviousRepository == nil || request.PreviousRepository.Kind != protocol.BackupRepoKindSMB3 {
+		return nil
+	}
+	previous := *request.PreviousRepository
+	poolBackupAuthorityMu.Lock()
+	current, err := GetPoolBackupRepository(s, previous.ID)
+	if err != nil || !sameBackupRepositoryRegistration(current, previous) {
+		poolBackupAuthorityMu.Unlock()
+		return errors.Join(vmhost.ErrStorageRollbackUncertain, err)
+	}
+	mutation := request.RepositoryMutation
+	if mutation == nil {
+		mutation, err = reserveBackupRepositoryMutation(s, previous.ID)
+		if err != nil {
+			poolBackupAuthorityMu.Unlock()
+			return errors.Join(vmhost.ErrStorageRollbackUncertain, err)
+		}
+		defer mutation.release()
+	} else if backupRepositoryMutationBusy(s, previous.ID, mutation) {
+		poolBackupAuthorityMu.Unlock()
+		return errors.Join(vmhost.ErrStorageRollbackUncertain, ErrBackupConflict)
+	}
+	poolBackupAuthorityMu.Unlock()
+	credentials, err := ResolveBackupCredential(s, previous)
+	if err != nil {
+		return errors.Join(vmhost.ErrStorageRollbackUncertain, err)
+	}
+	_, err = prepareBackupRepositorySMBNative(ctx, previous, credentials)
+	if err != nil {
+		return errors.Join(vmhost.ErrStorageRollbackUncertain, err)
+	}
+	if request.PreparedRepository != nil && request.PreparedRepository.CredentialRef != previous.CredentialRef {
+		err = removeBackupSMBCredentialNative(request.PreparedRepository.CredentialRef)
+	}
+	return err
+}
+
+// A repository keeps its credential unless this host can no longer read it (for example the
+// sealing key was lost) or the operator confirmed a replacement; then registering the same
+// destination again supplies a new one. A confirmed replacement may also re-pin an SFTP host key.
+func backupReplacementError(s *Store, existing, requested protocol.BackupRepository, replace bool) error {
+	if existing.CredentialRef != requested.CredentialRef && !replace && (!backupCredentialKind(existing.Kind) || credentialReadable(s, existing)) {
+		return ErrBackupCredentialInUse
+	}
+	if existing.Kind != requested.Kind ||
+		!reflect.DeepEqual(existing.Source, requested.Source) ||
+		!reflect.DeepEqual(existing.SMBSource, requested.SMBSource) || !reflect.DeepEqual(existing.S3Source, requested.S3Source) ||
+		!reflect.DeepEqual(existing.SFTPSource, requested.SFTPSource) && !(replace && sameSFTPDestination(existing.SFTPSource, requested.SFTPSource)) {
+		return repositoryMismatchError{}
+	}
+	return nil
+}
+
+// repositoryMismatchError is ErrBackupUnavailable for callers, worded for the operator.
+type repositoryMismatchError struct{}
+
+func (repositoryMismatchError) Error() string {
+	return "a repository with this ID already exists for a different destination; replacing changes only its credential or SFTP host key, so register another destination with a new ID"
+}
+
+func (repositoryMismatchError) Is(target error) bool { return target == ErrBackupUnavailable }
+
+// sameSFTPDestination reports whether two SFTP sources differ at most in the pinned host key.
+func sameSFTPDestination(a, b *protocol.BackupSFTPSource) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	pinned := *a
+	pinned.HostKeySHA256 = b.HostKeySHA256
+	return pinned == *b
+}
+
+// credentialReadable is false when this host has no usable credential: the sealing key is
+// lost, a receipt is damaged or the receipt is gone, the cases a re-registration repairs.
+// An I/O failure reading the vault says nothing about the credential, so it counts as
+// readable and the replacement keeps its typed confirmation.
+func credentialReadable(s *Store, repo protocol.BackupRepository) bool {
+	_, err := localBackupCredential(s, repo)
+	var pathErr *os.PathError
+	return err == nil || errors.As(err, &pathErr) && !errors.Is(err, os.ErrNotExist)
+}
+
+// projectBackupCredentialToMembers returns the members that did not receive the credential.
+func projectBackupCredentialToMembers(ctx context.Context, s *Store, membership protocol.PoolMembership, repo protocol.BackupRepository) map[string]error {
+	failed := map[string]error{}
+	for _, member := range membership.Members {
+		if member.HostID == s.State.HostID || member.Status != "ready" {
+			continue
+		}
+		err := ErrBackupUnavailable
+		if member.PeerOrigin != "" {
+			err = deliverPeerBackupCredential(ctx, s, member, repo)
+		}
+		if err != nil {
+			log.Printf("backup repository %s credential not delivered to member %s: %v", repo.ID, member.HostID, err)
+			failed[member.HostID] = err
+		}
+	}
+	return failed
+}
+
+func retireSupersededBackupCredentials(s *Store, repo protocol.BackupRepository) error {
+	current, err := localBackupCredential(s, repo)
+	if err != nil {
+		return err
+	}
+	dir, err := backupCredentialDir(s)
+	if err != nil {
+		return err
+	}
+	clusterSecretMu.Lock()
+	files, _, err := readBackupCredentials(s, dir)
+	clusterSecretMu.Unlock()
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		r := file.stored.Receipt
+		if r.PoolID != repo.PoolID || r.HostID != s.State.HostID || r.RepositoryID != repo.ID ||
+			r.Reference == repo.CredentialRef || !r.CreatedAt.Before(current.Receipt.CreatedAt) {
+			continue
+		}
+		old := protocol.BackupRepository{ID: r.RepositoryID, PoolID: r.PoolID, Kind: r.Kind, CredentialRef: r.Reference}
+		if err := RetireBackupCredential(s, old, repo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func preparedBackupRepositoryMatches(repo, prepared protocol.BackupRepository) bool {
+	if repo.Valid() != nil || prepared.Valid() != nil || repo.Kind != prepared.Kind || repo.ID != prepared.ID ||
+		repo.PoolID != prepared.PoolID || repo.Name != prepared.Name || repo.CredentialRef != prepared.CredentialRef ||
+		!reflect.DeepEqual(repo.Source, prepared.Source) || !reflect.DeepEqual(repo.SMBSource, prepared.SMBSource) ||
+		!reflect.DeepEqual(repo.S3Source, prepared.S3Source) || !reflect.DeepEqual(repo.SFTPSource, prepared.SFTPSource) || repo.MountPath != "" || repo.SMBIdentity != nil {
+		return false
+	}
+	if repo.Kind == protocol.BackupRepoKindS3 || repo.Kind == protocol.BackupRepoKindSFTP {
+		return prepared.MountPath == "" && prepared.Identity == nil && prepared.SMBIdentity == nil &&
+			prepared.RemoteIdentity != nil && (repo.RemoteIdentity == nil || reflect.DeepEqual(repo.RemoteIdentity, prepared.RemoteIdentity))
+	}
+	if prepared.MountPath == "" {
+		return false
+	}
+	switch repo.Kind {
+	case protocol.BackupRepoKindNFS:
+		return prepared.Identity != nil && (repo.Identity == nil || reflect.DeepEqual(repo.Identity, prepared.Identity)) && prepared.SMBIdentity == nil
+	case protocol.BackupRepoKindSMB3:
+		return prepared.Identity == nil && prepared.SMBIdentity != nil && prepared.SMBIdentity.MarkerID != "" &&
+			prepared.SMBIdentity.Server == repo.SMBSource.Server && prepared.SMBIdentity.Share == repo.SMBSource.Share
+	default:
+		return false
+	}
 }
 
 // ListPoolBackupRepositories returns the master's durable destination list.
@@ -235,10 +623,135 @@ func ListPoolBackupRepositories(s *Store) ([]protocol.BackupRepository, error) {
 	}
 	out := make([]protocol.BackupRepository, 0, len(state.Repositories))
 	for _, repo := range state.Repositories {
+		if repo.Health.Status == "" || time.Since(repo.Health.ObservedAt) > backupHealthFreshness {
+			repo.Health.Status = "unknown"
+		}
+		repo.MemberAccess = poolBackupMemberAccess(s, repo)
 		out = append(out, repo)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+func poolBackupMemberAccess(s *Store, repo protocol.BackupRepository) []protocol.PoolStorageAccess {
+	members := readyPoolMembers(s)
+	backupMemberAccessMu.Lock()
+	defer backupMemberAccessMu.Unlock()
+	rows := make([]protocol.PoolStorageAccess, 0, len(members))
+	for _, hostID := range members {
+		access := backupMemberAccess[s.dir][repo.ID][hostID]
+		if access.ObservedAt.IsZero() || access.ObservedAt.After(time.Now()) || time.Since(access.ObservedAt) > backupHealthFreshness {
+			access = protocol.PoolStorageAccess{RepositoryID: repo.ID, HostID: hostID, Error: "awaiting member probe"}
+		}
+		rows = append(rows, access)
+	}
+	return rows
+}
+
+func sameBackupProbeRepository(expected, local protocol.BackupRepository) bool {
+	return expected.ID == local.ID && expected.PoolID == local.PoolID && expected.Kind == local.Kind &&
+		expected.CredentialRef == local.CredentialRef &&
+		reflect.DeepEqual(expected.Source, local.Source) && reflect.DeepEqual(expected.SMBSource, local.SMBSource) &&
+		reflect.DeepEqual(expected.S3Source, local.S3Source) && reflect.DeepEqual(expected.SFTPSource, local.SFTPSource) &&
+		reflect.DeepEqual(expected.Identity, local.Identity) && (expected.Kind != protocol.BackupRepoKindSMB3 || samePeerSMBIdentity(expected.SMBIdentity, local.SMBIdentity)) &&
+		reflect.DeepEqual(expected.RemoteIdentity, local.RemoteIdentity)
+}
+
+func probePeerBackupRepository(ctx context.Context, s *Store, expected protocol.BackupRepository) protocol.PoolStorageAccess {
+	access := protocol.PoolStorageAccess{RepositoryID: expected.ID, HostID: s.State.HostID, ObservedAt: time.Now().UTC()}
+	poolBackupAuthorityMu.Lock()
+	mutation, err := reserveBackupRepositoryMutation(s, expected.ID)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		access.Error = "backup repository access probe failed"
+		return access
+	}
+	defer mutation.release()
+	local, err := GetPoolBackupRepository(s, expected.ID)
+	missing := errors.Is(err, ErrBackupRepoNotFound)
+	// The master owns the record's name and credential reference; a re-registration
+	// of the same destination replaces both here instead of being a conflict; so does a
+	// confirmed SFTP host-key or credential replacement.
+	renamed := local
+	renamed.Name, renamed.CredentialRef = expected.Name, expected.CredentialRef
+	if local.Kind == protocol.BackupRepoKindSFTP && sameSFTPDestination(local.SFTPSource, expected.SFTPSource) {
+		renamed.SFTPSource, renamed.RemoteIdentity = expected.SFTPSource, expected.RemoteIdentity
+	}
+	replaced := err == nil && (local.Name != expected.Name || local.CredentialRef != expected.CredentialRef ||
+		!reflect.DeepEqual(local.RemoteIdentity, expected.RemoteIdentity)) && sameBackupProbeRepository(expected, renamed)
+	if missing || replaced {
+		adopt := portablePeerRepository(expected)
+		adopt.SMBIdentity = expected.SMBIdentity
+		local, err = prepareBackupRepositoryForAdoption(ctx, s, adopt, mutation)
+	}
+	if err == nil && !sameBackupProbeRepository(expected, local) {
+		err = ErrBackupConflict
+	}
+	if err == nil && replaced {
+		poolBackupAuthorityMu.Lock()
+		err = adoptPeerBackupRepository(s, BackupRequest{PeerSMBIdentity: expected.SMBIdentity, RepositoryMutation: mutation}, expected, local)
+		poolBackupAuthorityMu.Unlock()
+	}
+	if err == nil && missing {
+		poolBackupAuthorityMu.Lock()
+		state, loadErr := loadPoolBackupRepositories(s)
+		if loadErr == nil {
+			if current, exists := state.Repositories[expected.ID]; exists {
+				if sameBackupProbeRepository(expected, current) {
+					local = current
+				} else {
+					loadErr = ErrBackupConflict
+				}
+			} else {
+				loadErr = adoptPeerBackupRepository(s, BackupRequest{PeerSMBIdentity: expected.SMBIdentity, RepositoryMutation: mutation}, expected, local)
+			}
+		}
+		poolBackupAuthorityMu.Unlock()
+		err = loadErr
+	}
+	if err == nil {
+		err = probeBackupRepositoryForStore(ctx, s, local)
+	}
+	access.ObservedAt = time.Now().UTC()
+	if err != nil {
+		access.Error = "backup repository access probe failed"
+	} else {
+		access.Readable, access.Writable = true, true
+	}
+	return access
+}
+
+func probeBackupMember(ctx context.Context, s *Store, repo protocol.BackupRepository, member protocol.PoolMember, timeout time.Duration) protocol.PoolStorageAccess {
+	access := protocol.PoolStorageAccess{RepositoryID: repo.ID, HostID: member.HostID, ObservedAt: time.Now().UTC(), Error: "member backup repository probe unavailable"}
+	client, err := PoolMemberPeerClient(s, member.PeerOrigin, member.HostID)
+	if err != nil {
+		return access
+	}
+	defer client.CloseIdleConnections()
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	repo.MemberAccess = nil
+	body, err := json.Marshal(repo)
+	if err != nil {
+		return access
+	}
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, strings.TrimRight(member.PeerOrigin, "/")+poolBackupPeerPath+"/access", strings.NewReader(string(body)))
+	if err != nil {
+		return access
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return access
+	}
+	defer response.Body.Close()
+	var observed protocol.PoolStorageAccess
+	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 1<<16)).Decode(&observed) != nil ||
+		observed.RepositoryID != repo.ID || observed.HostID != member.HostID || observed.ObservedAt.IsZero() {
+		return access
+	}
+	observed.ObservedAt = time.Now().UTC()
+	return observed
 }
 
 // GetPoolBackupRepository returns one durable destination by ID.
@@ -252,34 +765,6 @@ func GetPoolBackupRepository(s *Store, id string) (protocol.BackupRepository, er
 		return repo, nil
 	}
 	return protocol.BackupRepository{}, ErrBackupRepoNotFound
-}
-
-func validatedPublishedBackupManifest(ctx context.Context, repo protocol.BackupRepository, pointID string) (protocol.BackupManifest, string, error) {
-	if err := verifyBackupRepository(ctx, repo); err != nil {
-		return protocol.BackupManifest{}, "", err
-	}
-	manifest, digest, err := vmhost.ReadBackupManifest(filepath.Join(repo.MountPath, pointID))
-	if err != nil {
-		return protocol.BackupManifest{}, "", err
-	}
-	if manifest.RecoveryPointID != pointID || manifest.RepositoryID != repo.ID || manifest.PoolID != repo.PoolID {
-		return protocol.BackupManifest{}, "", ErrBackupConflict
-	}
-	if err := vmhost.VerifyPublishedBackupRecoveryPoint(filepath.Join(repo.MountPath, pointID), manifest); err != nil {
-		return protocol.BackupManifest{}, "", err
-	}
-	return manifest, digest, nil
-}
-
-func validatedBackupManifest(ctx context.Context, repo protocol.BackupRepository, pointID string) (protocol.BackupManifest, string, error) {
-	manifest, digest, err := validatedPublishedBackupManifest(ctx, repo, pointID)
-	if err != nil {
-		return protocol.BackupManifest{}, "", err
-	}
-	if err := vmhost.ValidateBackupFirmwareForRestore(manifest); err != nil {
-		return protocol.BackupManifest{}, "", err
-	}
-	return manifest, digest, nil
 }
 
 func restoreCatalogManifestSHA(s *Store, repositoryID, pointID string) (string, error) {
@@ -297,8 +782,16 @@ func validatedCatalogBackupManifest(ctx context.Context, s *Store, repo protocol
 	if expectedSHA == "" {
 		return protocol.BackupManifest{}, "", ErrBackupConflict
 	}
-	manifest, digest, err := validatedBackupManifest(ctx, repo, pointID)
+	backend, err := openBackupRepositoryStorage(s, repo)
 	if err != nil {
+		return protocol.BackupManifest{}, "", err
+	}
+	// CopyArtifacts verifies every artifact digest, so this check reads only metadata.
+	manifest, digest, err := backend.StatPoint(ctx, pointID)
+	if err != nil {
+		return protocol.BackupManifest{}, "", err
+	}
+	if err := vmhost.ValidateBackupFirmwareForRestore(manifest); err != nil {
 		return protocol.BackupManifest{}, "", err
 	}
 	currentSHA, err := restoreCatalogManifestSHA(s, repo.ID, pointID)
@@ -331,35 +824,222 @@ func TestPoolBackupRepositoryAccess(s *Store, id string) (protocol.BackupReposit
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
-	repo, err = checkBackupRepositoryAccess(context.Background(), repo)
-	if err != nil {
-		return protocol.BackupRepository{}, err
-	}
+	repo = checkBackupRepositoryAccessForStore(context.Background(), s, repo)
 	return repo, savePoolBackupRepositoryAccess(s, repo)
 }
 
-func checkBackupRepositoryAccess(ctx context.Context, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
-	if repo.MountPath == "" {
-		return protocol.BackupRepository{}, errors.New("backup repository has no mount path")
+func checkBackupRepositoryAccessForStore(ctx context.Context, s *Store, repo protocol.BackupRepository) protocol.BackupRepository {
+	now := time.Now().UTC()
+	repo.Health = protocol.BackupRepositoryHealth{Status: "online", ObservedAt: now}
+	repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: now}
+	if err := probeBackupRepositoryForStore(ctx, s, repo); err != nil {
+		repo.Health.Status, repo.Health.Error = "offline", backupHealthError(err)
+		repo.Access = protocol.StorageAccess{Status: "failed", Error: err.Error(), ObservedAt: now}
 	}
-	if err := verifyBackupRepository(ctx, repo); err != nil {
-		repo.Access = protocol.StorageAccess{Status: "failed", Error: err.Error(), ObservedAt: time.Now().UTC()}
-	} else {
-		repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: time.Now().UTC()}
+	return repo
+}
+
+// backupHealthError keeps probe details out of health, except the one an operator can act on.
+func backupHealthError(err error) string {
+	if strings.Contains(err.Error(), "host key differs from pinned key") {
+		return "backup repository health probe failed: the SFTP server's host key differs from the pinned key; verify the server, then register the repository again with its ID, the new fingerprint and the typed ID confirmation"
 	}
-	return repo, nil
+	return "backup repository health probe failed"
+}
+
+func probeBackupRepositoryForStore(ctx context.Context, s *Store, repo protocol.BackupRepository) error {
+	backend, err := openBackupRepositoryStorage(s, repo)
+	if err != nil {
+		return err
+	}
+	return backend.Probe(ctx)
+}
+
+func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Duration) error {
+	repos, err := ListPoolBackupRepositories(s)
+	if errors.Is(err, ErrBackupUnavailable) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	membership, err := Membership(s)
+	if err != nil {
+		return err
+	}
+	listed := map[string]bool{}
+	for _, repo := range repos {
+		listed[repo.ID] = true
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var undelivered map[string]error
+		if backupCredentialKind(repo.Kind) && requirePoolAuthorityWritable(s) == nil {
+			if err := retireSupersededBackupCredentials(s, repo); err != nil {
+				// A current credential that still opens is not offline: keep probing and retry retirement later.
+				if _, currentErr := localBackupCredential(s, repo); currentErr != nil {
+					now := time.Now().UTC()
+					repo.Health = protocol.BackupRepositoryHealth{Status: "offline", ObservedAt: now,
+						Error: "backup credential is unreadable on this host; register the repository again with its credentials"}
+					repo.Access = protocol.StorageAccess{Status: "failed", Error: repo.Health.Error, ObservedAt: now}
+					if err := savePoolBackupRepositoryAccess(s, repo); err != nil && !errors.Is(err, ErrBackupConflict) && !errors.Is(err, ErrBackupUnavailable) {
+						return err
+					}
+					continue
+				}
+			} else {
+				undelivered = projectBackupCredentialToMembers(ctx, s, membership, repo)
+			}
+		}
+		if repo.MountPath == "" && (repo.Kind == protocol.BackupRepoKindNFS || repo.Kind == protocol.BackupRepoKindSMB3) && requirePoolAuthorityWritable(s) == nil {
+			// Adopted unreachable at promotion: mount it now that it may answer.
+			repo = remountAdoptedBackupRepository(ctx, s, repo, timeout)
+		}
+		// Each pass replaces the repository's rows, so ejected members drop out.
+		rows := map[string]protocol.PoolStorageAccess{}
+		for _, member := range poolConfirmationPeers(membership, s.State.HostID) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			row := probeBackupMember(ctx, s, repo, member, timeout)
+			if err := undelivered[member.HostID]; err != nil && !row.Readable {
+				row.Error = "backup credential not delivered: " + err.Error()
+			}
+			rows[member.HostID] = row
+		}
+		backupMemberAccessMu.Lock()
+		if backupMemberAccess[s.dir] == nil {
+			backupMemberAccess[s.dir] = map[string]map[string]protocol.PoolStorageAccess{}
+		}
+		backupMemberAccess[s.dir][repo.ID] = rows
+		backupMemberAccessMu.Unlock()
+		key := struct{ dir, id string }{s.dir, repo.ID}
+		if _, active := backupHealthActive.LoadOrStore(key, true); active {
+			continue
+		}
+		work, cancel := context.WithTimeout(ctx, timeout)
+		finished := make(chan error, 1)
+		probeRepo := repo
+		go func() {
+			defer backupHealthActive.Delete(key)
+			finished <- probeBackupRepositoryForStore(work, s, probeRepo)
+		}()
+		var probeErr error
+		select {
+		case probeErr = <-finished:
+		case <-work.Done():
+			probeErr = work.Err()
+		}
+		cancel()
+		if ctx.Err() != nil {
+			// Shutdown or reconfiguration cut the probe short; it says nothing about the destination.
+			return ctx.Err()
+		}
+		now := time.Now().UTC()
+		repo.Health = protocol.BackupRepositoryHealth{Status: "online", ObservedAt: now}
+		repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: now}
+		if probeErr != nil {
+			repo.Health.Status = "offline"
+			repo.Health.Error = backupHealthError(probeErr)
+			repo.Access = protocol.StorageAccess{Status: "failed", Error: repo.Health.Error, ObservedAt: now}
+		}
+		if err := savePoolBackupRepositoryAccess(s, repo); err != nil && !errors.Is(err, ErrBackupConflict) && !errors.Is(err, ErrBackupUnavailable) {
+			return err
+		}
+	}
+	backupMemberAccessMu.Lock()
+	for id := range backupMemberAccess[s.dir] {
+		if !listed[id] {
+			delete(backupMemberAccess[s.dir], id)
+		}
+	}
+	backupMemberAccessMu.Unlock()
+	if requirePoolAuthorityWritable(s) == nil {
+		retainBackupRepositoryOnMembers(ctx, s, membership)
+		if err := ImportPendingBackupCatalogs(ctx, s); err != nil && ctx.Err() == nil {
+			log.Printf("pending backup catalog import needs attention: %v", err)
+		}
+	}
+	return nil
+}
+
+// remountAdoptedBackupRepository returns repo unchanged when it still cannot be mounted.
+func remountAdoptedBackupRepository(ctx context.Context, s *Store, repo protocol.BackupRepository, timeout time.Duration) protocol.BackupRepository {
+	work, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	poolBackupAuthorityMu.Lock()
+	mutation, err := reserveBackupRepositoryMutation(s, repo.ID)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		return repo
+	}
+	defer mutation.release()
+	prepared, err := prepareBackupRepositoryForAdoption(work, s, repo, mutation)
+	if err != nil || prepared.MountPath == "" || prepared.ID != repo.ID {
+		return repo
+	}
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	state, err := loadPoolBackupRepositories(s)
+	current, ok := state.Repositories[repo.ID]
+	if err != nil || !ok || current.MountPath != "" {
+		return repo
+	}
+	current.MountPath, current.Identity, current.SMBIdentity = prepared.MountPath, prepared.Identity, prepared.SMBIdentity
+	state.Repositories[repo.ID] = current
+	if savePoolBackupRepositories(s, state) != nil {
+		return repo
+	}
+	repo.MountPath, repo.Identity, repo.SMBIdentity = current.MountPath, current.Identity, current.SMBIdentity
+	return repo
 }
 
 func savePoolBackupRepositoryAccess(s *Store, repo protocol.BackupRepository) error {
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	membership, err := Membership(s)
+	if err != nil || membership.MasterHostID != s.State.HostID {
+		return ErrBackupUnavailable
+	}
+	if err := requirePoolAuthorityWritable(s); err != nil {
+		return err
+	}
 	state, err := loadPoolBackupRepositories(s)
 	if err != nil {
 		return err
 	}
-	if current, ok := state.Repositories[repo.ID]; !ok || current.PoolID != repo.PoolID || current.Generation != repo.Generation || !reflect.DeepEqual(current.Source, repo.Source) {
+	current, ok := state.Repositories[repo.ID]
+	if !ok || current.PoolID != repo.PoolID || current.Kind != repo.Kind ||
+		!reflect.DeepEqual(current.Source, repo.Source) || !reflect.DeepEqual(current.SMBSource, repo.SMBSource) ||
+		!reflect.DeepEqual(current.S3Source, repo.S3Source) || !reflect.DeepEqual(current.SFTPSource, repo.SFTPSource) ||
+		!reflect.DeepEqual(current.Identity, repo.Identity) ||
+		!reflect.DeepEqual(current.SMBIdentity, repo.SMBIdentity) || !reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity) ||
+		current.MountPath != repo.MountPath || current.CredentialRef != repo.CredentialRef {
 		return ErrBackupConflict
 	}
-	state.Repositories[repo.ID] = repo
-	return savePoolBackupRepositories(s, state)
+	if repo.Health.Status == "online" || repo.Health.Status == "offline" {
+		if repo.Health.ObservedAt.Before(current.Health.ObservedAt) {
+			return ErrBackupConflict
+		}
+		if current.Health.Status != repo.Health.Status && (repo.Health.Status == "offline" || current.Health.Status == "offline") {
+			status := "recovered"
+			if repo.Health.Status == "offline" {
+				status = "offline"
+			}
+			current.LastHealthTransition = &protocol.BackupRepositoryHealthTransition{Status: status, At: repo.Health.ObservedAt, Error: repo.Health.Error}
+		}
+		current.Health = repo.Health
+	}
+	if repo.Access.Status != "" {
+		if repo.Access.ObservedAt.Before(current.Access.ObservedAt) {
+			return ErrBackupConflict
+		}
+		current.Access = repo.Access
+	}
+	state.Repositories[repo.ID] = current
+	// Health and access are stripped from the replicated record, so this write cannot grow
+	// the authority and skips its whole-store capacity walk.
+	return writePoolBackupRepositories(s, state)
 }
 
 func savePoolBackupCatalogEntry(s *Store, point protocol.BackupRecoveryPoint) error {
@@ -369,6 +1049,11 @@ func savePoolBackupCatalogEntry(s *Store, point protocol.BackupRecoveryPoint) er
 	if err := checkBackupCatalogPointCapacity(s, point); err != nil {
 		return err
 	}
+	return writePoolBackupCatalogEntry(s, point)
+}
+
+// writePoolBackupCatalogEntry writes a valid point whose capacity was checked.
+func writePoolBackupCatalogEntry(s *Store, point protocol.BackupRecoveryPoint) error {
 	if err := os.MkdirAll(poolBackupCatalogPath(s), 0700); err != nil {
 		return err
 	}
@@ -379,15 +1064,20 @@ func savePoolBackupCatalogEntry(s *Store, point protocol.BackupRecoveryPoint) er
 	return vmhost.AtomicWrite(filepath.Join(poolBackupCatalogPath(s), point.ID+".json"), b, 0600)
 }
 
-func checkBackupCatalogPointCapacity(s *Store, point protocol.BackupRecoveryPoint) error {
+func checkBackupCatalogPointCapacity(s *Store, points ...protocol.BackupRecoveryPoint) error {
 	return checkPoolBackupAuthorityCapacity(s, func(auth *protocol.PoolBackupAuthority) {
-		for i := range auth.Catalog {
-			if auth.Catalog[i].ID == point.ID {
+		index := make(map[string]int, len(auth.Catalog))
+		for i, point := range auth.Catalog {
+			index[point.ID] = i
+		}
+		for _, point := range points {
+			if i, ok := index[point.ID]; ok {
 				auth.Catalog[i] = point
-				return
+			} else {
+				index[point.ID] = len(auth.Catalog)
+				auth.Catalog = append(auth.Catalog, point)
 			}
 		}
-		auth.Catalog = append(auth.Catalog, point)
 	})
 }
 
@@ -475,7 +1165,7 @@ func listPoolBackupRuns(s *Store) ([]protocol.BackupRun, error) {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		run, err := loadPoolBackupRun(s, stringsTrimSuffixJSON(entry.Name()))
+		run, err := loadPoolBackupRun(s, strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return nil, err
 		}
@@ -490,10 +1180,6 @@ func listPoolBackupRuns(s *Store) ([]protocol.BackupRun, error) {
 	return out, nil
 }
 
-func stringsTrimSuffixJSON(name string) string {
-	return name[:len(name)-len(".json")]
-}
-
 // ReservePoolBackupRun persists the durable master run record before native effects.
 func ReservePoolBackupRun(s *Store, run protocol.BackupRun) (protocol.BackupRun, error) {
 	if err := run.Valid(); err != nil {
@@ -501,6 +1187,9 @@ func ReservePoolBackupRun(s *Store, run protocol.BackupRun) (protocol.BackupRun,
 	}
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
+	if backupRepositoryRemoving(s, run.RepositoryID) {
+		return protocol.BackupRun{}, ErrBackupConflict
+	}
 	membership, err := Membership(s)
 	if err != nil || membership.PoolID != run.PoolID {
 		return protocol.BackupRun{}, ErrBackupUnavailable
@@ -516,12 +1205,25 @@ func ReservePoolBackupRun(s *Store, run protocol.BackupRun) (protocol.BackupRun,
 		if !kindOK || existing.RepositoryID != run.RepositoryID || existing.VMID != run.VMID ||
 			existing.RecoveryPointID != run.RecoveryPointID || existing.NewVMID != run.NewVMID ||
 			existing.IntentSHA256 != run.IntentSHA256 || existing.ManifestSHA256 != run.ManifestSHA256 ||
+			(existing.HostID == "" && run.HostID != "" && run.HostID != s.State.HostID &&
+				(existing.Kind == protocol.BackupKindScheduled || existing.Kind == protocol.BackupKindPolicyRunNow)) ||
 			(existing.HostID != "" && run.HostID != "" && existing.HostID != run.HostID) {
 			return protocol.BackupRun{}, ErrBackupConflict
 		}
 		return existing, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return protocol.BackupRun{}, err
+	}
+	// A delete accepted before this point has already checked for pending runs, so a new run of
+	// that policy must not start; a delete after it sees this run and refuses.
+	if run.PolicyID != "" && membership.MasterHostID == s.State.HostID {
+		policies, err := loadPoolBackupPolicies(s)
+		if err != nil {
+			return protocol.BackupRun{}, err
+		}
+		if _, ok := policies.Policies[run.PolicyID]; !ok {
+			return protocol.BackupRun{}, ErrBackupPolicyNotFound
+		}
 	}
 	run.Stage = "reserved"
 	run.Status = "pending"
@@ -538,24 +1240,48 @@ func ReservePoolBackupRun(s *Store, run protocol.BackupRun) (protocol.BackupRun,
 
 // SettlePoolBackupRun commits terminal evidence and, on successful backup-now, catalogs the point.
 func SettlePoolBackupRun(s *Store, run protocol.BackupRun, point *protocol.BackupRecoveryPoint) error {
+	return settlePoolBackupRun(context.Background(), s, run, point)
+}
+
+func settlePoolBackupRun(ctx context.Context, s *Store, run protocol.BackupRun, point *protocol.BackupRecoveryPoint) error {
+	retention, err := commitPoolBackupRun(ctx, s, run, point)
+	if err == nil && retention != nil {
+		applyBackupRetention(ctx, s, run, *retention)
+	}
+	return err
+}
+
+// applyBackupRetention runs once the run is durable, outside the pool backup
+// lock, and never turns the settled backup into a failure.
+func applyBackupRetention(ctx context.Context, s *Store, run protocol.BackupRun, retention protocol.BackupRetention) {
+	if err := prunePublishedBackupPayloads(ctx, s, run.RepositoryID, run.VMID, run.PolicyID, retention, run.RecoveryPointID); err != nil {
+		noteBackupRetentionFailure(s, run.OperationID, err)
+	}
+}
+
+// commitPoolBackupRun records the settlement and returns the retention to apply.
+func commitPoolBackupRun(ctx context.Context, s *Store, run protocol.BackupRun, point *protocol.BackupRecoveryPoint) (*protocol.BackupRetention, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	run.Error = resultError(run.Error)
 	if err := run.Valid(); err != nil {
-		return ErrBackupInvalid
+		return nil, ErrBackupInvalid
 	}
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
 	membership, err := Membership(s)
 	if err != nil || membership.PoolID != run.PoolID {
-		return ErrBackupUnavailable
+		return nil, ErrBackupUnavailable
 	}
 	if membership.MasterHostID == s.State.HostID {
 		if err := requirePoolAuthorityWritable(s); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	existing, err := loadPoolBackupRun(s, run.OperationID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	kindOK := existing.Kind == run.Kind ||
 		((existing.Kind == protocol.BackupKindScheduled || existing.Kind == protocol.BackupKindPolicyRunNow) &&
@@ -563,19 +1289,23 @@ func SettlePoolBackupRun(s *Store, run protocol.BackupRun, point *protocol.Backu
 	if !kindOK || existing.RepositoryID != run.RepositoryID || existing.VMID != run.VMID ||
 		existing.RecoveryPointID != run.RecoveryPointID || existing.NewVMID != run.NewVMID ||
 		(existing.HostID != "" && run.HostID != "" && existing.HostID != run.HostID) {
-		return ErrBackupConflict
+		return nil, ErrBackupConflict
 	}
 	if existing.IntentSHA256 != "" && run.IntentSHA256 != "" && existing.IntentSHA256 != run.IntentSHA256 {
-		return ErrBackupConflict
+		return nil, ErrBackupConflict
 	}
 	if run.ManifestSHA256 != "" && existing.ManifestSHA256 != run.ManifestSHA256 {
-		return ErrBackupConflict
+		return nil, ErrBackupConflict
 	}
 	if existing.Status == "succeeded" || existing.Status == "failed" {
-		if existing.Status == run.Status && existing.Stage == run.Stage && existing.Error == run.Error {
-			return nil
+		// A succeeded run's error can only be a later retention note.
+		if existing.Status == run.Status && existing.Stage == run.Stage && (existing.Error == run.Error || existing.Status == "succeeded") {
+			if existing.Kind == protocol.BackupKindPolicyRunNow {
+				return nil, settlePolicyRunNowReceipt(s, existing)
+			}
+			return nil, nil
 		}
-		return ErrBackupConflict
+		return nil, ErrBackupConflict
 	}
 	run.PolicyID = existing.PolicyID
 	run.ManifestSHA256 = existing.ManifestSHA256
@@ -585,9 +1315,7 @@ func SettlePoolBackupRun(s *Store, run protocol.BackupRun, point *protocol.Backu
 	run.Retention = existing.Retention
 	run.CaptureMode = existing.CaptureMode
 	run.UpdatedAt = time.Now().UTC()
-	if run.CreatedAt.IsZero() {
-		run.CreatedAt = existing.CreatedAt
-	}
+	run.CreatedAt = existing.CreatedAt
 	run.ScheduleID = existing.ScheduleID
 	run.OccurrenceID = existing.OccurrenceID
 	run.PolicyRevision = existing.PolicyRevision
@@ -599,8 +1327,12 @@ func SettlePoolBackupRun(s *Store, run protocol.BackupRun, point *protocol.Backu
 	if run.Status == "succeeded" && (run.Kind == protocol.BackupKindBackupNow || run.Kind == protocol.BackupKindScheduled || run.Kind == protocol.BackupKindPolicyRunNow) {
 		if point == nil || point.Valid() != nil || point.ID != run.RecoveryPointID ||
 			point.RepositoryID != run.RepositoryID || point.PoolID != run.PoolID || point.SourceVMID != run.VMID {
-			return errors.New("successful backup settlement requires a valid catalog point")
+			return nil, errors.New("successful backup settlement requires a valid catalog point")
 		}
+		// Retention is scoped to the creating policy, so the catalog records it.
+		p := *point
+		p.PolicyID = run.PolicyID
+		point = &p
 	}
 	if err := checkPoolBackupAuthorityCapacity(s, func(auth *protocol.PoolBackupAuthority) {
 		for i := range auth.History {
@@ -619,27 +1351,80 @@ func SettlePoolBackupRun(s *Store, run protocol.BackupRun, point *protocol.Backu
 			auth.Catalog = append(auth.Catalog, *point)
 		}
 	}); err != nil {
-		return err
+		return nil, err
 	}
+	var retention *protocol.BackupRetention
 	if run.Status == "succeeded" && (run.Kind == protocol.BackupKindBackupNow || run.Kind == protocol.BackupKindScheduled || run.Kind == protocol.BackupKindPolicyRunNow) {
 		if err := savePoolBackupCatalogEntry(s, *point); err != nil {
-			return err
+			return nil, err
 		}
-		if run.Retention != nil {
-			if err := prunePublishedBackupPayloads(s, run.RepositoryID, run.VMID, *run.Retention); err != nil {
-				return err
-			}
+		if membership.MasterHostID == s.State.HostID {
+			retention = run.Retention
 		}
 	}
-	return savePoolBackupRun(s, run)
+	if err := savePoolBackupRun(s, run); err != nil {
+		return nil, err
+	}
+	if run.Kind == protocol.BackupKindPolicyRunNow {
+		return retention, settlePolicyRunNowReceipt(s, run)
+	}
+	return retention, nil
 }
 
-func prunePublishedBackupPayloads(s *Store, repositoryID, vmID string, retention protocol.BackupRetention) error {
+// Caller holds poolBackupAuthorityMu; the run is the durable execution result.
+func settlePolicyRunNowReceipt(s *Store, run protocol.BackupRun) error {
+	receipt, err := loadPoolBackupMetadataReceipt(s, run.OperationID)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // Controller-dispatched runs have no Core-local receipt.
+	}
+	if err != nil {
+		return err
+	}
+	if receipt.Kind != protocol.BackupKindPolicyRunNow {
+		return ErrBackupConflict
+	}
+	if receipt.Status == run.Status && receipt.Error == run.Error {
+		return nil
+	}
+	if err := requirePoolAuthorityWritable(s); err != nil {
+		return err
+	}
+	receipt.Status, receipt.Error, receipt.ObservedAt = run.Status, run.Error, run.UpdatedAt
+	return savePoolBackupMetadataReceipt(s, receipt)
+}
+
+// poolBackupPruneSeq counts retention deletions, so a catalog import can tell
+// whether its unlocked scan may include a point retention has since removed.
+var poolBackupPruneSeq atomic.Uint64
+
+// poolBackupRetentionMu runs one retention pass at a time, so concurrent
+// settlements never rank the catalog while another pass is deleting from it.
+var poolBackupRetentionMu sync.Mutex
+
+// poolBackupPruning holds the points retention is deleting outside the pool
+// backup lock; restore pins and protection refuse them. Guarded by
+// poolBackupAuthorityMu.
+var poolBackupPruning = map[string]bool{}
+
+// prunePublishedBackupPayloads applies one policy's retention to the points that
+// policy created for one VM in a repository, ranked by capture time. Manual
+// backups and other policies' points are never counted or removed. settling is the point being settled: its
+// own settlement never removes it, even when the capturing host's clock was
+// behind, but it never outranks a point captured after it. A point that cannot
+// be removed is skipped so it never holds back the others; the joined error
+// names each one.
+func prunePublishedBackupPayloads(parent context.Context, s *Store, repositoryID, vmID, policyID string, retention protocol.BackupRetention, settling string) error {
+	poolBackupRetentionMu.Lock()
+	defer poolBackupRetentionMu.Unlock()
+	if err := masterBackupPool(s, s.State.PoolID); err != nil {
+		return err
+	}
 	repo, err := GetPoolBackupRepository(s, repositoryID)
 	if err != nil {
 		return err
 	}
-	if err := verifyBackupRepository(context.Background(), repo); err != nil {
+	backend, err := openBackupRepositoryStorage(s, repo)
+	if err != nil {
 		return err
 	}
 	pins, err := ActiveBackupRestorePins(s)
@@ -652,29 +1437,101 @@ func prunePublishedBackupPayloads(s *Store, repositoryID, vmID string, retention
 	}
 	var eligible []protocol.BackupRecoveryPoint
 	for _, point := range all {
-		if point.RepositoryID == repositoryID && point.SourceVMID == vmID {
+		if point.RepositoryID == repositoryID && policyID != "" && point.PolicyID == policyID {
 			eligible = append(eligible, point)
 		}
 	}
 	_, prune := protocol.RetentionEligiblePrune(eligible, vmID, retention, time.Now().UTC(), pins)
+	prune = slices.DeleteFunc(prune, func(point protocol.BackupRecoveryPoint) bool { return point.ID == settling })
+	if len(prune) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
+	defer cancel()
+	if err := backend.Verify(ctx); err != nil {
+		return err
+	}
+	var failed []error
 	for _, point := range prune {
-		pointDir := filepath.Join(repo.MountPath, point.ID)
-		if vmhost.ReadBackupProtectMarker(pointDir) {
-			continue
+		if err := ctx.Err(); err != nil {
+			failed = append(failed, err)
+			break
 		}
-		if _, err := os.Stat(filepath.Join(pointDir, ".nex-protected")); err == nil {
-			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.RemoveAll(pointDir); err != nil {
-			return err
-		}
-		if err := os.Remove(filepath.Join(poolBackupCatalogPath(s), point.ID+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+		if err := pruneRecoveryPoint(ctx, s, backend, repositoryID, point.ID); err != nil {
+			failed = append(failed, fmt.Errorf("recovery point %s: %w", point.ID, err))
 		}
 	}
+	return errors.Join(failed...)
+}
+
+// pruneRecoveryPoint deletes one point. Pins and protection are rechecked under
+// the pool backup lock, where the point is also marked pruning so none can be
+// taken while the repository I/O runs outside the lock.
+func pruneRecoveryPoint(ctx context.Context, s *Store, backend backupRepositoryStorage, repositoryID, id string) error {
+	due, err := func() (bool, error) {
+		poolBackupAuthorityMu.Lock()
+		defer poolBackupAuthorityMu.Unlock()
+		pins, err := ActiveBackupRestorePins(s)
+		if err != nil {
+			return false, err
+		}
+		point, err := getCatalogPoint(s, repositoryID, id)
+		if errors.Is(err, ErrBackupNotFound) || err == nil && (point.Protected || pins[id] || backupPointMetadataBusy(s, repositoryID, id)) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		poolBackupPruning[id] = true
+		return true, nil
+	}()
+	if err != nil || !due {
+		return err
+	}
+	protected, err := backend.Protected(ctx, id)
+	if err == nil && !protected {
+		err = backend.Delete(ctx, id)
+	}
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	delete(poolBackupPruning, id)
+	// Counted once the delete is over, so an import that scanned during it
+	// scans again instead of cataloging a removed point.
+	poolBackupPruneSeq.Add(1)
+	if err != nil || protected {
+		return err
+	}
+	if err := os.Remove(filepath.Join(poolBackupCatalogPath(s), id+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	return nil
+}
+
+// noteBackupRetentionFailure records on the settled run that retention left
+// expired points behind; the next settlement for the VM tries them again.
+func noteBackupRetentionFailure(s *Store, operationID string, pruneErr error) {
+	log.Printf("backup retention for %s left expired recovery points: %v", operationID, pruneErr)
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	run, err := loadPoolBackupRun(s, operationID)
+	if err != nil || run.Status != "succeeded" || requirePoolAuthorityWritable(s) != nil {
+		return
+	}
+	run.Error = resultError("retention could not remove every expired recovery point: " + pruneErr.Error())
+	run.UpdatedAt = time.Now().UTC()
+	err = checkPoolBackupAuthorityCapacity(s, func(auth *protocol.PoolBackupAuthority) {
+		for i := range auth.History {
+			if auth.History[i].OperationID == operationID {
+				auth.History[i] = run
+			}
+		}
+	})
+	if err == nil {
+		err = savePoolBackupRun(s, run)
+	}
+	if err != nil {
+		log.Printf("backup retention note for %s was not saved: %v", operationID, err)
+	}
 }
 
 func backupIntentSHA256(command protocol.Command) (string, error) {

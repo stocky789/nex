@@ -16,7 +16,7 @@ func TestEjectedHostCanRejoinItsFormerPool(t *testing.T) {
 	l := newJoinLab(t)
 	ejected := selfMembership(l.master.id, l.master.pool)
 	ejected.Generation, ejected.Members[0].Generation = 2, 2
-	ejected.Members = append(ejected.Members, protocol.PoolMember{HostID: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ejected", ObservedAt: time.Now().UTC()})
+	ejected.Members = append(ejected.Members, protocol.PoolMember{HostID: l.member.id, Hostname: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ejected", ObservedAt: time.Now().UTC()})
 	l.master.inv.Managed.Membership = ejected
 	l.send(&l.master, nil)
 

@@ -6,6 +6,7 @@ import type { ConsoleMedia } from "./console";
 import { guestNames } from "./vm-create";
 import { GuestOS } from "./guest-os";
 import { VMPanel, TagList, stateBadge } from "./vm-panel";
+import { tagStyle } from "./vm-edit";
 import { readPreference, writePreference } from "./dock";
 import { Badge, MiniBar, MissingPanel, Panel } from "./ui";
 import { Icon } from "./icons";
@@ -49,7 +50,7 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
   mediaControls: (vm: VM) => ConsoleMedia; installMedia: (vm: VM) => { busy: boolean; note: string; onEject: () => void };
 }) {
   const [query, setQuery] = useState("");
-  const [group, setGroup] = useState(false);
+  const [groupBy, setGroupBy] = useState<"none" | "host" | "tag">("none");
   // Networks links its VM count here with that network already chosen in the Network facet (by id).
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   useEffect(() => {
@@ -133,9 +134,21 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
   // A VM whose host is not in the inventory still gets a group, so grouping never hides it.
   const unplaced = rows.filter(v => !groups.some(h => h.id === v.host_id));
   // Flat lists above this size only paint the visible rows; grouping keeps the full tree.
-  const virtualize = !group && rows.length > 40;
+  const virtualize = groupBy === "none" && rows.length > 40;
   const virt = useVirtualWindow(virtualize ? rows.length : 0, 36);
-  const body = group ? groups.map(h => <Fragment key={h.id}>
+  // A VM with several tags appears under each of them; untagged VMs close the list.
+  const tagNames = groupBy === "tag" ? [...new Set(rows.flatMap(v => v.spec?.tags ?? []))].sort() : [];
+  const untagged = groupBy === "tag" ? rows.filter(v => !v.spec?.tags?.length) : [];
+  const body = groupBy === "tag" ? <>
+    {tagNames.map(t => <Fragment key={t}>
+      <tr className="group"><td colSpan={span}><span className="tag" style={tagStyle(t)}>{t}</span> <span className="muted">({rows.filter(v => v.spec?.tags?.includes(t)).length})</span></td></tr>
+      {rows.filter(v => v.spec?.tags?.includes(t)).map(v => <Fragment key={v.id}>{row(v)}</Fragment>)}
+    </Fragment>)}
+    {untagged.length > 0 && <>
+      <tr className="group"><td colSpan={span}>No tags <span className="muted">({untagged.length})</span></td></tr>
+      {untagged.map(row)}
+    </>}
+  </> : groupBy === "host" ? groups.map(h => <Fragment key={h.id}>
     <tr className="group"><td colSpan={span}>{poolName(h.pool_id)} › {h.hostname || h.id} {h.connection !== "fresh" && <Badge value="stale" />}</td></tr>
     {rows.filter(v => v.host_id === h.id).map(row)}
   </Fragment>).concat(unplaced.length ? [<Fragment key="unknown-host">
@@ -150,7 +163,9 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
     <h1 className="sr-only">Virtual machines</h1>
     <aside className={`vm-filters${filtersOpen ? " open" : ""}`} aria-label="Filters">
       <label className="search"><Icon kind="search" /><input type="search" placeholder="Search name, IP, tag" aria-label="Search name, IP address or tag" value={query} onChange={e => setQuery(e.target.value)} /></label>
-      <label className="toggle-row">Group by host<input type="checkbox" role="switch" className="switch" checked={group} onChange={e => setGroup(e.target.checked)} /></label>
+      <div className="group-by" role="group" aria-label="Group by">Group by
+        <span className="ov-seg">{(["none", "host", "tag"] as const).map(g => <button key={g} type="button" aria-pressed={groupBy === g} onClick={() => setGroupBy(g)}>{g === "none" ? "None" : g === "host" ? "Host" : "Tag"}</button>)}</span>
+      </div>
       {facetDefs.map(([facet, values, label]) => {
         const counts = new Map<string, number>();
         vms.forEach(v => values(v).forEach(value => counts.set(value, (counts.get(value) || 0) + 1)));

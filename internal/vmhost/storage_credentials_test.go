@@ -2,6 +2,8 @@
 package vmhost
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost/vmhosttest"
 )
 
 func testCredentialHandoff() protocol.StorageCredentialHandoff {
@@ -41,9 +44,6 @@ func TestStorageCredentialReceiptIsDurableAndScoped(t *testing.T) {
 	if err = credentialReceiptValid(state, first.Receipt, "repo-1", "pool-1", "host-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.Remove(filepath.Join(state, credentialDirectory, first.Receipt)); err != nil {
-		t.Fatal(err)
-	}
 	if err = bindCredentialReceipt(state, first.Receipt, "repo-1", "pool-1", "host-1", "storage-register-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +60,8 @@ func TestStorageCredentialReceiptIsDurableAndScoped(t *testing.T) {
 		t.Fatal("cross-host receipt retirement accepted")
 	}
 	b, err := os.ReadFile(credentialPath(state, handoff.Offer.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(b), handoff.Credentials.Secret) {
-		t.Fatal("credential was not persisted on Core")
+	if err != nil || strings.Contains(string(b), handoff.Credentials.Secret) {
+		t.Fatalf("receipt must carry no secret: %q, %v", b, err)
 	}
 	mountBody, err := os.ReadFile(filepath.Join(state, credentialDirectory, first.Receipt))
 	if err != nil || !strings.Contains(string(mountBody), handoff.Credentials.Secret) {
@@ -184,17 +181,6 @@ func TestStorageCredentialReplayRepairsMountCredentialArtifacts(t *testing.T) {
 			},
 		},
 		{
-			name: "same-length-corrupt",
-			setup: func(t *testing.T, path string, want []byte) {
-				t.Helper()
-				corrupt := append([]byte(nil), want...)
-				corrupt[0] ^= 1
-				if err := os.WriteFile(path, corrupt, 0600); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
 			name: "mode",
 			setup: func(t *testing.T, path string, _ []byte) {
 				t.Helper()
@@ -288,6 +274,9 @@ func TestStorageCredentialReplayRepairsMountCredentialArtifacts(t *testing.T) {
 			if err != nil || !info.Mode().IsRegular() || info.Mode() != 0600 {
 				t.Fatalf("repaired credential = %v, %v", info, err)
 			}
+			if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Nlink != 1 || st.Uid != uint32(os.Geteuid()) {
+				t.Fatalf("repaired credential is not an exclusive inode: %#v", info.Sys())
+			}
 			got, err := os.ReadFile(path)
 			if err != nil || string(got) != string(want) {
 				t.Fatalf("repaired bytes = %q, %v", got, err)
@@ -320,5 +309,225 @@ func TestStorageCredentialReplayRepairsWrongOwner(t *testing.T) {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || st.Uid != uint32(os.Geteuid()) || info.Mode() != 0600 {
 		t.Fatalf("repaired owner/mode = %#v", info)
+	}
+}
+
+func TestStorageCredentialMissingFileRefusesDifferentSecret(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, credentialDirectory, receipt.Receipt)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	changed := handoff
+	changed.Credentials.Secret = "different-secret"
+	if _, err := SaveStorageCredential(state, changed); err == nil {
+		t.Fatal("missing credential file accepted a different secret under the same receipt")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("conflicting replay wrote a credentials file: %v", err)
+	}
+	if _, err := SaveStorageCredential(state, handoff); err != nil {
+		t.Fatalf("same-secret repair after loss: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(got), handoff.Credentials.Secret) {
+		t.Fatalf("same-secret repair: %q, %v", got, err)
+	}
+}
+
+func TestStorageCredentialReplayRepairsDivergentExclusiveFile(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, credentialDirectory, receipt.Receipt)
+	if err := os.WriteFile(path, []byte("username=operator\npassword=tampered\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveStorageCredential(state, handoff); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	want, errBody := smbAuthFileBody(handoff.Credentials.Username, handoff.Credentials.Secret, handoff.Credentials.Domain)
+	if err != nil || errBody != nil || string(got) != want {
+		t.Fatalf("divergent file was not repaired: %q want %q (%v, %v)", got, want, err, errBody)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Nlink != 1 || st.Uid != uint32(os.Geteuid()) {
+		t.Fatalf("repaired file is not exclusive: %#v", st)
+	}
+}
+
+// systemd 257 fills no credentials directory for .mount units, so the unit names a root-only
+// credentials file instead of loading a credential; the secret never appears in the unit.
+func TestStorageCredentialIsRootOnlyFileNamedByMountUnit(t *testing.T) {
+	stateDir := t.TempDir()
+	handoff := protocol.StorageCredentialHandoff{
+		Offer:       protocol.StorageCredentialOffer{RequestID: "req-1", RegistrationRequestID: "req-1", PoolID: "pool-1", HostID: "host-1"},
+		Credentials: protocol.StorageCredentials{Username: "operator", Secret: "private-example-secret", Domain: "EXAMPLE"},
+	}
+	receipt, err := SaveStorageCredential(stateDir, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(stateDir, credentialDirectory, receipt.Receipt)
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("credentials file: %v, %v", info, err)
+	}
+	// A retried handoff finds the same receipt; a different secret for it is refused.
+	if again, err := SaveStorageCredential(stateDir, handoff); err != nil || again.Receipt != receipt.Receipt {
+		t.Fatalf("replay: %+v, %v", again, err)
+	}
+	handoff.Credentials.Secret = "another-secret"
+	if _, err := SaveStorageCredential(stateDir, handoff); err == nil {
+		t.Fatal("replay with a different secret was accepted")
+	}
+	got, err := PoolStorageCredential(stateDir, receipt.Receipt)
+	if err != nil || got.Username != "operator" || got.Secret != "private-example-secret" || got.Domain != "EXAMPLE" {
+		t.Fatalf("pool credential: %+v, %v", got, err)
+	}
+	unit := string(remoteUnit("//smb.example.test/vms", "/var/lib/nex-storage/vms", "cifs", smbMountOptions("1000", "1000", file)))
+	if !strings.Contains(unit, ",credentials="+file+",") || strings.Contains(unit, "LoadCredential") || strings.Contains(unit, "private-example-secret") {
+		t.Errorf("unit does not just name the credentials file:\n%s", unit)
+	}
+}
+
+// Regression: systemd 257 (Debian 13) has no --no-ask-password; the fake rejects it like the real tool.
+func TestSealCredentialUsesOnlyOptionsSystemd257Accepts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key.cred")
+	if err := SealCredential(context.Background(), "nex-test", path, []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := OpenCredential(context.Background(), "nex-test", path); err != nil || string(got) != "secret" {
+		t.Fatalf("open: %q, %v", got, err)
+	}
+	if _, err := vmhosttest.FakeSystemdCreds(context.Background(), nil, "systemd-creds", "encrypt", "-", "-"); err == nil {
+		t.Fatal("fake accepts an option systemd 257 rejects")
+	}
+}
+
+func TestRealSystemdCredsIsRefusedInTests(t *testing.T) {
+	if _, err := realSystemdCreds(context.Background(), nil, "systemd-creds", "encrypt", "-", "-"); err == nil || !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("real systemd-creds was not refused: %v", err)
+	}
+}
+
+func TestStorageCredentialDecryptFailureIsRefused(t *testing.T) {
+	stateDir := t.TempDir()
+	handoff := protocol.StorageCredentialHandoff{
+		Offer:       protocol.StorageCredentialOffer{RequestID: "req-1", RegistrationRequestID: "req-1", PoolID: "pool-1", HostID: "host-1"},
+		Credentials: protocol.StorageCredentials{Username: "operator", Secret: "private-example-secret"},
+	}
+	receipt, err := SaveStorageCredential(stateDir, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, credentialDirectory, receipt.Receipt), []byte("garbage"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := PoolStorageCredential(stateDir, receipt.Receipt); err == nil {
+		t.Fatalf("undecryptable credential was read: %+v", got)
+	}
+}
+
+// A crash between writing the credentials file and the receipt, or inside an atomic write,
+// leaves a secret no receipt names and nothing would ever retire. The listing every report
+// makes removes it, and nothing a receipt names.
+func TestStorageCredentialListingSweepsOrphanedSecrets(t *testing.T) {
+	state := t.TempDir()
+	receipt, err := SaveStorageCredential(state, testCredentialHandoff())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(state, credentialDirectory)
+	orphan := filepath.Join(dir, strings.Repeat("a", 48))
+	temp := filepath.Join(dir, ".write-123456")
+	legacyKey := filepath.Join(dir, "receipt-key")
+	other := filepath.Join(dir, "operator notes.txt")
+	for _, p := range []string{orphan, temp, legacyKey, other} {
+		if err := os.WriteFile(p, []byte("password=left-behind\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed, err := StorageCredentialReceipts(state)
+	if err != nil || len(listed) != 1 || listed[0].Receipt != receipt.Receipt {
+		t.Fatalf("listing = %+v, %v", listed, err)
+	}
+	for _, p := range []string{orphan, temp, legacyKey} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived the sweep: %v", filepath.Base(p), err)
+		}
+	}
+	for _, p := range []string{filepath.Join(dir, receipt.Receipt), other} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("sweep removed %s: %v", filepath.Base(p), err)
+		}
+	}
+}
+
+// A receipt written with the secret inside the JSON (the layout before the credentials
+// file held it alone) is rewritten without it, and a retry of the same handoff still matches.
+func TestStorageCredentialListingScrubsLegacyPlaintextReceipt(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := credentialPath(state, handoff.Offer.RequestID)
+	legacy, err := json.Marshal(struct {
+		protocol.StorageCredentialReceipt
+		Username string `json:"username"`
+		Secret   string `json:"secret"`
+		Proof    string `json:"proof"`
+	}{receipt, handoff.Credentials.Username, handoff.Credentials.Secret, "keyed-proof-from-the-old-layout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StorageCredentialReceipts(state); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(b), handoff.Credentials.Secret) {
+		t.Fatalf("legacy receipt still holds the secret: %q, %v", b, err)
+	}
+	if again, err := SaveStorageCredential(state, handoff); err != nil || again.Receipt != receipt.Receipt {
+		t.Fatalf("retry of the saved handoff after the scrub: %+v, %v", again, err)
+	}
+}
+
+// The proof of a retired receipt would stay an offline guess oracle for the retired password.
+func TestStorageCredentialRetirementDropsProof(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retireStorageCredential(state, receipt.Receipt, "pool-1", "host-1", false); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(credentialPath(state, handoff.Offer.RequestID))
+	if err != nil || strings.Contains(string(b), `"proof"`) {
+		t.Fatalf("retired tombstone keeps a proof: %q, %v", b, err)
+	}
+	changed := handoff
+	changed.Credentials.Secret = "another"
+	if _, err := SaveStorageCredential(state, changed); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("replay on a retired receipt = %v", err)
 	}
 }

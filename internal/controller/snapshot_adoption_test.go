@@ -16,7 +16,7 @@ func TestFreshControllerRetainsMasterSnapshotCatalogObservation(t *testing.T) {
 	master := a.enroll(a.token(site, ""), csr(t))
 	member := a.enroll(a.token(site, ""), csr(t))
 	membership := &protocol.PoolMembership{PoolID: a.poolOf(master.HostID), MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
 	}}
 	snapshot := protocol.PoolVMSnapshot{ID: "snapshot-1", VMID: "11111111-1111-4111-8111-111111111111", Name: "Before update", Description: "Original description", CreatedAt: time.Now().UTC(), SpecRevision: 2, SpecSHA256: strings.Repeat("a", 64), DiskIdentitySHA256: strings.Repeat("b", 64)}
 	inv := &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{Membership: membership, PoolVMSnapshots: []protocol.PoolVMSnapshot{snapshot}, PoolVMSnapshotsReported: true}}
@@ -267,7 +267,7 @@ func TestQueuedAdoptedSnapshotOutcomesAreNotDispatched(t *testing.T) {
 	for _, operation := range operations {
 		if operation.RequestID == "adopt-outcome:"+host.HostID+":core-queued-snap" {
 			found = true
-			if operation.Status != "queued" || operation.ID != adoptedSnapshotOperationID(host.HostID, "core-queued-snap") {
+			if operation.Status != "dispatched" || operation.ID != adoptedSnapshotOperationID(host.HostID, "core-queued-snap") {
 				t.Fatalf("adopted queued snapshot %#v", operation)
 			}
 		}

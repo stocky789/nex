@@ -4,7 +4,10 @@ import { cp, mkdir } from "node:fs/promises";
 await mkdir("dist", { recursive: true });
 await cp("public", "dist", { recursive: true });
 const options = {
-  entryPoints: { app: "src/main.tsx", local: "src/local.tsx" },
+  entryPoints: process.argv.includes("--demo")
+    ? { app: "src/demo.ts" }
+    : { app: "src/main.tsx", local: "src/local.tsx" },
+  define: { __NEX_DEMO__: String(process.argv.includes("--demo")) },
   bundle: true,
   splitting: true,
   minify: true,

@@ -1,0 +1,44 @@
+{
+  "summary": "A test cleanup to an unreachable member shows the waiting reason member unreachable; a run reservation or scheduler tick for a deleted policy is refused as not found; a delete of an unknown policy leaves no pending receipt; the delete and forget confirmation dialogs space the typed name from the buttons.",
+  "paths": [
+    "internal/agent/backup_peer_cleanup.go",
+    "internal/agent/backup_blocker.go",
+    "internal/agent/backup_blocker_test.go",
+    "internal/agent/run.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_schedule.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_policy_delete_test.go",
+    "web/src/style.css",
+    "docs/BUG_LEDGER.md",
+    "docs/API.md",
+    "docs/changes/2026-10-02-sixth-closeout-run-and-cleanup-fixes.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator step changes: a task shows an extra waiting reason, a racing run fails with the existing backup policy not found message, and the dialogs only gain spacing."
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Behavior inside existing backup-now, backup policy delete and test-cleanup operations: errors and the operation error text change, no fields, routes or commands change. Replays of the same request ID keep their recorded outcome.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes inside the backup recovery plan."
+  },
+  "state": {
+    "owner": "core",
+    "record": "The pool master's backup run record, policy store and operation receipt, and the host's cleanup journal entry (waiting reason).",
+    "reason": "No new durable state. The policy check and receipt write happen on the master under its authority lock, and a fresh Controller reads the same records through the existing inventory."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent (TestPendingCleanupReportsUnreachableMember, TestPolicyDeleteRacesRunReservation, TestDeleteMissingPolicyLeavesNoReceipt), each failing with its fix removed, plus a sanitized scenario-lab run on a three-host pool (blocked member cleanup, 20 concurrent delete versus run-now iterations with 0 anomalies, unknown-policy delete leaving no receipt, dialog spacing screenshots); the raw lab logs and captures are ignored local files and are not tracked evidence. At the time of this record needs_attention runs did not block a policy delete; later review fixes (docs/changes/2026-10-02-review-findings-fixes.json) refuse a delete while any run of the job is pending or needs_attention.",
+    "evidence": [
+      "internal/agent/backup_blocker_test.go",
+      "internal/agent/backup_policy_delete_test.go"
+    ]
+  }
+}

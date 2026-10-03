@@ -34,6 +34,12 @@ func init() {
 		}
 		return vmhost.VerifyBackupRepository(ctx, repo)
 	}
+	verifyBackupRepositoryRead = func(ctx context.Context, repo protocol.BackupRepository) error {
+		if _, ok := testBackupMounts.Load(repo.MountPath); ok {
+			return verifyBackupRepository(ctx, repo)
+		}
+		return vmhost.VerifyBackupRepositoryRead(ctx, repo)
+	}
 }
 
 func upsertTestBackupRepository(s *Store, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
@@ -42,8 +48,9 @@ func upsertTestBackupRepository(s *Store, repo protocol.BackupRepository) (proto
 	prepared.Identity = &protocol.NFSStorageIdentity{
 		Server: repo.Source.Server, Export: repo.Source.Export, FilesystemID: "test-nfs",
 	}
+	prepared = checkBackupRepositoryAccessForStore(context.Background(), s, prepared)
 	repo.MountPath = ""
-	return upsertPoolBackupRepositoryPrepared(s, repo, prepared)
+	return upsertPoolBackupRepositoryPrepared(s, repo, prepared, false, nil)
 }
 
 func seedBackupMaster(t *testing.T) *Store {
@@ -64,7 +71,7 @@ func TestBackupRepositoryCRUDAndInventoryFlags(t *testing.T) {
 		MountPath: mount,
 	}
 	saved, err := upsertTestBackupRepository(s, repo)
-	if err != nil || saved.Generation != 1 {
+	if err != nil || saved.ID != repo.ID {
 		t.Fatalf("upsert: %#v err=%v", saved, err)
 	}
 	listed, err := ListPoolBackupRepositories(s)
@@ -214,7 +221,7 @@ func TestRestoreAsNewControllerPathReservesMissingRunBeforeSettle(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	cmd := protocol.Command{

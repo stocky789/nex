@@ -249,11 +249,7 @@ func (e *ManagedEngine) deleteStoppedSnapshot(
 			}
 		}
 		if err != nil {
-			if cleanupErr := e.removePreflightSnapshot(ctx, command.OperationID); cleanupErr != nil {
-				return protocol.Result{OperationID: command.OperationID, Status: "needs_attention", Error: errors.Join(err, cleanupErr).Error(), ObservedAt: time.Now().UTC()}, nil
-			}
-			result.Error = err.Error()
-			return result, nil
+			return e.failSnapshotPreflight(ctx, result, command.OperationID, err)
 		}
 		j.RecoveryStage, j.Stage = "local-intent", "snapshot-delete-local-intent"
 		if err = e.saveSnapshotUnderLock(ctx, j, false); err != nil {
@@ -321,7 +317,7 @@ func (e *ManagedEngine) deleteStoppedSnapshot(
 	}
 	if err := e.finishNativeSnapshotDelete(ctx, command, &j); err != nil {
 		cause := errors.Join(nativeCommandErr, err)
-		if !j.SnapshotDelete.MetadataDeleted && len(j.SnapshotDelete.UnlinkedPaths) == 0 {
+		if !j.SnapshotDelete.MetadataDeleted && len(j.SnapshotDelete.UnlinkedPaths) == 0 && !errors.Is(cause, ErrOwnershipUnconfirmed) {
 			if failed, failErr := e.failSnapshotDeleteBeforeEffects(ctx, j, settle, cause); failErr == nil {
 				return failed, nil
 			} else if !errors.Is(failErr, errSnapshotDeleteEffectsPresent) {
@@ -349,7 +345,7 @@ func (e *ManagedEngine) snapshotDeleteIntent(ctx context.Context, command protoc
 	}
 	snapshot, nativeRaw, err := readManagedNativeSnapshotXML(ctx, command.VM.ID, nativeName)
 	if err != nil {
-		return managedSnapshotDeleteRecord{}, errors.New("selected native snapshot metadata cannot be read")
+		return managedSnapshotDeleteRecord{}, err
 	}
 	nativeDigest := sha256.Sum256(nativeRaw)
 	currentName, err := snapshotRevertCurrentName(ctx, command.VM.ID)
@@ -459,9 +455,9 @@ func snapshotDeleteMediaOverlayParent(ctx context.Context, js []managedJournal, 
 }
 
 func refuseSnapshotDeleteWithChildren(ctx context.Context, vmID, nativeName string) error {
-	b, err := managedVirsh(ctx, "snapshot-list", vmID, "--name")
+	b, err := managedSnapshotProbe(ctx, "snapshot-list", vmID, "--name")
 	if err != nil {
-		return errors.New("native snapshot list is unavailable")
+		return err
 	}
 	for _, name := range strings.Fields(string(b)) {
 		if name == "" || name == nativeName {
@@ -469,7 +465,7 @@ func refuseSnapshotDeleteWithChildren(ctx context.Context, vmID, nativeName stri
 		}
 		parent, err := snapshotParentName(ctx, vmID, name)
 		if err != nil {
-			return errors.New("native snapshot parent relationships are unavailable")
+			return err
 		}
 		if parent == nativeName {
 			return errors.New("snapshot delete refuses points that still have native children")
@@ -479,7 +475,7 @@ func refuseSnapshotDeleteWithChildren(ctx context.Context, vmID, nativeName stri
 }
 
 func snapshotParentName(ctx context.Context, vmID, name string) (string, error) {
-	b, err := managedVirsh(ctx, "snapshot-dumpxml", vmID, name)
+	b, err := managedSnapshotProbe(ctx, "snapshot-dumpxml", vmID, name)
 	if err != nil {
 		return "", err
 	}
@@ -537,8 +533,11 @@ func (e *ManagedEngine) runNativeSnapshotDelete(ctx context.Context, command pro
 	}
 	if !absent {
 		if record.WasCurrent {
-			state, err := managedVirsh(ctx, "domstate", command.VM.ID)
-			if err != nil || strings.TrimSpace(string(state)) != "shut off" {
+			state, err := managedSnapshotProbe(ctx, "domstate", command.VM.ID)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(string(state)) != "shut off" {
 				return errors.New("VM must remain stopped for snapshot consolidation")
 			}
 			// Resume after redefine: sources already on parents — skip commit/redefine.
@@ -860,20 +859,20 @@ func collectManagedSnapshotReferences(ctx context.Context, vmID string) (map[str
 		return nil
 	}
 	for _, args := range [][]string{{"dumpxml", vmID, "--inactive"}, {"dumpxml", vmID}} {
-		raw, err := managedVirsh(ctx, args...)
+		raw, err := managedSnapshotProbe(ctx, args...)
 		if err != nil {
 			if len(args) == 2 {
 				continue
 			}
-			return nil, errors.New("domain XML is unavailable for reference scan")
+			return nil, err
 		}
 		if err := addDomain(raw); err != nil {
 			return nil, err
 		}
 	}
-	names, err := managedVirsh(ctx, "snapshot-list", vmID, "--name")
+	names, err := managedSnapshotProbe(ctx, "snapshot-list", vmID, "--name")
 	if err != nil {
-		return nil, errors.New("snapshot list is unavailable for reference scan")
+		return nil, err
 	}
 	for _, name := range strings.Fields(string(names)) {
 		if name == "" {

@@ -60,6 +60,8 @@ jobs:
         run: .cache/phase1-qa-venv/bin/python tests/integration/cluster_storage_browser.py
       - name: Verify Controller action refresh without page reloads
         run: .cache/phase1-qa-venv/bin/python tests/integration/controller_refresh_browser.py --evidence .cache/controller-refresh-browser
+      - name: Verify backup workspace interactions with simulated Core replies
+        run: .cache/phase1-qa-venv/bin/python tests/integration/backup_workspace_browser.py --evidence .cache/backup-workspace-browser
       - name: Capture Controller gallery with neutral demo inventory
         run: .cache/phase1-qa-venv/bin/python tests/integration/website_controller_captures.py --output .cache/website-controller-captures/images --evidence .cache/website-controller-captures/results.json
       - name: Verify enrollment, recovery and browser workflows
@@ -92,12 +94,12 @@ jobs:
       # runner can exceed Go's default ten-minute package deadline.
       - name: Test Go services and recovery
         run: go test -race -timeout 20m ./...
-      - name: Exercise root-owned snapshot recovery fixtures
+      - name: Exercise root-owned snapshot and SMB rollback fixtures
         run: |
           mkdir -p .cache
           go test -race -c -o .cache/vmhost-snapshot.test ./internal/vmhost
-          # Only stoppedSnapshotTestFixture callers skip without root (Geteuid gate).
-          sudo -n .cache/vmhost-snapshot.test -test.run '^(TestBlockedSnapshotCaptureAllowsUnrelatedVMStart|TestPersistedNativeSnapshotRetryReconcilesWithoutRepeatingCreate|TestSnapshotReserveRefusalClearsLocalIntentFence)$' -test.v -test.timeout 5m
+          # These fixtures preserve the native root-owned storage ancestry boundary.
+          sudo -n .cache/vmhost-snapshot.test -test.run '^(TestBlockedSnapshotCaptureAllowsUnrelatedVMStart|TestPersistedNativeSnapshotRetryReconcilesWithoutRepeatingCreate|TestSnapshotReserveRefusalClearsLocalIntentFence|TestPrepareBackupRepositorySMBReplacesMountOfAnotherCredential|TestPrepareBackupRepositorySMBReplacementFailureRestoresPriorAccess|TestPrepareBackupRepositorySMBReplacementRollbackFailureRetainsCredentials)$' -test.v -test.timeout 5m
       - name: Verify Controller package startup gate rejects the SQLite stub
         env:
           DEBIAN_FRONTEND: noninteractive

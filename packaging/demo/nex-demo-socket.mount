@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Install as run-nex\x2ddemo.mount (the escaped unit name for /run/nex-demo).
+[Unit]
+Description=Bounded Nex demo Unix socket filesystem
+# This late /run mount follows tmpfiles, not the early local-fs target.
+DefaultDependencies=no
+Conflicts=umount.target
+After=systemd-tmpfiles-setup.service
+Before=docker.service nex-demo-proxy.service umount.target
+
+[Mount]
+What=tmpfs
+Where=/run/nex-demo
+Type=tmpfs
+Options=mode=0700,uid=64050,gid=64050,size=1M,nr_inodes=128,nosuid,nodev,noexec
+
+[Install]
+WantedBy=multi-user.target

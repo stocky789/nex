@@ -217,6 +217,7 @@ func TestAcknowledgedBackupMetadataOutcomesRemainInDurableInventory(t *testing.T
 		{protocol.Command{Kind: "backup-repository-test", BackupRepository: repo}, repo.ID, repo.Name},
 		{protocol.Command{Kind: "backup-policy-upsert", BackupPolicy: policy}, policy.ID, policy.Name},
 		{protocol.Command{Kind: "backup-policy-pause", BackupPolicy: policy}, policy.ID, policy.Name},
+		{protocol.Command{Kind: "backup-policy-delete", PolicyDelete: &protocol.DeleteBackupPolicyRequest{PolicyID: policy.ID}}, policy.ID, ""},
 		{protocol.Command{Kind: "backup-policy-run-now", BackupPolicy: policy, VM: &protocol.VMCreateSpec{ID: "vm-1"}}, policy.ID, policy.Name},
 		{protocol.Command{Kind: "backup-protect", BackupProtect: protect}, protect.RecoveryPointID, ""},
 		{protocol.Command{Kind: "backup-catalog-import", CatalogImport: imported}, repo.ID, ""},

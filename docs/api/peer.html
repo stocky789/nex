@@ -46,14 +46,23 @@
 <li><a href="#peerReplaceZFSDisk">POST /api/v1/pool/zfs-provision/replace</a></li>
 <li><a href="#peerObserveZFSAccess">GET /api/v1/pool/zfs-provision/{repository_id}/access</a></li>
 <li><a href="#peerSubmitCatalogBoundRestore">POST /api/v1/pool/backup/restore</a></li>
+<li><a href="#peerDeliverBackupCredential">POST /api/v1/pool/backup/credential</a></li>
+<li><a href="#peerForgetBackupRepository">POST /api/v1/pool/backup/forget</a></li>
+<li><a href="#peerListBackupRepositorySnapshots">GET /api/v1/pool/backup/retain</a></li>
+<li><a href="#peerRetainBackupRepositories">POST /api/v1/pool/backup/retain</a></li>
+<li><a href="#peerProbeBackupRepositoryAccess">POST /api/v1/pool/backup/access</a></li>
+<li><a href="#peerPullBackupCredentials">GET /api/v1/pool/backup/credentials</a></li>
+<li><a href="#peerCheckS3BackupCapability">POST /api/v1/pool/backup/capability/s3</a></li>
+<li><a href="#peerCheckSFTPBackupCapability">POST /api/v1/pool/backup/capability/sftp</a></li>
+<li><a href="#peerCheckSMBBackupCapability">POST /api/v1/pool/backup/capability/smb3</a></li>
 </ul></nav>
 <section id="peerAdvertiseOrigin"><h2>POST <code>/api/v1/pool/advertise</code></h2>
-<p>Advertise member peer origin, system UUID, management-controller report and watchdog</p><p>Served by the pool master. Records the calling member&#x27;s peer listener origin, its own SMBIOS system UUID, its own management-controller report and its own watchdog capability in the master membership: the origin so the master can later contact that member (PoolMasterCertificate routes), the UUID so another host can prove a management controller belongs to this machine before fencing it, and the watchdog so the master can answer whether that host could shut itself out after it is gone. Each field is recorded on its own and either may be omitted; both are observations and move no membership generation. The member is identified only by its certificate; input cannot name another member. Last write wins and repeats are idempotent; an unknown member is accepted without change. The member persists a pending origin first and retries it at startup until the master returns 204. Body at most 4 KiB; any non-POST method is rejected as 400 after authentication.</p>
+<p>Advertise member peer origin and host observations</p><p>Served by the pool master over authenticated member mTLS. Records only the calling member own peer listener origin, system UUID, management-controller and watchdog observations in Core membership. The certificate selects the member; body input cannot name another. Repeats with unchanged values do not rewrite authority. A pending origin is retried by Core. Body at most 4 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerAdvertiseOrigin&quot;,
-  &quot;summary&quot;: &quot;Advertise member peer origin, system UUID, management-controller report and watchdog&quot;,
-  &quot;description&quot;: &quot;Served by the pool master. Records the calling member&#x27;s peer listener origin, its own SMBIOS system UUID, its own management-controller report and its own watchdog capability in the master membership: the origin so the master can later contact that member (PoolMasterCertificate routes), the UUID so another host can prove a management controller belongs to this machine before fencing it, and the watchdog so the master can answer whether that host could shut itself out after it is gone. Each field is recorded on its own and either may be omitted; both are observations and move no membership generation. The member is identified only by its certificate; input cannot name another member. Last write wins and repeats are idempotent; an unknown member is accepted without change. The member persists a pending origin first and retries it at startup until the master returns 204. Body at most 4 KiB; any non-POST method is rejected as 400 after authentication.&quot;,
+  &quot;summary&quot;: &quot;Advertise member peer origin and host observations&quot;,
+  &quot;description&quot;: &quot;Served by the pool master over authenticated member mTLS. Records only the calling member own peer listener origin, system UUID, management-controller and watchdog observations in Core membership. The certificate selects the member; body input cannot name another. Repeats with unchanged values do not rewrite authority. A pending origin is retried by Core. Body at most 4 KiB.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMemberCertificate&quot;: []
@@ -66,7 +75,7 @@
       &quot;description&quot;: &quot;Origin recorded.&quot;
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Non-POST, invalid JSON, an invalid management-controller report, an invalid watchdog report, or neither a bare HTTPS origin nor a usable system UUID nor a report was supplied.&quot;,
+      &quot;description&quot;: &quot;Non-POST, invalid JSON, invalid origin, management-controller or watchdog report, or no usable advertised field.&quot;,
       &quot;content&quot;: {
         &quot;text/plain&quot;: {
           &quot;schema&quot;: {
@@ -89,7 +98,7 @@
       &quot;description&quot;: &quot;Method not allowed (sent after authentication, before the body is read); `Allow: POST`.&quot;
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Peer state could not be loaded or saved; retry later.&quot;,
+      &quot;description&quot;: &quot;Authority or peer state unavailable; the member retries after the pool authority is writable again.&quot;,
       &quot;content&quot;: {
         &quot;text/plain&quot;: {
           &quot;schema&quot;: {
@@ -183,7 +192,7 @@
   }
 }</pre></details></section>
 <section id="peerSubmitBackup"><h2>POST <code>/api/v1/pool/backup</code></h2>
-<p>Submit backup or test cleanup work to a member</p><p>The current pool master sends backup-now or test-cleanup with a source-only Core-owned NFS repository. The member derives its own mount path and filesystem identity, verifies master mTLS identity and dispatches through its durable Store owner. Restore commands use the catalog-bound /api/v1/pool/backup/restore route. A repeated operation ID returns the retained result only for the same command; changed input is refused. Request body is limited to 64 KiB.</p>
+<p>Submit backup or test cleanup work to a member</p><p>The current pool master sends backup-now or test-cleanup with its Core-owned NFS repository source and observed filesystem identity. The member verifies master mTLS identity and its own mounted filesystem against the supplied NFS identity before owner-marker claim or native effects, then dispatches through its durable Store owner. Restore commands use the catalog-bound /api/v1/pool/backup/restore route. A repeated operation ID returns the retained result only for the same command; changed input is refused. An older member that derives NFS identity from source alone must be upgraded before this peer work is considered safe. Request body is limited to 64 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;security&quot;: [
@@ -219,7 +228,7 @@
   },
   &quot;operationId&quot;: &quot;peerSubmitBackup&quot;,
   &quot;summary&quot;: &quot;Submit backup or test cleanup work to a member&quot;,
-  &quot;description&quot;: &quot;The current pool master sends backup-now or test-cleanup with a source-only Core-owned NFS repository. The member derives its own mount path and filesystem identity, verifies master mTLS identity and dispatches through its durable Store owner. Restore commands use the catalog-bound /api/v1/pool/backup/restore route. A repeated operation ID returns the retained result only for the same command; changed input is refused. Request body is limited to 64 KiB.&quot;,
+  &quot;description&quot;: &quot;The current pool master sends backup-now or test-cleanup with its Core-owned NFS repository source and observed filesystem identity. The member verifies master mTLS identity and its own mounted filesystem against the supplied NFS identity before owner-marker claim or native effects, then dispatches through its durable Store owner. Restore commands use the catalog-bound /api/v1/pool/backup/restore route. A repeated operation ID returns the retained result only for the same command; changed input is refused. An older member that derives NFS identity from source alone must be upgraded before this peer work is considered safe. Request body is limited to 64 KiB.&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
     &quot;content&quot;: {
@@ -324,6 +333,9 @@
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;No durable member operation exists for this exact operation ID; the master retains its reservation for manual reconciliation and does not replay the POST.&quot;
     },
     &quot;405&quot;: {
       &quot;description&quot;: &quot;Unsupported method.&quot;
@@ -774,7 +786,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Join refused: not a master, invalid/expired/mismatched offer, invalid CSR, host already a member, or persistence failure. Not retryable with the same input except after a lost success.&quot;,
+      &quot;description&quot;: &quot;First admission refused: not a master, invalid/expired/mismatched offer, invalid CSR or missing/invalid hostname (409 \&quot;joining Core did not report a valid hostname; upgrade and restart Nex Core on the joining host\&quot;), already admitted host, or persistence failure. An exact replay of a previously issued offer returns its original certificate.&quot;,
       &quot;content&quot;: {
         &quot;text/plain&quot;: {
           &quot;schema&quot;: {
@@ -1278,12 +1290,12 @@
   }
 }</pre></details></section>
 <section id="peerStagePoolBackupPage"><h2>POST <code>/api/v1/pool/replica/backup-page</code></h2>
-<p>Stage one signed backup authority page on a pool member</p><p>The current pool master sends one page with its signed authority replica over pinned mutual TLS. The member checks pool, master, member, CA signature, generation, page length and SHA-256 before atomically staging it. Staged pages grant no authority. A later replica POST verifies every page and the full authority digest before storing the replica; same-content retries are safe. A POST with index -1 and empty data reports the next missing page so a retry resumes without retransmitting validated pages.</p>
+<p>Stage one signed backup authority page in a push session</p><p>The current pool master sends content-addressed backup authority pages over pinned mutual TLS in a signed, addressed push session. A signed replica with index -1 and null data opens a session (10-minute expiry, one per member) and returns the next missing page. Page requests name manifest_sha256 and index with page bytes or reuse_sha256; another manifest or master is refused with 409. Each page and complete frame is at most 256 KiB. Cleanup kind-7 frames contain {cleanup,point_count}, where cleanup.points is null; exactly point_count contiguous kind-8 BackupOrphanPointResult frames follow, across pages if necessary. Counts, unique cleanup identities, frame validity, total bytes and the ordered full-stream SHA-256 root are verified before final adoption. No history is truncated. Reuse links an already durable page blob, or returns 404 for bytes to be resent. Opening a complete session verifies the full root; content mismatch clears staging, while read failure returns 500 without clearing it. Collection preserves acknowledged and unexpired-upload roots. Staged pages grant no authority. Matching updated Core peers must be deployed and authority repushed from the durable current master before promotion; old cleanup framing fails closed in either direction.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerStagePoolBackupPage&quot;,
-  &quot;summary&quot;: &quot;Stage one signed backup authority page on a pool member&quot;,
-  &quot;description&quot;: &quot;The current pool master sends one page with its signed authority replica over pinned mutual TLS. The member checks pool, master, member, CA signature, generation, page length and SHA-256 before atomically staging it. Staged pages grant no authority. A later replica POST verifies every page and the full authority digest before storing the replica; same-content retries are safe. A POST with index -1 and empty data reports the next missing page so a retry resumes without retransmitting validated pages.&quot;,
+  &quot;summary&quot;: &quot;Stage one signed backup authority page in a push session&quot;,
+  &quot;description&quot;: &quot;The current pool master sends content-addressed backup authority pages over pinned mutual TLS in a signed, addressed push session. A signed replica with index -1 and null data opens a session (10-minute expiry, one per member) and returns the next missing page. Page requests name manifest_sha256 and index with page bytes or reuse_sha256; another manifest or master is refused with 409. Each page and complete frame is at most 256 KiB. Cleanup kind-7 frames contain {cleanup,point_count}, where cleanup.points is null; exactly point_count contiguous kind-8 BackupOrphanPointResult frames follow, across pages if necessary. Counts, unique cleanup identities, frame validity, total bytes and the ordered full-stream SHA-256 root are verified before final adoption. No history is truncated. Reuse links an already durable page blob, or returns 404 for bytes to be resent. Opening a complete session verifies the full root; content mismatch clears staging, while read failure returns 500 without clearing it. Collection preserves acknowledged and unexpired-upload roots. Staged pages grant no authority. Matching updated Core peers must be deployed and authority repushed from the durable current master before promotion; old cleanup framing fails closed in either direction.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -1293,7 +1305,7 @@
   &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 pool member&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
-    &quot;description&quot;: &quot;Signed replica, page index and base64 page bytes; index -1 with empty data requests progress. Body is bounded by the replica limit plus two page limits.&quot;,
+    &quot;description&quot;: &quot;Session open: signed replica with index -1 and no data. Page: manifest_sha256, index and base64 page bytes or reuse_sha256. Body is bounded by the replica limit plus two page limits.&quot;,
     &quot;content&quot;: {
       &quot;application/json&quot;: {
         &quot;schema&quot;: {
@@ -1307,7 +1319,7 @@
       &quot;description&quot;: &quot;Page staged; replica authority is unchanged.&quot;
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Invalid JSON, index, length or page SHA-256.&quot;
+      &quot;description&quot;: &quot;Invalid JSON, index, page size or reuse hint.&quot;
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
@@ -1316,13 +1328,13 @@
       &quot;description&quot;: &quot;Only POST is allowed.&quot;
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Replica scope, signature or generation is invalid.&quot;
+      &quot;description&quot;: &quot;Replica scope, signature or generation is invalid, or no push session is open for the named manifest and caller.&quot;
     },
     &quot;500&quot;: {
       &quot;description&quot;: &quot;Page could not be written.&quot;
     },
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Progress probe: next_index is the first absent or corrupt page, or page count when complete.&quot;,
+      &quot;description&quot;: &quot;Session open: next_index is the first missing or invalid page, or the page count after full-root validation.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -1330,6 +1342,9 @@
           }
         }
       }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Reuse hint names a missing or corrupt local page blob; resend the actual page bytes.&quot;
     }
   }
 }</pre></details></section>
@@ -2677,7 +2692,7 @@
   }
 }</pre></details></section>
 <section id="peerSubmitCatalogBoundRestore"><h2>POST <code>/api/v1/pool/backup/restore</code></h2>
-<p>Submit catalog-bound restore work to a member</p><p>The authenticated current pool master sends restore-as-new, restore-replace or test-restore with its pinned catalog point and source-only repository. Member derives its own NFS mount, durably binds the manifest digest before native effects and refuses a missing or different catalog digest. A lost reply is reconciled by the existing GET for the same operation ID. Old members without this route fail closed; the master retains the uncertain run and point pin. Request body is limited to 64 KiB.</p>
+<p>Submit catalog-bound restore work to a member</p><p>The authenticated current pool master sends restore-as-new, restore-replace or test-restore with its pinned catalog point and NFS repository source and master-observed filesystem identity. The member verifies its mounted NFS identity before owner-marker claim or native effects, durably binds the manifest digest and refuses a missing or different catalog digest. A lost reply is reconciled by the existing GET for the same operation ID. Old members without this route fail closed; the master retains the uncertain run and point pin. A member that has the route but derives NFS identity from source alone must be upgraded before peer restore is considered safe. Request body is limited to 64 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;security&quot;: [
@@ -2716,7 +2731,7 @@
   },
   &quot;operationId&quot;: &quot;peerSubmitCatalogBoundRestore&quot;,
   &quot;summary&quot;: &quot;Submit catalog-bound restore work to a member&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master sends restore-as-new, restore-replace or test-restore with its pinned catalog point and source-only repository. Member derives its own NFS mount, durably binds the manifest digest before native effects and refuses a missing or different catalog digest. A lost reply is reconciled by the existing GET for the same operation ID. Old members without this route fail closed; the master retains the uncertain run and point pin. Request body is limited to 64 KiB.&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends restore-as-new, restore-replace or test-restore with its pinned catalog point and NFS repository source and master-observed filesystem identity. The member verifies its mounted NFS identity before owner-marker claim or native effects, durably binds the manifest digest and refuses a missing or different catalog digest. A lost reply is reconciled by the existing GET for the same operation ID. Old members without this route fail closed; the master retains the uncertain run and point pin. A member that has the route but derives NFS identity from source alone must be upgraded before peer restore is considered safe. Request body is limited to 64 KiB.&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
     &quot;content&quot;: {
@@ -2734,6 +2749,450 @@
           ]
         }
       }
+    }
+  }
+}</pre></details></section>
+<section id="peerDeliverBackupCredential"><h2>POST <code>/api/v1/pool/backup/credential</code></h2>
+<p>Deliver a scoped backup credential to a member</p><p>The authenticated current pool master sends a repository projection, bound receipt metadata and transient secret to a ready member over pinned peer mTLS. The member validates pool, repository, kind, receipt and current master, then writes a private local receipt before replying 204. Exact delivery retries are idempotent; conflicting material, or a different receipt for an existing repository ID, is refused. Body is limited to 128 KiB. Controller never transports this peer secret.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerDeliverBackupCredential&quot;,
+  &quot;summary&quot;: &quot;Deliver a scoped backup credential to a member&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends a repository projection, bound receipt metadata and transient secret to a ready member over pinned peer mTLS. The member validates pool, repository, kind, receipt and current master, then writes a private local receipt before replying 204. Exact delivery retries are idempotent; conflicting material, or a different receipt for an existing repository ID, is refused. Body is limited to 128 KiB. Controller never transports this peer secret.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PeerBackupCredentialRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Scoped credential saved privately on the member.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Only POST is accepted.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Invalid scope, unavailable local state or conflicting receipt/material.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerForgetBackupRepository"><h2>POST <code>/api/v1/pool/backup/forget</code></h2>
+<p>Forget a backup repository on a member</p><p>The authenticated current pool master obtains exact member snapshots through GET /api/v1/pool/backup/retain, rechecks that it no longer holds the repository, then sends {repository:exact_snapshot}, at most 64 KiB. The ready member queues admission on its Store owner, checks unsettled journal work, and removes only the still-matching registration, mount and sealed credential. Identity, credential reference and UpdatedAt bind the snapshot; transient health/access observations do not. Unknown or changed records are idempotent no-ops (204), so a late sweep cannot delete a newly adopted registration. Mount detachment is bounded; failed work returns 409 and can be retried through a fresh snapshot. An unavailable owner returns 503. Matching updated Core peers are required; repository_id-only requests are no longer accepted. Offline members converge through later health sweeps.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerForgetBackupRepository&quot;,
+  &quot;summary&quot;: &quot;Forget a backup repository on a member&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master obtains exact member snapshots through GET /api/v1/pool/backup/retain, rechecks that it no longer holds the repository, then sends {repository:exact_snapshot}, at most 64 KiB. The ready member queues admission on its Store owner, checks unsettled journal work, and removes only the still-matching registration, mount and sealed credential. Identity, credential reference and UpdatedAt bind the snapshot; transient health/access observations do not. Unknown or changed records are idempotent no-ops (204), so a late sweep cannot delete a newly adopted registration. Mount detachment is bounded; failed work returns 409 and can be retried through a fresh snapshot. An unavailable owner returns 503. Matching updated Core peers are required; repository_id-only requests are no longer accepted. Offline members converge through later health sweeps.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false,
+          &quot;required&quot;: [
+            &quot;repository&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;repository&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Matching repository forgotten; an unknown or changed registration is a safe no-op.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Unsettled member work, invalid member state, or mount/credential removal refused; obtain a fresh snapshot and retry.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The Store owner or member authority is unavailable.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerListBackupRepositorySnapshots"><h2>GET <code>/api/v1/pool/backup/retain</code></h2>
+<p>Read exact member repository registrations for targeted cleanup</p><p>Only the authenticated pinned current pool master may read a ready member&#x27;s exact durable repository records, including pending-detach snapshots whose active registration is absent. The Store owner returns an immutable complete snapshot; this route sorts unique IDs and returns a page strictly after after_id, with at most 256 rows and 4 MiB including envelope and cursor. Follow next_after_id until omitted. These are per-page bounds: a stale member&#x27;s complete inventory can exceed the master&#x27;s live-registration limit. Every page is a new observation; concurrent insertion/deletion may be deferred to the next sweep, never inferred as permission to delete. The master discards partial collections on malformed pages, nonprogressing cursors, later refusal or transport failure and rechecks current absence before each exact targeted mutation. A single row unable to fit a page is 503 and is never silently omitted. Matching updated Core peers are required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerListBackupRepositorySnapshots&quot;,
+  &quot;summary&quot;: &quot;Read exact member repository registrations for targeted cleanup&quot;,
+  &quot;description&quot;: &quot;Only the authenticated pinned current pool master may read a ready member&#x27;s exact durable repository records, including pending-detach snapshots whose active registration is absent. The Store owner returns an immutable complete snapshot; this route sorts unique IDs and returns a page strictly after after_id, with at most 256 rows and 4 MiB including envelope and cursor. Follow next_after_id until omitted. These are per-page bounds: a stale member&#x27;s complete inventory can exceed the master&#x27;s live-registration limit. Every page is a new observation; concurrent insertion/deletion may be deferred to the next sweep, never inferred as permission to delete. The master discards partial collections on malformed pages, nonprogressing cursors, later refusal or transport failure and rechecks current absence before each exact targeted mutation. A single row unable to fit a page is 503 and is never silently omitted. Matching updated Core peers are required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;development&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;after_id&quot;,
+      &quot;in&quot;: &quot;query&quot;,
+      &quot;required&quot;: false,
+      &quot;description&quot;: &quot;Exclusive repository-ID cursor from next_after_id. Omit on the first page; supply exactly once. Unknown parameters, invalid escaping, duplicates, empty or invalid IDs are rejected.&quot;,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1,
+        &quot;maxLength&quot;: 64,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact durable member registrations and pending detach snapshots.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: false,
+            &quot;required&quot;: [
+              &quot;repositories&quot;
+            ],
+            &quot;properties&quot;: {
+              &quot;repositories&quot;: {
+                &quot;type&quot;: &quot;array&quot;,
+                &quot;maxItems&quot;: 256,
+                &quot;items&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+                }
+              },
+              &quot;next_after_id&quot;: {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1,
+                &quot;maxLength&quot;: 64,
+                &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;,
+                &quot;description&quot;: &quot;Last returned repository ID when another page remains; omitted on the terminal page.&quot;
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid, repeated or unknown query parameter, malformed escaping, or invalid cursor.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Member repository state could not be read.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The Store owner/member authority is unavailable, or a single snapshot cannot fit the bounded page.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerRetainBackupRepositories"><h2>POST <code>/api/v1/pool/backup/retain</code></h2>
+<p>Drop a member&#x27;s backup repositories the pool no longer holds</p><p>After GET /api/v1/pool/backup/retain returns exact member snapshots, the authenticated pinned current master confirms current absence for each candidate and sends {repositories:[exact_snapshots]}, at most 256 records and 4 MiB. This is targeted compare-and-forget, not a negative list of retained IDs. Each Store-owner admission checks unsettled journal work and the exact registration; changed or missing registrations are safe no-ops. Only matching records, mounts and sealed credentials are removed; destination data is never deleted. An interrupted batch may have removed earlier records; obtain fresh snapshots and repeat idempotently. Mount/credential refusal is 409, unavailable owner is 503. Offline members are retried during later health sweeps. Matching updated Core peers are required; repository_ids-only requests are no longer accepted.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerRetainBackupRepositories&quot;,
+  &quot;summary&quot;: &quot;Drop a member&#x27;s backup repositories the pool no longer holds&quot;,
+  &quot;description&quot;: &quot;After GET /api/v1/pool/backup/retain returns exact member snapshots, the authenticated pinned current master confirms current absence for each candidate and sends {repositories:[exact_snapshots]}, at most 256 records and 4 MiB. This is targeted compare-and-forget, not a negative list of retained IDs. Each Store-owner admission checks unsettled journal work and the exact registration; changed or missing registrations are safe no-ops. Only matching records, mounts and sealed credentials are removed; destination data is never deleted. An interrupted batch may have removed earlier records; obtain fresh snapshots and repeat idempotently. Mount/credential refusal is 409, unavailable owner is 503. Offline members are retried during later health sweeps. Matching updated Core peers are required; repository_ids-only requests are no longer accepted.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;development&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false,
+          &quot;required&quot;: [
+            &quot;repositories&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;repositories&quot;: {
+              &quot;type&quot;: [
+                &quot;array&quot;,
+                &quot;null&quot;
+              ],
+              &quot;maxItems&quot;: 256,
+              &quot;items&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Matching candidate registrations removed; changed or missing registrations were preserved as safe no-ops.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Unsettled member work, invalid member state, or mount/credential removal refused; obtain fresh snapshots and retry.&quot;
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The Store owner or member authority is unavailable.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerProbeBackupRepositoryAccess"><h2>POST <code>/api/v1/pool/backup/access</code></h2>
+<p>Observe a member&#x27;s access to one backup repository</p><p>The authenticated current pool master sends the exact Core-owned repository registration to a ready member over pinned mTLS. The member compares any local repository&#x27;s pool, ID, kind, source, identity and credential reference; if none exists, it prepares the requested destination transiently through Core adoption before checking the same identity. For NFS, a missing or different master-observed filesystem identity is refused before owner-marker claim. It then probes native read, write and list access without saving a member registration. Mount path is not compared. A probe or repository mismatch returns a 200 observation with readable and writable false and a generic error. The master accepts only the expected member, repository and nonzero observation time, then replaces the peer time with its own receipt time. Transport or older members without this route fail closed; members that derive NFS identity from source alone must be upgraded before their access observation is relied on. The master keeps these access rows in process memory, reports them in repository inventory, and treats rows older than two minutes or stamped in the future as unknown; this route creates no durable access record. Body is limited to 64 KiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerProbeBackupRepositoryAccess&quot;,
+  &quot;summary&quot;: &quot;Observe a member&#x27;s access to one backup repository&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends the exact Core-owned repository registration to a ready member over pinned mTLS. The member compares any local repository&#x27;s pool, ID, kind, source, identity and credential reference; if none exists, it prepares the requested destination transiently through Core adoption before checking the same identity. For NFS, a missing or different master-observed filesystem identity is refused before owner-marker claim. It then probes native read, write and list access without saving a member registration. Mount path is not compared. A probe or repository mismatch returns a 200 observation with readable and writable false and a generic error. The master accepts only the expected member, repository and nonzero observation time, then replaces the peer time with its own receipt time. Transport or older members without this route fail closed; members that derive NFS identity from source alone must be upgraded before their access observation is relied on. The master keeps these access rows in process memory, reports them in repository inventory, and treats rows older than two minutes or stamped in the future as unknown; this route creates no durable access record. Body is limited to 64 KiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;development&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Member-observed access for the requested repository, including a failed probe as an offline row.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolStorageAccess&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed repository, wrong pool or unsupported kind.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Unsupported method.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerPullBackupCredentials"><h2>GET <code>/api/v1/pool/backup/credentials</code></h2>
+<p>Pull backup credentials from the pool master</p><p>An authenticated ready pool member requests current credential-bearing repository projections from its master over pinned peer TLS. The master scopes each private receipt and secret to the requesting member; the member validates and saves them privately before relying on the join or resuming work. Controller never handles these bytes. Retry is read-only; an unavailable or mismatched credential set fails closed.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerPullBackupCredentials&quot;,
+  &quot;summary&quot;: &quot;Pull backup credentials from the pool master&quot;,
+  &quot;description&quot;: &quot;An authenticated ready pool member requests current credential-bearing repository projections from its master over pinned peer TLS. The master scopes each private receipt and secret to the requesting member; the member validates and saves them privately before relying on the join or resuming work. Controller never handles these bytes. Retry is read-only; an unavailable or mismatched credential set fails closed.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: ready member to pool master&quot;,
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Scoped private repository credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/PeerBackupCredentialRequest&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not an authenticated pool member.&quot;
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Only GET is accepted.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Repository or private credential state is unavailable.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerCheckS3BackupCapability"><h2>POST <code>/api/v1/pool/backup/capability/s3</code></h2>
+<p>Prove member access to one S3 backup repository</p><p>The authenticated current pool master sends a portable S3 repository with its endpoint, bucket, prefix, credential_ref and observed remote fingerprint to a ready member before dispatching work. The member resolves its private receipt, prepares access and returns its observed receipt and fingerprint. The master requires exact agreement with current writable authority. Missing or incompatible routes on older members permanently refuse work; transport and unavailable backend outcomes can be retried with the same request. Body is limited to 64 KiB. This route does not advertise S3 product availability.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerCheckS3BackupCapability&quot;,
+  &quot;summary&quot;: &quot;Prove member access to one S3 backup repository&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends a portable S3 repository with its endpoint, bucket, prefix, credential_ref and observed remote fingerprint to a ready member before dispatching work. The member resolves its private receipt, prepares access and returns its observed receipt and fingerprint. The master requires exact agreement with current writable authority. Missing or incompatible routes on older members permanently refuse work; transport and unavailable backend outcomes can be retried with the same request. Body is limited to 64 KiB. This route does not advertise S3 product availability.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact member-observed S3 private receipt and remote fingerprint.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PeerS3CapabilityResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed or invalid S3 repository scope or identity.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Member, private credential, S3 access or identity unavailable or conflicting.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerCheckSFTPBackupCapability"><h2>POST <code>/api/v1/pool/backup/capability/sftp</code></h2>
+<p>Prove member access to one SFTP backup repository</p><p>The authenticated current pool master sends a source-only SFTP repository with its credential_ref to a ready member before dispatching work. The member resolves its private receipt, prepares access using the pinned SSH host-key fingerprint and returns its observed receipt and fingerprint. The master requires exact agreement with current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerCheckSFTPBackupCapability&quot;,
+  &quot;summary&quot;: &quot;Prove member access to one SFTP backup repository&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends a source-only SFTP repository with its credential_ref to a ready member before dispatching work. The member resolves its private receipt, prepares access using the pinned SSH host-key fingerprint and returns its observed receipt and fingerprint. The master requires exact agreement with current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact member-observed SFTP private receipt and pinned fingerprint.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PeerSFTPCapabilityResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed or invalid SFTP repository scope.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Member, private credential, SFTP access or identity unavailable or conflicting.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerCheckSMBBackupCapability"><h2>POST <code>/api/v1/pool/backup/capability/smb3</code></h2>
+<p>Prove member access to one SMB3 backup repository</p><p>The authenticated current pool master asks a ready member to prove access before dispatching SMB3 backup work. Request binds a source-only repository with credential_ref to the master-observed SMB server/share/marker identity. The member resolves its own Core-private receipt, prepares its sealed SMB3 mount, verifies source, owner and write/publication prerequisites, and returns the exact observed receipt and identity. The master compares the response with its current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerCheckSMBBackupCapability&quot;,
+  &quot;summary&quot;: &quot;Prove member access to one SMB3 backup repository&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master asks a ready member to prove access before dispatching SMB3 backup work. Request binds a source-only repository with credential_ref to the master-observed SMB server/share/marker identity. The member resolves its own Core-private receipt, prepares its sealed SMB3 mount, verifies source, owner and write/publication prerequisites, and returns the exact observed receipt and identity. The master compares the response with its current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PeerSMBCapabilityRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact member-observed SMB3 repository identity and receipt.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PeerSMBCapabilityResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed or invalid repository scope or expected identity.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Member, private credential, mount or identity unavailable or conflicting.&quot;
     }
   }
 }</pre></details></section>
@@ -2801,6 +3260,10 @@
         &quot;crash&quot;,
         &quot;quiesced&quot;
       ]
+    },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Creating policy, set by the scheduler; empty for manual backups.&quot;
     }
   },
   &quot;required&quot;: [
@@ -2877,6 +3340,18 @@
     &quot;revision&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0
+    },
+    &quot;expected_revision&quot;: {
+      &quot;description&quot;: &quot;Request-only compare-and-set value for a policy update. It must equal the current durable revision; Core removes it before persisting or reporting the policy.&quot;,
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;integer&quot;,
+          &quot;minimum&quot;: 1
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     },
     &quot;next_dispatch_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -3032,6 +3507,10 @@
     &quot;protected&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
     },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Policy that created the point; retention prunes only that policy&#x27;s points. Empty for manual backups.&quot;
+    },
     &quot;last_test_result&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
@@ -3060,7 +3539,7 @@
 }</pre></details>
 <details id="BackupRepository"><summary>BackupRepository</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Master-owned external NFS backup destination.&quot;,
+  &quot;description&quot;: &quot;Master-owned backup destination record. Kinds are NFS, SMB3, S3 and SFTP; Core validates the kind and source.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupRepository&quot;,
   &quot;properties&quot;: {
     &quot;id&quot;: {
@@ -3076,11 +3555,15 @@
     &quot;kind&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
-        &quot;nfs&quot;
+        &quot;nfs&quot;,
+        &quot;smb3&quot;,
+        &quot;s3&quot;,
+        &quot;sftp&quot;
       ]
     },
     &quot;source&quot;: {
-      &quot;$ref&quot;: &quot;#/components/schemas/NFSStorageSource&quot;
+      &quot;$ref&quot;: &quot;#/components/schemas/NFSStorageSource&quot;,
+      &quot;description&quot;: &quot;Legacy NFS source; emitted for NFS records and omitted for other destination kinds.&quot;
     },
     &quot;identity&quot;: {
       &quot;anyOf&quot;: [
@@ -3091,10 +3574,6 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ]
-    },
-    &quot;generation&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0
     },
     &quot;mount_path&quot;: {
       &quot;type&quot;: &quot;string&quot;
@@ -3118,14 +3597,80 @@
     &quot;updated_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;smb_source&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SMBStorageSource&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;s3_source&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupS3Source&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;sftp_source&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupSFTPSource&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;smb_identity&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SMBStorageIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;remote_identity&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupRemoteIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;credential_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Opaque Core-owned credential receipt reference; never credential material.&quot;
+    },
+    &quot;health&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/BackupRepositoryHealth&quot;
+    },
+    &quot;last_health_transition&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupRepositoryHealthTransition&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     }
   },
   &quot;required&quot;: [
     &quot;id&quot;,
     &quot;pool_id&quot;,
     &quot;name&quot;,
-    &quot;kind&quot;,
-    &quot;source&quot;
+    &quot;kind&quot;
   ],
   &quot;additionalProperties&quot;: false
 }</pre></details>
@@ -3936,7 +4481,7 @@
     }
   },
   &quot;required&quot;: [],
-  &quot;description&quot;: &quot;What a member advertises about itself: where it listens, which machine it is, what its own Core found on its management controller, the watchdog that machine has, and its observed sanlock generation. Each field is recorded on its own and any of them may be omitted.&quot;
+  &quot;description&quot;: &quot;What a member advertises about itself through authenticated peer mTLS: origin, machine identity, management controller, watchdog and observed sanlock generation. Each field is recorded on its own when safe.&quot;
 }</pre></details>
 <details id="PeerJoinRequest"><summary>PeerJoinRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -3954,6 +4499,10 @@
     &quot;CSRPEM&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;PEM certificate request whose subject CN equals HostID and whose SHA-256 matches the offer.&quot;
+    },
+    &quot;hostname&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Name reported by the joining Core for its durable membership row: required, at most 200 UTF-8 bytes of printable characters with no leading or trailing space. The Go encoding omits an empty value, so the schema does not list it under required, but the master refuses a join without one (409); a joiner that predates hostname reporting must be upgraded and restarted.&quot;
     }
   },
   &quot;required&quot;: [
@@ -4257,16 +4806,6 @@
       },
       &quot;description&quot;: &quot;In-progress destructive network or media removals, replicated so promotion cannot forget an unresolved outcome.&quot;
     },
-    &quot;backup_authority&quot;: {
-      &quot;anyOf&quot;: [
-        {
-          &quot;$ref&quot;: &quot;#/components/schemas/PoolBackupAuthority&quot;
-        },
-        {
-          &quot;type&quot;: &quot;null&quot;
-        }
-      ]
-    },
     &quot;backup_manifest&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -4276,7 +4815,7 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ],
-      &quot;description&quot;: &quot;Full paged backup authority reference; mutually exclusive with inline backup_authority.&quot;
+      &quot;description&quot;: &quot;Paged backup authority reference; the pages are pushed separately and bound by the manifest root.&quot;
     },
     &quot;corosync_key_wrapped&quot;: {
       &quot;anyOf&quot;: [
@@ -4452,7 +4991,7 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
       },
-      &quot;description&quot;: &quot;Durable NFS backup destination registrations for master takeover.&quot;
+      &quot;description&quot;: &quot;Durable backup destination registrations (NFS, SMB3, S3 and SFTP) for master takeover.&quot;
     },
     &quot;definitions&quot;: {
       &quot;type&quot;: [
@@ -4523,6 +5062,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/BackupMetadataReceipt&quot;
       },
       &quot;description&quot;: &quot;Durable operation result receipts retained for exact metadata retry after master takeover.&quot;
+    },
+    &quot;orphan_cleanups&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupOrphanCleanup&quot;
+      },
+      &quot;description&quot;: &quot;Orphaned-backup cleanup records retained so the new master still answers for a cleanup the old master ran.&quot;
     }
   },
   &quot;required&quot;: [],
@@ -4530,20 +5079,11 @@
 }</pre></details>
 <details id="PoolBackupManifest"><summary>PoolBackupManifest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Signed reference to all paged backup authority bytes. Every page and the full bundle are SHA-256 checked before promotion.&quot;,
+  &quot;description&quot;: &quot;Signed backup authority reference. It binds ordered page_count, total_bytes, full SHA-256 root and record counts; every page is at most 256 KiB. The member verifies the full root, frames, unique IDs and counts before acknowledging.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolBackupManifest&quot;,
   &quot;properties&quot;: {
     &quot;sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;page_sha256&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;type&quot;: &quot;string&quot;
-      }
     },
     &quot;total_bytes&quot;: {
       &quot;type&quot;: &quot;integer&quot;
@@ -4566,30 +5106,25 @@
     &quot;metadata_receipts&quot;: {
       &quot;type&quot;: &quot;integer&quot;
     },
-    &quot;page_bytes&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;type&quot;: &quot;integer&quot;,
-        &quot;minimum&quot;: 1,
-        &quot;maximum&quot;: 262144
-      },
-      &quot;description&quot;: &quot;Exact expected byte length of each ordered page.&quot;
+    &quot;page_count&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;Ordered page count.&quot;
+    },
+    &quot;orphan_cleanups&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
     }
   },
   &quot;required&quot;: [
     &quot;sha256&quot;,
-    &quot;page_sha256&quot;,
-    &quot;page_bytes&quot;,
     &quot;total_bytes&quot;,
     &quot;repositories&quot;,
     &quot;definitions&quot;,
     &quot;history&quot;,
     &quot;catalog&quot;,
     &quot;pins&quot;,
-    &quot;metadata_receipts&quot;
+    &quot;metadata_receipts&quot;,
+    &quot;orphan_cleanups&quot;,
+    &quot;page_count&quot;
   ],
   &quot;additionalProperties&quot;: false
 }</pre></details>
@@ -4611,20 +5146,38 @@
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
     &quot;replica&quot;: {
-      &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityReplica&quot;
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityReplica&quot;,
+      &quot;description&quot;: &quot;Signed replica; present only on the request that opens a push session (index -1).&quot;
     },
     &quot;index&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: -1,
-      &quot;description&quot;: &quot;Zero-based page index; -1 with empty data requests durable next-page progress for the signed manifest.&quot;
+      &quot;description&quot;: &quot;Zero-based page index; -1 with the signed replica and empty data opens a push session and returns next-page progress.&quot;
     },
     &quot;data&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;string&quot;,
+          &quot;format&quot;: &quot;byte&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Base64 page bytes; null with a version-2 reuse_sha256 hint or an index -1 progress probe.&quot;
+    },
+    &quot;reuse_sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;format&quot;: &quot;byte&quot;
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;,
+      &quot;description&quot;: &quot;Digest of an already durable 256 KiB-or-smaller page blob. Data must be null; missing/corrupt blob returns 404 so the master sends bytes instead.&quot;
+    },
+    &quot;manifest_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;,
+      &quot;description&quot;: &quot;Root of the manifest verified when the session opened; required on page requests.&quot;
     }
   },
   &quot;required&quot;: [
-    &quot;replica&quot;,
     &quot;index&quot;,
     &quot;data&quot;
   ],
@@ -4679,6 +5232,17 @@
     &quot;catalog_point&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/BackupRecoveryPoint&quot;,
       &quot;description&quot;: &quot;Required on the restore-only peer route; omitted for backup-now and cleanup.&quot;
+    },
+    &quot;smb_identity&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SMBStorageIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Master-observed SMB3 share marker; required for SMB3 backup/restore work and verified by the member before effects. Omitted for NFS and test cleanup.&quot;
     }
   },
   &quot;required&quot;: [
@@ -5351,6 +5915,10 @@
     &quot;host_id&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
+    &quot;hostname&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. At most 200 UTF-8 bytes of printable characters.&quot;
+    },
     &quot;certificate_sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
@@ -5400,7 +5968,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member did not report backup authority page progress\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, \&quot;pool member refused backup authority page reuse\&quot;, \&quot;pool member refused a backup authority page\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -6142,7 +6710,7 @@
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The last refusal this host recorded, kept alongside whatever it still holds; a later accepted push clears it.&quot;
+      &quot;description&quot;: &quot;The last refusal this host recorded, kept alongside whatever it still holds; a later accepted push clears it. Includes \&quot;pool member refused backup authority page reuse\&quot; when a reusable blob cannot be safely staged.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9356,5 +9924,397 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.DetectedOS&quot;,
   &quot;description&quot;: &quot;Durable historical OS identity retained by Core. It does not establish current guest-agent availability or guest health.&quot;
+}</pre></details>
+<details id="BackupS3Source"><summary>BackupS3Source</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;S3-compatible HTTPS endpoint, bucket, optional prefix and signing region for a backup destination.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupS3Source&quot;,
+  &quot;properties&quot;: {
+    &quot;endpoint&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;uri&quot;,
+      &quot;description&quot;: &quot;HTTPS endpoint with verified TLS identity.&quot;
+    },
+    &quot;bucket&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;prefix&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;region&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Signing region; empty means us-east-1.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;endpoint&quot;,
+    &quot;bucket&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupSFTPSource"><summary>BackupSFTPSource</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;SFTP host, root path and pinned SSH host-key fingerprint for a backup destination.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupSFTPSource&quot;,
+  &quot;properties&quot;: {
+    &quot;host&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;port&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;root&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_key_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Pinned SHA256 SSH host-key fingerprint.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host&quot;,
+    &quot;root&quot;,
+    &quot;host_key_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupRemoteIdentity"><summary>BackupRemoteIdentity</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Observed remote destination fingerprint used for S3 and SFTP identity checks.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRemoteIdentity&quot;,
+  &quot;properties&quot;: {
+    &quot;fingerprint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;fingerprint&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupRepositoryHealth"><summary>BackupRepositoryHealth</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Latest Core-observed repository access health.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRepositoryHealth&quot;,
+  &quot;properties&quot;: {
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;online&quot;,
+        &quot;offline&quot;,
+        &quot;unknown&quot;
+      ]
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupRepositoryHealthTransition"><summary>BackupRepositoryHealthTransition</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Historical repository health transition; not a fresh access result.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRepositoryHealthTransition&quot;,
+  &quot;properties&quot;: {
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;offline&quot;,
+        &quot;recovered&quot;
+      ]
+    },
+    &quot;at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;status&quot;,
+    &quot;at&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PeerBackupCredentialRequest"><summary>PeerBackupCredentialRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Private credential delivery from current pool master to a ready member. Never persisted by Controller or returned in inventory.&quot;,
+  &quot;properties&quot;: {
+    &quot;repository&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+    },
+    &quot;receipt&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PeerBackupCredentialReceipt&quot;
+    },
+    &quot;credentials&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageCredentials&quot;
+    },
+    &quot;recipient_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Authenticated member for whom this private credential projection was prepared.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository&quot;,
+    &quot;receipt&quot;,
+    &quot;credentials&quot;,
+    &quot;recipient_host_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;agent.peerBackupCredential&quot;
+}</pre></details>
+<details id="PeerBackupCredentialReceipt"><summary>PeerBackupCredentialReceipt</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;properties&quot;: {
+    &quot;reference&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;retired_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;reference&quot;,
+    &quot;request_id&quot;,
+    &quot;operation_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;kind&quot;,
+    &quot;created_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;agent.backupCredentialReceipt&quot;
+}</pre></details>
+<details id="PeerSMBCapabilityRequest"><summary>PeerSMBCapabilityRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;x-go-type&quot;: &quot;agent.peerSMBCapabilityRequest&quot;,
+  &quot;description&quot;: &quot;Portable Core-owned SMB3 backup repository and exact master-observed share identity for member preflight.&quot;,
+  &quot;properties&quot;: {
+    &quot;repository&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+    },
+    &quot;expected_identity&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/SMBStorageIdentity&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository&quot;,
+    &quot;expected_identity&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PeerSMBCapabilityResponse"><summary>PeerSMBCapabilityResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;x-go-type&quot;: &quot;agent.peerSMBCapabilityResponse&quot;,
+  &quot;description&quot;: &quot;Member-observed identity proof for this exact repository and private credential receipt.&quot;,
+  &quot;properties&quot;: {
+    &quot;credential_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;identity&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/SMBStorageIdentity&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;credential_ref&quot;,
+    &quot;identity&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PeerS3CapabilityResponse"><summary>PeerS3CapabilityResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;x-go-type&quot;: &quot;agent.peerS3CapabilityResponse&quot;,
+  &quot;description&quot;: &quot;Member-observed S3 identity proof for this exact repository and private credential receipt.&quot;,
+  &quot;properties&quot;: {
+    &quot;credential_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fingerprint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;credential_ref&quot;,
+    &quot;fingerprint&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PeerSFTPCapabilityResponse"><summary>PeerSFTPCapabilityResponse</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;x-go-type&quot;: &quot;agent.peerSFTPCapabilityResponse&quot;,
+  &quot;description&quot;: &quot;Member-observed SFTP identity proof for this exact repository and private credential receipt.&quot;,
+  &quot;properties&quot;: {
+    &quot;credential_ref&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;fingerprint&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;credential_ref&quot;,
+    &quot;fingerprint&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupOrphanCleanup"><summary>BackupOrphanCleanup</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The pool master&#x27;s durable record of one orphaned-backup cleanup: the planned points and each one&#x27;s outcome.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupOrphanCleanup&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;request&quot;,
+    &quot;status&quot;,
+    &quot;points&quot;,
+    &quot;updated_at&quot;
+  ],
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;request&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/OrphanCleanupRequest&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;running&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;points&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupOrphanPointResult&quot;
+      }
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  }
+}</pre></details>
+<details id="OrphanCleanupRequest"><summary>OrphanCleanupRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Deletes the recovery points of the chosen VMs, which are not in the pool&#x27;s VM inventory, from a repository&#x27;s destination and catalog.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.OrphanCleanupRequest&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;vm_ids&quot;,
+    &quot;confirmation&quot;,
+    &quot;recovery_points&quot;,
+    &quot;protected_points&quot;
+  ],
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    },
+    &quot;vm_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;minItems&quot;: 1,
+      &quot;maxItems&quot;: 1000,
+      &quot;uniqueItems&quot;: true,
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;minLength&quot;: 1,
+        &quot;maxLength&quot;: 128
+      },
+      &quot;description&quot;: &quot;VMs chosen explicitly; there is no wildcard.&quot;
+    },
+    &quot;include_protected&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Also delete protected points; otherwise they are skipped.&quot;
+    },
+    &quot;confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 256,
+      &quot;description&quot;: &quot;&#x27;delete N recovery points&#x27;, or &#x27;delete N recovery points including P protected&#x27; with include_protected.&quot;
+    },
+    &quot;recovery_points&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;description&quot;: &quot;Recovery points of the chosen VMs the operator was shown.&quot;
+    },
+    &quot;protected_points&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;How many of them are protected.&quot;
+    }
+  }
+}</pre></details>
+<details id="BackupOrphanPointResult"><summary>BackupOrphanPointResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One recovery point&#x27;s cleanup outcome.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupOrphanPointResult&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;required&quot;: [
+    &quot;recovery_point_id&quot;,
+    &quot;vm_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;properties&quot;: {
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;pending&quot;,
+        &quot;deleted&quot;,
+        &quot;skipped&quot;,
+        &quot;failed&quot;
+      ]
+    },
+    &quot;reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  }
 }</pre></details>
 </section></main></html>

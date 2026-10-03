@@ -2,22 +2,75 @@
 package controller
 
 import (
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
 
 type createBackupRepositoryRequest struct {
-	RequestID string                    `json:"request_id"`
-	ID        string                    `json:"id,omitempty"`
-	Name      string                    `json:"name"`
-	Kind      string                    `json:"kind"`
-	Source    protocol.NFSStorageSource `json:"source"`
+	RequestID           string                     `json:"request_id"`
+	ID                  string                     `json:"id,omitempty"`
+	Name                string                     `json:"name"`
+	Kind                string                     `json:"kind"`
+	Source              protocol.NFSStorageSource  `json:"source"`
+	SMBSource           *protocol.SMBStorageSource `json:"smb_source,omitempty"`
+	S3Source            *protocol.BackupS3Source   `json:"s3_source,omitempty"`
+	SFTPSource          *protocol.BackupSFTPSource `json:"sftp_source,omitempty"`
+	CredentialRef       string                     `json:"credential_ref,omitempty"`
+	CredentialRequestID string                     `json:"credential_request_id,omitempty"`
+	// ReplaceConfirmation is the existing repository's ID, typed to replace its credential or SFTP host key.
+	ReplaceConfirmation string `json:"replace_confirmation,omitempty"`
 }
 
 type testBackupRepositoryRequest struct {
 	RequestID string `json:"request_id"`
+}
+
+type forgetBackupRepositoryRequest struct {
+	RequestID       string `json:"request_id"`
+	Confirmation    string `json:"confirmation"`
+	RecoveryPoints  int    `json:"recovery_points"`
+	ProtectedPoints int    `json:"protected_points"`
+}
+
+// forgetBackupRepositoryIntent includes the path repository so request_id replay cannot
+// retarget an accepted forget to another repository with the same body.
+type forgetBackupRepositoryIntent struct {
+	RequestID       string `json:"request_id"`
+	RepositoryID    string `json:"repository_id"`
+	Confirmation    string `json:"confirmation"`
+	RecoveryPoints  int    `json:"recovery_points"`
+	ProtectedPoints int    `json:"protected_points"`
+}
+
+type orphanCleanupAPIRequest struct {
+	RequestID        string   `json:"request_id"`
+	VMIDs            []string `json:"vm_ids"`
+	IncludeProtected bool     `json:"include_protected"`
+	Confirmation     string   `json:"confirmation"`
+	RecoveryPoints   int      `json:"recovery_points"`
+	ProtectedPoints  int      `json:"protected_points"`
+}
+
+// orphanCleanupIntent includes the path repository so request_id replay cannot retarget
+// an accepted cleanup to another repository with the same body.
+type orphanCleanupIntent struct {
+	RequestID        string   `json:"request_id"`
+	RepositoryID     string   `json:"repository_id"`
+	VMIDs            []string `json:"vm_ids"`
+	IncludeProtected bool     `json:"include_protected"`
+	Confirmation     string   `json:"confirmation"`
+	RecoveryPoints   int      `json:"recovery_points"`
+	ProtectedPoints  int      `json:"protected_points"`
 }
 
 type backupNowAPIRequest struct {
@@ -37,36 +90,155 @@ type restoreAsNewAPIRequest struct {
 }
 
 func (c *Controller) listBackupRepositories(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	c.listPoolBackupInventory(w, r.PathValue("id"), "backup_repositories", func(m *protocol.ManagedState) (bool, any) {
+	c.listPoolBackupInventory(w, r.PathValue("id"), "backup_repositories", func(m *protocol.ManagedState, masterFresh bool) (bool, any) {
 		if !m.BackupRepositoriesReported {
 			return false, nil
 		}
 		out := append([]protocol.BackupRepository{}, m.BackupRepositories...)
+		for i := range out {
+			// Core ages health on its own clock; the Controller only masks a stale master.
+			health := &out[i].Health
+			if !masterFresh || health.Status == "" {
+				health.Status, health.Error = "unknown", ""
+			}
+		}
 		return true, out
 	})
 }
 
 func (c *Controller) listBackupCatalog(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	c.listPoolBackupInventory(w, r.PathValue("id"), "backup catalog", func(m *protocol.ManagedState) (bool, any) {
-		if !m.BackupCatalogReported {
-			return false, nil
-		}
-		out := append([]protocol.BackupRecoveryPoint{}, m.BackupCatalog...)
-		return true, out
-	})
+	c.relayBackupInventoryPage(w, r, true)
 }
 
 func (c *Controller) listBackupRuns(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	c.listPoolBackupInventory(w, r.PathValue("id"), "backup runs", func(m *protocol.ManagedState) (bool, any) {
-		if !m.BackupRunsReported {
-			return false, nil
-		}
-		out := append([]protocol.BackupRun{}, m.BackupRuns...)
-		return true, out
-	})
+	c.relayBackupInventoryPage(w, r, false)
 }
 
-func (c *Controller) listPoolBackupInventory(w http.ResponseWriter, pool, label string, pick func(*protocol.ManagedState) (bool, any)) {
+var backupPageGenerationValid = regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString
+
+// freshBackupMaster returns the pool's master host once it is freshly connected, or answers the failure.
+func (c *Controller) freshBackupMaster(w http.ResponseWriter, pool string) (string, bool) {
+	var master string
+	var revoked bool
+	if !nameValid(pool) {
+		fail(w, 404, "pool not found")
+		return "", false
+	}
+	if err := c.db.QueryRow("SELECT p.master_host_id,coalesce(h.revoked,1) FROM pools p LEFT JOIN hosts h ON h.id=p.master_host_id WHERE p.id=?", pool).Scan(&master, &revoked); err != nil || master == "" {
+		failPoolMaster(w, err)
+		return "", false
+	}
+	if fresh, _ := c.hostAgent(master, "", revoked); !fresh {
+		fail(w, 503, "pool master is not freshly connected")
+		return "", false
+	}
+	return master, true
+}
+
+// relayBackupInventoryPage reads Core-owned history over the enrolled host's
+// outbound channel.
+func (c *Controller) relayBackupInventoryPage(w http.ResponseWriter, r *http.Request, catalog bool) {
+	pool := r.PathValue("id")
+	master, ok := c.freshBackupMaster(w, pool)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	allowed := []string{"cursor", "generation"}
+	path := "/backup-runs"
+	if catalog {
+		path = "/backup-catalog"
+		allowed = append(allowed, "vm_id", "repository_id", "search")
+	} else {
+		allowed = append(allowed, "recovery_point_id")
+	}
+	for key, values := range query {
+		limit := 128
+		if key == "search" {
+			limit = 200
+		}
+		if !slices.Contains(allowed, key) || len(values) != 1 || len(values[0]) > limit {
+			fail(w, 400, "invalid backup page filter")
+			return
+		}
+	}
+	if cursor := query.Get("cursor"); query.Has("cursor") {
+		if n, err := strconv.Atoi(cursor); err != nil || n < 0 || !backupPageGenerationValid(query.Get("generation")) {
+			fail(w, 400, "invalid backup page cursor")
+			return
+		}
+	} else if query.Has("generation") {
+		fail(w, 400, "invalid backup page cursor")
+		return
+	}
+	status, body, _, ok := c.askAgent(w, r, master, path, url.Values(query), "backup history page")
+	if !ok {
+		return
+	}
+	if status == 409 && !query.Has("generation") {
+		fail(w, 503, "pool master is not serving backup history; retry after the master change settles")
+		return
+	}
+	if msg, ok := map[int]string{
+		409: "backup history changed; restart from first page",
+		413: "a backup history record exceeds the page limit",
+		400: "invalid backup page cursor or filter",
+		503: "backup history is unavailable from the pool master",
+	}[status]; ok {
+		fail(w, status, msg)
+		return
+	}
+	if status != 200 || len(body) > backupRelayPageBytes || !validBackupRelayPage(body, pool, catalog) {
+		fail(w, 502, "pool master returned an invalid backup history page")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = w.Write(body)
+}
+
+const backupRelayPageBytes = 2 << 20
+
+// validBackupRelayPage checks the trust boundary only: Core owns cursor and count arithmetic.
+func validBackupRelayPage(body []byte, pool string, catalog bool) bool {
+	if catalog {
+		var page protocol.BackupCatalogPage
+		if json.Unmarshal(body, &page) != nil || !backupPageGenerationValid(page.Generation) || page.UntestedCount < 0 {
+			return false
+		}
+		seen := map[string]bool{}
+		for _, point := range page.Items {
+			if point.PoolID != pool || point.Valid() != nil || seen[point.ID] {
+				return false
+			}
+			seen[point.ID] = true
+		}
+		return true
+	}
+	var page protocol.BackupRunPage
+	if json.Unmarshal(body, &page) != nil || !backupPageGenerationValid(page.Generation) || page.AttentionCount < 0 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, run := range page.Items {
+		if run.PoolID != pool || run.Valid() != nil || seen[run.OperationID] {
+			return false
+		}
+		seen[run.OperationID] = true
+	}
+	return true
+}
+
+// failPoolMaster answers a failed pool-master lookup: an unknown pool is 404.
+func failPoolMaster(w http.ResponseWriter, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		fail(w, 404, "pool not found")
+		return
+	}
+	fail(w, 503, "pool master is unavailable")
+}
+
+func (c *Controller) listPoolBackupInventory(w http.ResponseWriter, pool, label string, pick func(*protocol.ManagedState, bool) (bool, any)) {
 	if !nameValid(pool) {
 		fail(w, 404, "pool not found")
 		return
@@ -78,8 +250,8 @@ func (c *Controller) listPoolBackupInventory(w http.ResponseWriter, pool, label 
 	}
 	defer tx.Rollback()
 	var master string
-	if tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master) != nil || master == "" {
-		fail(w, 503, "pool master is unavailable")
+	if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil || master == "" {
+		failPoolMaster(w, err)
 		return
 	}
 	inv, err := hostInventory(tx, master)
@@ -91,7 +263,10 @@ func (c *Controller) listPoolBackupInventory(w http.ResponseWriter, pool, label 
 		fail(w, 503, label+" is unavailable from the pool master")
 		return
 	}
-	ok, out := pick(inv.Managed)
+	c.mu.Lock()
+	seen := c.seen[master]
+	c.mu.Unlock()
+	ok, out := pick(inv.Managed, !seen.IsZero() && time.Since(seen) <= c.cfg.StaleAfter)
 	if !ok {
 		fail(w, 503, label+" is unavailable from the pool master")
 		return
@@ -107,14 +282,27 @@ func (c *Controller) createBackupRepository(w http.ResponseWriter, r *http.Reque
 	}
 	body.Name = strings.TrimSpace(body.Name)
 	repoID := body.ID
+	if repoID == "" && (body.Kind == protocol.BackupRepoKindSMB3 || body.Kind == protocol.BackupRepoKindS3 || body.Kind == protocol.BackupRepoKindSFTP) {
+		// The credential receipt is already bound to the caller's repository ID.
+		fail(w, 400, "id is required for a destination with a credential")
+		return
+	}
 	if repoID == "" {
 		repoID = random()
 	}
 	repo := protocol.BackupRepository{
 		ID: repoID, PoolID: pool, Name: body.Name, Kind: body.Kind, Source: body.Source,
+		SMBSource: body.SMBSource, S3Source: body.S3Source, SFTPSource: body.SFTPSource,
+		CredentialRef: body.CredentialRef,
 	}
-	if !protocol.ValidSnapshotOperationID(body.RequestID) || repo.Valid() != nil {
-		fail(w, 400, "stable request_id and valid NFS backup repository required")
+	if body.ReplaceConfirmation != "" && body.ReplaceConfirmation != repoID {
+		fail(w, 400, "replace_confirmation must be the repository ID")
+		return
+	}
+	if !protocol.ValidSnapshotOperationID(body.RequestID) || repo.Valid() != nil ||
+		(repo.Kind == protocol.BackupRepoKindNFS && (body.CredentialRef != "" || body.CredentialRequestID != "")) ||
+		(repo.Kind != protocol.BackupRepoKindNFS && (body.CredentialRef == "" || !protocol.ValidSnapshotOperationID(body.CredentialRequestID))) {
+		fail(w, 400, "stable request_id and valid backup repository required")
 		return
 	}
 	c.enqueueBackupRepository(w, pool, user, body.RequestID, "backup-repository-register", &repo, body)
@@ -133,6 +321,110 @@ func (c *Controller) testBackupRepository(w http.ResponseWriter, r *http.Request
 	}
 	repo := protocol.BackupRepository{ID: repoID, PoolID: pool}
 	c.enqueueBackupRepository(w, pool, user, body.RequestID, "backup-repository-test", &repo, body)
+}
+
+func (c *Controller) forgetBackupRepository(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	pool, repoID := r.PathValue("id"), r.PathValue("repo_id")
+	var body forgetBackupRepositoryRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	req := protocol.ForgetRepositoryRequest{
+		RepositoryID: repoID, Confirmation: body.Confirmation,
+		RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
+	if !protocol.ValidSnapshotOperationID(body.RequestID) || body.RequestID == repoID || req.Valid() != nil {
+		fail(w, 400, "stable request_id distinct from repository id, the repository name and the recovery point counts required")
+		return
+	}
+	intent := forgetBackupRepositoryIntent{
+		RequestID: body.RequestID, RepositoryID: repoID, Confirmation: body.Confirmation,
+		RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
+	c.enqueueBackupMasterSync(w, pool, user, body.RequestID, "backup-repository-forget", protocol.Command{
+		OperationID: body.RequestID, Kind: "backup-repository-forget", ForgetRepository: &req,
+	}, intent, repoID)
+}
+
+func (c *Controller) orphanedBackups(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	c.relayBackupOrphans(w, r, url.Values{"repository_id": {r.PathValue("repo_id")}})
+}
+
+func (c *Controller) orphanCleanupResult(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	c.relayBackupOrphans(w, r, url.Values{"request_id": {r.PathValue("request_id")}})
+}
+
+// relayBackupOrphans reads the pool master's orphan query, or the record of one cleanup.
+func (c *Controller) relayBackupOrphans(w http.ResponseWriter, r *http.Request, query url.Values) {
+	master, ok := c.freshBackupMaster(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	for _, id := range query {
+		if !protocol.ValidSnapshotOperationID(id[0]) {
+			fail(w, 400, "invalid repository or request id")
+			return
+		}
+	}
+	status, body, refusal, ok := c.askAgent(w, r, master, "/backup-orphans", query, "orphaned backups query")
+	if !ok {
+		return
+	}
+	switch {
+	case status == 404:
+		fail(w, 404, "not found")
+	case status == 409 && refusal != "":
+		fail(w, 409, clip(refusal, 512))
+	case status == 400:
+		fail(w, 400, "invalid orphaned backups request")
+	case status != 200:
+		fail(w, 503, "pool master cannot answer orphaned backups now")
+	case len(body) > backupRelayPageBytes:
+		fail(w, 502, "pool master returned an invalid orphaned backups response")
+	default:
+		repoID := r.PathValue("repo_id")
+		if query.Has("request_id") {
+			var record protocol.BackupOrphanCleanup
+			if json.Unmarshal(body, &record) != nil || record.Request.RepositoryID != repoID {
+				fail(w, 404, "not found")
+				return
+			}
+		} else if !validBackupOrphanList(body, repoID) {
+			fail(w, 502, "pool master returned an invalid orphaned backups response")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}
+}
+
+// validBackupOrphanList checks the trust boundary only: Core owns group contents.
+func validBackupOrphanList(body []byte, repoID string) bool {
+	var list protocol.BackupOrphanQuery
+	return json.Unmarshal(body, &list) == nil && list.RepositoryID == repoID
+}
+
+func (c *Controller) cleanupOrphanedBackups(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	pool, repoID := r.PathValue("id"), r.PathValue("repo_id")
+	var body orphanCleanupAPIRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	req := protocol.OrphanCleanupRequest{
+		RepositoryID: repoID, VMIDs: body.VMIDs, IncludeProtected: body.IncludeProtected,
+		Confirmation: body.Confirmation, RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
+	if !protocol.ValidSnapshotOperationID(body.RequestID) || body.RequestID == repoID || req.Valid() != nil {
+		fail(w, 400, "stable request_id distinct from repository id, the VM ids, the confirmation text and the recovery point counts required")
+		return
+	}
+	intent := orphanCleanupIntent{
+		RequestID: body.RequestID, RepositoryID: repoID, VMIDs: body.VMIDs, IncludeProtected: body.IncludeProtected,
+		Confirmation: body.Confirmation, RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
+	c.enqueueBackupMasterSync(w, pool, user, body.RequestID, "backup-orphan-cleanup", protocol.Command{
+		OperationID: body.RequestID, Kind: "backup-orphan-cleanup", OrphanCleanup: &req,
+	}, intent, repoID)
 }
 
 func (c *Controller) enqueueBackupRepository(w http.ResponseWriter, pool, user, requestID, kind string, repo *protocol.BackupRepository, payload any) {
@@ -154,13 +446,22 @@ func (c *Controller) enqueueBackupRepository(w http.ResponseWriter, pool, user, 
 		return
 	}
 	var master string
-	if tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master) != nil || master == "" {
-		fail(w, 503, "pool master is unavailable")
+	if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil || master == "" {
+		failPoolMaster(w, err)
 		return
 	}
 	if err = c.backupHost(tx, pool, master); err != nil {
 		fail(w, 409, err.Error())
 		return
+	}
+	if kind == "backup-repository-register" && repo.Kind != protocol.BackupRepoKindNFS {
+		body := payload.(createBackupRepositoryRequest)
+		binding := "backup-credential:" + repo.Kind + ":" + requestID
+		receipt, ok := c.credentials.receipt(master, body.CredentialRequestID, pool, repo.ID, binding)
+		if !ok || receipt.Receipt != repo.CredentialRef {
+			fail(w, 409, "backup credential receipt does not match this repository registration")
+			return
+		}
 	}
 	var held int
 	if err = tx.QueryRow("SELECT count(*) FROM managed_resources WHERE id=? OR operation_id=?", requestID, requestID).Scan(&held); err != nil {
@@ -177,6 +478,9 @@ func (c *Controller) enqueueBackupRepository(w http.ResponseWriter, pool, user, 
 		name = repo.ID
 	}
 	cmd := protocol.Command{OperationID: requestID, Kind: kind, BackupRepository: repo}
+	if body, ok := payload.(createBackupRepositoryRequest); ok {
+		cmd.ReplaceRepository = body.ReplaceConfirmation
+	}
 	op, err := c.saveResource(tx, user, requestID, pool, master, name, rowID, cmd, payload)
 	if err != nil || tx.Commit() != nil {
 		fail(w, 500, "backup repository request storage failed")

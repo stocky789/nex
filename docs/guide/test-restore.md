@@ -15,9 +15,11 @@ boot or application data automatically.
 
 ## Steps
 
-1. Open **Backups**, select the pool and recovery point, then choose **Test
-   restore**. Enter a new test VM name, host and storage; review the new VM
-   identity and disconnected-network defaults before submitting.
+1. Choose the pool, then open **Backups** → **Recovery points**. Select the point
+   or its **Details** button, inspect it, then select **Restore…** → **Test restore**.
+   In **Destination**, enter a new test VM name, host and storage. Select **Review
+   restore**, check the new identity and disconnected-network defaults, then
+   **Create test restore** in the **Review and submit** footer.
 2. Follow the task. When the test restore succeeds, open the recovery point's
    **Verify test restore** section. Each successful test VM that still exists
    has its own labelled section, newest first, with its name, ID and **Open test VM** link.
@@ -33,9 +35,11 @@ boot or application data automatically.
    damaged, provided the original VM identity and definition can be proven.
 5. Shut down the test VM. Once Core freshly reports the VM **shut off** and
    its host connected, type that test VM's exact ID into the cleanup field and
-   choose **Clean up** for that section. Follow the cleanup task and confirm the
-   test VM disappears. If more than one test VM was made from the point, clean
+   choose **Clean up test VM and disks** for that section. Follow the cleanup task
+   and confirm the test VM disappears. If more than one test VM was made from the point, clean
    each one separately.
+   If the VM's host is unreachable, the cleanup task shows **Waiting: member unreachable** and
+   continues by itself when the host answers again.
 
 ## Expected result
 
@@ -82,3 +86,8 @@ receipts succeeded; the VM, copied disk and firmware were absent afterward,
 and Core removed the exact owner row and point pin. This checks the Failed
 path for one test VM; Passed verification, multiple native test VMs,
 interrupted cleanup and guest application recovery remain untested here.
+
+The [backup workspace review](../qa/2026-10-01-backup-ui/README.md) submitted
+test-restore, Record failed and exact-ID cleanup through the redesigned UI to
+fictional API responses, and checked unavailable-history refusal. This adds UI
+coverage only; it does not extend the native verification above.

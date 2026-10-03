@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -476,7 +478,7 @@ func TestSMBMountMapsFilesToLibvirtQEMU(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := smbMountOptions("/private/receipt", uid, gid)
+	got := smbMountOptions(uid, gid, "/private/receipt")
 	for _, want := range []string{"vers=3.1.1", "seal", "cache=strict", "credentials=/private/receipt", "uid=64055", "gid=64056", "file_mode=0600", "dir_mode=0700"} {
 		if !strings.Contains(","+got+",", ","+want+",") {
 			t.Errorf("SMB options missing %q: %s", want, got)
@@ -533,7 +535,7 @@ func TestRemoteMountRejectsReplacementAndAdminUnit(t *testing.T) {
 		return nil, nil
 	}
 	s := protocol.StorageRegistration{ID: "nfs", PoolID: "pool", HostID: "host", Generation: 1, Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/vms"}}}
-	if _, err := prepareNFS(context.Background(), s); err == nil || !strings.Contains(err.Error(), "source") {
+	if _, err := prepareNFS(context.Background(), s, ""); err == nil || !strings.Contains(err.Error(), "source") {
 		t.Fatalf("replaced mount accepted: %v", err)
 	}
 	_, unitPath := remoteUnitPath(s)
@@ -554,6 +556,85 @@ func TestRemoteMountRejectsReplacementAndAdminUnit(t *testing.T) {
 	}
 }
 
+func TestFailedFirstRemoteMountStartLeavesNoUnit(t *testing.T) {
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	s := protocol.StorageRegistration{ID: "smb", PoolID: "pool", HostID: "host", Generation: 1,
+		Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}}}
+	starts := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" && len(args) > 1 && args[0] == "enable" && args[1] == "--now" {
+			starts++
+			if starts == 1 {
+				return nil, errors.New("share unavailable")
+			}
+		}
+		return nil, nil
+	}
+	if _, err := prepareRemote(context.Background(), s, "//smb.example.test/backups", "cifs", "cache=strict"); err == nil {
+		t.Fatal("first unavailable mount succeeded")
+	}
+	_, unitPath := remoteUnitPath(s)
+	if _, err := os.Stat(unitPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed first mount left its unit: %v", err)
+	}
+	if _, err := prepareRemote(context.Background(), s, "//smb.example.test/backups", "cifs", "cache=strict"); err != nil {
+		t.Fatalf("new request after service recovery: %v", err)
+	}
+}
+
+func TestRemotePreparationsDoNotRaceFailedFirstMountCleanup(t *testing.T) {
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	s := protocol.StorageRegistration{ID: "nfs", PoolID: "pool", HostID: "host", Generation: 1,
+		Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/backups"}}}
+	firstStarted, releaseFirst, secondStarted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	starts := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" && len(args) > 1 && args[0] == "enable" && args[1] == "--now" {
+			mu.Lock()
+			starts++
+			current := starts
+			mu.Unlock()
+			if current == 1 {
+				close(firstStarted)
+				<-releaseFirst
+				return nil, errors.New("share unavailable")
+			}
+			close(secondStarted)
+		}
+		return nil, nil
+	}
+	firstDone := make(chan error, 1)
+	go func() { _, err := prepareNFS(context.Background(), s, ""); firstDone <- err }()
+	<-firstStarted
+	secondDone := make(chan error, 1)
+	go func() { _, err := prepareNFS(context.Background(), s, ""); secondDone <- err }()
+	select {
+	case <-secondStarted:
+		close(releaseFirst)
+		<-firstDone
+		<-secondDone
+		t.Fatal("second preparation started before failed first mount cleaned up")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err == nil {
+		t.Fatal("unavailable first mount succeeded")
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second preparation did not resume after cleanup")
+	}
+	<-secondDone
+}
+
 func TestSMBCredentialRotationRestoresWorkingUnitOnRestartFailure(t *testing.T) {
 	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
 	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
@@ -561,7 +642,7 @@ func TestSMBCredentialRotationRestoresWorkingUnitOnRestartFailure(t *testing.T) 
 	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
 	s := protocol.StorageRegistration{ID: "smb", Kind: protocol.StorageKindSMB}
 	unit, unitPath := remoteUnitPath(s)
-	old := remoteUnit("//smb.example.test/vms", remoteMountPath(s), "cifs", smbMountOptions("/private/old", "64055", "64056"))
+	old := remoteUnit("//smb.example.test/vms", remoteMountPath(s), "cifs", smbMountOptions("64055", "64056", "/private/old"))
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -576,8 +657,7 @@ func TestSMBCredentialRotationRestoresWorkingUnitOnRestartFailure(t *testing.T) 
 		}
 		return nil, nil
 	}
-	_, err := prepareRemote(allowStorageRemount(context.Background()), s, "//smb.example.test/vms", "cifs", smbMountOptions("/private/new", "64055", "64056"))
-	if err == nil {
+	if _, err := prepareRemote(allowStorageRemount(context.Background()), s, "//smb.example.test/vms", "cifs", smbMountOptions("64055", "64056", "/private/new")); err == nil {
 		t.Fatal("credential rotation unexpectedly succeeded")
 	}
 	got, readErr := os.ReadFile(unitPath)
@@ -598,7 +678,7 @@ func remoteMountTestSetup(t *testing.T) (*[][]string, func(protocol.StorageRegis
 	calls := &[][]string{}
 	writeUnit := func(s protocol.StorageRegistration) ([]byte, string) {
 		_, unitPath := remoteUnitPath(s)
-		content := remoteUnit("//smb.example.test/vms", remoteMountPath(s), "cifs", smbMountOptions("/private/receipt", "64055", "64056"))
+		content := remoteUnit("//smb.example.test/vms", remoteMountPath(s), "cifs", smbMountOptions("64055", "64056", "/private/receipt"))
 		if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -795,5 +875,110 @@ func TestRecheckRepairsAStaleRemoteMountOnlyWhenNothingUsesIt(t *testing.T) {
 	}
 	if err := repairStaleRemoteMount(context.Background(), js[:1], repo); err != nil || len(ran) != 0 {
 		t.Fatalf("an administrator's mount unit was restarted: %v %v", err, ran)
+	}
+}
+
+func TestRemotePreparationWaitHonoursContext(t *testing.T) {
+	s := protocol.StorageRegistration{ID: "nfs", PoolID: "pool", HostID: "host", Generation: 1,
+		Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/backups"}}}
+	unlock, err := remotePreparation.lock(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := prepareNFS(ctx, s, ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("preparation waited past its request: %v", err)
+	}
+}
+
+// A mount stuck on a hung server holds only its own slot: another repository still prepares.
+func TestRemotePreparationOfOneMountDoesNotBlockAnother(t *testing.T) {
+	unlock, err := remotePreparation.lock(context.Background(), "hung")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	other, err := remotePreparation.lock(ctx, "healthy")
+	if err != nil {
+		t.Fatalf("an unrelated mount waited on the hung one: %v", err)
+	}
+	other()
+}
+
+func TestNFSBackupMountIsDataOnlyAndVMStorageMountIsNot(t *testing.T) {
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	source := protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/backups"}
+	unitOptions := func(prepare func() error, s protocol.StorageRegistration) string {
+		_, unitPath := remoteUnitPath(s)
+		var unit []byte
+		nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if name == "systemctl" && args[0] == "daemon-reload" && unit == nil {
+				unit, _ = os.ReadFile(unitPath)
+			}
+			if name == "systemctl" && args[0] == "enable" {
+				return nil, errors.New("share unavailable")
+			}
+			return nil, nil
+		}
+		if err := prepare(); err == nil {
+			t.Fatal("unavailable share was prepared")
+		}
+		return string(unit)
+	}
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindNFS, Source: source}
+	backup := unitOptions(func() error { _, err := PrepareBackupRepository(context.Background(), repo); return err }, backupStorageRegistration(repo))
+	if !strings.Contains(backup, "Options=vers=4,hard,_netdev,nosuid,nodev,noexec\n") {
+		t.Fatalf("NFS backup mount is not restricted to data: %s", backup)
+	}
+	vm := protocol.StorageRegistration{ID: "nfs", PoolID: "pool", HostID: "host", Generation: 1, Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &source}}
+	vmUnit := unitOptions(func() error { _, err := prepareNFS(context.Background(), vm, ""); return err }, vm)
+	if !strings.Contains(vmUnit, "Options=vers=4,hard,_netdev\n") {
+		t.Fatalf("NFS VM storage mount options changed: %s", vmUnit)
+	}
+}
+
+func TestFailedRemoteMountReportsMountHelperMessage(t *testing.T) {
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	var journalArgs []string
+	helper := "mount error(13): Permission denied\n"
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "systemctl" && args[0] == "enable" && args[1] == "--now":
+			return nil, errors.New("systemctl failed: exit status 1: Job failed")
+		case name == "journalctl":
+			journalArgs = args
+			return []byte(helper), nil
+		}
+		return nil, nil
+	}
+	nfs := protocol.StorageRegistration{ID: "nfs", PoolID: "pool", HostID: "host", Generation: 1, Kind: protocol.StorageKindNFS}
+	before := time.Now().Unix()
+	_, err := prepareRemote(context.Background(), nfs, "nfs.example.test:/vms", "nfs4", "vers=4,hard,_netdev")
+	if err == nil || !strings.Contains(err.Error(), "Job failed") || !strings.Contains(err.Error(), "mount error(13): Permission denied") {
+		t.Fatalf("mount failure lost the helper message: %v", err)
+	}
+	// An earlier attempt's lines in the unit journal are not this attempt's failure.
+	since := strings.Join(journalArgs, " ")
+	i := strings.Index(since, "--since @")
+	if i < 0 {
+		t.Fatalf("journal read is not limited to this attempt: %v", journalArgs)
+	}
+	if got, perr := strconv.ParseInt(strings.Fields(since[i+len("--since @"):])[0], 10, 64); perr != nil || got < before {
+		t.Fatalf("journal window starts at %d, before the attempt (%d): %v", got, before, perr)
+	}
+	helper = strings.Repeat("x", 4*mountJournalLimit)
+	_, err = prepareRemote(context.Background(), nfs, "nfs.example.test:/vms", "nfs4", "vers=4,hard,_netdev")
+	if err == nil || len(err.Error()) > 2*mountJournalLimit {
+		t.Fatalf("journal text is not bounded: %d bytes", len(err.Error()))
 	}
 }

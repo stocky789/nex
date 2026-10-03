@@ -63,7 +63,7 @@ def simulated(lab):
     failures = []
     # control lets a walkthrough change what the simulated host observes and applies.
     control = {'state': 'shut off',
-               'capabilities': ['managed-vm-v1', 'pool-vm-placement-v1', 'vm-update-v1', 'vm-media-v1', 'storage-repositories-v1', 'vm-cpu-baseline-v1'],
+               'capabilities': ['managed-vm-v1', 'vm-update-v1', 'vm-media-v1', 'storage-repositories-v1', 'vm-cpu-baseline-v1'],
                'reject_placement': False,
                'cpu_baseline': {'model': 'SyntheticBaseline', 'features': [{'name': 'sse4.2', 'policy': 'require'}], 'machine': 'q35', 'generation': 1, 'member_count': 1, 'observed_at': datetime.now(timezone.utc).isoformat()}}
     specs = {}
@@ -512,17 +512,10 @@ def acceptance(config, password, iso, evidence, mode):
         # An automatic MAC is listed as its effective derived address.
         assert re.fullmatch(r'52:54:00:[0-9a-f]{2}:[0-9a-f]{2}:00', spec['nics'][0]['mac']) and spec['nics'][1]['mac'] == '52:54:00:ab:cd:ef', spec
         capture('created-desktop')
-        # Simulator-only fault controls prove that an old Core is rejected synchronously and
-        # a current Core's asynchronous placement rejection leaves an actionable task route.
+        # A simulator-only fault control proves that a Core's asynchronous placement
+        # rejection leaves an actionable task route.
         if mode == 'simulated':
             request = {**bodies[0], 'name': 'Placement browser failure ' + suffix}
-            request['request_id'] = 'placement-browser-capability-' + suffix
-            config['control']['capabilities'] = [cap for cap in config['control']['capabilities'] if cap != 'pool-vm-placement-v1']
-            eventually(lambda: 'pool-vm-placement-v1' not in next(h for h in page.request.get(config['url'] + '/api/v1/hosts').json() if h['id'] == config['host_id'])['capabilities'], 'simulated Core without placement capability')
-            rejected = page.request.post(config['url'] + '/api/v1/vms', data=request, headers={'X-CSRF-Token': csrf})
-            assert rejected.status == 409 and 'master-owned VM placement; upgrade Nex Core' in rejected.text(), rejected.text()
-            config['control']['capabilities'].append('pool-vm-placement-v1')
-            eventually(lambda: 'pool-vm-placement-v1' in next(h for h in page.request.get(config['url'] + '/api/v1/hosts').json() if h['id'] == config['host_id'])['capabilities'], 'simulated Core placement capability restored')
             request['request_id'] = 'placement-browser-rejected-' + suffix
             config['control']['reject_placement'] = True
             rejected = page.request.post(config['url'] + '/api/v1/vms', data=request, headers={'X-CSRF-Token': csrf})

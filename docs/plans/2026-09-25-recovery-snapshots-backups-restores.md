@@ -16,17 +16,17 @@ independent correction review, interrupted-request and native restore reruns,
 and proof that promotion preserves complete retained history as the replica
 grows. The bounded Campaign A/B and browser results remain evidence for their
 tested builds; they do not certify these later edits.
-The current paged authority refuses more than 64 MiB or 1024 pages without
-truncating records. The encoder's packing rule means the 64 MiB byte bound
-arrives before the page-count bound for valid records. The new admission
-guard refuses growth that would cross the bound, preserving a previously
-complete replica. An older oversized history, or a failed replica push,
-still prevents complete-history takeover. Phase 6 stays
-open for a near-boundary transfer/promotion check and a product decision on
-history capacity and continued takeover beyond it. Current Core source adds
-master-side capacity preflight for new backup metadata and reserves room for
-pending operation outcomes. A focused sparse-page assertion passed; near-boundary
-native transfer/promotion proof remains open.
+The legacy version 0 authority transfer refused more than 64 MiB or 1024 pages
+without truncating records. The current candidate adds incremental v2 signed
+pages to retain complete history beyond that bound. A native three-Core
+overlay verified transfer of 1,052 directly seeded runs beyond 64 MiB to
+both members, and a matched Controller overlay read all 1,052 runs through
+authenticated pages. Those overlays precede the latest admission and page
+guards. Core source now checks live, exact member replica status before
+admitting more backup metadata and reserves room for pending outcomes.
+Failed replica push or incomplete member history still prevents safe takeover.
+Phase 6 remains open for a final-candidate native retry, fence-verified
+promotion preserving all retained history, and post-promotion adoption.
 Test-result recording now requires the exact successful restore creator and
 current native VM identity on the owner host. The current master obtains
 authenticated member proof when needed. Passed requires intact current
@@ -110,6 +110,12 @@ definitions, schedules, retained previous runs and recovery points through authe
 The old Controller's database, export, CA and job configuration are not prerequisites. The
 [three-host campaign below](#mandatory-three-host-continuity-and-adoption-campaign) is a blocking
 acceptance gate, including loss of the host carrying both Controller and the master role.
+
+**No legacy compatibility, project owner, 2026-09-29:** Nex is not in production. Recovery work
+implements current behaviour directly and keeps no compatibility path for older Cores,
+Controllers or members, mixed-version pools, old on-disk formats or existing lab deployments.
+Remove such shims when touching them. A lab unit or record written by an older build is
+recreated, not migrated.
 
 | Included | Completion requirement |
 |---|---|
@@ -208,7 +214,37 @@ Protection labels use actual Core policy and schedule/run evidence, with Unknown
 that evidence is unavailable. Show policy coverage and successful-copy history separately; having
 a policy does not prove a backup exists. Do not invent an aggregate protection score.
 
-Illustrative structure, without fabricated product data:
+### Controller-only refinement (2026-10-01)
+
+The implemented scope is presentation of existing Core capabilities:
+
+- Separate compact **Backup jobs** and **Recovery points** views. Job filters and
+  expansion survive view switches; View points keeps its VM scope.
+- Point selection opens inspection only. Restore, protection, verification and
+  exact-VM cleanup are contextual actions rather than repeated point-row buttons.
+- Wide slide-overs use named steps and fixed footer navigation. Backup and restore
+  have Destination and Review and submit; job creation retains three meaningful steps.
+- Restore as new is the safe default. Replace original VM and Test restore state
+  their consequences; existing exact-name, fresh shut-off and cleanup-ID gates remain.
+- Existing catalog filters occupy a desktop sidebar or smaller-screen Filters
+  disclosure. Name/result hierarchy, compact phone rows, loading placeholders and
+  reduced-motion-aware transitions use the console tokens and accessible controls.
+- Ordinary drafts and refreshed point details remain available while navigating;
+  uncertain requests cannot change target or disappear through a view switch.
+
+**API impact: existing contract** — unchanged catalog/run reads, backup/restore/test,
+protection, policy create/pause/run-now and revision-checked repository update.
+**Guide impact: updated** — backup, job setup and all three restore instructions.
+**State owner: none** — no new durable data; the existing pool master's backup
+records and fresh-Controller adoption path remain authoritative. Full job editing,
+new telemetry, filters and backup capabilities are outside this refinement.
+
+The [browser review](../qa/2026-10-01-backup-ui/README.md) covers actual rendered
+workflows with fictional API responses and regression checks. It establishes UI
+behavior only, not new Core recovery evidence or phase closure.
+
+
+Illustrative future structure (not the implemented refinement above):
 
 ```text
 Backups                                 Back up now   Create policy

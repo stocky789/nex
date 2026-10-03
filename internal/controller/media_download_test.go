@@ -101,7 +101,8 @@ func TestFailedMediaImportIsRemovableAndRetryable(t *testing.T) {
 	inv.Managed.Media = []protocol.Media{applied}
 	l.seq++
 	l.a.report(l.cert, protocol.ReportRequest{Version: 1, Sequence: l.seq, Capabilities: l.caps, Inventory: inv, Results: []protocol.Result{{OperationID: stored.OperationID, Status: "succeeded"}}})
-	l.a.call("DELETE", "/api/v1/media/"+stored.ID, nil, nil, 409)
+	// Removing it is a relay to Core that needs a request_id; the bodyless library call is refused.
+	l.a.call("DELETE", "/api/v1/media/"+stored.ID, nil, nil, 400)
 	if all := list(); len(all) != 1 || all[0].ID != stored.ID || all[0].Status != "succeeded" {
 		t.Fatalf("stored ISO changed: %+v", all)
 	}

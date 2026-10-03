@@ -1,0 +1,32 @@
+{
+  "summary": "A planned master change receipt settles as succeeded only through its own hand-over, not because the target later became master by another operation.",
+  "paths": [
+    "internal/agent/pool_transfer.go",
+    "internal/agent/backup_master_change_test.go",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-master-change-receipt-binding.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "An unconfirmed master change now reports when the target became master through another operation.",
+    "pages": ["docs/guide/pool-authority-and-recovery.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Only the Core-local settlement of an existing command receipt changes; no request, response or contract changes."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fix inside the existing master-change settlement."
+  },
+  "state": {
+    "owner": "core",
+    "record": "The old master's durable pool-peer transfer record (source role, operation id, stage done) and its command journal.",
+    "reason": "Both already exist on the host; a fresh Controller reads the receipt result from the host."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent; the new test fails without the check. No lab run.",
+    "evidence": ["internal/agent/backup_master_change_test.go", "docs/BUG_LEDGER.md"]
+  }
+}

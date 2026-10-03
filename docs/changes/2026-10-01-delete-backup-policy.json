@@ -1,0 +1,67 @@
+{
+  "summary": "Guarded delete of a backup policy: Core removes only the policy definition on the pool master (schedule, VM list, retention rules), refused while a run of it is pending or without the typed policy name; recovery points, run history and repository data are never deleted. New Core-local route, Controller route and UI dialog.",
+  "paths": [
+    "internal/agent/backup_policy_delete.go",
+    "internal/agent/backup_policy_delete_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/agent/queue_test.go",
+    "internal/protocol/backup_policy.go",
+    "internal/protocol/protocol.go",
+    "internal/controller/backup_policies.go",
+    "internal/controller/backup_dr.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/backup_adoption_test.go",
+    "internal/localcore/backup.go",
+    "internal/localcore/service.go",
+    "internal/localcore/backup_test.go",
+    "web/src/backup-policy-delete.tsx",
+    "web/src/backup-policies.tsx",
+    "web/src/backup-policies.test.mjs",
+    "web/src/labels.ts",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/guide/backup-policies.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-delete-backup-policy.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Adds the Delete backup job steps, what is kept, the refusals and troubleshooting; removes the statement that no delete-job action exists.",
+    "pages": [
+      "docs/guide/backup-policies.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "New backup-policy-delete command (Command.delete_backup_policy), POST /api/v1/pools/{id}/backup-policies/{policy_id}/delete and POST /api/local/v1/pool/backup-policies/{id}/delete. Admin session and CSRF; request_id idempotency through the Core metadata receipt (replay returns the recorded Result, changed payload 409, absent policy under a new id not found); no peer call because policies live only on the master.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Closes a gap in the existing backup policy management slice."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The policy definition already lives in pool-backup-policies.json on the pool master; delete removes the record there and the authority replica is rebuilt from it. The Controller keeps no copy: its policy list is the master's reported inventory, so a fresh Controller adopts the post-delete state. Run history, recovery points and repository data are untouched.",
+    "record": "pool-backup-policies.json and the backup metadata receipt directory on the pool master (the delete receipt is the idempotency record)"
+  },
+  "verification": {
+    "method": "Go tests against a seeded master with a member (TestDeleteBackupPolicy: name refusal, refusal naming a pending run, removal keeping runs and recovery points, no scheduler dispatch afterwards, replay, changed payload, absent policy, crash retry), Controller route test (CSRF, auth, validation, replay, conflict, delivery to the master), Core-local route test, web unit tests and tsc. Mutation checks confirmed the pending-run refusal and crash-retry tests fail without their code. No browser walkthrough and no lab run.",
+    "evidence": [
+      "internal/agent/backup_policy_delete_test.go",
+      "internal/controller/backup_adoption_test.go",
+      "internal/localcore/backup_test.go",
+      "web/src/backup-policies.test.mjs"
+    ]
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.18. This page covers what a pool member holds as a copy of the pool
+Development product 0.4.19. This page covers what a pool member holds as a copy of the pool
 master's authority and how to read that copy's state (**Settings** → **Members** → each host's
 **Authority copy** check), how to **change which host is the pool master**, how to **eject a host
 from a pool**, how Nex Core **configures each host's own management controller** for fencing, how to
@@ -149,21 +149,13 @@ action opens it for that host's pool.
 - An administrator session in Nex Controller, and the pool's **Settings** → **Members** section
   open.
 - A pool with at least one member besides the master. A single-host pool has no member to hold a
-  copy, and no host shows an **Authority copy** check when the master does not support the copy
-  at all.
-- The pool master and the member both advertising the `pool-authority-replica-v1` capability. A
-  member without it holds nothing and is reported as **not supported — upgrade**.
+  copy.
 - Both hosts able to reach each other on their pool peer addresses. The master pushes the copy to
   each member over the same pinned pool connection it already uses; the browser's own reachability
   proves nothing about it.
 
 For a master change or an eject, additionally:
 
-- The pool master, the selected host and **every ready member** advertising
-  `pool-authority-transfer-v1`. Without it on the master no action is offered at all; without it on
-  the selected host or another ready member the request is refused and the host to upgrade is named.
-  A member that is not currently reporting is not required to have it — Nex Core checks every
-  participant again anyway.
 - For a **master change**: the pool master fresh and active, the selected host fresh and active, a
   `ready` member of this pool with a peer address, and its **Authority copy** at **current**. The
   host takes over the copy it already holds and has verified; a missing, unverified or older copy
@@ -204,8 +196,7 @@ For a fence device or a promotion, additionally:
 - For a Nex Core that runs as a virtual machine in a disposable laboratory there is no management
   controller to ask, so a `virsh` device — an SSH login on a host running libvirt — stays available
   behind a link in the same dialog.
-- **To promote**: the surviving member fresh and active, a `ready` member of this pool, advertising
-  `pool-authority-transfer-v1`, holding a verified copy of the pool records, and able to shut the
+- **To promote**: the surviving member fresh and active, a `ready` member of this pool, holding a verified copy of the pool records, and able to shut the
   old master out — either through a fence device for it that this host can use, or, where the old
   master armed its own watchdog, by waiting out that watchdog's period (see
   [Host fencing, and the watchdog line](#host-fencing-and-the-watchdog-line)).
@@ -213,6 +204,12 @@ For a fence device or a promotion, additionally:
   reachable, and whether Nex Controller can reach it is never evidence either way: Nex Core probes
   it over the pool network itself and refuses the promotion if it answers and still holds the
   authority.
+
+For the backup review-fix build, upgrade all Core peers to matching builds before
+using the changed backup cleanup and paged orphan-result contracts. Let the active
+master send a fresh complete authority copy and verify it as **current** on each
+candidate before promotion. An older acknowledged copy is not evidence that the
+new per-point framing has been received. No mixed-version fallback bypasses validation.
 
 ## Steps
 
@@ -281,6 +278,12 @@ Do this with the current pool master still working. It is a planned hand-over, n
    only go forward.
 7. When the change finishes, the master row moves to the new host by itself, from the hosts' own
    reports. There is nothing to confirm and nothing to re-enter.
+8. A backup repository the new master cannot reach or read does not stop the change. The
+   repository is kept, and **Settings** → **Backup repositories** shows it **offline** with the reason.
+   Fix the network path or credentials from the new master. Any repository, including a
+   network-share (NFS or SMB3) one, returns online by itself at the next health check once the new
+   master can reach it; nothing needs registering again.
+   Recovery points of a repository that was unreachable are listed after **Catalog rebuild**.
 
 ### Eject a host from a pool
 
@@ -288,7 +291,8 @@ Do this with the current pool master still working. It is a planned hand-over, n
    select **Eject from pool**.
 2. Read the dialog. The host leaves this pool and becomes the pool master of its own new
    single-host pool, keeping its host identity, its local virtual machines and its local storage;
-   the pool's shared networks, storage registrations and ISO library are removed from it.
+   the pool's shared networks, storage registrations and ISO library are removed from it, and it
+   erases the backup credentials and SMB3 mount credential files it held for this pool.
 3. Type the **host name** in the confirmation box, exactly as it is shown, and select
    **Eject from pool**.
 4. Watch the **Pool master change** panel for the outcome. Nex Core refuses an unknown or
@@ -395,7 +399,7 @@ host never checks itself — the question is whether *somebody else* could shut 
 | **Not protected — an operator withdrew…** | You cleared this host's device deliberately. | Nothing, unless you want it back: **Let Nex configure this controller again**. |
 | **Not protected — no other host has checked… yet** | The device is recorded and nothing has looked at it yet. A fresh pool, or a pool master that has just restarted. | Wait one check interval, about five minutes. It is honestly *unknown*, never *ready*. |
 | **BMC · no other host to check from** | This pool has one host, so there is nobody to check it — and nothing to promote it over either. | Nothing. A single-host pool needs no fence device at all; it gets one when a second host joins. |
-| **not reported** | This pool master's Nex Core is too old to report fencing readiness. | Upgrade the pool master. Until then nothing here knows, so nothing here claims it. |
+| **not reported** | The pool master has not reported fencing readiness with its membership yet. | Wait for its next report. Until then nothing here knows, so nothing here claims it. |
 | **unknown** | The pool master is not reporting. It keeps this record, so nothing else can answer for it. | See [when the pool master is gone](#promote-a-surviving-member). This does **not** mean the hosts cannot be shut out; it means nothing here knows. |
 
 Under the first line, the same **Fencing** entry gives the reasons behind it, the recorded fence
@@ -530,8 +534,8 @@ while they wait their turn — **until a host's turn comes it still resets itsel
 pool's quorum**, which is why the pool does not tear the cluster down underneath them. To turn it
 back on, tick it again. The setting is the pool master's, like everything else on this page: it is stored
 on the master, copied to every member with the pool's records, and a Nex Controller you rebuild reads
-it back from the master. If the switch is missing and the page says the master is **too old to
-report the host fencing setting**, upgrade the pool master.
+it back from the master. If the switch is missing and the page says the master **has not reported
+the host fencing setting yet**, wait for the master's next report.
 
 **Promoting over a host that reset itself.** Where a host has no usable management controller but did
 arm a watchdog, a promotion excludes it by that watchdog instead. Nobody powers it off: the surviving
@@ -815,6 +819,11 @@ Nothing is ever cancelled by a timeout, and a cancellation is never offered as a
 finished change. A cancelled master change is recorded as *the pool master change was cancelled by
 an operator*; a cancelled eject as *the pool member eject was cancelled by an operator*.
 
+A master change that was never confirmed to you is settled as succeeded only by its own hand-over.
+If the same host became master through a different operation, the unconfirmed change keeps
+needing attention and says *the target became master through another operation, not this master
+change*; check the pool master shown in inventory rather than treating that change as done.
+
 ## Expected result
 
 - Every fresh member of a healthy pool settles at **current** within about one reporting interval
@@ -893,8 +902,6 @@ After a **promotion**:
   disagree about the pool they are in; do not try to fix that by rejoining a production host.
 - **A member shows *unverified*.** It holds bytes it could not prove. Treat it as holding nothing
   and investigate the member's own pool certificate state.
-- **"Not supported — upgrade".** The master records such a member at copy `0` with an
-  upgrade-required reason. Upgrade that host.
 - **An SMB repository is registered in the pool.** The stored credentials are not part of the
   copy, by design. Keep the credentials for any SMB repository recorded outside the pool, because
   a copy alone would not restore access to them.
@@ -922,9 +929,6 @@ change** panel in its own words. What each one means:
   join first.
 - **"The selected host must be fresh and active to become the pool master."** It is not reporting
   now. A host that cannot be reached cannot take the authority — but it *can* be ejected.
-- **"… needs `pool-authority-transfer-v1` on …; upgrade `<host>`."** Upgrade the named host. Every
-  ready member needs it, because a member that cannot be re-pointed would keep following a host that
-  is no longer the pool master.
 - **"Another pool authority transfer is already in progress on this pool."** Wait for the one on the
   panel to finish, or cancel it.
 - **"The pool master reports membership generation N; reload the pool and retry."** The membership
@@ -952,6 +956,22 @@ change** panel in its own words. What each one means:
   ejected host has released its pool resources. Follow that host's own transfer row: `leave` means
   it is still working, and `needs_attention` names a local VM or other blocker. Once the cause is
   cleared, the host resumes and finishes by itself, with no master connection or manual state edit.
+- **"backup operation is unresolved; finish or reconcile it before changing pool authority."**
+  A backup, restore or other backup work is still running, unresolved or waiting on a metadata
+  receipt, on the master or on a member (an accepted **Run now** counts). The master change is
+  refused as failed and nothing moves. Let the work finish or reconcile it in **Tasks**, then
+  request the change again; do not expect the change to interrupt a running backup. The message
+  names the operation. A metadata receipt that has made no progress for 12 hours no longer counts:
+  the next change attempt marks it **needs attention** with its reason and goes ahead, and so does
+  a stale task entry whose operation already finished.
+- **"Pool authority was handed to `<host>` but its activation is not confirmed yet."** The new
+  master has not answered in time, usually while it checks a backup repository it cannot reach.
+  Wait: this host refuses authority writes meanwhile and settles the task to **succeeded** by itself
+  once it sees the new master, even after either host restarts. Do not power off either host.
+- **"Pool authority kept changing while it was being frozen; nothing was changed, so start the
+  master change again."** Something wrote to the pool's authority (for example a backup cleanup
+  finishing) while the old master was freezing it. The master change was not started and the
+  master did not move; request it again.
 - **"Pool authority was handed to another host; this host is no longer the pool master."** You
   addressed a host that has already given the authority away. Select **Refresh** in the
   **Members** section.
@@ -1058,6 +1078,17 @@ That is expected while it cannot reach any host of the pool. It keeps running it
 machines. As soon as it can reach one, it learns that its certificate is no longer admitted and
 re-initializes itself as its own single-host pool. Do not re-enrol or rebuild it to hurry this up.
 
+### A new master has not imported a repository's catalog
+
+After a master change or promotion, the new master imports each backup repository's catalog
+before it re-points members. A repository it could not reach does not block the change: Core
+records it in `pool-backup-catalog-pending.json` and imports its catalog automatically on a
+later health probe, once the repository's access is no longer failed (a cancelled or timed-out
+attempt never marks it unreachable). Until then its recovery points are missing from the catalog;
+run **Import points** on the repository row to do it by hand. Replica pushes no longer hold the
+authority lock while preparing storage leases or waiting on members, and at most one push per host
+waits at a time, so a stuck member only delays its own replica.
+
 ### The change is interrupted
 
 Closing the browser, losing Nex Controller, or replacing it entirely changes nothing: the pool
@@ -1128,7 +1159,7 @@ captured on the earlier layout and still applies to the behaviour it describes.
   rule including the durable never-activate record; an eject with re-initialization as a new pool;
   both eject refusals; ejecting an unreachable member and its learning on return; and concurrent
   authority writes during a freeze, all refused. Controller tests cover the three routes, the
-  refusal matrix, the capability gate, the projections, adoption of the new master and of an
+  refusal matrix, the projections, adoption of the new master and of an
   ejected host's new pool, and a Controller reopened from the same database mid-change. The
   interface helpers are covered by component tests.
 - The promotion and the restriction are covered by Go `-race` tests that run several hosts in one

@@ -3,6 +3,7 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -53,6 +54,143 @@ func (r ProtectRecoveryPointRequest) Valid() error {
 		return errors.New("protect recovery point request is invalid")
 	}
 	return nil
+}
+
+// ForgetRepositoryRequest drops a repository and its recovery-point and run records from the
+// pool; the destination's data is never touched. Confirmation is the repository name and the
+// counts are what the operator was shown, so a catalog that changed since is refused.
+type ForgetRepositoryRequest struct {
+	RepositoryID    string `json:"repository_id"`
+	Confirmation    string `json:"confirmation"`
+	RecoveryPoints  int    `json:"recovery_points"`
+	ProtectedPoints int    `json:"protected_points"`
+}
+
+func (r ForgetRepositoryRequest) Valid() error {
+	if !ValidSnapshotOperationID(r.RepositoryID) || len(r.Confirmation) > 256 ||
+		r.RecoveryPoints < 0 || r.ProtectedPoints < 0 || r.ProtectedPoints > r.RecoveryPoints {
+		return errors.New("forget backup repository request is invalid")
+	}
+	return nil
+}
+
+// OrphanCleanupRequest deletes the recovery points of the chosen VMs, which are no longer in the
+// pool's VM inventory, from a repository's destination and the catalog. Counts are the totals the
+// operator was shown for the chosen VMs; Core refuses if they changed since. Confirmation is
+// OrphanCleanupConfirmation for those counts. Protected points are deleted only with
+// IncludeProtected.
+type OrphanCleanupRequest struct {
+	RepositoryID     string   `json:"repository_id"`
+	VMIDs            []string `json:"vm_ids"`
+	IncludeProtected bool     `json:"include_protected,omitempty"`
+	Confirmation     string   `json:"confirmation"`
+	RecoveryPoints   int      `json:"recovery_points"`
+	ProtectedPoints  int      `json:"protected_points"`
+}
+
+func (r OrphanCleanupRequest) Valid() error {
+	seen := map[string]bool{}
+	for _, id := range r.VMIDs {
+		if id == "" || len(id) > 128 || seen[id] {
+			return errors.New("orphaned backup cleanup request is invalid")
+		}
+		seen[id] = true
+	}
+	if !ValidSnapshotOperationID(r.RepositoryID) || len(r.VMIDs) == 0 || len(r.VMIDs) > 1000 || len(r.Confirmation) > 256 ||
+		r.RecoveryPoints < 1 || r.ProtectedPoints < 0 || r.ProtectedPoints > r.RecoveryPoints {
+		return errors.New("orphaned backup cleanup request is invalid")
+	}
+	return nil
+}
+
+// OrphanCleanupConfirmation is the text the operator types; with protected points included it
+// states how many.
+func OrphanCleanupConfirmation(points, protected int, includeProtected bool) string {
+	text := fmt.Sprintf("delete %d recovery points", points)
+	if includeProtected {
+		text += fmt.Sprintf(" including %d protected", protected)
+	}
+	return text
+}
+
+// BackupOrphanGroup is one missing VM's recovery points in a repository.
+type BackupOrphanGroup struct {
+	VMID              string    `json:"vm_id"`
+	VMName            string    `json:"vm_name,omitempty"`
+	RecoveryPoints    int       `json:"recovery_points"`
+	ProtectedPoints   int       `json:"protected_points"`
+	SizeBytes         int64     `json:"size_bytes"`
+	SizeUnknownPoints int       `json:"size_unknown_points,omitempty"`
+	Oldest            time.Time `json:"oldest"`
+	Newest            time.Time `json:"newest"`
+	// InUse: an unfinished restore or test restore pins a point, or a backup run on the
+	// repository names the VM. Cleanup always skips those points.
+	InUse bool `json:"in_use,omitempty"`
+}
+
+// BackupOrphanQuery lists a repository's recovery points whose VM is not in the master's VM inventory.
+type BackupOrphanQuery struct {
+	RepositoryID string              `json:"repository_id"`
+	Groups       []BackupOrphanGroup `json:"groups"`
+	Warnings     []string            `json:"warnings,omitempty"`
+}
+
+// BackupOrphanPointResult is one recovery point's outcome: pending, deleted, skipped or failed.
+type BackupOrphanPointResult struct {
+	RecoveryPointID string `json:"recovery_point_id"`
+	VMID            string `json:"vm_id"`
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+}
+
+// BackupOrphanCleanup is the master's durable record of one cleanup: the planned points and what
+// happened to each. Status is running, succeeded or failed.
+type BackupOrphanCleanup struct {
+	OperationID string                    `json:"operation_id"`
+	Request     OrphanCleanupRequest      `json:"request"`
+	Status      string                    `json:"status"`
+	Error       string                    `json:"error,omitempty"`
+	Points      []BackupOrphanPointResult `json:"points"`
+	UpdatedAt   time.Time                 `json:"updated_at"`
+}
+
+func (c BackupOrphanCleanup) Valid() error {
+	if !ValidSnapshotOperationID(c.OperationID) || c.Request.Valid() != nil ||
+		!orphanCleanupStatusOK(c.Status) || len(c.Error) > 4096 || c.UpdatedAt.IsZero() {
+		return errors.New("orphaned backup cleanup is invalid")
+	}
+	for _, point := range c.Points {
+		if point.Valid() != nil {
+			return errors.New("orphaned backup cleanup is invalid")
+		}
+	}
+	return nil
+}
+
+func orphanCleanupStatusOK(status string) bool {
+	switch status {
+	case "running", "succeeded", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func (p BackupOrphanPointResult) Valid() error {
+	if !ValidSnapshotOperationID(p.RecoveryPointID) || p.VMID == "" || len(p.VMID) > 128 ||
+		!orphanCleanupPointStatusOK(p.Status) || len(p.Reason) > 4096 {
+		return errors.New("orphaned backup cleanup point is invalid")
+	}
+	return nil
+}
+
+func orphanCleanupPointStatusOK(status string) bool {
+	switch status {
+	case "pending", "deleted", "skipped", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 // TestRestoreRequest restores as a new VM marked for verification and later cleanup.

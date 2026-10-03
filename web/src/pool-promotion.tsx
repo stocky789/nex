@@ -119,12 +119,12 @@ export type FenceReadiness = { ready: boolean; methods?: FenceMethod[] };
 // Structural shapes only, so pool-members.tsx keeps one richer type of its own.
 export type PromotionMember = {
   host_id: string; name?: string; role: "master" | "member"; connection?: string;
-  transfer_supported?: boolean; fence?: MemberFence | null; restricted?: Restricted | null;
+  fence?: MemberFence | null; restricted?: Restricted | null;
   replica?: { generation: number; verified?: boolean; state?: string } | null;
 };
 export type PromotionReport = {
   pool_id: string; pool_name: string; master_host_id: string; master_connection: string;
-  authoritative: boolean; transfer_supported?: boolean;
+  authoritative: boolean;
   promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: PromotionMember[];
 };
 
@@ -221,7 +221,6 @@ export function promotionBlock(report: PromotionReport, member: PromotionMember)
   if (member.role === "master") return "This host is already the pool master.";
   if (report.authoritative) return `The pool master ${hostName(report, report.master_host_id)} is reporting. Use “Make pool master” for a planned master change; promoting is for a pool master that is gone.`;
   if (member.connection !== "fresh") return "The promotion candidate must be fresh and active to be promoted.";
-  if (member.transfer_supported === false) return `A fence-verified promotion needs pool-authority-transfer-v1 on the promotion candidate; upgrade ${member.name || member.host_id}.`;
   if (!member.replica || !member.replica.verified) return "This host does not report a copy of the pool records it has verified, so it cannot be promoted.";
   if (promotionInProgress(report)) return "A promotion is already running on this pool.";
   return "";
@@ -230,7 +229,6 @@ export function promotionBlock(report: PromotionReport, member: PromotionMember)
 // fresh master. That is worth saying plainly: it has to be recorded before the master is lost.
 export function fenceProfileBlock(report: PromotionReport, member: PromotionMember) {
   if (!report.authoritative) return `The pool master is ${report.master_connection}, so a fence device cannot be recorded now. The pool master keeps this record, so it has to be recorded while the master is reporting.`;
-  if (report.transfer_supported === false) return `Recording a fence device needs pool-authority-transfer-v1 on the pool master; upgrade ${hostName(report, report.master_host_id)}.`;
   return "";
 }
 

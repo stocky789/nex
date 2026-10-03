@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,16 @@ type storageCredentialRequest struct {
 	HostID                string                      `json:"host_id"`
 	RepositoryID          string                      `json:"repository_id,omitempty"`
 	Credentials           protocol.StorageCredentials `json:"credentials"`
+	// Repository is the backup destination the credential is for. The Controller validates
+	// its shape before delivering the secret so a registration it would refuse leaves no receipt.
+	Repository *backupCredentialRepository `json:"repository,omitempty"`
+}
+
+type backupCredentialRepository struct {
+	Name       string                     `json:"name"`
+	SMBSource  *protocol.SMBStorageSource `json:"smb_source,omitempty"`
+	S3Source   *protocol.BackupS3Source   `json:"s3_source,omitempty"`
+	SFTPSource *protocol.BackupSFTPSource `json:"sftp_source,omitempty"`
 }
 
 type credentialBrokerEntry struct {
@@ -70,14 +81,19 @@ func (b *credentialBroker) observeReceipts(host string, receipts []protocol.Stor
 			delete(b.receipts, key)
 		}
 	}
+	// The bound is per host, and retired tombstones go last so they never crowd out a live receipt.
+	receipts = slices.Clone(receipts)
+	sort.SliceStable(receipts, func(i, j int) bool { return receipts[i].Status != "retired" && receipts[j].Status == "retired" })
+	kept := 0
 	for _, receipt := range receipts {
 		if receipt.HostID != host || receipt.RequestID == "" || receipt.Receipt == "" {
 			continue
 		}
-		if len(b.receipts) >= 1024 {
+		if kept == 1024 {
 			break
 		}
 		b.receipts[receiptKey(host, receipt.RequestID)] = receipt
+		kept++
 	}
 }
 
@@ -101,15 +117,17 @@ func (b *credentialBroker) receipt(host, requestID, poolID, repositoryID, regist
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	receipt, ok := b.receipts[receiptKey(host, requestID)]
+	if !ok {
+		if entry := b.entries[requestID]; entry != nil && entry.offer.HostID == host && entry.receipt.Status == "ready" {
+			receipt, ok = entry.receipt, true
+		}
+	}
 	return receipt, ok && receipt.PoolID == poolID && receipt.RepositoryID == repositoryID && receipt.RegistrationRequestID == registrationRequestID
 }
 
 func (b *credentialBroker) proof(v storageCredentialRequest) []byte {
 	m := hmac.New(sha256.New, b.key[:])
-	fields := []string{v.RequestID, v.RegistrationRequestID, v.PoolID, v.HostID, v.RepositoryID, v.Credentials.Username, v.Credentials.Secret}
-	if v.Credentials.Domain != "" {
-		fields = append(fields, v.Credentials.Domain)
-	}
+	fields := []string{v.RequestID, v.RegistrationRequestID, v.PoolID, v.HostID, v.RepositoryID, v.Credentials.Username, v.Credentials.Secret, v.Credentials.Domain, v.Credentials.SSHPrivateKey, v.Credentials.SSHKnownHosts}
 	for _, field := range fields {
 		_, _ = m.Write([]byte(field))
 		_, _ = m.Write([]byte{0})
@@ -142,7 +160,8 @@ func (b *credentialBroker) offer(v storageCredentialRequest) (protocol.StorageCr
 			delete(b.entries, id)
 		}
 	}
-	if old := b.entries[v.RequestID]; old != nil {
+	// A refused offer is spent: the operator may resend the request id and get a fresh offer.
+	if old := b.entries[v.RequestID]; old != nil && old.receipt.Status != "failed" {
 		if old.offer.PoolID != v.PoolID || old.offer.HostID != v.HostID || old.offer.RepositoryID != v.RepositoryID || old.offer.RegistrationRequestID != v.RegistrationRequestID || (old.receipt.Receipt == "" && old.credentials != v.Credentials) || (old.receipt.Receipt != "" && !hmac.Equal(old.proof, b.proof(v))) {
 			return protocol.StorageCredentialOffer{}, errors.New("request_id already used with another credential payload")
 		}
@@ -191,7 +210,7 @@ func (b *credentialBroker) offers(host string) []protocol.StorageCredentialOffer
 			delete(b.entries, id)
 			continue
 		}
-		if entry.offer.HostID == host && entry.receipt.Receipt == "" {
+		if entry.offer.HostID == host && entry.receipt.Receipt == "" && !entry.delivered {
 			out = append(out, entry.offer)
 		}
 	}
@@ -206,10 +225,12 @@ func (b *credentialBroker) acknowledge(handle, host string, receipt protocol.Sto
 		if entry.offer.Handle != handle {
 			continue
 		}
-		if entry.offer.HostID != host || receipt.RequestID != entry.offer.RequestID || receipt.PoolID != entry.offer.PoolID || receipt.HostID != entry.offer.HostID || receipt.RepositoryID != entry.offer.RepositoryID || receipt.RegistrationRequestID != entry.offer.RegistrationRequestID || receipt.Receipt == "" || receipt.Status != "ready" {
+		if entry.offer.HostID != host || receipt.RequestID != entry.offer.RequestID || receipt.PoolID != entry.offer.PoolID || receipt.HostID != entry.offer.HostID || receipt.RepositoryID != entry.offer.RepositoryID || receipt.RegistrationRequestID != entry.offer.RegistrationRequestID ||
+			(receipt.Status != "ready" || receipt.Receipt == "") && (receipt.Status != "failed" || receipt.Error == "") {
 			return errors.New("credential receipt does not match offer")
 		}
-		if entry.receipt.Receipt == "" {
+		// A failed receipt is Core refusing the offer; it carries the reason and no receipt.
+		if entry.receipt.Status == "" {
 			entry.receipt = receipt
 			entry.credentials = protocol.StorageCredentials{}
 			close(entry.done)
@@ -228,7 +249,7 @@ func (b *credentialBroker) wait(requestID string) (protocol.StorageCredentialRec
 	}
 	select {
 	case <-entry.done:
-		return entry.receipt, true
+		return entry.receipt, entry.receipt.Status == "ready"
 	case <-time.After(time.Until(entry.offer.ExpiresAt)):
 		return protocol.StorageCredentialReceipt{}, false
 	}
@@ -239,7 +260,29 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 	if !decodeLimit(w, r, &v, 1<<20) {
 		return
 	}
-	if !nameValid(v.RequestID) || !nameValid(v.PoolID) || !nameValid(v.HostID) || (v.RepositoryID != "" && !nameValid(v.RepositoryID)) || (v.RegistrationRequestID != "" && !nameValid(v.RegistrationRequestID)) || (v.RepositoryID == "" && v.RegistrationRequestID == "") || len(v.Credentials.Username) > 4096 || len(v.Credentials.Secret) == 0 || len(v.Credentials.Secret) > 65536 || len(v.Credentials.Domain) > 253 || strings.ContainsAny(v.Credentials.Domain, "/\\= \t;'\"`$&|<>()") || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\x00\r\n") {
+	backup := strings.HasPrefix(v.RegistrationRequestID, "backup-credential:")
+	if !nameValid(v.RequestID) || !nameValid(v.PoolID) || !nameValid(v.HostID) || (v.RepositoryID != "" && !nameValid(v.RepositoryID)) || (v.RegistrationRequestID != "" && !nameValid(v.RegistrationRequestID)) || (v.RepositoryID == "" && v.RegistrationRequestID == "") || len(v.Credentials.Username) > 4096 || len(v.Credentials.Secret) > 65536 || len(v.Credentials.SSHPrivateKey) > 65536 || len(v.Credentials.Domain) > 253 || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain+v.Credentials.SSHPrivateKey+v.Credentials.SSHKnownHosts, "\x00") || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\r\n") {
+		fail(w, 400, "valid request, pool, host and bounded credential required")
+		return
+	}
+	if backup {
+		parts := strings.Split(v.RegistrationRequestID, ":")
+		if len(parts) != 3 || !protocol.ValidSnapshotOperationID(parts[2]) || !protocol.ValidSnapshotOperationID(v.RequestID) || !protocol.ValidSnapshotOperationID(v.RepositoryID) ||
+			(parts[1] != protocol.BackupRepoKindSMB3 && parts[1] != protocol.BackupRepoKindS3 && parts[1] != protocol.BackupRepoKindSFTP) ||
+			v.Credentials.Username == "" || v.Credentials.SSHKnownHosts != "" || !protocol.ValidSMBDomain(v.Credentials.Domain) ||
+			(parts[1] != protocol.BackupRepoKindSMB3 && v.Credentials.Domain != "") ||
+			(parts[1] == protocol.BackupRepoKindSMB3 && strings.Contains(v.Credentials.Username, "=")) ||
+			(parts[1] == protocol.BackupRepoKindSFTP && (v.Credentials.SSHPrivateKey == "" || v.Credentials.Secret != "")) ||
+			(parts[1] != protocol.BackupRepoKindSFTP && (v.Credentials.Secret == "" || v.Credentials.SSHPrivateKey != "")) {
+			fail(w, 400, "valid scoped backup credential required")
+			return
+		}
+		if v.Repository == nil || (protocol.BackupRepository{ID: v.RepositoryID, PoolID: v.PoolID, Name: strings.TrimSpace(v.Repository.Name), Kind: parts[1],
+			SMBSource: v.Repository.SMBSource, S3Source: v.Repository.S3Source, SFTPSource: v.Repository.SFTPSource}).Valid() != nil {
+			fail(w, 400, "valid backup repository destination required before credential delivery")
+			return
+		}
+	} else if v.Repository != nil || len(v.Credentials.Secret) == 0 || strings.ContainsAny(v.Credentials.Domain, "/\\= \t;'\"`$&|<>()") || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" {
 		fail(w, 400, "valid request, pool, host and bounded credential required")
 		return
 	}
@@ -249,7 +292,22 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	defer tx.Rollback()
-	if err = c.storageRepositoryHost(tx, v.PoolID, v.HostID); err != nil {
+	if backup {
+		var master string
+		if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", v.PoolID).Scan(&master); err != nil {
+			failPoolMaster(w, err)
+			return
+		}
+		if master != v.HostID {
+			err = errors.New("backup credential must be delivered to the pool master")
+		}
+		if err == nil {
+			err = c.backupHost(tx, v.PoolID, master)
+		}
+	} else {
+		err = c.storageRepositoryHost(tx, v.PoolID, v.HostID)
+	}
+	if err != nil {
 		fail(w, 409, err.Error())
 		return
 	}
@@ -262,6 +320,10 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	receipt, ok := c.credentials.wait(v.RequestID)
+	if !ok && receipt.Error != "" {
+		fail(w, 409, receipt.Error)
+		return
+	}
 	if !ok {
 		fail(w, 503, "Core did not acknowledge credential delivery; retry with the same request_id")
 		return

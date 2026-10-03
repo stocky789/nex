@@ -133,7 +133,7 @@ func TestRehomeLeavingPoolScopeRehomesAppliedCopies(t *testing.T) {
 
 func TestPoolCommandCannotCreateMembershipFromControllerTransport(t *testing.T) {
 	member := func(generation uint64) protocol.PoolMembership {
-		return protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: generation, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Generation: generation, Status: "ready"}}}
+		return protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: generation, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Generation: generation, Status: "ready"}}}
 	}
 	command := protocol.Command{OperationID: "pool-op", Kind: "pool-member-join", Pool: &protocol.PoolCommand{RequestID: "join-1", Action: "member-join", Membership: member(1), ExpectedVersion: 1}}
 	if err := HandlePoolCommand(context.Background(), t.TempDir(), "master-1", command); err == nil {

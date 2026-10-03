@@ -31,11 +31,11 @@ func TestQnetdLiveReadiness(t *testing.T) {
 	cluster := protocol.PoolWitnessClusterName(enrolled.PoolID)
 	membership := protocol.PoolMembership{
 		PoolID: enrolled.PoolID, MasterHostID: enrolled.HostID, Generation: 2,
-		Members: []protocol.PoolMember{{HostID: enrolled.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"}},
+		Members: []protocol.PoolMember{{HostID: enrolled.HostID, Hostname: enrolled.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"}},
 	}
 	a.report(cert, protocol.ReportRequest{
 		Version: protocol.Version, Sequence: 1,
-		Capabilities: []string{protocol.ManagedVMCapability, protocol.PoolWitnessCapability},
+		Capabilities: []string{protocol.ManagedVMCapability},
 		Inventory:    &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership}},
 	})
 	var candidates protocol.PoolWitnessCandidates
@@ -74,11 +74,11 @@ func TestWitnessEndpointsAuthenticateMasterAndCheckGeneration(t *testing.T) {
 
 	membership := protocol.PoolMembership{
 		PoolID: enrolled.PoolID, MasterHostID: enrolled.HostID, Generation: 2,
-		Members: []protocol.PoolMember{{HostID: enrolled.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"}},
+		Members: []protocol.PoolMember{{HostID: enrolled.HostID, Hostname: enrolled.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"}},
 	}
 	a.report(cert, protocol.ReportRequest{
 		Version: protocol.Version, Sequence: 1,
-		Capabilities: []string{protocol.ManagedVMCapability, protocol.PoolWitnessCapability},
+		Capabilities: []string{protocol.ManagedVMCapability},
 		Inventory:    &protocol.Inventory{Managed: &protocol.ManagedState{Membership: &membership}},
 	})
 	csrPEM := witnessCSR(t, cluster)

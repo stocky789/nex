@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+.git
+.cache
+**/node_modules
+**/dist
+**/build
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+**/*.key
+**/*.pem
+**/*.sock
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite-*
+**/*.log
+docs/qa/**/*.png
+docs/qa/**/*.jpg
+docs/qa/**/*.jpeg
+docs/qa/**/*.webp
+docs/qa/**/*.gif

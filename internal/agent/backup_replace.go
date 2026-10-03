@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -38,27 +39,30 @@ func executeRestoreReplace(ctx context.Context, store *Store, cmd protocol.Comma
 		return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "invalid restore-replace command", ObservedAt: observed}, nil
 	}
 	if err := ensureBackupRunReserved(store, cmd); err != nil {
-		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
+		return unreservedBackupResult(store, cmd, observed, err), nil
 	}
 	req := *cmd.RestoreReplace
 	repo, err := GetPoolBackupRepository(store, req.RepositoryID)
 	if err != nil {
 		return failReplaceRun(store, cmd, observed, err.Error()), nil
 	}
-	if repo.MountPath == "" {
-		return failReplaceRun(store, cmd, observed, "backup repository mount path is missing"), nil
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
+		return failReplaceRun(store, cmd, observed, err.Error()), nil
 	}
-	pointDir := filepath.Join(repo.MountPath, req.RecoveryPointID)
 	run, err := loadPoolBackupRun(store, cmd.OperationID)
 	if err != nil {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
 	}
 	manifest, _, err := validatedCatalogBackupManifest(ctx, store, repo, req.RecoveryPointID, run.ManifestSHA256)
-	if err != nil {
-		return attentionReplaceRun(store, cmd, observed, run.Stage, err.Error()), nil
+	if err == nil && manifest.CapturedSpec == nil {
+		err = errors.New("recovery point lacks a captured VM specification; re-backup before restore-replace")
 	}
-	if manifest.CapturedSpec == nil {
-		return attentionReplaceRun(store, cmd, observed, run.Stage, "recovery point lacks a captured VM specification; re-backup before restore-replace"), nil
+	if err != nil {
+		if replaceHasNoEffects(store, cmd.OperationID) {
+			return failReplaceRun(store, cmd, observed, err.Error()), nil
+		}
+		return attentionReplaceRun(store, cmd, observed, run.Stage, err.Error()), nil
 	}
 	engine := vmhost.NewManaged(filepath.Join(store.dir, "managed-vms"))
 	vm, vmErr := engine.VMDefinition(req.OriginalVMID)
@@ -78,18 +82,18 @@ func executeRestoreReplace(ctx context.Context, store *Store, cmd protocol.Comma
 	if err != nil {
 		return failReplaceRun(store, cmd, observed, err.Error()), nil
 	}
+	localDir := restoreStagingDir(store, cmd.OperationID)
 	// Explicit refusal of writing restored images onto the live original paths.
 	for _, disk := range disks {
-		if filepath.Dir(disk.Source) == filepath.Join(store.dir, "backup-restore", cmd.OperationID) {
+		if filepath.Dir(disk.Source) == localDir {
 			continue
 		}
 		// Any attempt to treat original Source as the restore destination is in-place overwrite.
-		if err := refuseInPlaceOverwrite(disk.Source, filepath.Join(store.dir, "backup-restore", cmd.OperationID)); err != nil {
+		if err := refuseInPlaceOverwrite(disk.Source, localDir); err != nil {
 			return failReplaceRun(store, cmd, observed, err.Error()), nil
 		}
 	}
-	localDir := filepath.Join(store.dir, "backup-restore", cmd.OperationID)
-	if err := vmhost.CopyBackupArtifactsLocal(ctx, pointDir, localDir, manifest); err != nil {
+	if err := backend.CopyArtifacts(ctx, req.RecoveryPointID, localDir, manifest); err != nil {
 		return failReplaceRun(store, cmd, observed, err.Error()), nil
 	}
 	paths := map[string]string{}
@@ -152,6 +156,7 @@ func executeRestoreReplace(ctx context.Context, store *Store, cmd protocol.Comma
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
 	}
 	_ = clearBackupRestorePin(store, req.RecoveryPointID, cmd.OperationID)
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: observed}, nil
 }
 
@@ -174,8 +179,16 @@ func reconcileRestoreReplaceAttention(ctx context.Context, dir string, identity 
 	}
 	store := &Store{dir: dir, State: identity}
 	run, err := loadPoolBackupRun(store, cmd.OperationID)
-	if err != nil || run.Status != "needs_attention" || run.Kind != protocol.BackupKindRestoreReplace {
+	// A pending run here is one whose attention settlement did not persist.
+	if err != nil || run.Status != "needs_attention" && run.Status != "pending" || run.Kind != protocol.BackupKindRestoreReplace {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: "replace run has no retained uncertain state", ObservedAt: observed}, nil
+	}
+	if replaceHasNoEffects(store, cmd.OperationID) {
+		message := run.Error
+		if message == "" {
+			message = "restore replace stopped before it changed the original VM"
+		}
+		return failReplaceRun(store, cmd, observed, message), nil
 	}
 	repo, err := GetPoolBackupRepository(store, cmd.RestoreReplace.RepositoryID)
 	if err == nil {
@@ -208,7 +221,15 @@ func reconcileRestoreReplaceAttention(ctx context.Context, dir string, identity 
 		return attentionReplaceRun(store, cmd, observed, "owner-commit", err.Error()), nil
 	}
 	_ = clearBackupRestorePin(store, cmd.RestoreReplace.RecoveryPointID, cmd.OperationID)
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: observed}, nil
+}
+
+// The retained-original record is written before the owner reservation and
+// cutover, so without it restore replace has not touched the original VM.
+func replaceHasNoEffects(store *Store, operationID string) bool {
+	_, err := os.Lstat(retainedOriginalPath(store, operationID))
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func refuseInPlaceOverwrite(originalPath, restoreDir string) error {
@@ -225,19 +246,15 @@ func refuseInPlaceOverwrite(originalPath, restoreDir string) error {
 
 func failReplaceRun(store *Store, cmd protocol.Command, observed time.Time, message string) protocol.Result {
 	intent, _ := backupIntentSHA256(cmd)
-	_ = SettlePoolBackupRun(store, protocol.BackupRun{
+	if err := SettlePoolBackupRun(store, protocol.BackupRun{
 		OperationID: cmd.OperationID, Kind: protocol.BackupKindRestoreReplace, PoolID: store.State.PoolID,
 		VMID: cmd.RestoreReplace.OriginalVMID, RepositoryID: cmd.RestoreReplace.RepositoryID,
 		RecoveryPointID: cmd.RestoreReplace.RecoveryPointID, IntentSHA256: intent,
 		Stage: "failed", Status: "failed", Error: message, CreatedAt: observed, UpdatedAt: observed,
-	}, nil)
-	if cmd.RestoreReplace != nil {
-		_ = clearBackupRestorePin(store, cmd.RestoreReplace.RecoveryPointID, cmd.OperationID)
+	}, nil); err != nil {
+		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}
 	}
+	_ = clearBackupRestorePin(store, cmd.RestoreReplace.RecoveryPointID, cmd.OperationID)
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: message, ObservedAt: observed}
-}
-
-// SimulateInPlaceOverwriteRequest is used by tests to assert the safety refusal.
-func SimulateInPlaceOverwriteRequest(originalPath, restoreDir string) error {
-	return refuseInPlaceOverwrite(originalPath, restoreDir)
 }

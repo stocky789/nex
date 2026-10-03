@@ -1,0 +1,44 @@
+{
+  "summary": "A planned master change settles its Controller task when the transfer finishes, repository checks at activation are bounded, offline-adopted NFS and SMB3 repositories remount on the next probe, orphan-cleanup records travel with the signed backup authority, and stale backup receipts no longer block a master change.",
+  "paths": [
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_authority_transfer.go",
+    "internal/agent/backup_authority_pages.go",
+    "internal/agent/backup_policy.go",
+    "internal/agent/backup_orphans.go",
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/agent/backup_master_change_test.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/protocol/backup_policy.go",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-master-change-settlement.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Network-share repositories now recover by themselves after a master change, a stale receipt no longer blocks one, and the hand-off message changed.",
+    "pages": ["docs/guide/pool-authority-and-recovery.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "The peer backup authority gains an orphan_cleanups record list and manifest count; no endpoint changes. The OpenAPI contracts and generated references are updated.",
+    "pages": ["docs/api/openapi.json", "docs/api/local-openapi.json", "docs/api/peer-openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes inside the backup recovery plan."
+  },
+  "state": {
+    "owner": "core",
+    "record": "The pool master's pool-backup-orphan-cleanups records, now carried in the signed backup authority pages and staged on the new master at activation.",
+    "reason": "A fresh Controller reads cleanup results from the new master through the existing orphan-cleanups endpoint."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent and the full internal/agent, protocol, controller and localcore suites; no lab run.",
+    "evidence": ["internal/agent/backup_master_change_test.go", "docs/BUG_LEDGER.md"]
+  }
+}

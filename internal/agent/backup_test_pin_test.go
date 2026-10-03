@@ -19,7 +19,7 @@ func TestSuccessfulTestRestoreStaysPinnedUntilCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPublishedPoint(t, mount, "repo-1", s.State.PoolID, "point-1")
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	previousPlace, previousRegister := requestTestRestorePlacement, registerTestRestoredAsNew
@@ -61,7 +61,11 @@ func TestSuccessfulTestRestoreStaysPinnedUntilCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, _, err := validatedBackupManifest(context.Background(), repo, "point-1")
+	point, err := getCatalogPoint(s, "repo-1", "point-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := validatedCatalogBackupManifest(context.Background(), s, repo, "point-1", point.ManifestSHA256)
 	if err != nil {
 		t.Fatal(err)
 	}

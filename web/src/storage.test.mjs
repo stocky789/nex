@@ -27,23 +27,19 @@ assert.match(src, /Host default; cannot detach/);
 assert.match(src, /lockLocalPath=\{Boolean\(edit && defaultLocalStorage\(edit\)\)\}/);
 assert.match(src, /path: edit && defaultLocalStorage\(edit\) \? edit\.path : draft\.path/);
 
-// D1: only a registration the pool master refused is a discardable Controller request record.
+// D1: only a network registration the pool master refused is a discardable Controller request record.
 // A queued one has no id to address and is still the host's business; a succeeded one is a
 // repository the host holds and is removed with detach instead.
-assert.equal(registrationDiscardable({ id: "pending-storage-op-1", status: "failed" }), true);
+assert.equal(registrationDiscardable({ id: "net-1", status: "failed" }), true);
 assert.equal(registrationDiscardable({ id: "", status: "failed" }), false);
 assert.equal(registrationDiscardable({ id: "", status: "queued" }), false);
 assert.equal(registrationDiscardable({ id: "repo-1", status: "queued" }), false);
 assert.equal(registrationDiscardable({ id: "repo-1", status: "dispatched" }), false);
 assert.equal(registrationDiscardable({ id: "repo-1", status: "succeeded" }), false);
 // The confirmation says what it does and does not do: no host is asked for anything.
-assert.match(discardConfirmText("storage", "lab-nfs-fault"), /^Discard the failed storage registration lab-nfs-fault\?/);
 assert.match(discardConfirmText("network", "guests"), /removes only Nex Controller's record of the failed request and asks no host to do anything/);
-// The discard takes no body and addresses the row by the id the list answered.
-assert.match(src, /await api\(`storage\/\$\{encodeURIComponent\(s\.id\)\}`, "DELETE"\);/);
-assert.match(src, /catch \(e\) \{ setError\(\(e as Error\)\.message\); \}/);
-// A failed row offers the discard instead of the repository actions, never beside them.
-assert.match(src, /registrationDiscardable\(s\) \? <button type="button"[\s\S]*?>Discard failed registration<\/button> : <>[\s\S]*?>Recheck<\/button>[\s\S]*?>Detach<\/button>[\s\S]*?<\/>\}/);
+// A refused storage registration is not listed, so no row offers a discard.
+assert.doesNotMatch(src, /Discard failed registration/);
 
 // Scope never calls a local disk shared: only NFS, SMB and clustered GFS2 iSCSI are.
 assert.equal(storageScope({ kind: "nfs" }), "Shared");

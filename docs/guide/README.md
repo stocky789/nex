@@ -71,21 +71,25 @@ verification limits that apply to its workflow.
 25. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 26. [Set up backup repositories](backup-repositories.md)
-   (Settings → Backup repositories; NFS destination, Test access, capacity and host access).
+   (Settings → Backup repositories; NFS, SMB3, S3 and SFTP destinations, access checks, exact retries and forgetting).
 27. [Back up a VM now](backup-now.md)
-   (stopped full backup or running BIOS crash-consistent backup from Backups or the VM Overview link).
+   (Backups → Recovery points → Back up now; destination and review for stopped or running BIOS crash-consistent capture).
 28. [Restore a backup as a new VM](restore-as-new.md)
-   (recovery point → new stopped guest with new UUID/MACs and disconnected NICs).
+   (recovery-point details → Restore… → Restore as new; new stopped guest with new UUID/MACs and disconnected NICs).
 29. [Test a backup restore](test-restore.md)
-   (inspect an isolated test VM, record passed or failed, then confirm cleanup).
-30. [Set up backup policies and schedules](backup-policies.md)
-   (Backups → Policies; coverage, schedule/time zone, retention, Pause, Run now).
+   (recovery-point details → Restore… → Test restore; inspect, record a result and confirm exact-VM cleanup).
+30. [Set up backup jobs and schedules](backup-policies.md)
+   (Backups → Backup jobs; named coverage/schedule/review steps and expanded Pause, Run now and View points controls).
 31. [Restore a backup over an existing VM](restore-replace.md)
-   (explicit replace; retained originals; refuses unsafe in-place overwrite).
+   (recovery-point details → Restore… → Replace original VM; exact-name confirmation, retained originals and shut-off gates).
 32. [Rebuild the backup catalog](catalog-rebuild.md)
    (import/rebuild from repository manifests; CLI and local API syntax).
 33. [Recover backups without Controller](recover-without-controller.md)
    (Core-local status, restore, protect, test restore and catalog rebuild).
+34. [Explore the public Controller demo](explore-controller-demo.md)
+   (fictional inventory, shared demo credentials, read-only limits and source access).
+35. [Operate the public Controller demo](operate-controller-demo.md)
+   (authorized maintainers; isolated container, automatic publication and rollback).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification
 limits. A documented procedure is not automatically a tested procedure: check its Verification
