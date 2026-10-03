@@ -272,13 +272,15 @@ func (s *Service) refreshDHCPController(id string, d deployment) {
 }
 
 // refreshDHCPAgentReady retries TLS verification of a rediscovered DHCP Controller
-// address until the appliance accepts connections or the deadline expires.
+// address until the appliance accepts connections or the deadline expires. Each
+// attempt runs under ctx, the service lifetime, never under the deadline: a
+// successful attempt starts the embedded agent, which must outlive this call.
 func refreshDHCPAgentReady(ctx context.Context, dir, endpoint, trust, serverName string) error {
 	wait, cancel := context.WithTimeout(ctx, dhcpControllerReadyWait)
 	defer cancel()
 	var err error
 	for {
-		err = refreshDHCPAgent(wait, dir, endpoint, trust, serverName)
+		err = refreshDHCPAgent(ctx, dir, endpoint, trust, serverName)
 		if err == nil {
 			return nil
 		}

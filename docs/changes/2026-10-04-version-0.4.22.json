@@ -1,0 +1,32 @@
+{
+  "summary": "Start working version 0.4.22 for selected-target iSCSI LUN inspection, backup repository share browsing and the Pool update wording.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-10-04-version-0.4.22.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only the changelog-derived version heading changes; the operator steps for the bundled features are documented by their own change records."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Version numbering changes no client, Controller/Core or observed-result contract. The discovery contract changes are recorded in 2026-10-03-iscsi-lun-autofill.json and 2026-10-03-backup-repository-discovery.json.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Version numbering changes no milestone or acceptance gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Version labels and release notes create no durable product state."
+  },
+  "verification": {
+    "method": "Changelog-derived version resolution and documentation structure checks.",
+    "evidence": [
+      "CHANGELOG.md",
+      "scripts/release-version.py",
+      "tests/test_release_version.py"
+    ]
+  }
+}

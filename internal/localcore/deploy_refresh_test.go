@@ -144,10 +144,20 @@ func TestRefreshDHCPAgentReadyWaitsForControllerListen(t *testing.T) {
 	}
 	handoffAgents.Lock()
 	a := handoffAgents.entries[abs]
-	startedAgent := a != nil && a.started
+	var done chan struct{}
+	if a != nil {
+		done = a.done
+	}
 	handoffAgents.Unlock()
-	if !startedAgent {
+	if done == nil {
 		t.Fatal("embedded agent was not started after DHCP refresh")
+	}
+	// The agent belongs to the service context. The bounded wait that verified the
+	// address is cancelled as soon as the refresh returns and must not stop it.
+	select {
+	case <-done:
+		t.Fatal("embedded agent stopped when the DHCP refresh returned")
+	case <-time.After(time.Second):
 	}
 }
 

@@ -18,6 +18,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+## [0.4.22] — 2026-10-04
+
 ### Minor Feature
 
 - Creating a backup repository can now browse the destination like VM storage does: **Browse exports** for NFS and **Browse shared folders** for SMB3, with **E** marking folders that already hold a backup repository. Browsing needs an updated Nex Core (`storage-discovery-purpose-v1`); the Controller refuses it for an older one instead of showing unreliable markers.
