@@ -1,0 +1,32 @@
+{
+  "summary": "Start working version 0.4.25 for the website download cards, the download-page content-type fix and clean release artifact names.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-10-04-version-0.4.25.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only the changelog-derived version heading changes; the operator steps for the bundled changes are documented by their own change records."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Version numbering changes no client, Controller/Core or observed-result contract. The website and artifact-naming changes are recorded in 2026-10-04-website-download-cards.json.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Version numbering changes no milestone or acceptance gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Version labels and release notes create no durable product state."
+  },
+  "verification": {
+    "method": "Changelog-derived version resolution and documentation structure checks.",
+    "evidence": [
+      "CHANGELOG.md",
+      "scripts/release-version.py",
+      "tests/test_release_version.py"
+    ]
+  }
+}
