@@ -353,7 +353,8 @@ func pinRefusal(s *Store, pin protocol.BackupRestorePin) string {
 	return "a recovery point of this repository is in use by an unfinished restore or test restore (" + holder + "); finish or clean it up first"
 }
 
-func removeIfPresent(path string) error {
+// A variable so a test can interrupt a forget part-way; a directory permission would not stop root.
+var removeIfPresent = func(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

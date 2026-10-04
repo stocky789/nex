@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,10 @@ import (
 // and flooded a desktop with hundreds of prompts (BUG-0216). A stub early in PATH makes the
 // failure deterministic on every machine. Tests that install their own fake with fakeCommand
 // still win, because they prepend their own directory to PATH after this one.
+//
+// Whether sbd feeds a watchdog is asked of systemd. A CI container has no systemctl, which the
+// code rightly reads as "cannot tell", and a workstation running sbd would answer "armed"; the
+// default is a host that is not armed, and the tests about arming install their own answer.
 func TestMain(m *testing.M) {
 	code, err := runWithStubbedHostTools(m)
 	if err != nil {
@@ -44,5 +49,6 @@ func runWithStubbedHostTools(m *testing.M) (int, error) {
 	// SMB credentials are sealed with systemd-creds, which prompts the desktop user for
 	// authentication; vmhost refuses the real tool inside any test binary.
 	vmhost.SetSystemdCredsRunner(vmhosttest.FakeSystemdCreds)
+	localWatchdogArmed = func(context.Context) (bool, error) { return false, nil }
 	return m.Run(), nil
 }

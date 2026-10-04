@@ -259,7 +259,7 @@ func TestTwoProcessesNeverWriteTheRecordTogether(t *testing.T) {
 // that had just finished and remove its staging; the late save then raced the second process' write.
 func TestTheFinishedRecordIsSavedBeforeTheLockIsGivenBack(t *testing.T) {
 	prev := lockWait
-	lockWait = 10 * time.Second
+	lockWait = time.Minute // the record save below takes seconds under -race on a loaded runner
 	t.Cleanup(func() { lockWait = prev })
 	ctx := context.Background()
 	r := newRig(t)
@@ -288,7 +288,7 @@ func TestTheFinishedRecordIsSavedBeforeTheLockIsGivenBack(t *testing.T) {
 		if err != nil {
 			t.Fatalf("cancel after the apply ended: %v", err)
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(2 * time.Minute):
 		t.Fatal("the second process never got the lock")
 	}
 	st := readUpdate(t, r.cfg.Dir)
@@ -307,7 +307,7 @@ func TestTheFinishedRecordIsSavedBeforeTheLockIsGivenBack(t *testing.T) {
 // the caller was told never started.
 func TestARefusedApplyLeavesNoRecordForTheNextProcess(t *testing.T) {
 	prev := lockWait
-	lockWait = 10 * time.Second
+	lockWait = time.Minute
 	t.Cleanup(func() { lockWait = prev })
 	ctx := context.Background()
 	r := newRig(t)
@@ -343,7 +343,7 @@ func TestARefusedApplyLeavesNoRecordForTheNextProcess(t *testing.T) {
 	select {
 	case err := <-done:
 		wantCode(t, err, "nothing_to_cancel")
-	case <-time.After(30 * time.Second):
+	case <-time.After(2 * time.Minute):
 		t.Fatal("the second process never got the lock")
 	}
 }

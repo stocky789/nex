@@ -74,7 +74,8 @@ def main():
             assert response and response.status == 200
             assert_headers(response, require_hsts)
             assert page.locator('h1').count() == 1
-            assert page.locator('script').count() == 0
+            # The only script is the first-party download-card loader that script-src 'self' allows.
+            assert page.locator('script').evaluate_all('s => s.map(e => e.getAttribute("src") || "inline")') == ['/releases.js']
             assert page.locator('form, iframe').count() == 0
             assert 'Private preview' in page.content()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
@@ -139,6 +140,11 @@ def main():
             assert headers.get(name) == expected, (url, name, headers.get(name))
         if require_hsts:
             assert headers.get('strict-transport-security') == 'max-age=31536000', url
+    # The download cards fetch /downloads/**/latest.json, which the release publisher writes on the real host and
+    # this static preview lacks. The cards keep their links and the browser logs one generic 404 per missing manifest.
+    missing = sum(status == 404 and url.endswith('/latest.json') for url, status, _ in responses)
+    for _ in range(missing):
+        errors.remove('console: Failed to load resource: the server responded with a status of 404 (Not Found)')
     assert not errors, errors
     (args.evidence / 'results.json').write_text(json.dumps({
         'url': args.url,

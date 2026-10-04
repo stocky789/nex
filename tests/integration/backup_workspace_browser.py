@@ -250,14 +250,17 @@ def delayed_history(page, fixture):
     panel.get_by_role('button', name='Cancel', exact=True).click()
     page.wait_for_function("window.heldHistoryRequests === 1")
     assert len(held) == 1
+    # Core never sends an empty page mid-scan and never more rows than its total, so the earlier
+    # pages carry another job's runs; only the last page holds this job's failure.
+    other = lambda n: {**runs[0], 'operation_id': f'run-other-{n}', 'policy_id': 'policy-other'}
     for cursor in range(1, 4):
         advance_poll(page)
         assert len(requests) == cursor, 'A poll must not abort and restart an unfinished history scan'
         with page.expect_request(lambda request: f'cursor={cursor}&generation=slow-history' in request.url):
-            held.pop(0).fulfill(json={'items': [], 'generation': 'slow-history', 'total': 1, 'next_cursor': str(cursor)})
+            held.pop(0).fulfill(json={'items': [other(cursor)], 'generation': 'slow-history', 'total': 4, 'next_cursor': str(cursor)})
         page.wait_for_function("count => window.heldHistoryRequests === count", arg=cursor + 1)
         expect(row.locator('td').nth(3)).to_have_text('Unknown')
-    held.pop(0).fulfill(json={'items': runs, 'generation': 'slow-history', 'total': 1})
+    held.pop(0).fulfill(json={'items': runs, 'generation': 'slow-history', 'total': 4})
     expect(row.locator('td').nth(3)).to_contain_text('1 failed')
     assert len(requests) == 4, 'All four delayed pages must complete despite three intervening polls'
 

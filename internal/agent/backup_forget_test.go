@@ -981,10 +981,14 @@ func TestForgetResumesAfterPartialRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs := poolBackupRunsPath(master)
-	if err := os.Chmod(runs, 0500); err != nil {
-		t.Fatal(err)
+	previous := removeIfPresent
+	removeIfPresent = func(path string) error {
+		if filepath.Dir(path) == runs {
+			return errors.New("run record removal interrupted")
+		}
+		return previous(path)
 	}
-	t.Cleanup(func() { _ = os.Chmod(runs, 0700) })
+	t.Cleanup(func() { removeIfPresent = previous })
 	request := BackupRequest{Command: ptr(forgetCommand("forget-1", "repo-1", "Primary", 2, 0))}
 	if first := acceptBackupRequest(context.Background(), master, request); first.Err == nil {
 		t.Fatalf("expected the removal to be interrupted: %+v", first)
@@ -997,9 +1001,7 @@ func TestForgetResumesAfterPartialRemoval(t *testing.T) {
 	if _, err := ReservePoolBackupRun(master, run); !errors.Is(err, ErrBackupConflict) {
 		t.Fatalf("a run started on a repository being forgotten: %v", err)
 	}
-	if err := os.Chmod(runs, 0700); err != nil {
-		t.Fatal(err)
-	}
+	removeIfPresent = previous
 	second := acceptBackupRequest(context.Background(), master, request)
 	if second.Err != nil || second.Result == nil || second.Result.Status != "succeeded" {
 		t.Fatalf("the same operation did not resume: %+v", second)

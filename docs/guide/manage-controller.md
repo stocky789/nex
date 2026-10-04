@@ -179,7 +179,7 @@ development build 0.4.8 console layout; see
    Read **Health checks** together with the connection and observation timestamps.
    **Overview** → **Needs attention** lists each unhealthy or stale host with Core's public
    reasons and links to its panel; it reads
-   `Every host in scope is reporting and healthy.` when nothing needs attention.
+   `No reported issues in the available inventory. Check Backups for run history.` when nothing needs attention.
    Stale data and revoked management access cannot establish whether workloads are running.
    Open **Events** in the rail for recorded health changes and administrative actions, kept
    separately from asynchronous tasks. This development view shows the newest 1,000 task and

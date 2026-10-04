@@ -184,9 +184,10 @@ def main():
             sys.exit(f"missing {tool}")
     if not os.access("/dev/kvm", os.R_OK | os.W_OK):
         sys.exit("no usable /dev/kvm (the QEMU labs need KVM: the runner must expose it and the user must be in the kvm group)")
-    system = os.path.join(args.release, "system.img")
-    if not os.path.isfile(system):
-        sys.exit(f"{system} not found")
+    # image/build.sh controller writes system.img; appliance/build.py --profile controller copies it as controller-system.img.
+    system = next((p for p in (os.path.join(args.release, n) for n in ("system.img", "controller-system.img")) if os.path.isfile(p)), None)
+    if system is None:
+        sys.exit(f"no system.img or controller-system.img in {args.release}")
     work = lab.scratch_dir(args.release, "nex-controller-boot-")
     vm = None
     try:

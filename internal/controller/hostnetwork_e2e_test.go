@@ -29,7 +29,8 @@ func managementHostLab(t *testing.T) string {
 	root, dir := t.TempDir(), t.TempDir()
 	t.Cleanup(vmhost.ManagementEtcRootForTests(root))
 	bin := t.TempDir()
-	for _, name := range []string{"ifup", "ifdown", "ip", "dhcpcd"} {
+	// systemctl answers Core's "is sbd feeding a watchdog" read with an empty, so not armed, reply.
+	for _, name := range []string{"ifup", "ifdown", "ip", "dhcpcd", "systemctl"} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 			t.Fatal(err)
 		}

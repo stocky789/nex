@@ -538,7 +538,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
                                                 'observed_at': '2026-09-12T00:00:00Z'}]
         refresh_route('')
         expect(host_row).to_have_count(0)
-        expect(attention).to_contain_text('Every host in scope is reporting and healthy.')
+        expect(attention).to_contain_text('No reported issues in the available inventory.')
         page.unroute('**/api/v1/hosts')
         lab.passed('browser pool Needs attention summary: healthy, current degraded/failed reasons, multiple affected checks in one row, stale/unknown observations, and a revoked host told apart from a stale one (bad vs warn row, Access revoked notice only on the revoked host panel)')
         refresh_route('hosts/' + host_id)

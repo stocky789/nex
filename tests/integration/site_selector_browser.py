@@ -102,6 +102,16 @@ def acceptance(url, evidence):
                     'members': [{'host_id': host_id, 'name': host_id, 'role': 'master',
                                  'connection': 'fresh', 'status': 'active', 'maintenance': False}],
                 })
+            elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/backup-catalog'):
+                # Overview summarises backups; the fixture pool has no recovery points.
+                route.fulfill(json={'items': [], 'generation': '1', 'total': 0, 'untested_count': 0, 'backup_days_14': []})
+            elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/backup-runs'):
+                route.fulfill(json={'items': [], 'generation': '1', 'total': 0, 'attention_count': 0})
+            elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/backup-repositories'):
+                route.fulfill(json=[])
+            elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/updates'):
+                # Settings > Updates reads the pool's update rollout record; none is in progress.
+                route.fulfill(json={'pool_id': path.split('/', 2)[1], 'connection': 'fresh', 'supported': True})
             elif route.request.method == 'GET' and path.endswith('/stats'):
                 # Lists and Overview read each online host's usage history; the fixture has none.
                 route.fulfill(status=404, json={'error': 'no usage history in this fixture'})

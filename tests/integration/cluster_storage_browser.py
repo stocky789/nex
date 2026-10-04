@@ -334,7 +334,7 @@ def main():
             mode["inspection"] = "multiple"
             setup.get_by_role("button", name="Discover targets", exact=True).click()
             discovered.click()
-            picker = setup.get_by_label("Detected LUN", exact=True)
+            picker = setup.get_by_role("combobox", name="Detected LUN", exact=True)
             expect(picker).to_have_value("")
             expect(setup.get_by_label("LUN", exact=True)).to_have_value("")
             picker.focus()
@@ -366,7 +366,8 @@ def main():
             setup.get_by_role("button", name="Inspect LUNs", exact=True).click()
             pending, reply = take_deferred(page, deferred_inspection, "clustered LUN inspection")
             setup.get_by_label("Target portal", exact=True).fill("other-storage.example.test:3260")
-            setup.get_by_role("button", name="Cancel LUN inspection", exact=True).click()
+            # Changing the portal changes the inspection identity: the UI aborts the request itself, so no cancel control remains.
+            expect(setup.get_by_role("button", name="Cancel LUN inspection", exact=True)).to_have_count(0)
             setup.get_by_label("LUN", exact=True).fill("19")
             pending.fulfill(json=reply)
             expect(setup.get_by_label("LUN", exact=True)).to_have_value("19")

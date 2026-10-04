@@ -298,6 +298,16 @@ func TestPoolBackupAuthorityPageReadIsBounded(t *testing.T) {
 	}
 }
 
+// pushLargeHistory pushes a replica that carries tens of MiB of run history. A pool push gets
+// 20 seconds per member in production; with the race detector on a loaded runner this history
+// alone takes longer, so these tests allow a budget that only a hang can use up.
+func pushLargeHistory(t *testing.T, master *Store) {
+	t.Helper()
+	if err := PushPoolAuthorityReplicas(context.Background(), master, 5*time.Minute); err != nil {
+		t.Fatalf("replica push: %v", err)
+	}
+}
+
 func TestPoolBackupAuthorityV2PeerTransferAndCorruptRetry(t *testing.T) {
 	lab := promotionLab(t, 1)
 	master, candidate := lab.host("master-1"), lab.host("member-1")
@@ -321,7 +331,7 @@ func TestPoolBackupAuthorityV2PeerTransferAndCorruptRetry(t *testing.T) {
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	started := time.Now()
-	pushReplicas(t, master)
+	pushLargeHistory(t, master)
 	runtime.ReadMemStats(&after)
 	t.Logf("v2 transfer elapsed=%s allocated=%d bytes", time.Since(started), after.TotalAlloc-before.TotalAlloc)
 	record, err := loadPoolReplica(candidate)
@@ -364,7 +374,7 @@ func TestPoolBackupAuthorityV2PeerTransferAndCorruptRetry(t *testing.T) {
 	if _, err := loadPoolReplica(candidate); err == nil {
 		t.Fatal("corrupt v2 page remained promotable")
 	}
-	if err := PushPoolAuthorityReplicas(context.Background(), master, 20*time.Second); err != nil {
+	if err := PushPoolAuthorityReplicas(context.Background(), master, 5*time.Minute); err != nil {
 		t.Fatalf("corrupt staging retry failed: %v", err)
 	}
 	if repaired, err := os.ReadFile(page); err != nil || !bytes.Equal(repaired, original) {
@@ -383,7 +393,7 @@ func TestPoolBackupAuthorityV2PeerTransferAndCorruptRetry(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(poolBackupRunsPath(master), run.OperationID+".json"), body, 0600); err != nil {
 			t.Fatal(err)
 		}
-		pushReplicas(t, master)
+		pushLargeHistory(t, master)
 		// Records are packed, so an append resends at most the final page.
 		if sent := lab.pageDataBytes.Load() - beforeWireBytes; sent == 0 || sent > protocol.PoolBackupPageLimit {
 			t.Fatalf("one appended run transferred %d page bytes", sent)
@@ -435,7 +445,7 @@ func TestBackupAuthorityV2AdmitsRepositoryReceiptAfterLargeHistory(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	pushReplicas(t, master)
+	pushLargeHistory(t, master)
 	for _, id := range []string{"member-1", "member-2"} {
 		record, err := loadPoolReplica(lab.host(id))
 		if err != nil || record == nil || record.Replica.BackupManifest == nil ||

@@ -88,7 +88,7 @@ jobs:
       # Keep production-strength password hashing and race checks; the shared
       # runner can exceed Go's default ten-minute package deadline.
       - name: Test Go services and recovery
-        run: go test -race -timeout 20m ./...
+        run: go test -race -timeout 30m ./...
       - name: Verify native read-only iSCSI metadata boundaries
         run: |
           set -euo pipefail

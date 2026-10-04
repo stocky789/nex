@@ -21,6 +21,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Bug Fixes
 
 - Installing a Nex Core image from inside a container no longer stops because the host's swap file is not visible there.
+- Release builds no longer stop because the compliance manifests recorded a different version than the release file names.
+- The Controller image boot check now finds the image the Controller appliance build produces.
+- Backup forgetting and SFTP read-only tests, and the host-network tests, no longer depend on running as a normal user or on a systemd host, so they pass in CI.
 
 ### Miscellaneous
 

@@ -44,7 +44,7 @@ class BrowserArtifactTests(unittest.TestCase):
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
-                self.assertIn('run: go test -race -timeout 20m ./...', workflow)
+                self.assertIn('run: go test -race -timeout 30m ./...', workflow)
 
     def test_phase1_runs_independent_lanes_in_parallel(self):
         """Separate jobs surface storage UI failures early and run side by side.

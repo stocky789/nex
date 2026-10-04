@@ -253,7 +253,7 @@ def main():
             expect(nfs_browser).to_be_hidden()
             expect(form.get_by_label("Export path")).to_have_value("/ignored/draft")
             form.get_by_role("button", name="Browse exports", exact=True).click()
-            expect(nfs_browser.get_by_role("button", name="Open /exports", exact=True)).to_be_visible()
+            expect(nfs_browser.get_by_role("button", name="Select /exports", exact=True)).to_be_visible()
             # A close notification queued for the previous opening must not clear a
             # newly opened picker; browsers deliver close events asynchronously.
             page.evaluate("""() => {
@@ -277,22 +277,22 @@ def main():
                 };
             }""")
             form.get_by_role("button", name="Browse exports", exact=True).click()
-            expect(nfs_browser.get_by_role("button", name="Open /exports", exact=True)).to_be_visible()
+            expect(nfs_browser.get_by_role("button", name="Select /exports", exact=True)).to_be_visible()
             page.evaluate("window.deliverOldBrowserClose()")
-            expect(nfs_browser.get_by_role("button", name="Open /exports", exact=True)).to_be_visible()
+            expect(nfs_browser.get_by_role("button", name="Select /exports", exact=True)).to_be_visible()
             page.screenshot(path=str(args.evidence / "nfs-browser-reopened.png"), full_page=True)
             checks.append("Escape cancels discovery before its reply; delayed close events cannot empty a reopened modal")
-            nfs_browser.get_by_role("button", name="Open /exports", exact=True).dblclick()
+            nfs_browser.get_by_role("button", name="Select /exports", exact=True).dblclick()
             expect(nfs_browser.get_by_role("button", name="Up", exact=True)).to_be_enabled()
             with page.expect_request("**/api/v1/storage/discover") as refresh_request:
                 nfs_browser.get_by_role("button", name="Refresh", exact=True).click()
             assert refresh_request.value.post_data_json["path"] == "/exports", refresh_request.value.post_data_json
-            nfs_browser.get_by_role("button", name="Open /exports/team", exact=True).dblclick()
+            nfs_browser.get_by_role("button", name="Select /exports/team", exact=True).dblclick()
             with page.expect_request("**/api/v1/storage/discover") as up_request:
                 nfs_browser.get_by_role("button", name="Up", exact=True).click()
             assert up_request.value.post_data_json["path"] == "/exports", up_request.value.post_data_json
-            nfs_browser.get_by_role("button", name="Open /exports/team", exact=True).dblclick()
-            team_folder = nfs_browser.get_by_role("button", name="Open /exports/team/vms", exact=True)
+            nfs_browser.get_by_role("button", name="Select /exports/team", exact=True).dblclick()
+            team_folder = nfs_browser.get_by_role("button", name="Select /exports/team/vms", exact=True)
             team_folder.focus()
             page.keyboard.press("Space")
             expect(team_folder).to_have_attribute("aria-pressed", "true")
@@ -355,11 +355,11 @@ def main():
             page.screenshot(path=str(args.evidence / "iscsi-single-lun.png"), full_page=True)
             # Registration carries exactly the detected identity; exclusivity is an explicit operator act.
             form.get_by_label("Name", exact=True).fill("Autofilled iSCSI")
-            submit_failed_registration()
-            assert last_iscsi_source() == {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:vm-storage", "lun": 0, "wwid": inspected_lun["wwid"], "filesystem_uuid": inspected_lun["filesystem_uuid"], "exclusive_target": False, "mode": "exclusive"}, last_iscsi_source()
+            # The exclusivity acknowledgement is a required field: the browser refuses to submit without it.
+            assert form.get_by_label(iscsi_label, exact=True).evaluate("e => !e.checkValidity()"), "an unacknowledged LUN must not be submittable"
             form.get_by_label(iscsi_label, exact=True).check()
             submit_failed_registration()
-            assert last_iscsi_source()["exclusive_target"] is True, last_iscsi_source()
+            assert last_iscsi_source() == {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:vm-storage", "lun": 0, "wwid": inspected_lun["wwid"], "filesystem_uuid": inspected_lun["filesystem_uuid"], "exclusive_target": True, "mode": "exclusive"}, last_iscsi_source()
             form.get_by_label(iscsi_label, exact=True).uncheck()
             # A failed submission must leave a cancelled/manual source draft intact.
             form.get_by_label("Name", exact=True).fill("Manual iSCSI")
@@ -389,10 +389,12 @@ def main():
                 if outcome == "failed":
                     expect(form.get_by_text("Core could not inspect this selected target.", exact=False)).to_be_visible()
                     expect(form.get_by_label("LUN", exact=True)).to_have_value("19")
+                    expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_checked()
                 else:
                     expect(form.get_by_label("LUN", exact=True)).to_have_value("0")
                     expect(form.get_by_label("LUN WWID", exact=True)).to_have_value(inspected_lun["wwid"])
-                expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_checked()
+                    # A newly detected LUN identity must be acknowledged again.
+                    expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).not_to_be_checked()
             checks.append("Failed submissions preserve cancelled manual identities and exclusivity without reinspection; selecting the same target retries cancelled and failed inspections")
 
             def inspect_mode(value):
@@ -406,7 +408,7 @@ def main():
                     inspect_button.click()
 
             inspect_mode("multiple")
-            picker = form.get_by_label("Detected LUN", exact=True)
+            picker = form.get_by_role("combobox", name="Detected LUN", exact=True)
             expect(picker).to_be_visible()
             expect(picker).to_have_value("")
             expect(form.get_by_label("LUN", exact=True)).to_have_value("")
@@ -419,9 +421,11 @@ def main():
             expect(form.get_by_label("LUN WWID", exact=True)).to_have_value("3600-second-qa")
             expect(form.get_by_label("Existing filesystem UUID", exact=True)).to_have_value("00000000-0000-0000-0000-000000000456")
             page.screenshot(path=str(args.evidence / "iscsi-multiple-luns.png"), full_page=True)
-            # An explicit multi-LUN choice registers exactly the chosen LUN's identity (the IQN edit cleared exclusivity).
+            # An explicit multi-LUN choice registers exactly the chosen LUN's identity (the IQN edit cleared exclusivity,
+            # so it is acknowledged again before the browser lets the form submit).
+            form.get_by_label(iscsi_label, exact=True).check()
             submit_failed_registration()
-            assert last_iscsi_source() == {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:multiple", "lun": 7, "wwid": "3600-second-qa", "filesystem_uuid": "00000000-0000-0000-0000-000000000456", "exclusive_target": False, "mode": "exclusive"}, last_iscsi_source()
+            assert last_iscsi_source() == {"portal": "storage.example.test:3260", "target_iqn": "iqn.2026-01.example.test:multiple", "lun": 7, "wwid": "3600-second-qa", "filesystem_uuid": "00000000-0000-0000-0000-000000000456", "exclusive_target": True, "mode": "exclusive"}, last_iscsi_source()
             for value, message in [("empty", "Core reported no LUNs"), ("blank", "No filesystem signature detected."), ("unsupported", "not supported for ordinary iSCSI"), ("failed", "Core could not inspect this selected target.")]:
                 inspect_mode(value)
                 expect(form.get_by_text(message, exact=False)).to_be_visible()
@@ -459,8 +463,10 @@ def main():
                 start_inspection(f"iqn.2026-01.example.test:pending-{index}")
                 pending, reply = take_deferred(page, deferred_inspection, "selected-target LUN inspection")
                 form.get_by_label(field, exact=True).fill("" if field == "Target IQN" else f"changed-{index}")
-                if field != "Target IQN":
-                    form.get_by_role("button", name="Cancel LUN inspection", exact=True).click()
+                # Editing the portal, IQN, CHAP account or CHAP secret ends a running inspection by itself; no manual cancel is left.
+                expect(form.get_by_role("button", name="Cancel LUN inspection", exact=True)).to_have_count(0)
+                if field in ("CHAP account", "CHAP secret"):
+                    expect(form.get_by_text("Inspection interrupted, select the target again.", exact=True)).to_be_visible()
                 form.get_by_label("LUN", exact=True).fill("23")
                 form.get_by_label("LUN WWID", exact=True).fill("manual-wwid")
                 pending.fulfill(json=reply)
@@ -572,8 +578,8 @@ def main():
             expect(smb_browser).to_be_visible()
             smb_root = smb_request.value.post_data_json
             assert smb_root["kind"] == "smb" and smb_root["credentials"] == {"username": "nex-vm", "secret": secret, "domain": "truenas"} and "path" not in smb_root, smb_root
-            smb_browser.get_by_role("button", name="Open /team-share", exact=True).dblclick()
-            share_folder = smb_browser.get_by_role("button", name="Open /team-share/vms, existing repository", exact=True)
+            smb_browser.get_by_role("button", name="Select /team-share", exact=True).dblclick()
+            share_folder = smb_browser.get_by_role("button", name="Select /team-share/vms, a backup repository was found here", exact=True)
             share_folder.click()
             expect(share_folder).to_have_attribute("aria-pressed", "true")
             expect(share_folder.get_by_text("E", exact=True)).to_be_visible()

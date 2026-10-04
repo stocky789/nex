@@ -293,15 +293,17 @@ def main():
 
             page.evaluate("location.hash = '#/settings/updates'")
             page.get_by_role('button', name='Update', exact=True).click()
-            expect(page.get_by_text('Update complete', exact=True)).to_be_visible(timeout=13000)
+            expect(page.get_by_text('Update complete. Reloading to load the new version…', exact=True)).to_be_visible(timeout=13000)
             assert state['update_posts'] == 1 and state['update_status_reads'] >= 3, 'an uncertain update response was not followed by read-only status checks'
             checks.append('uncertain update submission follows status through a temporary server error without resubmitting')
+            page.wait_for_function("Number(sessionStorage.getItem('refresh-check-loads')) === %d" % (loads + 1), timeout=10000)
+            expect(page.get_by_role('button', name='Update', exact=True)).to_be_visible()
             page.get_by_role('button', name='Update', exact=True).click()
             expect(page.get_by_text('this update could not be confirmed', exact=False)).to_be_visible(timeout=13000)
             assert state['update_posts'] == 2, 'an old done status caused a duplicate update submission'
             checks.append('a previous terminal update status does not falsely confirm a new uncertain request')
 
-            assert int(page.evaluate("sessionStorage.getItem('refresh-check-loads')")) == loads, 'an action or background catch-up required full-page navigation'
+            assert int(page.evaluate("sessionStorage.getItem('refresh-check-loads')")) == loads + 1, 'only the update restart reload may navigate the page; an action or background catch-up required full-page navigation'
             assert not errors, errors
             browser.close()
         (args.evidence / 'browser-results.json').write_text(json.dumps({'mode': 'real Chromium against built web/dist with fully mocked API; no live Controller or host', 'checks': checks, 'page_errors': errors}, indent=2) + '\n')

@@ -638,7 +638,7 @@ SOURCES
 # 5.40.1-6+deb13u1; retain the exact dsc/tarballs so the source bundle stays complete.
 ensure_perl_exact_source
 python3 /work/scripts/build-source-bundle.py \
-    --version "$version" --iso "$downloads/$iso" --tree "$stage" --repository "$stage/nex/repo" \
+    --version "$file_version" --iso "$downloads/$iso" --tree "$stage" --repository "$stage/nex/repo" \
     --apt-sources "$cache/source-sources.list" \
     --source-input "$cache/virtio-win-retained-source" --source-input "$stage/nex/third-party" --source-input "$stage/nex/nex-source.tar.gz" \
     --source-input "$downloads/perl-exact-source" --source-cache "$downloads/sources" \
@@ -769,7 +769,7 @@ xorriso -indev "$downloads/$iso" -outdev "$output" \
     -boot_image any replay -update_r "$stage" / -volid NEX_CORE -commit -end
 cp "$stage/nex/package-manifest.tsv" /work/dist/package-manifest.tsv
 python3 /work/scripts/build-source-bundle.py \
-    --version "$version" --iso "$output" --tree "$stage" --repository "$stage/nex/repo" \
+    --version "$file_version" --iso "$output" --tree "$stage" --repository "$stage/nex/repo" \
     --source-bundle "/work/dist/nex-core-${file_version}-source.tar.gz" \
     --compliance-manifest "/work/dist/nex-core-${file_version}-compliance-manifest.json"
 (cd /work/dist && sha256sum "nex-core-${file_version}-compliance-manifest.json" > "nex-core-${file_version}-compliance-manifest.json.sha256")
@@ -838,7 +838,7 @@ PYNOTICE
     xorriso -indev "$downloads/$iso" -outdev "$netoutput" \
         -boot_image any replay -update_r "$netstage" / -volid NEX_NETINST -commit -end
     python3 /work/scripts/build-source-bundle.py \
-        --version "$version" --iso "$netoutput" --tree "$netstage" --repository "$netstage/nex/repo" \
+        --version "$file_version" --iso "$netoutput" --tree "$netstage" --repository "$netstage/nex/repo" \
         --source-bundle "/work/dist/nex-core-${file_version}-source.tar.gz" \
         --compliance-manifest "/work/dist/nex-core-${file_version}-netinst-compliance-manifest.json"
     python3 - "/work/dist/nex-core-${file_version}-netinst-compliance-manifest.json" /work/dist/netinst "$netstage/nex/payloads.tsv" <<'PYMANIFEST'

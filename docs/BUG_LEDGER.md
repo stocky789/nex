@@ -12553,3 +12553,21 @@ of real storage or hardware certification.
 - Regression: `TestInstallPreflightIgnoresSwapFileInvisibleToThisNamespace` (`internal/hostimage/install_preflight_test.go`) failed with the exact error before the fix and passes after; the existing in-use disk/partition swap refusals still pass (`go test ./internal/hostimage`).
 - Limits: no forge image run was executed after the fix.
 - Avoid: reading host-wide kernel tables from inside a container and treating their paths as visible.
+
+## BUG-1912 — Release compliance manifests carried the Debian version while the publisher expected the readable one
+
+- Date: 2026-10-04.
+- Symptom: the forge release run built every artifact, then stopped at `release-publish: compliance manifest version must be 0.4.27-dev.260`.
+- Root cause: when release files were renamed to the readable version (`0.4.27-dev.260`), `installer/build.sh` kept passing Debian's `~~` form to `build-source-bundle.py --version`, so the manifests' `version` field disagreed with the file names the publisher checks.
+- Fix: the ISO source bundle and both compliance manifests are stamped with the readable release version (`$file_version`).
+- Regression: `tests.test_release_publish` and `tests.test_source_bundle` pass; the `--check` publisher step is the runtime guard. No forge release run was executed after the fix.
+- Avoid: renaming a release artifact family without changing the version recorded inside it.
+
+## BUG-1913 — The Controller image boot lab looked for a file name the builder does not write
+
+- Date: 2026-10-04.
+- Symptom: forge `controller-image` stopped at `.cache/controller-image/system.img not found` after a successful build.
+- Root cause: `appliance/build.py --profile controller` copies the image out as `controller-system.img` (the documented artifact name); `controller_image_boot.py` only looked for the raw `system.img` of `image/build.sh controller`.
+- Fix: the boot lab accepts either name.
+- Regression: none automated; the forge `controller-image` job is the check. Not run after the fix.
+- Avoid: naming a lab's input after an intermediate build file instead of the published artifact.

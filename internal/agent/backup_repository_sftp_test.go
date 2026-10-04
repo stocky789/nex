@@ -103,10 +103,10 @@ func stubSFTPSync(t *testing.T, dirs bool) {
 	t.Cleanup(func() { syncSFTPFile, syncSFTPDir = oldFile, oldDir })
 }
 
-func testSFTPClient(t *testing.T) *sftp.Client {
+func testSFTPClient(t *testing.T, options ...sftp.ServerOption) *sftp.Client {
 	t.Helper()
 	serverConn, clientConn := net.Pipe()
-	server, err := sftp.NewServer(serverConn)
+	server, err := sftp.NewServer(serverConn, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,16 +119,13 @@ func testSFTPClient(t *testing.T) *sftp.Client {
 	return client
 }
 
+// The server refuses every write itself: a chmod would not stop root, which is who CI runs as.
 func TestSFTPPublishReportsReadOnlyRoot(t *testing.T) {
-	client := testSFTPClient(t)
+	client := testSFTPClient(t, sftp.ReadOnly())
 	oldSync := syncSFTPDir
 	syncSFTPDir = func(*sftp.Client, string) error { return nil }
 	t.Cleanup(func() { syncSFTPDir = oldSync })
 	root := t.TempDir()
-	t.Cleanup(func() { _ = os.Chmod(root, 0700) })
-	if err := os.Chmod(root, 0500); err != nil {
-		t.Fatal(err)
-	}
 	storage := sftpBackupStorage{repo: protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
 	if _, err := storage.claimOwner(client); err == nil || errors.Is(err, ErrBackupConflict) || !strings.Contains(strings.ToLower(err.Error()), "permission") {
 		t.Fatalf("read-only owner claim returned %v instead of a permission failure", err)
@@ -139,14 +136,8 @@ func TestSFTPPublishReportsReadOnlyRoot(t *testing.T) {
 	if err == nil || errors.Is(err, ErrBackupConflict) || !strings.Contains(strings.ToLower(err.Error()), "permission") {
 		t.Fatalf("read-only root returned %v instead of a permission failure", err)
 	}
-	if err := os.Chmod(root, 0700); err != nil {
-		t.Fatal(err)
-	}
 	sum := sha256.Sum256(raw)
 	if err := os.WriteFile(filepath.Join(root, ".nex-intent-point-1"), []byte(hex.EncodeToString(sum[:])), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(root, 0500); err != nil {
 		t.Fatal(err)
 	}
 	_, err = storage.publishOnClient(context.Background(), client, manifest, nil, raw)
