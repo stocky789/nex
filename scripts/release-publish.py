@@ -14,8 +14,10 @@ Layout, all under one root owned by the publishing user (no root privilege neede
     <root>/0.1.6~alpha1/nex-core-0.1.6~alpha1-source.tar.gz
     <root>/0.1.6~alpha1/nex-core-0.1.6~alpha1-compliance-manifest.json
     <root>/latest -> 0.1.6~alpha1
+    <root>/latest.json   (version, build date, and file paths/sizes/hashes of `latest`, for the website)
 """
 import argparse
+from datetime import datetime, timezone
 from functools import cmp_to_key
 import hashlib
 import json
@@ -27,13 +29,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-VERSION_DIR = re.compile(r"^[0-9][A-Za-z0-9.+~]*$")
-ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-amd64\.iso$")
-SOURCE_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-source\.tar\.gz$")
-NETINST_ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-amd64-netinst\.iso$")
-NETINST_MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-netinst-compliance-manifest\.json$")
+VERSION_DIR = re.compile(r"^[0-9][A-Za-z0-9.+~-]*$")
+ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-amd64\.iso$")
+SOURCE_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-source\.tar\.gz$")
+NETINST_ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-amd64-netinst\.iso$")
+NETINST_MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-netinst-compliance-manifest\.json$")
 PAYLOAD_NAME = re.compile(r"^(?:nex-core-local|dlm-controld|libvirt[a-z0-9.+-]*|libnss-libvirt)-[0-9a-f]{64}\.deb$")
-MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-compliance-manifest\.json$")
+MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-compliance-manifest\.json$")
+# Release names are readable (0.4.23-dev.251); dpkg orders the Debian form (0.4.23~~dev.251).
+PRERELEASE = re.compile(r"^(?P<release>\d+\.\d+\.\d+)-(?P<pre>[0-9A-Za-z.]+)$")
 
 
 class ReleasePublishError(RuntimeError):
@@ -92,13 +96,21 @@ def sha256(path, chunk=1 << 20):
     return digest.hexdigest()
 
 
+def debian_version(version):
+    match = PRERELEASE.match(version)
+    if not match:
+        return version
+    prefix = "~~" if match["pre"].startswith("dev.") else "~"
+    return f"{match['release']}{prefix}{match['pre']}"
+
+
 def compare_versions(left, right):
     if left == right:
         return 0
     for relation, result in (("lt", -1), ("gt", 1)):
         try:
             compared = subprocess.run(
-                ["dpkg", "--compare-versions", left, relation, right],
+                ["dpkg", "--compare-versions", debian_version(left), relation, debian_version(right)],
                 capture_output=True, text=True)
         except OSError as error:
             raise ReleasePublishError("dpkg is required to order releases") from error
@@ -130,6 +142,30 @@ def prune(root, keep):
     return removed
 
 
+def write_latest_manifest(root):
+    """Describe the newest release so the website can show it without a redeploy."""
+    root = Path(root)
+    newest = existing_releases(root)[-1]
+    directory = root / newest
+    names = {"iso": f"nex-core-{newest}-amd64.iso",
+             "netinst": f"nex-core-{newest}-amd64-netinst.iso",
+             "source": f"nex-core-{newest}-source.tar.gz"}
+    files = {}
+    for key, name in names.items():
+        path = directory / name
+        if path.is_file():
+            digest = (directory / (name + ".sha256")).read_text().split()[0]
+            files[key] = {"path": f"{newest}/{name}", "size": path.stat().st_size, "sha256": digest}
+    manifest = {"version": newest.replace("~~", "-").replace("~", "-"), "files": files}
+    if "iso" in files:
+        built = (directory / names["iso"]).stat().st_mtime
+        manifest["published"] = datetime.fromtimestamp(built, timezone.utc).date().isoformat()
+    temporary = root / ".latest.json.tmp"
+    temporary.write_text(json.dumps(manifest, indent=2) + "\n")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, root / "latest.json")
+
+
 def write_download_page(directory, version):
     images = (f"nex-core-{version}-amd64.iso", f"nex-core-{version}-amd64-netinst.iso")
     documents = (f"nex-core-{version}-source.tar.gz",
@@ -140,7 +176,7 @@ def write_download_page(directory, version):
              f"<title>Nex Core {version} downloads</title>",
              f"<h1>Nex Core {version}</h1>",
              "<p>Development channel build of the next release, for testing only. It is replaced "
-             "by newer builds without notice.</p>" if "~dev." in version
+             "by newer builds without notice.</p>" if "~dev." in debian_version(version)
              else "<p>Development build for disposable evaluation.</p>"]
     for heading, names in (("Installer images", images), ("Source and compliance", documents)):
         lines.extend((f"<h2>{heading}</h2>", "<ul>"))
@@ -240,6 +276,7 @@ def publish(root, iso, source, manifest, keep, netinst_iso=None, netinst_manifes
     temporary.symlink_to(newest)
     os.replace(temporary, link)
     removed = prune(root, keep)
+    write_latest_manifest(root)
     for old_version in existing_releases(root):
         if old_version != version:
             write_download_page(root / old_version, old_version)

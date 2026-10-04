@@ -458,7 +458,10 @@ matched_libvirt_dir=${MATCHED_LIBVIRT_DIR:?matched libvirt output directory requ
 }
 (cd "$matched_libvirt_dir" && sha256sum --check SHA256SUMS)
 version=$(dpkg-deb -f "$core_local_deb" Version)
-output=/work/dist/nex-core-${version}-amd64.iso
+# Artifact names use the readable release version (0.4.23-dev.251), not Debian's 0.4.23~~dev.251.
+file_version=${version//\~\~/-}
+file_version=${file_version//\~/-}
+output=/work/dist/nex-core-${file_version}-amd64.iso
 mkdir -p "$cache" "$downloads" /work/dist
 trap 'chown -R "${BUILD_UID:-0}:${BUILD_GID:-0}" /work/dist "$cache"' EXIT
 # Explicit release + expected digest; update together only after Debian signature
@@ -639,7 +642,7 @@ python3 /work/scripts/build-source-bundle.py \
     --apt-sources "$cache/source-sources.list" \
     --source-input "$cache/virtio-win-retained-source" --source-input "$stage/nex/third-party" --source-input "$stage/nex/nex-source.tar.gz" \
     --source-input "$downloads/perl-exact-source" --source-cache "$downloads/sources" \
-    --output "/work/dist/nex-core-${version}-source.tar.gz"
+    --output "/work/dist/nex-core-${file_version}-source.tar.gz"
 cp installer/assets/boot-splash.png "$stage/isolinux/splash.png"
 cat > "$stage/isolinux/isolinux.cfg" <<'BIOS'
 path
@@ -767,9 +770,9 @@ xorriso -indev "$downloads/$iso" -outdev "$output" \
 cp "$stage/nex/package-manifest.tsv" /work/dist/package-manifest.tsv
 python3 /work/scripts/build-source-bundle.py \
     --version "$version" --iso "$output" --tree "$stage" --repository "$stage/nex/repo" \
-    --source-bundle "/work/dist/nex-core-${version}-source.tar.gz" \
-    --compliance-manifest "/work/dist/nex-core-${version}-compliance-manifest.json"
-(cd /work/dist && sha256sum "nex-core-${version}-compliance-manifest.json" > "nex-core-${version}-compliance-manifest.json.sha256")
+    --source-bundle "/work/dist/nex-core-${file_version}-source.tar.gz" \
+    --compliance-manifest "/work/dist/nex-core-${file_version}-compliance-manifest.json"
+(cd /work/dist && sha256sum "nex-core-${file_version}-compliance-manifest.json" > "nex-core-${file_version}-compliance-manifest.json.sha256")
 cp "$stage/nex/BUILD.txt" /work/dist/BUILD.txt
 (cd /work/dist && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 printf '\nBuilt %s\n' "$output"
@@ -827,7 +830,7 @@ PYNOTICE
     mv "$netstage/install.amd/initrd.gz.new" "$netstage/install.amd/initrd.gz"
     (cd "$serial_overlay" && find . -print0 | cpio --null -o -H newc --quiet | gzip -n) >> "$netstage/install.amd/initrd.gz"
     rm -rf "$serial_overlay"
-    netoutput=/work/dist/nex-core-${version}-amd64-netinst.iso
+    netoutput=/work/dist/nex-core-${file_version}-amd64-netinst.iso
     rm -f "$netstage/.disk/info" "$netstage/md5sum.txt"
     printf '%s\n' "Nex Core $version amd64 net installer — internet required" > "$netstage/.disk/info"
     (cd "$netstage" && find . -type f ! -name md5sum.txt ! -path './isolinux/boot.cat' ! -path './isolinux/isolinux.bin' -print0 | sort -z | xargs -0 md5sum > md5sum.txt)
@@ -836,9 +839,9 @@ PYNOTICE
         -boot_image any replay -update_r "$netstage" / -volid NEX_NETINST -commit -end
     python3 /work/scripts/build-source-bundle.py \
         --version "$version" --iso "$netoutput" --tree "$netstage" --repository "$netstage/nex/repo" \
-        --source-bundle "/work/dist/nex-core-${version}-source.tar.gz" \
-        --compliance-manifest "/work/dist/nex-core-${version}-netinst-compliance-manifest.json"
-    python3 - "/work/dist/nex-core-${version}-netinst-compliance-manifest.json" /work/dist/netinst "$netstage/nex/payloads.tsv" <<'PYMANIFEST'
+        --source-bundle "/work/dist/nex-core-${file_version}-source.tar.gz" \
+        --compliance-manifest "/work/dist/nex-core-${file_version}-netinst-compliance-manifest.json"
+    python3 - "/work/dist/nex-core-${file_version}-netinst-compliance-manifest.json" /work/dist/netinst "$netstage/nex/payloads.tsv" <<'PYMANIFEST'
 import hashlib, json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -853,6 +856,6 @@ for payload in sorted(Path(sys.argv[2]).glob('*.deb')):
 path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
 PYMANIFEST
     (cd /work/dist && sha256sum "$(basename "$netoutput")" > "$(basename "$netoutput").sha256" && \
-        sha256sum "nex-core-${version}-netinst-compliance-manifest.json" > "nex-core-${version}-netinst-compliance-manifest.json.sha256")
+        sha256sum "nex-core-${file_version}-netinst-compliance-manifest.json" > "nex-core-${file_version}-netinst-compliance-manifest.json.sha256")
     printf '\nBuilt %s\n' "$netoutput"
 fi

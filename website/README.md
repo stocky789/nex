@@ -29,6 +29,11 @@ publishes through `nex-website-publish` on the website host. Manual publish and
 rollback remain available; see [operate the website](../docs/guide/operate-website.md).
 The preview uses `noindex, nofollow`, which is a crawler hint, not access control.
 
+The home page's **Download Nex Core** cards are filled in the browser from `/downloads/latest.json`
+and `/downloads/dev/latest.json`, which the release publisher writes beside the downloads
+(`scripts/release-publish.py`); the site itself carries no version numbers. Without
+JavaScript they link to the download pages. The `/downloads/` tree is served by nginx, not built here.
+
 ## Contributing
 
 Contribute copy, design, accessibility, documentation and screenshots through this

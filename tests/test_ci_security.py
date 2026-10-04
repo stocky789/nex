@@ -248,8 +248,8 @@ class ReleaseChannelTests(unittest.TestCase):
     def test_branch_decides_the_channel_version_and_publish_paths(self):
         for provider in PROVIDERS:
             for branch, expected in (
-                    ('main', 'tag=v0.4.18\nversion=0.4.18\nchannel=stable\napt_path=apt\ndownloads_path=downloads\n'),
-                    ('dev', 'tag=v0.4.19-dev.2\nversion=0.4.19~~dev.2\nchannel=dev\napt_path=apt/dev\ndownloads_path=downloads/dev\n')):
+                    ('main', 'tag=v0.4.18\nversion=0.4.18\npublic_version=0.4.18\nchannel=stable\napt_path=apt\ndownloads_path=downloads\n'),
+                    ('dev', 'tag=v0.4.19-dev.2\nversion=0.4.19~~dev.2\npublic_version=0.4.19-dev.2\nchannel=dev\napt_path=apt/dev\ndownloads_path=downloads/dev\n')):
                 with self.subTest(provider=provider, branch=branch), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     self.checkout(root)
@@ -288,7 +288,8 @@ class ReleaseChannelTests(unittest.TestCase):
                     deploy.write_text(f'#!/bin/sh\ntouch "{root}/website-deployed"\n')
                     deploy.chmod(0o755)
                     result = self.run_step(provider, 'Publish to the website host', root, {
-                        'NEX_VERSION': version, 'NEX_CHANNEL': channel, 'NEX_DEPLOY_HOST': 'host.example.invalid',
+                        'NEX_VERSION': version, 'NEX_PUBLIC_VERSION': version.replace('~~', '-'),
+                        'NEX_CHANNEL': channel, 'NEX_DEPLOY_HOST': 'host.example.invalid',
                         'NEX_DEPLOY_USER': 'publisher', 'NEX_DEPLOY_KEY': 'key', 'NEX_DEPLOY_KNOWN_HOSTS': 'hosts',
                         'GITHUB_SHA': 'f' * 40}, tools=('ssh', 'scp'))
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -320,9 +321,9 @@ class ReleaseChannelTests(unittest.TestCase):
                     expected = {}
                     for suffix in ('amd64.iso', 'amd64-netinst.iso'):
                         data = f'ISO payload: {version} {suffix}'.encode()
-                        original = root / f'dist/nex-core-{version}-{suffix}'
+                        original = root / f'dist/nex-core-{public}-{suffix}'
                         original.write_bytes(data)
-                        original.with_suffix('.iso.sha256').write_text(
+                        original.with_name(original.name + '.sha256').write_text(
                             f'{hashlib.sha256(data).hexdigest()}  {original.name}\n')
                         expected[f'nex-core-{public}-{suffix}'] = data
                     FakeGitea.calls = []
@@ -332,7 +333,7 @@ class ReleaseChannelTests(unittest.TestCase):
                     FakeGitea.release_payload = None
                     result = self.run_step(provider, 'Create or replace the release', root, {
                         'GITHUB_TOKEN': 'token', 'GITHUB_SHA': 'f' * 40, 'NEX_CHANNEL': channel,
-                        'NEX_TAG': f'v{public}', 'NEX_VERSION': version,
+                        'NEX_TAG': f'v{public}',
                         'GITHUB_API_URL': f'http://127.0.0.1:{server.server_port}/api/v1',
                         'GITHUB_REPOSITORY': 'o/r'})
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -355,11 +356,6 @@ class ReleaseChannelTests(unittest.TestCase):
                         checked = subprocess.run(['sha256sum', '-c', name + '.sha256'],
                                                  cwd=downloaded, capture_output=True, text=True)
                         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
-                    # Publication must not rename the build inputs or rewrite their Debian-form sidecars.
-                    for suffix in ('amd64.iso', 'amd64-netinst.iso'):
-                        original = root / f'dist/nex-core-{version}-{suffix}'
-                        self.assertEqual(original.read_bytes(), expected[f'nex-core-{public}-{suffix}'])
-                        self.assertIn(original.name, original.with_suffix('.iso.sha256').read_text())
 
 
 class GitHubMinuteBudgetTests(unittest.TestCase):

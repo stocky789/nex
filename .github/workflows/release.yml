@@ -81,6 +81,7 @@ jobs:
           {
             echo "tag=v$tag_version"
             echo "version=$version"
+            echo "public_version=$tag_version"
             echo "channel=$channel"
             echo "apt_path=$apt"
             echo "downloads_path=$downloads"
@@ -153,6 +154,7 @@ jobs:
       - name: Build source archive, packages and both ISOs
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
           NEX_DOWNLOADS_PATH: ${{ steps.version.outputs.downloads_path }}
           NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
           NEX_APPLIANCE_SIGNING_KEY: ${{ steps.signing.outputs.key }}
@@ -166,7 +168,7 @@ jobs:
           mkdir -p "$TMPDIR"
           # build.sh rebuilds the appliance and the nex-core-local package from current
           # source, then the ISO from that package. The Controller package is separate.
-          export NEX_NETINST_BASE_URL="${NEX_PUBLIC_URL%/}/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}"
+          export NEX_NETINST_BASE_URL="${NEX_PUBLIC_URL%/}/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}"
           bash installer/build.sh
           python3 packaging/controller/build.py \
             --source dist/nex-source.tar.gz --version "$NEX_VERSION" \
@@ -175,15 +177,16 @@ jobs:
       - name: Verify every artifact carries the released version
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
         run: |
           set -euo pipefail
-          iso="dist/nex-core-${NEX_VERSION}-amd64.iso"
-          source="dist/nex-core-${NEX_VERSION}-source.tar.gz"
-          manifest="dist/nex-core-${NEX_VERSION}-compliance-manifest.json"
+          iso="dist/nex-core-${NEX_PUBLIC_VERSION}-amd64.iso"
+          source="dist/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz"
+          manifest="dist/nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json"
           core="dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb"
           controller="dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
-          netinst="dist/nex-core-${NEX_VERSION}-amd64-netinst.iso"
-          netinst_manifest="dist/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json"
+          netinst="dist/nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso"
+          netinst_manifest="dist/nex-core-${NEX_PUBLIC_VERSION}-netinst-compliance-manifest.json"
           for artifact in "$iso" "$source" "$manifest" "$core" "$controller" "$netinst" "$netinst_manifest" dist/netinst/*.deb; do
             [ -f "$artifact" ] || { echo "missing artifact: $artifact" >&2; exit 1; }
             stat --printf='%n: %s bytes\n' "$artifact"
@@ -211,11 +214,11 @@ jobs:
             esac
           done
           ( cd dist && for artifact in \
-              "nex-core-${NEX_VERSION}-amd64.iso" \
-              "nex-core-${NEX_VERSION}-source.tar.gz" \
-              "nex-core-${NEX_VERSION}-compliance-manifest.json" \
-              "nex-core-${NEX_VERSION}-amd64-netinst.iso" \
-              "nex-core-${NEX_VERSION}-netinst-compliance-manifest.json"; do
+              "nex-core-${NEX_PUBLIC_VERSION}-amd64.iso" \
+              "nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz" \
+              "nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json" \
+              "nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso" \
+              "nex-core-${NEX_PUBLIC_VERSION}-netinst-compliance-manifest.json"; do
               sha256sum "$artifact" > "$artifact.sha256"
             done )
           # Validate every ISO/source/payload binding before any public upload.
@@ -232,6 +235,7 @@ jobs:
       - name: Smoke-start the packaged Controller
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
           NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
         run: |
           set -euo pipefail
@@ -282,6 +286,7 @@ jobs:
         if: steps.deploy.outputs.enabled == 'true'
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
           NEX_CHANNEL: ${{ steps.version.outputs.channel }}
           NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
           NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
@@ -309,11 +314,11 @@ jobs:
           ssh $ssh_opts "$target" "rm -rf '$staging' && mkdir -m 700 '$staging'"
           # shellcheck disable=SC2086
           scp $ssh_opts \
-            "dist/nex-core-${NEX_VERSION}-amd64.iso" \
-            "dist/nex-core-${NEX_VERSION}-source.tar.gz" \
-            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json" \
-            "dist/nex-core-${NEX_VERSION}-amd64-netinst.iso" \
-            "dist/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json" \
+            "dist/nex-core-${NEX_PUBLIC_VERSION}-amd64.iso" \
+            "dist/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz" \
+            "dist/nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json" \
+            "dist/nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso" \
+            "dist/nex-core-${NEX_PUBLIC_VERSION}-netinst-compliance-manifest.json" \
             dist/netinst/*.deb \
             "dist/controller/nex-controller_${NEX_VERSION}_amd64.deb" \
             scripts/release-publish.py \
@@ -339,7 +344,7 @@ jobs:
           ssh $ssh_opts "$target" "set -eu
             ln '$staging'/nex-core-local-*.deb '$staging/nex-core-local_${NEX_VERSION}_amd64.deb'
             sudo -n /usr/local/sbin/nex-apt-publish $apt_args '$staging/nex-core-local_${NEX_VERSION}_amd64.deb' '$staging/nex-controller_${NEX_VERSION}_amd64.deb'
-            python3 '$staging/release-publish.py' $root_args --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_VERSION}-compliance-manifest.json' --netinst-iso '$staging/nex-core-${NEX_VERSION}-amd64-netinst.iso' --netinst-manifest '$staging/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json' ${payload_args[*]} --keep 3
+            python3 '$staging/release-publish.py' $root_args --iso '$staging/nex-core-${NEX_PUBLIC_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json' --netinst-iso '$staging/nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso' --netinst-manifest '$staging/nex-core-${NEX_PUBLIC_VERSION}-netinst-compliance-manifest.json' ${payload_args[*]} --keep 3
             rm -rf '$staging'"
 
           # Static pages last: same host, same secrets, one Release run. Only the stable
@@ -352,6 +357,7 @@ jobs:
         if: steps.deploy.outputs.enabled == 'true'
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
           NEX_APT_PATH: ${{ steps.version.outputs.apt_path }}
           NEX_DOWNLOADS_PATH: ${{ steps.version.outputs.downloads_path }}
           NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
@@ -364,17 +370,18 @@ jobs:
           payload_paths=()
           for payload in dist/netinst/*.deb; do
             [ -f "$payload" ] || { echo 'missing netinst payloads' >&2; exit 1; }
-            payload_paths+=("/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/${payload##*/}")
+            payload_paths+=("/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/${payload##*/}")
           done
           for path in \
             "/" \
             "/${NEX_APT_PATH}/dists/nex/InRelease" \
             "/${NEX_APT_PATH}/dists/nex/main/binary-amd64/Packages" \
-            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
-            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-source.tar.gz" \
-            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-compliance-manifest.json" \
-            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64-netinst.iso" \
-            "/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json" \
+            "/${NEX_DOWNLOADS_PATH}/latest.json" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-amd64.iso.sha256" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso" \
+            "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-netinst-compliance-manifest.json" \
             "${payload_paths[@]}"; do
             code=$(curl -sSI -o /dev/null -w '%{http_code}' --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}${path}")
             [ "$code" = 200 ] || { echo "$path returned $code" >&2; exit 1; }
@@ -386,7 +393,6 @@ jobs:
       - name: Create or replace the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEX_VERSION: ${{ steps.version.outputs.version }}
           NEX_TAG: ${{ steps.version.outputs.tag }}
           NEX_CHANNEL: ${{ steps.version.outputs.channel }}
         run: |
@@ -399,15 +405,9 @@ jobs:
             # The = form is required: argparse reads a separate value that starts with - as an option.
             args=(--name "Nex Core $public_version (development)" '--prune-tags=-dev\.[0-9]+$' --keep 3)
           fi
-          # Keep Debian ordering in the build/download tree, not in forge display names.
-          mkdir -p .cache/release-assets
           assets=()
           for suffix in amd64.iso amd64-netinst.iso; do
-            name="nex-core-${public_version}-${suffix}"
-            asset=".cache/release-assets/$name"
-            ln -f "dist/nex-core-${NEX_VERSION}-${suffix}" "$asset"
-            read -r digest _ < "dist/nex-core-${NEX_VERSION}-${suffix}.sha256"
-            printf '%s  %s\n' "$digest" "$name" > "$asset.sha256"
+            asset="dist/nex-core-${public_version}-${suffix}"
             assets+=("$asset" "$asset.sha256")
           done
           python3 scripts/gitea-release.py \

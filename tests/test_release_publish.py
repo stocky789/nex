@@ -58,22 +58,22 @@ class PublishTests(unittest.TestCase):
     def test_publishes_iso_with_checksum_and_latest_link(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
-            iso = make_iso(tmp, "0.1.6~alpha1")
-            source = make_source(tmp, "0.1.6~alpha1")
-            manifest = make_manifest(tmp, "0.1.6~alpha1")
+            iso = make_iso(tmp, "0.1.6-alpha1")
+            source = make_source(tmp, "0.1.6-alpha1")
+            manifest = make_manifest(tmp, "0.1.6-alpha1")
             version, digest, newest, removed = publish.publish(root, iso, source, manifest, keep=3)
-            self.assertEqual(version, "0.1.6~alpha1")
-            self.assertEqual(newest, "0.1.6~alpha1")
+            self.assertEqual(version, "0.1.6-alpha1")
+            self.assertEqual(newest, "0.1.6-alpha1")
             self.assertEqual(removed, [])
-            installed = root / "0.1.6~alpha1" / iso.name
+            installed = root / "0.1.6-alpha1" / iso.name
             self.assertTrue(installed.is_file())
             self.assertEqual(installed.read_bytes(), iso.read_bytes())
-            sidecar = (root / "0.1.6~alpha1" / (iso.name + ".sha256")).read_text()
+            sidecar = (root / "0.1.6-alpha1" / (iso.name + ".sha256")).read_text()
             self.assertEqual(sidecar, f"{digest}  {iso.name}\n")
             for asset in (source, manifest):
                 self.assertEqual((root / version / asset.name).read_bytes(), asset.read_bytes())
                 self.assertTrue((root / version / (asset.name + ".sha256")).is_file())
-            self.assertEqual((root / "latest").resolve().name, "0.1.6~alpha1")
+            self.assertEqual((root / "latest").resolve().name, "0.1.6-alpha1")
 
     def test_sidecar_verifies_with_sha256sum(self):
         if not shutil.which("sha256sum"):
@@ -89,39 +89,39 @@ class PublishTests(unittest.TestCase):
     def test_retention_keeps_the_newest_and_prunes_the_rest(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
-            for version in ("0.1.4", "0.1.5", "0.1.6~alpha1", "0.1.6", "0.1.7"):
+            for version in ("0.1.4", "0.1.5", "0.1.6-alpha1", "0.1.6", "0.1.7"):
                 publish_release(root, tmp, version)
             kept = publish.existing_releases(root)
-            self.assertEqual(kept, ["0.1.6~alpha1", "0.1.6", "0.1.7"])
+            self.assertEqual(kept, ["0.1.6-alpha1", "0.1.6", "0.1.7"])
             self.assertEqual((root / "latest").resolve().name, "0.1.7")
 
     def test_retention_orders_development_and_prerelease_numbers_with_dpkg(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"
-            versions = ["0.1.6", "0.1.7~~dev.999", "0.1.7~~dev.1000",
-                        "0.1.7~alpha1", "0.1.7~rc9", "0.1.7~rc10", "0.1.7", "0.1.10"]
+            versions = ["0.1.6", "0.1.7-dev.999", "0.1.7-dev.1000",
+                        "0.1.7-alpha1", "0.1.7-rc9", "0.1.7-rc10", "0.1.7", "0.1.10"]
             for version in reversed(versions):
                 publish_release(root, tmp, version, keep=len(versions))
             self.assertEqual(publish.existing_releases(root), versions)
             self.assertEqual((root / "latest").resolve().name, "0.1.10")
-            publish_release(root, tmp, "0.1.7~~dev.999", keep=3)
-            self.assertEqual(publish.existing_releases(root), ["0.1.7~rc10", "0.1.7", "0.1.10"])
+            publish_release(root, tmp, "0.1.7-dev.999", keep=3)
+            self.assertEqual(publish.existing_releases(root), ["0.1.7-rc10", "0.1.7", "0.1.10"])
             self.assertEqual((root / "latest").resolve().name, "0.1.10")
-            self.assertFalse((root / "0.1.7~~dev.999").exists())
+            self.assertFalse((root / "0.1.7-dev.999").exists())
 
     def test_the_development_root_keeps_its_own_latest_and_retention(self):
         with tempfile.TemporaryDirectory() as tmp:
             stable, development = Path(tmp) / "downloads", Path(tmp) / "downloads" / "dev"
             publish_release(stable, tmp, "0.1.6")
             for build in (1, 2, 3):
-                publish_release(development, tmp, f"0.1.7~~dev.{build}", keep=2)
+                publish_release(development, tmp, f"0.1.7-dev.{build}", keep=2)
             # Two builds survive, `latest` is the newest build, and the stable root is untouched
             # even though the development tree sits inside it.
-            self.assertEqual(publish.existing_releases(development), ["0.1.7~~dev.2", "0.1.7~~dev.3"])
-            self.assertEqual((development / "latest").resolve().name, "0.1.7~~dev.3")
+            self.assertEqual(publish.existing_releases(development), ["0.1.7-dev.2", "0.1.7-dev.3"])
+            self.assertEqual((development / "latest").resolve().name, "0.1.7-dev.3")
             self.assertEqual(publish.existing_releases(stable), ["0.1.6"])
             self.assertEqual((stable / "latest").resolve().name, "0.1.6")
-            page = (development / "0.1.7~~dev.3" / "index.html").read_text()
+            page = (development / "0.1.7-dev.3" / "index.html").read_text()
             self.assertIn("Development channel build of the next release", page)
             self.assertNotIn("Development channel", (stable / "0.1.6" / "index.html").read_text())
 
@@ -137,6 +137,33 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), second.read_bytes())
             self.assertEqual(publish.sha256(installed), digest)
             self.assertEqual(publish.existing_releases(root), ["0.1.6"])
+
+    def test_latest_manifest_follows_the_newest_release_per_channel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stable, development = Path(tmp) / "downloads", Path(tmp) / "downloads" / "dev"
+            publish_release(stable, tmp, "0.1.6")
+            publish_release(development, tmp, "0.1.7-dev.4")
+            publish_release(development, tmp, "0.1.7-dev.5")
+            self.assertEqual(json.loads((stable / "latest.json").read_text())["version"], "0.1.6")
+            manifest = json.loads((development / "latest.json").read_text())
+            self.assertEqual(manifest["version"], "0.1.7-dev.5")
+            iso = development / "0.1.7-dev.5" / "nex-core-0.1.7-dev.5-amd64.iso"
+            self.assertEqual(manifest["files"]["iso"], {
+                "path": "0.1.7-dev.5/" + iso.name,
+                "size": iso.stat().st_size,
+                "sha256": publish.sha256(iso)})
+            self.assertNotIn("netinst", manifest["files"])
+            self.assertRegex(manifest["published"], r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_latest_manifest_is_not_replaced_by_a_failed_publish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "downloads"
+            publish_release(root, tmp, "0.1.6")
+            bad = make_iso(tmp, "0.1.7")
+            with self.assertRaises(publish.ReleasePublishError):
+                publish.publish(root, bad, make_source(tmp, "0.1.7"),
+                                make_manifest(tmp, "0.1.6"), keep=3)
+            self.assertEqual(json.loads((root / "latest.json").read_text())["version"], "0.1.6")
 
     def test_new_publication_adds_download_pages_to_retained_releases(self):
         with tempfile.TemporaryDirectory() as tmp:

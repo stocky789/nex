@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Exercise the nginx website policy against a real nginx process."""
 import http.client
+import json
 from pathlib import Path
 import shutil
 import socket
@@ -37,6 +38,7 @@ class WebsiteHosting(unittest.TestCase):
         downloads.mkdir(parents=True)
         (downloads / 'index.html').write_text('<!doctype html><title>Nex Core downloads</title>')
         (downloads / 'nex-core-local-fixture.deb').write_bytes(b'netinst payload')
+        (cls.base / 'downloads' / 'latest.json').write_text('{"version": "0.4.14"}')
         cls.log_dir = cls.base / 'log'
         cls.log_dir.mkdir()
         cls.port = cls.free_port()
@@ -98,7 +100,7 @@ class WebsiteHosting(unittest.TestCase):
             connection.close()
 
     def assert_headers(self, headers):
-        self.assertEqual(headers['Content-Security-Policy'], "default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'self'; style-src 'self'")
+        self.assertEqual(headers['Content-Security-Policy'], "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'self'; style-src 'self'")
         self.assertEqual(headers['Strict-Transport-Security'], 'max-age=31536000')
         self.assertEqual(headers['X-Content-Type-Options'], 'nosniff')
         self.assertEqual(headers['X-Frame-Options'], 'DENY')
@@ -132,6 +134,10 @@ class WebsiteHosting(unittest.TestCase):
         self.assertIn(b'Nex Core downloads', body)
         status, _, _ = self.request('/downloads/0.4.14/nex-core-local-fixture.deb', 'HEAD')
         self.assertEqual(status, 200)
+        status, headers, body = self.request('/downloads/latest.json')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'application/json')
+        self.assertEqual(json.loads(body), {'version': '0.4.14'})
 
     def test_service_runs_nginx_as_the_dedicated_account(self):
         unit = (ROOT / 'packaging/website/nex-website.service').read_text()

@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 from playwright.sync_api import sync_playwright
 
 
-CSP = ("default-src 'self'; base-uri 'none'; connect-src 'none'; font-src 'self'; "
+CSP = ("default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; "
        "form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; "
        "script-src 'self'; style-src 'self'")
 HEADERS = {

@@ -18,6 +18,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Minor Feature
+
+- The website home page now opens with a **Download Nex Core** section: the latest Stable and Development builds with version, size, build date, SHA-256 and direct links to the installer ISO and network installer, plus an **All Releases** link to the full download directory. It updates itself from the published release files, so a new stable or development release appears without redeploying the website.
+
+### Bug Fixes
+
+- The website's `/downloads/latest/` and release download pages are served as web pages again instead of being offered as a file download.
+- Installer ISOs, source bundles, release manifests and website download folders are now named with clean versions such as `nex-core-0.4.24-dev.251-amd64.iso`, without the `~~` characters.
+
 ## [0.4.24] — 2026-10-04
 
 ### Bug Fixes

@@ -12523,3 +12523,12 @@ of real storage or hardware certification.
 - Fix: run each attempt under the service context. The deadline still ends the retry loop, and the 5 s dialer timeout in `UpdateControllerURL` still bounds one attempt.
 - Regression: `TestRefreshDHCPAgentReadyWaitsForControllerListen` now requires the agent goroutine to still be running one second after the refresh returns; it failed before the fix (`embedded agent stopped when the DHCP refresh returned`) and passes after. `go test ./internal/localcore/ -count=1` passes. Lab evidence: a goroutine dump of the stuck process showed no agent goroutine; a build with the fix, temporarily bind-mounted over the Core binary of a lab host with a DHCP-deployed Controller and then removed, restarted through the update path and the host resumed reporting (report sequence advancing, last report under a second old). Not run: an end-to-end package update from a released build containing the fix.
 - Avoid: passing a bounded or derived context to code that starts a long-lived worker, and asserting that a worker started without checking that it is still running after its starter returns.
+
+## BUG-1909 — Website download pages were offered as a file download
+
+- Date: 2026-10-04.
+- Symptom: opening `/downloads/latest/`, `/downloads/dev/latest/` or a version directory from the website made the browser download `index.html` instead of showing it. The `/downloads/` directory listing worked.
+- Root cause: the website host's installed `/etc/nex-website/nginx-downloads.inc` predated the `text/html html;` type. nginx's `default_type application/octet-stream` then applied to the published `index.html`. The repository copy already had the type and a test, but `packaging/apt/bootstrap.sh` is the only thing that copies it to the host and nothing in a release run reinstalls it or notices the drift.
+- Fix: reinstalled the current include on the host and reloaded `nex-website`. The release run now also checks that `/downloads/latest.json` is reachable, and the guide's troubleshooting names this symptom and its check (`curl -I` returns `text/html`).
+- Regression: `tests.test_website_hosting` (`test_download_index_renders_and_payload_url_stays_available`, now also covering `latest.json` as `application/json`) runs the repository include through a real nginx and passes. It cannot detect a stale installed copy on a host; that stays a manual `curl -I` check after bootstrap.
+- Avoid: assuming a repository nginx include is live on the host because the release run succeeded.

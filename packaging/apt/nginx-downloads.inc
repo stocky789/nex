@@ -14,6 +14,7 @@ location /downloads/ {
     limit_except GET HEAD { deny all; }
     types {
         text/html html;
+        application/json json;
         application/x-iso9660-image iso;
         text/plain sha256;
     }

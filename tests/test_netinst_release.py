@@ -87,7 +87,7 @@ class NetinstReleaseTests(unittest.TestCase):
             self.assertIn('export NEX_NETINST_BASE_URL=', workflow)
             self.assertLess(workflow.index('export NEX_NETINST_BASE_URL='), workflow.index('bash installer/build.sh'))
             # The ISO fetches its payloads from its own channel's download tree.
-            self.assertIn('${NEX_PUBLIC_URL%/}/${NEX_DOWNLOADS_PATH}/${NEX_VERSION}', workflow)
+            self.assertIn('${NEX_PUBLIC_URL%/}/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}', workflow)
             self.assertIn('--netinst-iso', workflow)
             self.assertIn('dist/netinst/*.deb', workflow)
             transfer = workflow.split('          scp $ssh_opts', 1)[1].split('"$target:$staging/"', 1)[0]

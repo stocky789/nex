@@ -9,6 +9,7 @@
     name="description"
     content="A community-driven virtualization project. Help build Nex Core and Nex Controller on Debian, KVM and libvirt."
   />
+  <script src="/releases.js" defer></script>
 </svelte:head>
 
 <a class="skip" href="#main">Skip to content</a>
@@ -26,13 +27,58 @@
     <a href="#platform">Platform</a><a href="#approach">Approach</a
     ><a href="#questions">Questions</a><a href="/roadmap/">Roadmap</a
     ><a href="/gallery/">Gallery</a
-    ><a class="nav-release" href="#releases"
-      >Releases <span aria-hidden="true">↗</span></a
+    ><a class="nav-release" href="#download"
+      >Download <span aria-hidden="true">↓</span></a
     >
   </nav>
 </header>
 
 <main id="main">
+  <section class="download wrap" id="download" aria-labelledby="download-title">
+    <div class="download-head">
+      <div>
+        <p class="eyebrow"><span class="small-line"></span> Download Nex Core</p>
+        <h2 id="download-title">Get the latest build.</h2>
+      </div>
+      <p class="download-note">
+        Early development. Use in disposable environments only.
+      </p>
+    </div>
+    <div class="download-grid">
+      <article class="dl-card dl-stable" data-manifest="/downloads/latest.json">
+        <div class="dl-top">
+          <span class="dl-channel"><i class="dl-dot" aria-hidden="true"></i>Stable</span>
+          <span class="dl-branch">main</span>
+        </div>
+        <p class="dl-version" data-version>Latest stable</p>
+        <p class="dl-meta" data-meta>Built from the main branch.</p>
+        <div class="dl-actions">
+          <a class="dl-primary" data-iso href="/downloads/latest/"
+            ><span data-iso-label>Open downloads</span> <span aria-hidden="true">↓</span></a
+          ><a class="dl-secondary" data-netinst href="/downloads/latest/" hidden>Network installer</a>
+        </div>
+        <p class="dl-hash" data-hash hidden></p>
+      </article>
+      <article class="dl-card dl-dev" data-manifest="/downloads/dev/latest.json">
+        <div class="dl-top">
+          <span class="dl-channel"><i class="dl-dot" aria-hidden="true"></i>Development</span>
+          <span class="dl-branch">dev · pre-release</span>
+        </div>
+        <p class="dl-version" data-version>Latest development</p>
+        <p class="dl-meta" data-meta>The next release, rebuilt on every merge.</p>
+        <div class="dl-actions">
+          <a class="dl-primary" data-iso href="/downloads/dev/latest/"
+            ><span data-iso-label>Open downloads</span> <span aria-hidden="true">↓</span></a
+          ><a class="dl-secondary" data-netinst href="/downloads/dev/latest/" hidden>Network installer</a>
+        </div>
+        <p class="dl-hash" data-hash hidden></p>
+      </article>
+    </div>
+    <p class="download-all">
+      <a href="/downloads/">All Releases <span aria-hidden="true">→</span></a>
+    </p>
+  </section>
+
   <section class="hero wrap" aria-labelledby="hero-title">
     <div class="hero-copy">
       <p class="eyebrow"><span class="small-line"></span> A community-driven project</p>
@@ -244,22 +290,6 @@
         </p>
       </div>
       <div class="release-details">
-        <div>
-          <span class="release-kicker">Stable channel</span
-          ><strong><a href="https://nexvirtualization.com/downloads/latest/">Latest Nex Core build</a></strong>
-          <p>
-            Releases from the main branch. Check the build’s release notes and verification
-            limits before evaluating it.
-          </p>
-        </div>
-        <div>
-          <span class="release-kicker">Development channel</span
-          ><strong><a href="https://nexvirtualization.com/downloads/dev/latest/">Latest development build</a></strong>
-          <p>
-            A pre-release of the next stable release, built from every change merged for it.
-            Expect rough edges; choose the channel in Nex Core and Nex Controller settings.
-          </p>
-        </div>
         <div>
           <span class="release-kicker">Next milestones</span
           ><strong>Pool acceptance, recovery and migration</strong>

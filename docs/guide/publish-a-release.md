@@ -155,17 +155,27 @@ The changelog supplies the notes. The release includes:
 - `nex-core-<tag-version>-amd64.iso` and its `.sha256` sidecar
 - `nex-core-<tag-version>-amd64-netinst.iso` and its `.sha256` sidecar
 
-Forge titles and ISO filenames use readable hyphenated versions, for example
-`nex-core-0.4.20-dev.247-amd64.iso`, not Debian's `0.4.20~~dev.247`.
-The sidecars name the downloaded files, so `sha256sum -c <filename>.sha256` works.
-The website download tree and Debian packages retain their Debian-form versions;
-the forge ISOs contain identical bytes under the readable filenames.
+Forge titles, ISO filenames, source bundles, compliance manifests and the website download
+directories all use the readable hyphenated version, for example
+`nex-core-0.4.20-dev.247-amd64.iso` in `/downloads/dev/0.4.20-dev.247/`, never Debian's
+`0.4.20~~dev.247`. Only the Debian packages and APT indexes carry the Debian form, which
+`release-publish.py` converts internally to order releases. The sidecars name the downloaded
+files, so `sha256sum -c <filename>.sha256` works. Download directories published before this
+change keep their `~~` names until retention removes them.
 
 The versioned website download directory holds the matching source bundle,
 compliance manifests and hash-pinned netinst `.deb` files with checksums. Opening
 `/downloads/latest/` or a version directory shows installer links, checksums and
 source/compliance links without listing the network-installer packages. The packages
 remain available at their exact URLs inside the network installer.
+
+Each channel root also gets `latest.json`, rewritten on every publication, naming the newest
+version, its build date, and the path, size and SHA-256 of its installer ISO, network installer
+and source bundle. The home page of the website reads `/downloads/latest.json` (stable) and
+`/downloads/dev/latest.json` (development) in the visitor's browser to fill its **Download Nex
+Core** cards, so a new release shows there without redeploying the site, and a development run,
+which never deploys the site, updates the development card. Without JavaScript or the file the
+cards link to the `latest/` download pages, and **All Releases** links to `/downloads/`.
 
 The tag points at the commit that built the release. Pushing the same version again deletes
 the previous release, moves the tag to the new commit and uploads fresh assets, so a version
@@ -203,7 +213,15 @@ and the final check verifies the development URLs, not the stable ones.
   The final workflow check uses HEAD for reachability, then reads the small package
   index to verify the version. It does not download the multi-gigabyte source archive
   or establish a complete downloaded-artifact integrity check.
-
+- **A download page opens as a file download, or the home page cards show "Open downloads"** —
+  the website host's nginx predates the HTML and JSON download types or the same-origin
+  `connect-src` policy. Copy `packaging/apt/nginx-downloads.inc` to
+  `/etc/nex-website/nginx-downloads.inc` (re-running `packaging/apt/bootstrap.sh` does this),
+  make `connect-src 'self'` in the `Content-Security-Policy` of `/etc/nex-website/nginx.conf`
+  match `packaging/website/nginx.conf.template`, run `nginx -t` and reload `nex-website`. Check
+  `curl -I https://<site>/downloads/latest/` returns `text/html` and
+  `https://<site>/downloads/latest.json` returns `application/json`. If `latest.json` is
+  missing, the next release publication writes it.
 - **The final check reports "/ returned 503"** — the site was still settling from the publish
   a moment earlier. The check retries each request for about thirty seconds before failing; a
   503 that outlasts that is a real outage on the website host.

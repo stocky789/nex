@@ -1,0 +1,54 @@
+{
+  "summary": "Put Stable and Development download cards at the top of the website home page with an All Releases link, fed by a latest.json the release publisher writes per channel; fix download pages being served as application/octet-stream. Name installer ISOs, source bundles, manifests and download folders with the readable version (no ~~).",
+  "paths": [
+    ".gitea/workflows/release.yml",
+    ".github/workflows/release.yml",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-04-website-download-cards.json",
+    "docs/guide/publish-a-release.md",
+    "installer/build.sh",
+    "packaging/apt/nginx-downloads.inc",
+    "packaging/website/nginx.conf.template",
+    "scripts/release-publish.py",
+    "tests/integration/website_hardening_browser.py",
+    "tests/test_ci_security.py",
+    "tests/test_netinst_release.py",
+    "tests/test_release_publish.py",
+    "tests/test_source_bundle.py",
+    "tests/test_website_hosting.py",
+    "website/src/app.css",
+    "website/src/routes/+page.svelte",
+    "website/static/releases.js",
+    "website/svelte.config.js"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The publish guide describes latest.json, the home page cards and the host nginx steps for existing hosts.",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Static website files and a static JSON file in the public download tree. No Controller operation, Core agent command, client API or observed-state flow changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Website presentation only; no milestone or acceptance gate changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "latest.json is derived by the release publisher from the published download tree; the site holds no product, pool or Controller state."
+  },
+  "verification": {
+    "method": "tests.test_release_publish and tests.test_website_hosting (real nginx) pass; svelte-check and npm run build pass. Browser check against the deployed site at desktop and 390 px width: both cards filled from the live manifests, ISO/netinst/hash links and All Releases resolve, no console errors, no horizontal overflow. HEAD requests to the linked ISOs returned 200. Not exercised: a real release run publishing a new latest.json, and a browser with JavaScript disabled (prerendered fallback links were inspected in the built HTML only). Artifact renaming: release-publish, ci-security, netinst, gitea-release, source-bundle and release-version tests pass; installer/build.sh passes bash -n; a publisher run over a mixed legacy (~~) and readable tree orders, prunes and writes latest.json correctly. Not exercised: a full ISO build and a real Release run with the renamed artifacts.",
+    "evidence": [
+      "scripts/release-publish.py",
+      "tests/test_release_publish.py",
+      "tests/test_website_hosting.py",
+      "website/static/releases.js"
+    ]
+  }
+}
