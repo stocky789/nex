@@ -177,6 +177,12 @@ Core** cards, so a new release shows there without redeploying the site, and a d
 which never deploys the site, updates the development card. Without JavaScript or the file the
 cards link to the `latest/` download pages, and **All Releases** links to `/downloads/`.
 
+Publication also generates an `index.html` in that channel's root. **All Releases** shows
+the latest link and retained versions, newest first, with Stable and Development navigation;
+metadata such as `latest.json` remains accessible to the cards but is not listed.
+Existing channel listings change on their next publication; no nginx configuration change
+or website redeployment is needed.
+
 The tag points at the commit that built the release. Pushing the same version again deletes
 the previous release, moves the tag to the new commit and uploads fresh assets, so a version
 has exactly one release and it always matches the newest build. Each asset is checked against

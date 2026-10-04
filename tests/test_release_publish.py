@@ -175,6 +175,28 @@ class PublishTests(unittest.TestCase):
             self.assertIn("nex-core-0.1.6-amd64.iso", page)
             self.assertIn("nex-core-0.1.6-source.tar.gz", page)
 
+    def test_channel_indexes_only_link_retained_releases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stable = Path(tmp) / "downloads"
+            development = stable / "dev"
+            for version in ("0.1.4", "0.1.5", "0.1.6"):
+                publish_release(stable, tmp, version, keep=2)
+            publish_release(development, tmp, "0.1.7-dev.1")
+            for root, versions in ((stable, ("0.1.6", "0.1.5")),
+                                   (development, ("0.1.7-dev.1",))):
+                page = (root / "index.html").read_text()
+                self.assertNotIn("latest.json", page)
+                self.assertNotIn("0.1.4/", page)
+                self.assertIn('href="latest/"', page)
+                self.assertIn('href="/downloads/dev/"', page)
+                for version in versions:
+                    self.assertIn(f'href="{version}/"', page)
+                    self.assertTrue((root / version / "index.html").is_file())
+                if len(versions) == 2:
+                    self.assertLess(page.index(versions[0]), page.index(versions[1]))
+                self.assertEqual(json.loads((root / "latest.json").read_text())["version"],
+                                 versions[0])
+
     def test_rejects_unexpected_iso_filename(self):
         with tempfile.TemporaryDirectory() as tmp:
             bad = Path(tmp) / "something-else.iso"

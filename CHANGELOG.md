@@ -18,6 +18,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Miscellaneous
+
+- Download listings now show only release links, with Stable and Development navigation, instead of exposing the website's `latest.json` metadata.
+
 ## [0.4.26] — 2026-10-04
 
 ### Miscellaneous

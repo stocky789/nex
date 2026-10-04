@@ -193,6 +193,24 @@ def write_download_page(directory, version):
     os.replace(temporary, directory / "index.html")
 
 
+def write_release_index(root):
+    root = Path(root)
+    lines = ["<!doctype html>", '<html lang="en">', '<meta charset="utf-8">',
+             '<meta name="viewport" content="width=device-width, initial-scale=1">',
+             "<title>Nex Core downloads</title>", "<h1>Nex Core downloads</h1>",
+             '<nav><a href="/downloads/">Stable</a> · '
+             '<a href="/downloads/dev/">Development</a></nav>',
+             '<h2>Releases</h2>', '<ul>',
+             '<li><a href="latest/">Latest release</a></li>']
+    for version in reversed(existing_releases(root)):
+        lines.append(f'<li><a href="{version}/">{version}</a></li>')
+    lines.extend(("</ul>", "</html>"))
+    temporary = root / ".index.html.tmp"
+    temporary.write_text("\n".join(lines) + "\n")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, root / "index.html")
+
+
 def publish(root, iso, source, manifest, keep, netinst_iso=None, netinst_manifest=None, payloads=(), check=False):
     root = _real_dir(root, create=True)
     iso = Path(iso)
@@ -280,6 +298,7 @@ def publish(root, iso, source, manifest, keep, netinst_iso=None, netinst_manifes
     for old_version in existing_releases(root):
         if old_version != version:
             write_download_page(root / old_version, old_version)
+    write_release_index(root)
     return version, digests[iso.name], newest, removed
 
 
