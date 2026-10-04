@@ -427,6 +427,9 @@ func TestPoolBackupAuthorityV2PeerTransferAndCorruptRetry(t *testing.T) {
 
 func TestBackupAuthorityV2AdmitsRepositoryReceiptAfterLargeHistory(t *testing.T) {
 	lab := promotionLab(t, 2)
+	previousStatusTimeout := poolBackupMemberStatusTimeout
+	poolBackupMemberStatusTimeout = time.Minute
+	t.Cleanup(func() { poolBackupMemberStatusTimeout = previousStatusTimeout })
 	master := lab.host("master-1")
 	pushReplicas(t, master)
 	if err := os.MkdirAll(poolBackupRunsPath(master), 0700); err != nil {

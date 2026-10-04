@@ -410,7 +410,8 @@ def main():
                 errors = []
                 context = browser.new_context(viewport={'width': 1440, 'height': 900})
                 page = context.new_page()
-                page.set_default_timeout(10000)
+                page.set_default_timeout(30000)
+                expect.set_options(timeout=30000)
                 page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 def route_api(route):

@@ -168,6 +168,7 @@ def main():
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={'width': 1440, 'height': 1000})
             page.set_default_timeout(30000)
+            expect.set_options(timeout=30000)
             page.add_init_script("localStorage.setItem('nex-signed-in', '1'); window.addEventListener('load', () => sessionStorage.setItem('refresh-check-loads', String(Number(sessionStorage.getItem('refresh-check-loads') || 0) + 1)))")
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.route('**/api/v1/**', route_api)

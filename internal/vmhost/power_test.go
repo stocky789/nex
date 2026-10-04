@@ -182,7 +182,7 @@ func TestManagedPowerRequestCancellationSettlesFromObservation(t *testing.T) {
 			t.Setenv("VMHOST_POWER_LOG", log)
 			fakeCommand(t, "virsh", `case "$3" in
 domstate) cat "$VMHOST_POWER_STATE";;
-start) echo start >> "$VMHOST_POWER_LOG"; echo running > "$VMHOST_POWER_STATE"; sleep 2;;
+start) echo running > "$VMHOST_POWER_STATE"; echo start >> "$VMHOST_POWER_LOG"; sleep 2;;
 esac`)
 			e := managedTestEngine(dir)
 			c := protocol.Command{OperationID: "start-deadline", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: "11111111-2222-4333-a444-555555555555", PoolID: "pool1", HostID: "host1", Action: "start"}}

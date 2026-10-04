@@ -622,8 +622,14 @@ def main():
             dt = reboot_cmd(f"nex-update apply -request-id lab-apply-{RUN} -activate reboot", "apply -activate reboot")
             ctl = vm.ctl
             info(f"apply + activate: back in control on the new version after {dt:.0f}s")
-            time.sleep(25)  # the assessment, the bless and the reconcile service run after the control shell is up
-            phase_raw = raw_phase(ctl)  # before any nex-update command of ours
+            # The assessment, the bless and the reconcile service run after the control shell is up, and a loaded runner
+            # takes longer than any fixed pause; read the record file only (no nex-update command of ours) until it commits.
+            phase_raw = raw_phase(ctl)
+            for _ in range(30):
+                if '"committed"' in phase_raw:
+                    break
+                time.sleep(5)
+                phase_raw = raw_phase(ctl)
             check('"committed"' in phase_raw, "update: nex-update-reconcile.service alone left the record committed (read before any CLI call)", phase_raw)
             fs = facts(ctl)
             st = fs["status"]

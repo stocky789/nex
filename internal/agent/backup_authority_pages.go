@@ -432,6 +432,10 @@ func requirePoolBackupMembersCurrent(s *Store, membership protocol.PoolMembershi
 	return nil
 }
 
+// poolBackupMemberStatusTimeout bounds one member's answer during growth admission. Tests that
+// make members verify tens of MiB under the race detector raise it.
+var poolBackupMemberStatusTimeout = 3 * time.Second
+
 func refreshPoolBackupMemberStatus(s *Store, member protocol.PoolMember) (protocol.PoolReplicaStatus, error) {
 	if member.PeerOrigin == "" {
 		return protocol.PoolReplicaStatus{}, errors.New("pool member peer origin is unavailable")
@@ -441,7 +445,7 @@ func refreshPoolBackupMemberStatus(s *Store, member protocol.PoolMember) (protoc
 		return protocol.PoolReplicaStatus{}, err
 	}
 	defer client.CloseIdleConnections()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), poolBackupMemberStatusTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(member.PeerOrigin, "/")+poolReplicaPath, nil)
 	if err != nil {

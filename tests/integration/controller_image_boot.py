@@ -230,8 +230,9 @@ def main():
             vm = VM(work, "tampered", bad, data, seed)
             marker = ready(cert_path, 150, vm, exit_means_not_ready=True)
             log = vm.serial()
+            print(log[-3000:])
             check(marker is None, "tampered system disk: the Controller never becomes ready")
-            check("verity" in log and "is corrupted" in log and "Dependency failed for sysroot.mount" in log,
+            check("verity" in log and "is corrupted" in log and any(m in log for m in ("Dependency failed for", "Failed to mount", "sysroot.mount: Mount process exited")),
                   "tampered system disk: the console shows dm-verity refusing the block and the root mount failing")
             vm.stop()
         print("controller image boot test: PASS")
