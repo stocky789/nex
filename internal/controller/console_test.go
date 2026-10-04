@@ -141,7 +141,7 @@ func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 	}
 	select {
 	case <-hijackEntered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("browser never consumed the host tunnel")
 	}
 	if _, resp := dial(agentRequest("/api/v1/agent/console/" + ticket.Ticket)); resp.StatusCode != 404 {
@@ -153,7 +153,7 @@ func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 		if resp.StatusCode != 101 {
 			t.Fatalf("browser upgrade %d", resp.StatusCode)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("browser never paired")
 	}
 	// Host → browser: raw bytes become one binary frame.
@@ -219,7 +219,7 @@ func TestConsoleRejectsConcurrentHostTunnelBeforeUpgrade(t *testing.T) {
 	}
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("first host tunnel did not reach its upgrade")
 	}
 	request, err := http.NewRequest(http.MethodPost, server.URL+"/console/ticket", nil)

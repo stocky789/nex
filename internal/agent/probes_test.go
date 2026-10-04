@@ -325,7 +325,7 @@ func TestEventWatcherCancelsAndReapsProcess(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("event subprocess was not reaped on cancellation")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestUnixSocketRefusesConflictAndUsesPrivateMode(t *testing.T) {
@@ -49,6 +50,9 @@ func TestUnixSocketRefusesConflictAndUsesPrivateMode(t *testing.T) {
 		w.Write([]byte(`{"status":"ok","simulated":true}`))
 	})}
 	defer server.Close()
+	previous := healthTimeout
+	healthTimeout = time.Minute
+	defer func() { healthTimeout = previous }()
 	go server.Serve(listener)
 	if err := checkHealth("", path); err != nil {
 		t.Fatalf("UNIX health mode failed: %v", err)

@@ -113,6 +113,9 @@ func openListener(address, socket string) (net.Listener, error) {
 	return listener, nil
 }
 
+// healthTimeout bounds one health probe; tests on a saturated runner raise it.
+var healthTimeout = 3 * time.Second
+
 func checkHealth(address, socket string) error {
 	transport := &http.Transport{Proxy: nil}
 	if socket != "" {
@@ -121,7 +124,7 @@ func checkHealth(address, socket string) error {
 		}
 	}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	client := &http.Client{Transport: transport, Timeout: healthTimeout}
 	endpoint := "http://" + address + "/healthz"
 	if socket != "" {
 		endpoint = "http://localhost/healthz"

@@ -654,7 +654,7 @@ func TestUnservableMemberReleasesBackupSlotAndSettlesNeverStartedRun(t *testing.
 		if completion.err == nil || peerBackupNotStarted(completion.err) {
 			t.Fatalf("a fresh run must stay retryable: %v", completion.err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the wait loop kept the backup slot while the member could not serve the repository")
 	}
 

@@ -784,7 +784,7 @@ func TestApplyStagesWithoutArmingThenActivateCommitsAndRollsBack(t *testing.T) {
 	}
 	select {
 	case <-r.reboot:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("no reboot after activate")
 	}
 	if st = r.status(); st.Phase != PhaseArmed || len(r.plat.armed) != 1 || r.plat.armed[0] != 2 {
@@ -844,7 +844,7 @@ func TestFailedBootFallsBackAndIsReported(t *testing.T) {
 	r.mustApply("req-apply-0001", func(a *ApplyRequest) { a.Activate = "reboot" })
 	select {
 	case <-r.reboot:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("no reboot")
 	}
 	_ = b2

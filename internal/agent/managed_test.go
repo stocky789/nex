@@ -170,7 +170,7 @@ func TestManagedWorkerBackgroundCompletionSendCancels(t *testing.T) {
 		if sent {
 			t.Fatal("canceled background completion was sent")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("blocked background completion did not exit on cancellation")
 	}
 	if got := <-completed; got.result.OperationID != "occupied" {
@@ -684,7 +684,7 @@ func TestBundledMediaSeedRunsOffWorkerOneAtATime(t *testing.T) {
 	go func() { startBundledSeed(&running, seed); startBundledSeed(&running, seed); close(returned) }()
 	select {
 	case <-returned:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("starting a bundled media seed blocked the worker")
 	}
 	<-started

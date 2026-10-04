@@ -581,7 +581,7 @@ func TestSFTPAbortWinsDelayedFinalRename(t *testing.T) {
 	}()
 	select {
 	case <-claimed:
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		close(release)
 		t.Fatal("abort did not reach the manifest claim")
 	}
@@ -2034,14 +2034,14 @@ func requireSFTPMembershipFree(t *testing.T, s *Store, entered, release chan str
 	t.Helper()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the operation never reached the stalled step")
 	}
 	member := make(chan struct{})
 	go func() { Membership(s); close(member) }()
 	select {
 	case <-member:
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		close(release)
 		t.Fatal("Membership blocked on poolPeerMu during SFTP I/O")
 	}

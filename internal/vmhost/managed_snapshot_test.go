@@ -604,7 +604,7 @@ esac`)
 	case completed := <-snapshotDone:
 		snapshotReceived = true
 		t.Fatalf("snapshot did not reach native capture: result=%+v err=%v", completed.result, completed.err)
-	case <-time.After(3 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("timed out waiting for the native snapshot command")
 	}
 
@@ -625,7 +625,7 @@ esac`)
 		if completed.err != nil || completed.result.Status != "succeeded" {
 			t.Fatalf("unrelated VM start did not complete during snapshot capture: result=%+v err=%v", completed.result, completed.err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(time.Minute):
 		_ = os.WriteFile(release, nil, 0600)
 		t.Fatal("unrelated VM start waited for the blocked native snapshot command")
 	}

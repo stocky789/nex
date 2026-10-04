@@ -206,7 +206,7 @@ esac`)
 					err error
 				}{r, err}
 			}()
-			until := time.After(2 * time.Second)
+			until := time.After(time.Minute)
 			for {
 				if calls, _ := os.ReadFile(log); string(calls) == "start\n" {
 					break

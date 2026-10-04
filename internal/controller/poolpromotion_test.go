@@ -76,7 +76,7 @@ func (l *joinLab) preflight(h *joinHost, body any, answer func(protocol.PoolRequ
 	select {
 	case w := <-done:
 		return w
-	case <-time.After(20 * time.Second):
+	case <-time.After(time.Minute):
 		l.t.Fatal("promotion preflight never returned")
 	}
 	return nil
@@ -394,7 +394,7 @@ func (l *joinLab) postFenceProfile(body any, delivered *protocol.StorageCredenti
 	select {
 	case w := <-done:
 		return w
-	case <-time.After(20 * time.Second):
+	case <-time.After(time.Minute):
 		l.t.Fatal("fence profile request never returned")
 	}
 	return nil

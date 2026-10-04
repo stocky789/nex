@@ -82,7 +82,7 @@ func TestStatsRelay(t *testing.T) {
 				t.Fatalf("got %d want %d: %s", w.Code, want, w.Body.String())
 			}
 			return w
-		case <-time.After(5 * time.Second):
+		case <-time.After(time.Minute):
 			t.Fatal("query never finished")
 		}
 		return nil

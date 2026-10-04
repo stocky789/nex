@@ -343,7 +343,7 @@ func TestMemberTestVerificationBindsNativeProofAndRun(t *testing.T) {
 		if !passed {
 			t.Fatal("passed result did not require full native proof")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("member did not observe native test VM")
 	}
 	plan.VerifiedAt = time.Now().UTC()
@@ -360,7 +360,7 @@ func TestMemberTestVerificationBindsNativeProofAndRun(t *testing.T) {
 		if passed {
 			t.Fatal("failed result requested full native proof")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("member did not observe failed test result")
 	}
 	changed := run

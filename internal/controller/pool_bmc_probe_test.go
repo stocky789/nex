@@ -53,7 +53,7 @@ func (l *joinLab) probeBMC(host string, body any, delivered *protocol.StorageCre
 	select {
 	case w := <-done:
 		return w
-	case <-time.After(20 * time.Second):
+	case <-time.After(time.Minute):
 		l.t.Fatal("bmc probe never returned")
 	}
 	return nil

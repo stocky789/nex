@@ -521,7 +521,7 @@ func TestStatsChannelServesSequentialQueriesOnOneConnection(t *testing.T) {
 	controllerSide.Close()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("channel did not end when the Controller closed it")
 	}
 }

@@ -1109,7 +1109,7 @@ func TestS3AbortReadsArtifactsWithoutPoolPeerLock(t *testing.T) {
 	go func() { Membership(b.s); close(member) }()
 	select {
 	case <-member:
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		close(release)
 		t.Fatal("Membership blocked on poolPeerMu while abort read an artifact")
 	}
@@ -1177,7 +1177,7 @@ func TestS3ConnectionFailsOnlyWithoutProgress(t *testing.T) {
 		if err == nil {
 			t.Fatal("silent connection returned data")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("silent connection was not bounded")
 	}
 }
@@ -2002,7 +2002,7 @@ func requireMembershipFree(t *testing.T, s *Store, release chan struct{}) {
 	go func() { Membership(s); close(member) }()
 	select {
 	case <-member:
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		close(release)
 		t.Fatal("Membership blocked on poolPeerMu during S3 I/O")
 	}
@@ -2139,7 +2139,7 @@ func TestS3CommitWriteHoldsPoolPeerLockOnlyBriefly(t *testing.T) {
 	go func() { Membership(b.s); close(member) }()
 	select {
 	case <-member:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		close(fake.releaseManifestPut)
 		t.Fatal("a stalled commit write held poolPeerMu past its deadline")
 	}

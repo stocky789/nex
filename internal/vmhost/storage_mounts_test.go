@@ -629,7 +629,7 @@ func TestRemotePreparationsDoNotRaceFailedFirstMountCleanup(t *testing.T) {
 	}
 	select {
 	case <-secondStarted:
-	case <-time.After(time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("second preparation did not resume after cleanup")
 	}
 	<-secondDone

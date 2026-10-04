@@ -159,7 +159,7 @@ func TestManagedWorkerKeepsExactPlacementReplayAmbiguousWhenMasterIsOffline(t *t
 		if completion.err != nil || completion.result.Status != "needs_attention" || completion.result.Error == "" {
 			t.Fatalf("offline exact replay = %+v", completion)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("worker did not settle exact replay")
 	}
 	cancel()
@@ -207,7 +207,7 @@ func TestManagedWorkerDoesNotReconcileClusteredReplayAfterAdmissionRefusal(t *te
 		if completion.err != nil || completion.result.Status != "needs_attention" {
 			t.Fatalf("clustered replay = %+v", completion)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("worker did not preserve clustered replay")
 	}
 	// The journal remains unresolved; no native create/reconciliation result was written.

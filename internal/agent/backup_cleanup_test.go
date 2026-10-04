@@ -33,7 +33,7 @@ func TestOrdinaryCredentialRetireDoesNotWaitForBackupAuthority(t *testing.T) {
 		if got.handled || got.err != nil {
 			t.Fatalf("ordinary receipt = %t, %v", got.handled, got.err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("ordinary receipt retirement waited for the pool backup authority")
 	}
 }

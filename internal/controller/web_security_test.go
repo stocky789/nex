@@ -36,7 +36,7 @@ func TestIncompleteLoginDoesNotReserveHashCapacity(t *testing.T) {
 		go func() { a.c.Handler().ServeHTTP(httptest.NewRecorder(), r); close(done) }()
 		select {
 		case <-b.entered:
-		case <-time.After(time.Second):
+		case <-time.After(time.Minute):
 			t.Fatal("request did not read body")
 		}
 		defer func() { close(b.release); <-done }()

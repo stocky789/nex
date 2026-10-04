@@ -34,7 +34,7 @@ func TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit(t *testing.T) {
 	var snapshotDigest string
 	select {
 	case snapshotDigest = <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("authority push did not reach generation advance")
 	}
 	// The push must hold the backup authority lock until the snapshot is numbered.
@@ -128,7 +128,7 @@ func TestPoolAuthorityPushWaitsForBackupLockWithoutQueueing(t *testing.T) {
 		if err == nil {
 			t.Fatal("cancelled push reported success without the lock")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("push kept waiting for the backup lock after its context ended")
 	}
 	unlock()

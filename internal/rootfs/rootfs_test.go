@@ -138,7 +138,7 @@ func TestOpenWritableSerializesWindows(t *testing.T) {
 	var second func()
 	select {
 	case second = <-secondOpened:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the second window never opened after the first closed")
 	}
 	if options, _ := host.state(); options != "rw,relatime" {

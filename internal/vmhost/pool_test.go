@@ -260,7 +260,7 @@ func TestRehomePoolScopeWaitsForManagedOperationsLock(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "snapshot operation is unresolved") {
 			t.Fatalf("rehome after lock release = %v, want unresolved snapshot refusal", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("rehome did not continue after managed-operations lock release")
 	}
 }

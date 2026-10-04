@@ -138,7 +138,7 @@ func TestManagedWorkerJournalsRefusedUpdate(t *testing.T) {
 		if completion.result.Status != "failed" {
 			t.Fatalf("refused update = %+v", completion)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("worker did not settle refused update")
 	}
 	cancel()

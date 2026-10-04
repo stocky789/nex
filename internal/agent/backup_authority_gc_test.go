@@ -119,7 +119,7 @@ func TestBackupAuthorityCollectionSerializesWithReplicaReplacement(t *testing.T)
 	}()
 	select {
 	case <-paused:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("old collector did not reach its paused removal")
 	}
 	master, ok := poolMemberByID(peerState(t, member).Membership, "master-1")

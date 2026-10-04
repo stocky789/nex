@@ -114,7 +114,7 @@ func TestEngineOnFileBackedDisks(t *testing.T) {
 	}
 	select {
 	case <-r.reboot:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("no reboot")
 	}
 	for i := range disks {

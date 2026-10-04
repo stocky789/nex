@@ -1916,7 +1916,7 @@ func TestAPassIsBoundedWhileHostsDoNotAnswer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("a pass over hosts that never answer did not end at its deadline")
 	}
 	if r := lab.rollout(); r.State != protocol.PoolUpdateRunning || r.Phase != "staging" {

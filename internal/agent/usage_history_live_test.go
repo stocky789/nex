@@ -91,7 +91,7 @@ func TestLiveLeaseStartsRenewsAndExpires(t *testing.T) {
 	go func() { l.running.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("sampling goroutine outlived its lease")
 	}
 	if views() != 0 {
@@ -355,7 +355,7 @@ func TestLiveVMGoneFromLibvirtIsNullsAndExpires(t *testing.T) {
 	go func() { l.running.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("view did not expire")
 	}
 }

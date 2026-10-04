@@ -1487,7 +1487,7 @@ func TestPoolStorageMemberAccessKeepsPeerBeforeStorageLockOrder(t *testing.T) {
 	}()
 	select {
 	case <-locked:
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		poolPeerMu.Unlock() // release so the leaked goroutines finish
 		t.Fatal("deadlock: PoolStorageMemberAccess holds poolStorageMu while waiting for poolPeerMu")
 	}

@@ -293,7 +293,7 @@ func TestZFSReplaceTakesHostDiskOpsLock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ZFS replace after unlock: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("ZFS replace did not proceed after the host disk-ops lock was released")
 	}
 }

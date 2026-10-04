@@ -92,7 +92,7 @@ func TestBackupCredentialReceiptsDoNotWaitForBackupAuthority(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("receipt listing waited for the pool backup authority")
 	}
 }

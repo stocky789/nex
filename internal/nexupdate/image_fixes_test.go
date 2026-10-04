@@ -445,7 +445,7 @@ func TestRollbackDuringTheTrialBootReturnsToTheReleaseItReplaced(t *testing.T) {
 	r.mustApply("req-apply-0001", func(a *ApplyRequest) { a.Activate = "reboot" })
 	select {
 	case <-r.reboot:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("no reboot after the update was armed")
 	}
 	r.plat.boot(Booted{RootHash: b2.rootHash, Label: "v2", Sequence: 2}, false)
@@ -460,7 +460,7 @@ func TestRollbackDuringTheTrialBootReturnsToTheReleaseItReplaced(t *testing.T) {
 	}
 	select {
 	case <-r.reboot:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("no reboot after the rollback")
 	}
 	// What rollbackESP does on the ESPs: the replaced release's entry gets a fresh boot counter.
@@ -511,7 +511,7 @@ func TestApplyOfAnAlreadyStagedReleaseDoesNotStageItAgain(t *testing.T) {
 	r.mustApply("req-apply-0002", func(a *ApplyRequest) { a.Activate = "reboot" })
 	select {
 	case <-r.reboot:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("no reboot after the second apply")
 	}
 	if len(r.plat.staged) != 1 || blobReads() != before {
@@ -549,7 +549,7 @@ func TestCancelIsRefusedWhileAnActivationIsInFlight(t *testing.T) {
 	var err error
 	select {
 	case err = <-cancelled:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		close(gate) // a Cancel that waits for the activation to end is the defect
 		t.Fatal("Cancel waited for the activation instead of refusing")
 	}
@@ -684,7 +684,7 @@ func TestFailedRebootIsRecordedAndActivateRepeatsIt(t *testing.T) {
 			}
 			select {
 			case <-r.reboot:
-			case <-time.After(5 * time.Second):
+			case <-time.After(time.Minute):
 				t.Fatal("activate did not restart the host again")
 			}
 			if st := r.waitFailure(""); st.Phase != PhaseArmed || len(r.plat.armed) != 1 {
@@ -779,7 +779,7 @@ func TestActivateAfterAnArmThatCouldNotBeUndoneArmsAgain(t *testing.T) {
 	}
 	select {
 	case <-r.reboot:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the retry did not restart the host")
 	}
 }

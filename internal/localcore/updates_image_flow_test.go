@@ -213,7 +213,7 @@ func TestImageEditionHostServesTheWholeUpdateFlow(t *testing.T) {
 	}
 	select {
 	case <-rebooted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("activate did not reboot the host")
 	}
 	if len(platform.armed) != 1 || platform.armed[0] != 2 {

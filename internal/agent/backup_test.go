@@ -396,7 +396,7 @@ func TestPoolBackupAuthorityRefsDoesNotReenterPeerLock(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("PoolBackupAuthorityRefs deadlocked re-entering poolPeerMu (Membership)")
 	}
 }

@@ -134,7 +134,7 @@ func TestCloseWaitsForTheBackgroundUpdate(t *testing.T) {
 	close(gate)
 	select {
 	case <-closed:
-	case <-time.After(30 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("Close did not return after the apply finished")
 	}
 	// Nothing may write here any more; that is what makes removing the directory safe.

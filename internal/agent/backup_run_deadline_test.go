@@ -109,7 +109,7 @@ func TestLocalRunDeadlinePreservesWorkerAndLateCompletion(t *testing.T) {
 		if got.result.Status != "needs_attention" {
 			t.Fatalf("deadline result = %+v", got.result)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("deadline was not reported")
 	}
 	if saved, err := loadPoolBackupRun(master, run.OperationID); err != nil || saved.Status != "needs_attention" {
@@ -129,7 +129,7 @@ func TestLocalRunDeadlinePreservesWorkerAndLateCompletion(t *testing.T) {
 		if got.result.Status != "succeeded" {
 			t.Fatalf("late completion was lost: %+v", got.result)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("stopped worker did not release ownership")
 	}
 }

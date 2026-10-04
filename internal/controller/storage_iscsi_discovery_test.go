@@ -129,7 +129,7 @@ func TestCancelledSelectedISCSIRequestDropsBrokerAndLateResult(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("cancelled client kept the broker request alive")
 	}
 	a.c.completeStorageDiscoveries(host.HostID, []protocol.StorageDiscoveryResult{{RequestID: body.RequestID, PoolID: pool, HostID: host.HostID, Status: "succeeded", ISCSILUNs: []protocol.ISCSILUNDiscovery{{LUN: 0}}}})

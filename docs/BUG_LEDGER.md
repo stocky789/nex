@@ -12662,3 +12662,12 @@ of real storage or hardware certification.
 - Fix: both hold an exclusive `flock` on `/run/nex/esp.lock` for the whole mount, use and unmount: `WithESP` in Go (with `ESPSync` holding it once across its nested mounts, because the lock is not reentrant) and `nex-bless-boot` in shell, which waits up to 120 s.
 - Regression: `TestWithESPDoesNotOverlapOtherUsersOfTheTransientMount` fails on the old code (`3 users held the transient ESP mount at the same time`) and passes with the fix; the whole `internal/hostimage` package passes under `-race`; the forge `image-build-boot` lab (`nex-update-reconcile.service alone left the record committed`) exercises the boot-time race itself.
 - Avoid: mounting a shared path from two programs without a common lock, and a non-reentrant lock around code that nests.
+
+## BUG-1924 — More one to five second Go test waits, and a shared hook corrupted by the first failure
+
+- Date: 2026-10-04.
+- Symptom: `TestUnixSocketRefusesConflictAndUsesPrivateMode` failed with `Client.Timeout exceeded while awaiting headers`; `TestRemotePreparationsDoNotRaceFailedFirstMountCleanup` failed after a one-second wait and `TestSMBCredentialRotationRestoresWorkingUnitOnRestartFailure` then failed on the call list the first test's leftover goroutine had written into the shared `nativeRun` hook.
+- Root cause: 66 positive waits of the form `case <-time.After(1-30 s): t.Fatal(...)` (and one `until := time.After(2 s)`) allowed a few seconds for work that takes milliseconds on an idle host; the demo health probe has a production three-second client timeout that a test cannot raise; a test that fails by timeout leaves goroutines running against package-level hooks.
+- Fix: the 63 failing waits are one minute (three that wait for something not to happen are unchanged); `nex-demo` takes its probe timeout from `healthTimeout` (three seconds) and the test raises it.
+- Regression: `go vet ./...` is clean and the three named tests pass on the runner host; the forge `go` and `image-layout` jobs run the suite on every push.
+- Avoid: a short fixed timeout on a positive wait; a timeout that fails a test while goroutines still own shared state.

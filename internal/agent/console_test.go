@@ -80,7 +80,7 @@ func TestServeConsoleTunnelsVNCSocketToController(t *testing.T) {
 		if got != "RFB 003.008\n" {
 			t.Fatalf("relayed %q", got)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("bytes were not relayed through the VNC socket")
 	}
 	<-seen
@@ -138,7 +138,7 @@ func TestServeConsoleUsesHostSessionDirectly(t *testing.T) {
 		if got != "host shell\n" {
 			t.Fatalf("relayed %q", got)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("bytes were not relayed through the host console session")
 	}
 }

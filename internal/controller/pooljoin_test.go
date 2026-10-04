@@ -130,7 +130,7 @@ func (l *joinLab) addMember(body any, answer func(protocol.PoolRequest) protocol
 	select {
 	case w := <-done:
 		return w
-	case <-time.After(20 * time.Second):
+	case <-time.After(time.Minute):
 		l.t.Fatal("pool join request never returned")
 	}
 	return nil

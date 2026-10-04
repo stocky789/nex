@@ -523,7 +523,7 @@ func TestMediaThatIsNotRegularFilesIsRefusedWithoutBlocking(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("reading a FIFO on the media blocked")
 	}
 	if len(got) != 1 || got[0].Name != "dev" || got[0].Sequence != 4 {
