@@ -10,6 +10,8 @@ defaults:
     shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 permissions:
   contents: read
+env:
+  NEX_CI_LOCK: shared
 jobs:
   recovery-libvirt:
     if: github.server_url != 'https://github.com' # heavy disposable build is forge-only

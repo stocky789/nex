@@ -155,7 +155,7 @@ def run(*cmd, **kw):
 
 
 def docker(image, script, mounts, user=True):
-    cmd = ["docker", "run", "--rm", "--cpus", "2", "--memory", "4g", "--entrypoint", "sh"]
+    cmd = ["docker", "run", "--rm", "--entrypoint", "sh"]
     if user:
         cmd += ["-u", f"{os.getuid()}:{os.getgid()}"]
     for m in mounts:

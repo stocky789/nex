@@ -15,7 +15,7 @@
 # UKI, ESP tree, manifest), twice. --layers adds image/mkosi.images/build-layer.sh for each named layer.
 # --no-base compares layers only: --base-tree DIR is a finished base output both runs overlay (lab use).
 # --parallel runs the two builds at the same time (they share only the tools image and the network).
-# Containers run under --cpus/--memory caps (NEX_DOCKER_CPUS, default 4; NEX_DOCKER_MEMORY, default 8g).
+# Containers are uncapped unless NEX_DOCKER_CPUS / NEX_DOCKER_MEMORY are set.
 #
 # The report (default image/out/repro/) holds summary.tsv (artifact, digest run 1, digest run 2, equal),
 # inputs.txt, run1.log/run2.log and, for every artifact that differs, diff/<artifact>.files.txt (the diff of the two
@@ -59,8 +59,8 @@ tools=${NEX_TOOLS_IMAGE:-nex-image-tools}
 if [ -z "${NEX_TOOLS_IMAGE:-}" ]; then
     $docker build -q -t "$tools" --build-arg "SNAPSHOT=$snapshot" "$repo/image/tools" >/dev/null
 fi
-# Every container runs under the same caps as image/build.sh (the workstation may be shared).
-caps="--cpus ${NEX_DOCKER_CPUS:-4} --memory ${NEX_DOCKER_MEMORY:-8g}"
+# Every container runs under the same optional caps as image/build.sh.
+caps="${NEX_DOCKER_CPUS:+--cpus $NEX_DOCKER_CPUS} ${NEX_DOCKER_MEMORY:+--memory $NEX_DOCKER_MEMORY}"
 # Root-owned products of an earlier check can only be removed from inside the container.
 # shellcheck disable=SC2086
 $docker run --rm $caps -v "$report":/r "$tools" sh -c 'rm -rf /r/run1 /r/run2 /r/diff /r/src /r/summary.tsv /r/inputs.txt /r/run1.log /r/run2.log'

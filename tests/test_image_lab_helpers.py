@@ -36,11 +36,11 @@ class LabHelperTests(unittest.TestCase):
         other.write_text('x')
         self.assertEqual(image_boot.hostimage_for(release, str(other)), str(other))
 
-    def test_caps_default_to_the_lab_limits_and_follow_the_environment(self):
+    def test_caps_apply_only_when_the_environment_sets_them(self):
         with mock.patch.dict(os.environ, clear=False):
             os.environ.pop('NEX_DOCKER_CPUS', None)
             os.environ.pop('NEX_DOCKER_MEMORY', None)
-            self.assertEqual(image_boot.docker_caps(), ['--cpus', '2', '--memory', '4g'])
+            self.assertEqual(image_boot.docker_caps(), [])
             os.environ.update(NEX_DOCKER_CPUS='3', NEX_DOCKER_MEMORY='6g')
             self.assertEqual(image_boot.docker_caps(), ['--cpus', '3', '--memory', '6g'])
 

@@ -58,7 +58,7 @@ if [ -z "${NEX_TOOLS_IMAGE:-}" ]; then
 fi
 mkdir -p "$out/layers"
 # shellcheck disable=SC2086
-docker run --rm --privileged --cpus "${NEX_DOCKER_CPUS:-4}" --memory "${NEX_DOCKER_MEMORY:-8g}" -v "$repo":/nex:ro -v "$out":/out -v "$cache":/cache $dockerargs \
+docker run --rm --privileged ${NEX_DOCKER_CPUS:+--cpus $NEX_DOCKER_CPUS} ${NEX_DOCKER_MEMORY:+--memory $NEX_DOCKER_MEMORY} -v "$repo":/nex:ro -v "$out":/out -v "$cache":/cache $dockerargs \
     -e SOURCE_DATE_EPOCH="$sde" -e LAYER="$layer" -e BUILD_ID="$build_id" -e SNAPSHOT="$snapshot" \
     -e MKOSI_ARGS="$pkgdirs $args" -w /out "$tools" sh -eu -c '
     # The dpkg database was removed from the base output; a copy of the tree with it restored is the

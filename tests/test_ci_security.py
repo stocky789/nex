@@ -385,25 +385,21 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
             end = starts[index + 1][0] if index + 1 < len(starts) else len(body)
             yield name, body[start:end]
 
-    def test_image_workflow_is_forge_only_serial_and_cap_bounded(self):
+    def test_image_workflow_is_forge_only_parallel_and_uncapped(self):
         # The image build, QEMU boots, tamper proof and double build are heavy disposable labs: forge-only like
-        # recovery-libvirt, chained with `needs` so one job runs at a time on the shared runner, with the lab caps.
+        # recovery-libvirt. They run side by side and take whatever CPU and memory the runner has.
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 path = ROOT / provider / 'workflows/image.yml'
                 text = path.read_text()
                 jobs = dict(self.jobs(path))
                 self.assertEqual(list(jobs), ['image-layout', 'image-build-boot', 'controller-image', 'image-repro'])
-                previous = None
                 for name, block in jobs.items():
                     self.assertIn(self.SKIP, block, name)
                     self.assertIn('timeout-minutes:', block, name)
-                    if previous:
-                        self.assertIn(f'needs: {previous}\n', block, name)
-                    previous = name
-                for name in ('image-build-boot', 'controller-image', 'image-repro'):
-                    self.assertIn("NEX_DOCKER_CPUS: '2'", jobs[name], name)
-                    self.assertIn('NEX_DOCKER_MEMORY: 4g', jobs[name], name)
+                    self.assertNotIn('needs:', block, name)
+                self.assertNotIn('NEX_DOCKER_CPUS', text)
+                self.assertNotIn('NEX_DOCKER_MEMORY', text)
                 for step in ('image/build.sh all', 'tests/integration/image_boot.py', 'tests/integration/image_update.py',
                              'appliance/build.py --profile controller', 'tests/integration/controller_image_boot.py',
                              'scripts/image-repro-check.sh'):

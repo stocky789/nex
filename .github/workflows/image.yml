@@ -1,8 +1,8 @@
 name: Image build, boot, tamper and reproducibility
 # The immutable Nex Core image and the Controller guest image (docs/plans/2026-10-01-immutable-nex-core.md, D4).
 # Heavy, disposable and forge-only, like recovery-libvirt.yml: every job needs Docker, KVM and tens of minutes, and
-# none of it runs on github.com. Jobs are chained with `needs`, so only one runs at a time on the shared runner; each
-# step keeps to the lab caps (2 CPUs, 4 GiB containers, QEMU -smp 2 -m 2048, one VM at a time).
+# none of it runs on github.com. Jobs run side by side and use whatever CPU and memory the runner has: containers are
+# uncapped, QEMU guests keep -smp 2 -m 2048.
 on:
   push:
     branches:
@@ -27,6 +27,8 @@ defaults:
     shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 permissions:
   contents: read
+env:
+  NEX_CI_LOCK: shared
 jobs:
   image-layout:
     if: github.server_url != 'https://github.com' # forge-only
@@ -47,13 +49,9 @@ jobs:
             tests.test_update_publish tests.test_appliance_build tests.test_core_local_package
           go test -p 1 -count=1 ./internal/hostimage ./internal/vmhost ./internal/nexupdate
   image-build-boot:
-    needs: image-layout
     if: github.server_url != 'https://github.com' # forge-only
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      NEX_DOCKER_CPUS: '2'
-      NEX_DOCKER_MEMORY: 4g
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -116,13 +114,9 @@ jobs:
           python3 tests/integration/image_update.py --rel1 .cache/image-ci-1/release --rel2 .cache/image-ci-2/release \
             --keys "$keys" --trust "$keys/trust/trust.json"
   controller-image:
-    needs: image-build-boot
     if: github.server_url != 'https://github.com' # forge-only
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      NEX_DOCKER_CPUS: '2'
-      NEX_DOCKER_MEMORY: 4g
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -178,13 +172,9 @@ jobs:
           NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
         run: python3 tests/integration/controller_image_boot.py --release .cache/controller-image
   image-repro:
-    needs: controller-image
     if: github.server_url != 'https://github.com' # forge-only
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      NEX_DOCKER_CPUS: '2'
-      NEX_DOCKER_MEMORY: 4g
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

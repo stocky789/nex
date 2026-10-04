@@ -25,7 +25,7 @@
 #                             appliance/build-controller-payload.sh); required by the controller step
 #   NEX_IMAGE_OUT             output directory (default image/out)
 #   NEX_MKOSI_CACHE           package cache directory (default <out>/cache)
-#   NEX_DOCKER_CPUS, NEX_DOCKER_MEMORY   container caps (default 4 and 8g)
+#   NEX_DOCKER_CPUS, NEX_DOCKER_MEMORY   optional container caps (default: uncapped)
 #   NEX_DOCKER              docker command (default docker); scripts/ci-docker.sh on a runner whose job runs in a container
 set -eu
 
@@ -103,7 +103,7 @@ fi
 
 run() {
     # shellcheck disable=SC2086
-    $docker run --rm --privileged --cpus "${NEX_DOCKER_CPUS:-4}" --memory "${NEX_DOCKER_MEMORY:-8g}" \
+    $docker run --rm --privileged ${NEX_DOCKER_CPUS:+--cpus $NEX_DOCKER_CPUS} ${NEX_DOCKER_MEMORY:+--memory $NEX_DOCKER_MEMORY} \
         -v "$repo":/nex:ro -v "$out":/out -v "$cache":/mkosi-cache $dockerargs \
         -e NEX_LABEL="${NEX_LABEL:-dev}" -e NEX_SEQUENCE="${NEX_SEQUENCE:-0}" -e NEX_STATE_FORMAT="${NEX_STATE_FORMAT:-3}" \
         -e NEX_MIN_STATE_FORMAT="${NEX_MIN_STATE_FORMAT:-0}" -e NEX_MD_GENERATION="${NEX_MD_GENERATION:-0}" -e NEX_MD_FALLBACK_SAFE="${NEX_MD_FALLBACK_SAFE:-0}" \

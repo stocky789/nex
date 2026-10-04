@@ -42,6 +42,8 @@ defaults:
     shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 permissions:
   contents: write
+env:
+  NEX_CI_LOCK: shared
 jobs:
   release:
     if: github.server_url != 'https://github.com'  # github.com runs github.yml only

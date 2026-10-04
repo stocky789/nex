@@ -22,7 +22,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Miscellaneous
 
-- Build checks now run side by side instead of one at a time: the Controller foundation and demo checks share the build machine, while the image, release and recovery builds still run alone. The Controller browser, Go and web checks in one run also start together, so a pull request gets its result sooner.
+- Build checks now run side by side on the build machine instead of one at a time, and the image build jobs no longer have CPU or memory limits, so a push gets its results much sooner. The image build, the Controller image, the reproducibility check, and the Controller browser, Go and web checks all start together. Optional limits can still be set with `NEX_DOCKER_CPUS` and `NEX_DOCKER_MEMORY`.
 
 ## [0.4.25] — 2026-10-04
 

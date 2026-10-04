@@ -139,8 +139,13 @@ class Console:
 
 
 def docker_caps():
-    """The lab caps for every container (2 CPUs, 4g; NEX_DOCKER_CPUS and NEX_DOCKER_MEMORY override)."""
-    return ["--cpus", os.environ.get("NEX_DOCKER_CPUS", "2"), "--memory", os.environ.get("NEX_DOCKER_MEMORY", "4g")]
+    """Optional container caps: only NEX_DOCKER_CPUS and NEX_DOCKER_MEMORY, when set."""
+    caps = []
+    if os.environ.get("NEX_DOCKER_CPUS"):
+        caps += ["--cpus", os.environ["NEX_DOCKER_CPUS"]]
+    if os.environ.get("NEX_DOCKER_MEMORY"):
+        caps += ["--memory", os.environ["NEX_DOCKER_MEMORY"]]
+    return caps
 
 
 def host_mount(path):
