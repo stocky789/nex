@@ -12580,3 +12580,21 @@ of real storage or hardware certification.
 - Fix: the watchdog reads the file whole and signals only when it actually parsed a PPid that differs from the wrapper's.
 - Regression: reproduced on the forge runner host by running 12 wrapper containers at once under full CPU load (failed within 5 to 14 rounds twice; one round hung); after the fix 15 consecutive rounds (180 containers) all exited 0. Not automated: the race needs a saturated host to appear.
 - Avoid: line-by-line reads of procfs files, and treating an unparsed value as "the parent died".
+
+## BUG-1915 — Go advisory check failed on golang.org/x/crypto after new advisories were published
+
+- Date: 2026-10-04.
+- Symptom: forge `go` job stopped at `Check Go dependency advisories` with seven vulnerabilities (GO-2026-5013, 5017 to 5020, 6354, 6355) in `golang.org/x/crypto@v0.48.0`, fixed in v0.52.0 and v0.56.0.
+- Root cause: the pinned dependency had aged out of the advisory database's fixed range; nothing in the repo changed.
+- Fix: `golang.org/x/crypto` v0.56.0 (and `golang.org/x/sys` v0.47.0, now a direct requirement); the module's `go` directive is 1.26.0, below the 1.27.1 toolchain every workflow and builder pins.
+- Regression: `govulncheck ./...` (v1.7.0, Go 1.27.1) reports no affected code after the bump; `go build ./...`, `go vet ./...` and the SFTP tests (the only `x/crypto` user) pass. The forge `go` job runs the same check on every push.
+- Avoid: pinning a security-sensitive module and assuming the advisory check stays green without a bump.
+
+## BUG-1916 — ZFS provisioning browser check read the POST before the page had sent it
+
+- Date: 2026-10-04.
+- Symptom: `zfs_provisioning_browser.py` failed with `StopIteration` right after clicking "Erase disks and create storage".
+- Root cause: the script took the submission from the list immediately after the click; the request is sent asynchronously and a loaded runner delayed it.
+- Fix: wait up to 30 s for the provision request to be recorded before reading it.
+- Regression: the script passes locally after the change; the forge `controller-browser` job runs it on every push.
+- Avoid: reading mocked-API request logs straight after a click without waiting for the request.

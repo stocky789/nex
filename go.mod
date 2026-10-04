@@ -1,6 +1,6 @@
 module nex.local/nex
 
-go 1.24.0
+go 1.26.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
@@ -10,7 +10,8 @@ require (
 	github.com/klauspost/compress v1.18.0
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/pkg/sftp v1.13.10
-	golang.org/x/crypto v0.48.0
+	golang.org/x/crypto v0.56.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -24,5 +25,4 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.4 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
-	golang.org/x/sys v0.41.0 // indirect
 )

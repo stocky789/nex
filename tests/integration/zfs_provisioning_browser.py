@@ -96,6 +96,9 @@ def main():
             configure.get_by_label("Use /dev/disk/by-id/core-b-blank", exact=True).check()
             configure.get_by_role("button", name="Review and erase →", exact=True).click()
             configure.get_by_role("button", name="Erase disks and create storage", exact=True).click()
+            deadline = time.monotonic() + 30
+            while not any(path == "storage/zfs/provision" for path, _ in submissions) and time.monotonic() < deadline:
+                page.wait_for_timeout(50)
             configured = next(body for path, body in submissions if path == "storage/zfs/provision")
             assert configured["repository_id"] == "repo-existing" and configured["scope"] == "pool" and [host["host_id"] for host in configured["hosts"]] == ["core-b"]
             add = page.get_by_role("button", name="Add ZFS storage", exact=True)

@@ -607,7 +607,7 @@ these exact versions. This is not an inventory of a finished Core binary or ISO.
 | `github.com/aws/aws-sdk-go-v2` 1.47.1; `aws/protocol/eventstream` 1.7.20; `feature/s3/manager` 1.23.10; `internal/configsources` 1.5.4; `internal/endpoints/v2` 2.8.4; `internal/v4a` 1.5.4; `service/internal/accept-encoding` 1.13.19; `service/internal/checksum` 1.11.5; `service/internal/presigned-url` 1.14.4; `service/internal/s3shared` 1.20.4; `service/s3` 1.113.4 | Apache-2.0 in each module's `LICENSE.txt`; root module also has `NOTICE.txt`. |
 | `github.com/aws/smithy-go` 1.28.1 | Apache-2.0 `LICENSE` and `NOTICE`. |
 | `github.com/pkg/sftp` 1.13.10 | BSD-2-Clause `LICENSE`. |
-| `github.com/kr/fs` 0.1.0; `golang.org/x/crypto` 0.48.0 | BSD-3-Clause `LICENSE` in each module. |
+| `github.com/kr/fs` 0.1.0; `golang.org/x/crypto` 0.56.0 | BSD-3-Clause `LICENSE` in each module. |
 
 The compiled AWS SDK and Smithy `internal/sync/singleflight` packages each
 also carry a BSD-3-Clause `LICENSE` for incorporated Go code. The Core package
