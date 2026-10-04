@@ -18,6 +18,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+## [0.4.24] — 2026-10-04
+
+### Bug Fixes
+
+- Updating Nex Controller no longer shows a "Failed to fetch" error while the Controller restarts. The Updates panel reads "Waiting for the Controller to restart…", reconnects by itself and reloads into the new version when the update completes. Any other time the Controller is unreachable, the page retries every 5 seconds and shows "Reconnected to the Controller." when it returns, with no manual refresh.
+
 ## [0.4.23] — 2026-10-04
 
 ### Major Feature

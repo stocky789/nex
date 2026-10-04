@@ -54,7 +54,9 @@ been walked through on a running Controller, a host or a VM: only automated hand
 4. Watch the progress through refresh, install, shutdown of virtual machines, reboot and
    report check; errors appear on the same page and include apt's own message. Progress moves in
    steps, not by download percentage. A host reboot takes several minutes.
-5. Sign in again if the session drops after the restart. Before you start, expect the host (or,
+5. When you update the Controller itself, it restarts and the page is briefly unreachable. The page says *Waiting for
+   the Controller to restart…*, keeps retrying by itself, and reloads when the update completes; you do not need to
+   refresh it. Sign in again if the session drops after the restart. Before you start, expect the host (or,
    for the Controller, the appliance) to reboot: machines on a Core host are stopped for the
    reboot, so schedule the update accordingly.
 

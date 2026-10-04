@@ -187,6 +187,10 @@ function App() {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [updateNote, setUpdateNote] = useState("");
   const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "applying" | "done" | "error">("idle");
+  // The Controller restarts during its own update, so polls fail then by design; the Updates panel says so instead.
+  const applyingUpdate = useRef(false);
+  const wasDown = useRef(false);
+  const restartSeen = useRef(false);
   const requestID = useRef<string | null>(null);
   const generation = useRef(0);
   const reloadOrdinal = useRef(0);
@@ -505,14 +509,18 @@ function App() {
         } else {
           startTransition(() => setData(next));
         }
+        if (wasDown.current) setNotice("Reconnected to the Controller.");
+        wasDown.current = false;
         setError("");
       }
     } catch (e) {
-      if (isCurrent())
+      if (isCurrent() && !applyingUpdate.current) {
+        wasDown.current = true;
         setError(
           sentence((e as Error).message) +
-            " Inventory may be out of date. Retry when the controller is reachable.",
+            " Inventory may be out of date. Retrying automatically.",
         );
+      }
     } finally {
       if (isCurrent()) setLoading(false);
     }
@@ -547,6 +555,12 @@ function App() {
       window.removeEventListener("online", refresh);
     };
   }, [session]);
+  // While the Controller is unreachable, retry every 5 s so the page recovers by itself when it returns.
+  useEffect(() => {
+    if (!session || !error) return;
+    const timer = setInterval(() => { if (document.visibilityState === "visible") void reload(); }, 5000);
+    return () => clearInterval(timer);
+  }, [session, error]);
   // The update status feeds the Overview, Hosts, Members and Updates screens; it is read once per
   // session and again on Check, not on every route.
   useEffect(() => {
@@ -927,6 +941,9 @@ function App() {
                   setActionError("");
                   setUpdateNote("");
                   setUpdatePhase("applying");
+                  applyingUpdate.current = true;
+                  restartSeen.current = false;
+                  setError("");
                   try {
                     let uncertain = false;
                     try {
@@ -936,9 +953,11 @@ function App() {
                       if (status && status < 500 && status !== 408) throw e;
                       uncertain = true;
                     }
-                    const st = await followUpdate(api, setUpdate, undefined, uncertain);
+                    const st = await followUpdate(api, setUpdate, undefined, uncertain, () => { restartSeen.current = true; setUpdate(u => u && { ...u, message: "Waiting for the Controller to restart" }); });
                     if (st?.phase === "done") {
-                      setUpdateNote(st.message || "Update complete");
+                      // A restarted Controller serves new UI files; the old page's lazy chunks no longer exist, so load the new ones.
+                      if (restartSeen.current) window.setTimeout(() => location.reload(), 2500);
+                      setUpdateNote(restartSeen.current ? "Update complete. Reloading to load the new version…" : st.message || "Update complete");
                       setUpdatePhase("done");
                     } else if (st?.phase === "failed" || st?.phase === "attention") {
                       setUpdatePhase("error");
@@ -951,6 +970,8 @@ function App() {
                     setUpdatePhase("error");
                     setActionError((e as Error).message);
                   } finally {
+                    applyingUpdate.current = false;
+                    void reload();
                     setBusy(false);
                   }
                 })(),

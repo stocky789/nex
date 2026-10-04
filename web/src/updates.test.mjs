@@ -11,9 +11,11 @@ const sleep = async () => {};
 // The Controller is stopped for the package install, so fetch rejects with no HTTP status.
 const restart = [new TypeError("Failed to fetch"), new TypeError("Failed to fetch"), { phase: "restarting" }, { phase: "done", message: "Update complete" }];
 const seen = [];
-const done = await followUpdate(async () => { const next = restart.shift(); if (next instanceof Error) throw next; return next; }, st => seen.push(st.phase), sleep);
+let unreachable = 0;
+const done = await followUpdate(async () => { const next = restart.shift(); if (next instanceof Error) throw next; return next; }, st => seen.push(st.phase), sleep, false, () => unreachable++);
 assert.equal(done.phase, "done", "a refused connection during the restart is not a failure");
 assert.deepEqual(seen, ["restarting", "done"]);
+assert.equal(unreachable, 2, "each unreachable poll is reported so the page can say it is waiting");
 
 const failed = await followUpdate(async () => ({ phase: "failed", error: "apt failed" }), () => {}, sleep);
 assert.equal(failed.error, "apt failed");
