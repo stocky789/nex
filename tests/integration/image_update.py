@@ -637,6 +637,11 @@ def main():
                     break
                 time.sleep(5)
                 phase_raw = raw_phase(ctl)
+            if '"committed"' not in phase_raw:
+                # What booted, which entries the loader has, what the update command said, and what both boots logged.
+                info("DIAG " + ctl.sh("cat /tmp/lastcmd.out | tail -15; echo == build; . /usr/lib/os-release; echo $BUILD_ID; echo == bootctl; bootctl list --no-pager 2>&1 | head -40; "
+                                      "echo == this boot; journalctl -b 0 --no-pager | grep -E 'nex-update|nex-boot-check|bless|systemd-boot|reboot' | tail -40 | cut -c1-250; "
+                                      "echo == previous boot; journalctl -b -1 --no-pager | grep -E 'nex-update|nex-boot-check|bless|reboot|Reached target' | tail -30 | cut -c1-250", 90)[1])
             check('"committed"' in phase_raw, "update: nex-update-reconcile.service alone left the record committed (read before any CLI call)", phase_raw)
             fs = facts(ctl)
             st = fs["status"]

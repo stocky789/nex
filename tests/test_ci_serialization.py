@@ -171,7 +171,7 @@ os.execv("/bin/sh", ["sh", "-c", helper])
             time.sleep(0.01)
 
     def wait_file(self, path, process=None):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60  # an upper bound for a loaded host; a passing wait returns as soon as the file appears
         while not path.exists():
             if process is not None and process.poll() is not None:
                 try:
@@ -216,7 +216,7 @@ os.execv("/bin/sh", ["sh", "-c", helper])
 
     def finish(self, process, expected=0):
         self.remember_workers()
-        output, error = process.communicate(timeout=5)
+        output, error = process.communicate(timeout=60)
         self.assertEqual(process.returncode, expected, f"{output}\n{error}")
         return output, error
 
@@ -346,7 +346,7 @@ printf "resumed\\n"
         waiter = self.start("native-waiter", 'printf "resumed\\n"\n', workflow="release")
         self.wait_file(self.work / "attempt-native-waiter", waiter)
         os.killpg(leader.pid, signal.SIGTERM)
-        leader.communicate(timeout=5)
+        leader.communicate(timeout=60)
         self.finish(waiter)
 
     def test_native_wrapper_sigkill_reaps_ignored_term_work_before_the_waiter_runs(self):
@@ -454,7 +454,7 @@ while [ ! -f "$NEX_CI_TEST_WORK/release-queue" ]; do sleep 0.01; done
                             workflow="release", docker=True)
         self.wait_file(self.work / "attempt-queue-cancelled", queued)
         os.kill(queued.pid, cancellation_signal)
-        queued.communicate(timeout=5)
+        queued.communicate(timeout=60)
         self.assertEqual(queued.returncode, -signal.SIGKILL if cancellation_signal == signal.SIGKILL else 143)
         own_name = (self.work / "container-queue-cancelled").read_text()
         removed = (self.work / "removed-containers").read_text().splitlines()

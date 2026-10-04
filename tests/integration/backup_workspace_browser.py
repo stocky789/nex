@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import sync_playwright, expect
 
@@ -177,8 +178,20 @@ def repository_inventory(page, fixture):
     expect(panel).to_contain_text('Loading backup repositories')
     expect(panel.locator('a[href="#/settings/backups"]')).to_have_count(0)
     assert held, 'Repository read must be pending'
-    held.pop(0).fulfill(status=503, json={'error': 'Simulated unavailable repository inventory'})
-    expect(panel.get_by_role('alert')).to_contain_text('Repository inventory unavailable')
+    # The page discards the answer to a read that a newer refresh superseded, and on a busy runner a refresh can start
+    # before this runs. Answer every read it has issued until one of them reaches the alert.
+    alert = panel.get_by_role('alert')
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        while held:
+            try:
+                held.pop(0).fulfill(status=503, json={'error': 'Simulated unavailable repository inventory'})
+            except Exception:
+                pass  # superseded and aborted by the page's own refresh
+        if alert.count():
+            break
+        page.wait_for_timeout(100)
+    expect(alert).to_contain_text('Repository inventory unavailable')
     expect(panel.locator('a[href="#/settings/backups"]')).to_have_count(0)
     panel.get_by_role('button', name='Cancel', exact=True).click()
     page.get_by_role('tab', name='Recovery points', exact=True).click()
@@ -238,7 +251,12 @@ def delayed_history(page, fixture):
     def defer(route):
         requests.append(route.request.url)
         held.append(route)
-        page.evaluate("count => window.heldHistoryRequests = count", len(requests))
+        for _ in range(100):  # the request can arrive while the page is still switching documents
+            try:
+                page.evaluate("count => window.heldHistoryRequests = count", len(requests))
+                break
+            except Exception:
+                page.wait_for_timeout(50)
     page.route('**/api/v1/pools/pool-demo/backup-runs*', defer)
     page.reload(wait_until='domcontentloaded')
     row = page.locator('.job-row')

@@ -12617,3 +12617,12 @@ of real storage or hardware certification.
 - Fix: `facts()` waits for `running=false`; the committed-record check polls the record file; the bless check reads a longer journal and accepts systemd's `Finished systemd-bless-boot`; the resumed apply is awaited to a finished operation before power is cut; the enrollment lab waits up to 60 s for the full inventory; the reconcile unit's own journal is printed when its check fails.
 - Regression: the labs are the regression checks (forge `image-build-boot` and `controller-browser`); they were run on the forge after the earlier part of this fix and progressed through every later step, and are re-run on every push.
 - Avoid: asserting on a value read once after a boot or a service start; use a bounded wait on the condition itself.
+
+## BUG-1919 — Backup browser lab and wrapper tests failed intermittently when the runner was saturated
+
+- Date: 2026-10-04.
+- Symptom: `backup_workspace_browser.py` failed on `repository-inventory` (no alert after 30 s) or `delayed-history` (`Execution context was destroyed`); `test_ci_serialization` timed out waiting five seconds for the wrapper to reap a killed workload.
+- Root cause: reproduced on the forge runner host by running the lab repeatedly with 32 CPU-bound processes: the page discards the answer to a repository read once a newer refresh has started, so a test that answered only the first held read left the second pending forever; the history marker called `page.evaluate` inside a route handler that could run while the page was changing documents; the serialization harness used fixed five-second waits for a wrapper whose cleanup is itself time-bounded.
+- Fix: the lab answers every held read until the alert appears and retries the marker across a navigation; the harness waits up to 60 s for a condition instead of 5 s; the image lab prints the boot loader state and both boots' journals when an update does not commit.
+- Regression: before, 2 of 8 stressed rounds of the backup lab failed and 1 of 14 failed after the first fix; after, 14 of 14 stressed rounds and two full rounds of all 13 `controller-browser` scripts passed on the runner host under the same load.
+- Avoid: answering only the first of several requests a page may issue, and fixed short deadlines on waits that depend on a loaded machine.
