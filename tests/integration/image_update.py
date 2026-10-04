@@ -351,6 +351,23 @@ def status(ctl, timeout=60):
     return json.loads(text[text.find("{"):text.rfind("}") + 1])
 
 
+def await_commit(ctl, patience=150):
+    """Wait for the boot-time reconcile to leave the record committed, reading the record file only (no nex-update command of ours).
+    The assessment, the bless and the reconcile service run after the control shell is up, and a loaded runner takes longer than any
+    fixed pause. When it never commits, print what booted, the loader's entries, the update command's output and both boots' logs."""
+    phase_raw = raw_phase(ctl)
+    for _ in range(patience // 5):
+        if '"committed"' in phase_raw:
+            break
+        time.sleep(5)
+        phase_raw = raw_phase(ctl)
+    if '"committed"' not in phase_raw:
+        info("DIAG " + ctl.sh("cat /tmp/lastcmd.out | tail -15; echo == build; . /usr/lib/os-release; echo $BUILD_ID; echo == bootctl; bootctl list --no-pager 2>&1 | head -40; "
+                              "echo == this boot; journalctl -b 0 --no-pager | grep -E 'nex-update|nex-boot-check|bless|systemd-boot|reboot' | tail -40 | cut -c1-250; "
+                              "echo == previous boot; journalctl -b -1 --no-pager | grep -E 'nex-update|nex-boot-check|bless|reboot|Reached target' | tail -30 | cut -c1-250", 90)[1])
+    return phase_raw
+
+
 def facts(ctl):
     """Everything the checks need from a running host, from the root shell."""
     def out(cmd, timeout=60):
@@ -629,19 +646,7 @@ def main():
             dt = reboot_cmd(f"nex-update apply -request-id lab-apply-{RUN} -activate reboot", "apply -activate reboot")
             ctl = vm.ctl
             info(f"apply + activate: back in control on the new version after {dt:.0f}s")
-            # The assessment, the bless and the reconcile service run after the control shell is up, and a loaded runner
-            # takes longer than any fixed pause; read the record file only (no nex-update command of ours) until it commits.
-            phase_raw = raw_phase(ctl)
-            for _ in range(30):
-                if '"committed"' in phase_raw:
-                    break
-                time.sleep(5)
-                phase_raw = raw_phase(ctl)
-            if '"committed"' not in phase_raw:
-                # What booted, which entries the loader has, what the update command said, and what both boots logged.
-                info("DIAG " + ctl.sh("cat /tmp/lastcmd.out | tail -15; echo == build; . /usr/lib/os-release; echo $BUILD_ID; echo == bootctl; bootctl list --no-pager 2>&1 | head -40; "
-                                      "echo == this boot; journalctl -b 0 --no-pager | grep -E 'nex-update|nex-boot-check|bless|systemd-boot|reboot' | tail -40 | cut -c1-250; "
-                                      "echo == previous boot; journalctl -b -1 --no-pager | grep -E 'nex-update|nex-boot-check|bless|reboot|Reached target' | tail -30 | cut -c1-250", 90)[1])
+            phase_raw = await_commit(ctl)
             check('"committed"' in phase_raw, "update: nex-update-reconcile.service alone left the record committed (read before any CLI call)", phase_raw)
             fs = facts(ctl)
             st = fs["status"]
@@ -833,7 +838,7 @@ def main():
         check("virsh=0" in txt, "again: libvirtd answers again", txt)
         dt = reboot_cmd(f"nex-update apply -request-id lab-apply2-{RUN} -activate reboot", "again: apply -activate reboot")
         ctl = vm.ctl
-        time.sleep(25)
+        await_commit(ctl)
         fs = facts(ctl)
         st = fs["status"]
         check(fs["build_id"] == "2026.10.2-2" and fs["cmdline_roothash"] == slot2_hash, "again, happy path: release 2 runs, roothash is the signed manifest's", fs["build_id"])

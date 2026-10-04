@@ -12626,3 +12626,12 @@ of real storage or hardware certification.
 - Fix: the lab answers every held read until the alert appears and retries the marker across a navigation; the harness waits up to 60 s for a condition instead of 5 s; the image lab prints the boot loader state and both boots' journals when an update does not commit.
 - Regression: before, 2 of 8 stressed rounds of the backup lab failed and 1 of 14 failed after the first fix; after, 14 of 14 stressed rounds and two full rounds of all 13 `controller-browser` scripts passed on the runner host under the same load.
 - Avoid: answering only the first of several requests a page may issue, and fixed short deadlines on waits that depend on a loaded machine.
+
+## BUG-1920 — Swap rollback test and storage browser labs used waits a loaded host can exceed
+
+- Date: 2026-10-04.
+- Symptom: `TestSwapRollbackRestoresDataAfterFailedImageAutostartsAgain` ended with `the new Controller image was not ready within 500ms ... restore failed: virsh failed: context deadline exceeded`; `cluster_storage_browser.py` timed out after 15 s waiting for the console's next automatic storage poll.
+- Root cause: the swap request's `Deadline` bounds every readiness probe, including the one that confirms the old image is back during a restore, and the test gave it 500 ms; the browser lab waited 15 s for a poll that runs on a timer of its own.
+- Fix: the not-ready deadline is 2 s; the two storage labs wait up to 60 s for the poll.
+- Regression: the labs and the Go test are the checks (forge `image-layout`, `controller-browser`); the browser labs passed 26 of 26 stressed runs on the runner host before this change to the poll waits.
+- Avoid: reusing one deadline for a step that is meant to expire and a step that must succeed.

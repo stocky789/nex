@@ -159,7 +159,7 @@ def main():
 
             def refresh():
                 # The console has no manual refresh; wait for its next automatic inventory poll.
-                with page.expect_response(lambda r: r.url.endswith("/api/v1/storage") and r.request.method == "GET", timeout=15000):
+                with page.expect_response(lambda r: r.url.endswith("/api/v1/storage") and r.request.method == "GET", timeout=60000):
                     pass
             rail.get_by_role("link", name="Storage", exact=True).click()
             expect(page.get_by_text("No storage repositories reported.", exact=False)).to_be_visible()
