@@ -12,16 +12,13 @@ defaults:
     shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 permissions:
   contents: read
+env:
+  # CPU-bound checks overlap each other; only QEMU/image/ISO labs hold the lock alone.
+  NEX_CI_LOCK: shared
 jobs:
-  # Separate lanes so storage UI failures stay visible, capped at two concurrent
-  # job containers inside this workflow on the shared Gitea act_runner.
-  # Five fully parallel containers (plus Installer/Documentation on the same
-  # Docker host) wedged cleanup in run 4168. Wave 1 previously ran Go race beside
-  # Playwright and starved the stalled-probe heartbeat check (run 4171).
-  #
-  # Wave 1: controller-browser alone (UI fails fast; no Go-race CPU contention)
-  # Wave 2: go + web
-  # Wave 3: contracts + website
+  # Separate lanes so storage UI failures stay visible. controller-browser, go and
+  # web start together; the host-side shared lock (NEX_CI_LOCK) and the runner's
+  # job capacity bound the load. contracts waits for go, website for web.
   controller-browser:
     if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     runs-on: ubuntu-latest
@@ -79,7 +76,6 @@ jobs:
 
   go:
     if: github.server_url != 'https://github.com'  # github.com runs github.yml only
-    needs: [controller-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -125,7 +121,6 @@ jobs:
 
   web:
     if: github.server_url != 'https://github.com'  # github.com runs github.yml only
-    needs: [controller-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

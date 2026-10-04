@@ -18,6 +18,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+## [0.4.26] — 2026-10-04
+
+### Miscellaneous
+
+- Build checks now run side by side instead of one at a time: the Controller foundation and demo checks share the build machine, while the image, release and recovery builds still run alone. The Controller browser, Go and web checks in one run also start together, so a pull request gets its result sooner.
+
 ## [0.4.25] — 2026-10-04
 
 ### Minor Feature

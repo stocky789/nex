@@ -156,6 +156,12 @@ bash -c '
 ' -- "$supervisor_pid" "$owner" &
 watchdog=$!
 
+# Exclusive (default): QEMU, image and ISO labs, one at a time and alone. Shared
+# (NEX_CI_LOCK=shared): CPU-bound checks that may overlap each other but never an
+# exclusive holder. The gate is held only while waiting, so a queued exclusive
+# waiter blocks later shared arrivals instead of being starved by them.
+lock_mode=--exclusive
+[[ ${NEX_CI_LOCK:-} == shared ]] && lock_mode=--shared
 image=
 if [[ -n ${NEX_CI_LOCK_DIR:-} ]] || ! image=$(docker inspect --format '{{.Image}}' "${HOSTNAME:-$(hostname)}" 2>/dev/null); then
     if [[ -z ${NEX_CI_LOCK_DIR:-} && -e /.dockerenv ]]; then
@@ -170,9 +176,12 @@ if [[ -n ${NEX_CI_LOCK_DIR:-} ]] || ! image=$(docker inspect --format '{{.Image}
     exec {local_lock}>"$lock_dir/heavy.lock"
     setsid --wait bash -c '
         set +m
-        flock --exclusive "$1" || exit
+        exec 8>"$3/gate.lock"
+        flock --exclusive 8 || exit
+        flock "$4" "$1" || exit
+        exec 8>&-
         exec bash --noprofile --norc -e -o pipefail "$2"
-    ' -- "$local_lock" "$script" &
+    ' -- "$local_lock" "$script" "$lock_dir" "$lock_mode" &
     child=$!
 else
     # Container /tmp is private: reuse the job's existing image and a daemon-owned
@@ -186,8 +195,10 @@ else
         set +e
         docker run --rm -i --name "$helper_name" --network none \
             --volume nex-ci-heavy-lock:/nex-ci --entrypoint sh "$image" -c '
-                exec 9>/nex-ci/heavy.lock
-                flock --exclusive 9 || exit
+                exec 8>/nex-ci/gate.lock 9>/nex-ci/heavy.lock
+                flock --exclusive 8 || exit
+                flock '"$lock_mode"' 9 || exit
+                exec 8>&-
                 printf "locked\n"
                 cat >/dev/null
             '

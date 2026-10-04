@@ -46,14 +46,13 @@ class BrowserArtifactTests(unittest.TestCase):
                 workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
                 self.assertIn('run: go test -race -timeout 20m ./...', workflow)
 
-    def test_phase1_keeps_separate_lanes_with_runner_safe_stagger(self):
-        """Separate jobs still surface storage UI failures; needs caps Docker load.
+    def test_phase1_runs_independent_lanes_in_parallel(self):
+        """Separate jobs surface storage UI failures early and run side by side.
 
         A single serial job hid late UI failures behind ~15 minutes of unrelated work.
-        Five fully parallel containers on the shared Gitea act_runner then wedged Docker
-        cleanup (run 4168). Keep named lanes, stagger to two concurrent containers, run
-        the browser lane alone first so Go race cannot starve stalled-probe heartbeats
-        (run 4171).
+        The browser, Go and web lanes have no dependency on each other; only contracts
+        (needs go) and website (needs web) wait. Load is bounded by the runner's
+        capacity and the shared host lock, not by artificial waves.
         """
         required = (
             'go:',
@@ -64,7 +63,6 @@ class BrowserArtifactTests(unittest.TestCase):
             'phase1:',
             'iso_url_browser.py',
             'storage_repositories_browser.py',
-            'needs: [controller-browser]',
             'needs: [go]',
             'needs: [web]',
         )
@@ -76,12 +74,16 @@ class BrowserArtifactTests(unittest.TestCase):
                 smoke = workflow.index('iso_url_browser.py')
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
-                # Browser lane must be first and must not wait on Go.
+                # The browser, Go and web lanes are independent: none waits on another.
                 browser_job = workflow.index('\n  controller-browser:')
                 go_job = workflow.index('\n  go:')
+                web_job = workflow.index('\n  web:')
+                contracts_job = workflow.index('\n  contracts:')
                 self.assertLess(browser_job, go_job)
-                browser_block = workflow[browser_job:go_job]
-                self.assertNotIn('needs:', browser_block)
+                self.assertNotIn('needs:', workflow[browser_job:go_job])
+                self.assertNotIn('needs:', workflow[go_job:web_job])
+                self.assertNotIn('needs: [controller-browser]', workflow)
+                self.assertIn('needs: [go]', workflow[contracts_job:])
                 self.assertNotIn('  host:', workflow)
                 self.assertNotIn('schedule:', workflow)
 

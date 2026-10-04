@@ -12,16 +12,13 @@ defaults:
     shell: bash -c 'exec bash "$GITHUB_WORKSPACE/scripts/ci-heavy-step.sh" "$1"' -- {0}
 permissions:
   code: read
+env:
+  # CPU-bound checks overlap each other; only QEMU/image/ISO labs hold the lock alone.
+  NEX_CI_LOCK: shared
 jobs:
-  # Separate lanes so storage UI failures stay visible, capped at two concurrent
-  # job containers inside this workflow on the shared Gitea act_runner.
-  # Five fully parallel containers (plus Installer/Documentation on the same
-  # Docker host) wedged cleanup in run 4168. Wave 1 previously ran Go race beside
-  # Playwright and starved the stalled-probe heartbeat check (run 4171).
-  #
-  # Wave 1: controller-browser alone (UI fails fast; no Go-race CPU contention)
-  # Wave 2: go + web
-  # Wave 3: contracts + website
+  # Separate lanes so storage UI failures stay visible. controller-browser, go and
+  # web start together; the host-side shared lock (NEX_CI_LOCK) and the runner's
+  # job capacity bound the load. contracts waits for go, website for web.
   controller-browser:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -77,7 +74,6 @@ jobs:
         run: .cache/phase1-qa-venv/bin/python tests/integration/form_select_picker.py --evidence .cache/form-select-picker
 
   go:
-    needs: [controller-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -122,7 +118,6 @@ jobs:
           govulncheck ./...
 
   web:
-    needs: [controller-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

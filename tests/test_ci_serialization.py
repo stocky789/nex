@@ -252,6 +252,34 @@ rmdir "$NEX_CI_TEST_WORK/active"
                     for name in ("leader-ready", "release-leader", "completed"):
                         (self.work / name).unlink()
 
+    def test_shared_holders_overlap_but_an_exclusive_waiter_blocks_later_arrivals(self):
+        for docker in (False, True):
+            with self.subTest(docker=docker):
+                prefix = f"shared-{int(docker)}"
+                holding = '''
+touch "$NEX_CI_TEST_WORK/up-$NEX_CI_TEST_ID"
+while [ ! -f "$NEX_CI_TEST_WORK/release-$NEX_CI_TEST_ID" ]; do sleep 0.01; done
+'''
+                first = self.start(prefix + "-a", holding, docker=docker, NEX_CI_LOCK="shared")
+                second = self.start(prefix + "-b", holding, docker=docker, NEX_CI_LOCK="shared")
+                self.wait_file(self.work / f"up-{prefix}-a", first)
+                self.wait_file(self.work / f"up-{prefix}-b", second)
+                exclusive = self.start(prefix + "-x", 'touch "$NEX_CI_TEST_WORK/up-' + prefix + '-x"\n', docker=docker)
+                self.wait_file(self.work / f"attempt-{prefix}-x", exclusive)
+                time.sleep(0.3)  # the exclusive waiter now holds the gate and waits on the shared holders
+                late = self.start(prefix + "-c", 'touch "$NEX_CI_TEST_WORK/up-' + prefix + '-c"\n',
+                                  docker=docker, NEX_CI_LOCK="shared")
+                self.wait_file(self.work / f"attempt-{prefix}-c", late)
+                time.sleep(0.3)
+                self.assertFalse((self.work / f"up-{prefix}-x").exists(), "exclusive ran beside shared holders")
+                self.assertFalse((self.work / f"up-{prefix}-c").exists(), "late shared arrival jumped the exclusive waiter")
+                (self.work / f"release-{prefix}-a").touch()
+                (self.work / f"release-{prefix}-b").touch()
+                for process in (first, second, exclusive, late):
+                    self.finish(process)
+                self.assertTrue((self.work / f"up-{prefix}-x").exists())
+                self.assertTrue((self.work / f"up-{prefix}-c").exists())
+
     def test_native_script_failure_keeps_errexit_and_pipefail_and_releases_the_lock(self):
         failed = self.start("native-failure", 'false | true\nprintf "unexpected\\n"\n')
         output, _ = self.finish(failed, 1)

@@ -11,6 +11,9 @@ concurrency:
   # Never cancel a live deploy or its rollback. PRs have separate ref groups.
   group: nex-demo-${{ github.ref }}
   cancel-in-progress: false
+env:
+  # CPU-bound checks overlap each other; only QEMU/image/ISO labs hold the lock alone.
+  NEX_CI_LOCK: shared
 defaults:
   run:
     # Heavy verification uses the same host-side mutex as image/release/phase1.
