@@ -18,6 +18,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Bug Fixes
+
+- Installing a Nex Core image from inside a container no longer stops because the host's swap file is not visible there.
+
+### Miscellaneous
+
+- CI checks no longer fail on the website navigation and gallery assertions that predated the Download link, and the appliance swap tests allow more time when the build machine is busy.
+
 ## [0.4.27] — 2026-10-04
 
 ### Bug Fixes

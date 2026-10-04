@@ -358,6 +358,19 @@ func TestInstallAndRepairValidateAllDisksBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestInstallPreflightIgnoresSwapFileInvisibleToThisNamespace(t *testing.T) {
+	f := preflightFixture(t)
+	disk, _ := f.node("sda", 8, 0, "", LayoutSingle)
+	f.write(swapsPath, "Filename Type Size Used Priority\n/swap.img file 1024 0 -2\n")
+	_, disks, err := (&Writer{Runner: &recorder{}}).open(Options{
+		Layout: LayoutSingle, Disks: []string{disk}, ImageDir: makeRelease(t, "r1", 1, 1, 4),
+	})
+	if err != nil {
+		t.Fatalf("a host swap file outside this mount namespace refused the install: %v", err)
+	}
+	closeAll(disks)
+}
+
 func TestInstallPreflightAcceptsReleaseAtSlotCapacity(t *testing.T) {
 	f := preflightFixture(t)
 	disk, _ := f.node("sda", 8, 0, "", LayoutSingle)

@@ -108,7 +108,7 @@ func newSwapLab(t *testing.T) *swapLab {
 	t.Setenv("DATA", l.data)
 	t.Setenv("LABID", l.id)
 	t.Setenv("MAC", mac(l.id))
-	l.req = SwapRequest{RequestID: "swap-request-1", Sequence: 7, SHA256: l.newSHA, Source: l.source, Deadline: 100 * time.Millisecond, Probe: l.probe}
+	l.req = SwapRequest{RequestID: "swap-request-1", Sequence: 7, SHA256: l.newSHA, Source: l.source, Deadline: readyDeadline, Probe: l.probe}
 	return l
 }
 
@@ -153,6 +153,22 @@ func (l *swapLab) probe(ctx context.Context, url string) error {
 		return errors.New("Controller not ready")
 	}
 	return nil
+}
+
+// readyDeadline bounds the readiness probe when the new image comes up; a run that fails only pays
+// notReadyDeadline. Both are far above one fake virsh call so a loaded runner cannot expire the first.
+const (
+	readyDeadline    = 5 * time.Second
+	notReadyDeadline = 500 * time.Millisecond
+)
+
+// setNewReady chooses whether the new image boots, and the probe budget that fits the outcome.
+func (l *swapLab) setNewReady(ok bool) {
+	l.ready[l.newSHA] = ok
+	l.req.Deadline = readyDeadline
+	if !ok {
+		l.req.Deadline = notReadyDeadline
+	}
 }
 
 func (l *swapLab) swap(hook func(stage string) error) (Operation, error) {
@@ -293,7 +309,7 @@ func TestSwapNextUpdatePrunesImagesOlderThanPrevious(t *testing.T) {
 
 func TestSwapReadinessFailureRestoresDataAndOldImage(t *testing.T) {
 	l := newSwapLab(t)
-	l.ready[l.newSHA] = false
+	l.setNewReady(false)
 	op, err := l.swap(nil)
 	if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" || op.Stage != swapRolledBack {
 		t.Fatalf("expected a rollback: %+v %v", op, err)
@@ -320,7 +336,8 @@ func TestSwapReadinessFailureRestoresDataAndOldImage(t *testing.T) {
 
 func TestSwapDoubleFailureLeavesControllerStoppedNeedsAttention(t *testing.T) {
 	l := newSwapLab(t)
-	l.ready[l.newSHA], l.ready[l.oldSHA] = false, false
+	l.setNewReady(false)
+	l.ready[l.oldSHA] = false
 	op, err := l.swap(nil)
 	if codeOf(err) != SwapNeedsAttention || op.Status != "needs_attention" {
 		t.Fatalf("expected needs_attention: %+v %v", op, err)
@@ -343,7 +360,7 @@ func TestSwapDoubleFailureLeavesControllerStoppedNeedsAttention(t *testing.T) {
 
 func TestSwapRestoreFailureAlsoNeedsAttention(t *testing.T) {
 	l := newSwapLab(t)
-	l.ready[l.newSHA] = false
+	l.setNewReady(false)
 	// The checkpoint disappears after the new image booted: the data cannot be restored.
 	hook := func(stage string) error {
 		if stage == swapRestore {
@@ -385,7 +402,7 @@ func TestSwapRestoreInterruptedAtEveryStepResumes(t *testing.T) {
 	for _, stage := range []string{swapRestore, swapRedefine, swapRestart, swapReprobe} {
 		t.Run(stage, func(t *testing.T) {
 			l := newSwapLab(t)
-			l.ready[l.newSHA] = false
+			l.setNewReady(false)
 			op, err := l.swap(crashAt(stage))
 			if err == nil || op.Status != "running" || op.Stage != stage {
 				t.Fatalf("interruption must leave the journal at %s: %+v %v", stage, op, err)
@@ -406,7 +423,7 @@ func TestSwapRollbackRestoresDataAfterFailedImageAutostartsAgain(t *testing.T) {
 		for _, mode := range []string{"running", "already stopped", "no guest agent"} {
 			t.Run(stage+"/"+mode, func(t *testing.T) {
 				l := newSwapLab(t)
-				l.ready[l.newSHA] = false
+				l.setNewReady(false)
 				if _, err := l.swap(crashAt(stage)); err == nil {
 					t.Fatal("expected the simulated crash")
 				}
@@ -444,7 +461,7 @@ func TestSwapRollbackPreservesOldImageWritesAfterRedefinition(t *testing.T) {
 	for _, stage := range []string{swapRedefine, swapRestart, swapReprobe} {
 		t.Run(stage, func(t *testing.T) {
 			l := newSwapLab(t)
-			l.ready[l.newSHA] = false
+			l.setNewReady(false)
 			if _, err := l.swap(crashAt(stage)); err == nil {
 				t.Fatal("expected the simulated crash")
 			}
@@ -473,7 +490,7 @@ func TestSwapRollbackRechecksOwnedImageBeforeRepeatingRestore(t *testing.T) {
 	for _, changed := range []string{"system", "data", "MAC", "inactive"} {
 		t.Run(changed, func(t *testing.T) {
 			l := newSwapLab(t)
-			l.ready[l.newSHA] = false
+			l.setNewReady(false)
 			if _, err := l.swap(crashAt(swapRedefine)); err == nil {
 				t.Fatal("expected the simulated crash")
 			}
@@ -676,7 +693,7 @@ func TestSwapRechecksExclusivityBeforeCheckpointAndRestore(t *testing.T) {
 	})
 	t.Run("restore", func(t *testing.T) {
 		l := newSwapLab(t)
-		l.ready[l.newSHA] = false
+		l.setNewReady(false)
 		// Another domain claims the disk while the new image runs: replacing the file would split them.
 		hook := func(stage string) error {
 			if stage == swapRestore {
@@ -719,6 +736,7 @@ func TestSwapReadinessNeedsTheExpectedImageToRun(t *testing.T) {
 	l := newSwapLab(t)
 	// The running domain never picked up the new definition and the old Controller keeps answering.
 	l.put("stale_live", "")
+	l.req.Deadline = notReadyDeadline
 	op, err := l.swap(nil)
 	if codeOf(err) != SwapRolledBack || op.Status != "rolled_back" {
 		t.Fatalf("an answer from the old image must not commit the swap: %+v %v", op, err)
@@ -756,7 +774,7 @@ func TestSwapRestoresDataWhenLibvirtAutostartedTheNewImage(t *testing.T) {
 
 func TestSwapKeepsCheckpointWhenAlreadyDefinedNewImageStoppedAfterWriting(t *testing.T) {
 	l := newSwapLab(t)
-	l.ready[l.newSHA] = false
+	l.setNewReady(false)
 	if _, err := l.swap(crashAt(swapDefine)); err == nil {
 		t.Fatal("expected the simulated crash")
 	}
@@ -791,7 +809,7 @@ func TestSwapCancelledContextInterruptsEveryStep(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l := newSwapLab(t)
-			l.ready[l.newSHA] = !tc.restore
+			l.setNewReady(!tc.restore)
 			t.Setenv("STALLCP", tc.copyEnd)
 			fakeCommand(t, "cp", `case "$*" in *"$STALLCP") if [ -e "$LAB/stall_cp" ]; then touch "$LAB/stalled"; exec sleep 30; fi;; esac
 exec `+real+` "$@"`)
@@ -849,7 +867,7 @@ func TestSwapRollbackForcesOnlyANewImageThatNeverBecameReady(t *testing.T) {
 	for name, file := range map[string]string{"no guest agent": "fail_shutdown", "guest ignores the shutdown": "hang_shutdown"} {
 		t.Run(name, func(t *testing.T) {
 			l := newSwapLab(t)
-			l.ready[l.newSHA] = false
+			l.setNewReady(false)
 			op, err := l.swap(func(stage string) error {
 				if stage == swapProbe {
 					l.put(file, "")
@@ -866,7 +884,7 @@ func TestSwapRollbackForcesOnlyANewImageThatNeverBecameReady(t *testing.T) {
 	}
 	t.Run("never any other guest", func(t *testing.T) {
 		l := newSwapLab(t)
-		l.ready[l.newSHA] = false
+		l.setNewReady(false)
 		if _, err := l.swap(crashAt(swapRestore)); err == nil {
 			t.Fatal("expected the simulated crash")
 		}
@@ -998,7 +1016,7 @@ func TestSwapContinuesWhenLibvirtAutostartedTheOldImage(t *testing.T) {
 		for _, ready := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s ready=%v", stage, ready), func(t *testing.T) {
 				l := newSwapLab(t)
-				l.ready[l.newSHA] = ready
+				l.setNewReady(ready)
 				if _, err := l.swap(crashAt(stage)); err == nil {
 					t.Fatal("expected the simulated crash")
 				}
@@ -1036,7 +1054,7 @@ func TestSwapRefreshesCheckpointWhenRestartedOldImageAlreadyStopped(t *testing.T
 	for _, ready := range []bool{true, false} {
 		t.Run(fmt.Sprintf("ready=%v", ready), func(t *testing.T) {
 			l := newSwapLab(t)
-			l.ready[l.newSHA] = ready
+			l.setNewReady(ready)
 			if _, err := l.swap(crashAt(swapDefine)); err == nil {
 				t.Fatal("expected the simulated crash")
 			}

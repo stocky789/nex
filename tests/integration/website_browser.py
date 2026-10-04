@@ -87,7 +87,7 @@ def main():
             for anchor in page.locator('a[href^="#"]').all():
                 target = anchor.get_attribute('href')
                 assert len(target) > 1 and page.locator(target).count() == 1, target
-            for target in ('platform', 'approach', 'releases', 'questions'):
+            for target in ('platform', 'approach', 'download', 'questions'):
                 link = page.get_by_role('navigation').locator(f'a[href="#{target}"]')
                 assert link.is_visible(), f'Navigation hidden: {target}'
                 link.click()
@@ -183,7 +183,8 @@ def main():
             for screenshot in screenshots.all():
                 screenshot.scroll_into_view_if_needed()
                 screenshot.evaluate('image => image.decode()')
-                assert screenshot.get_attribute('alt')
+                # The dark variant of a theme slider repeats the light screenshot and is decorative (alt="").
+                assert screenshot.get_attribute('alt') or 'dark' in (screenshot.get_attribute('class') or '')
                 assert screenshot.evaluate('image => image.naturalWidth > 0')
             page.evaluate('document.activeElement.blur(); window.scrollTo(0, 0)')
             page.screenshot(path=str(args.evidence / f'gallery-{width}.png'), full_page=True)

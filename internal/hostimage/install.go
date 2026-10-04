@@ -208,6 +208,11 @@ func validateOffline(disks []*Disk) error {
 		path := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(fields[0])
 		f, err := os.Open(path)
 		if err != nil {
+			// A swap file lives on a mounted filesystem, which the mount check above already covers.
+			// /proc/swaps is not namespaced, so inside a container it can name a host file we cannot see.
+			if fields[1] == "file" && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return fmt.Errorf("inspect swap %s: %w", path, err)
 		}
 		st, err := diskFileInfo(f)

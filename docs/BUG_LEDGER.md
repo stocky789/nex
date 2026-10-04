@@ -12543,3 +12543,13 @@ of real storage or hardware certification.
 - Smoke: the production source-copy block ran against the actual checkout with exit 0, preserved selected build-script bytes/modes and directory modes/nanosecond mtimes, and excluded `.git`/`.cache`; its temporary snapshot was removed. A selected path behind a nontraversable directory failed with `PermissionError`, not partial-copy success. An unprivileged disposable Docker container with the exact device mapping reported KVM API 12 and created a VM descriptor through `KVM_CREATE_VM`.
 - Limits: no subsequent forge run, full image build, guest boot or real-image reproducibility comparison was executed. Device forwarding must still be observed on the forge; its Docker host must have usable KVM. The observed runner version supports workflow device options; newer runner policy may require administrator-configured devices. Existing boot prerequisite/lab failures remain hard failures, not skipped coverage.
 - Avoid: removing the KVM gate, switching to software emulation, privileging every job, or assuming the runner contains an incidental source-copy tool.
+
+## BUG-1911 — Image install preflight refused a host swap file it could not open
+
+- Date: 2026-10-04.
+- Symptom: forge `image-build-boot` stopped at `nex-hostimage: inspect swap /swap.img: open /swap.img: no such file or directory` before writing any disk.
+- Root cause: `/proc/swaps` is not namespaced, so inside the privileged install container it listed the runner host's swap file, a path that container cannot open. The preflight treated any unopenable swap entry as fatal.
+- Fix: a swap entry of type `file` that does not exist in this mount namespace is skipped. A swap file lives on a mounted filesystem, which the preflight's mount check already covers; unopenable partition entries still refuse.
+- Regression: `TestInstallPreflightIgnoresSwapFileInvisibleToThisNamespace` (`internal/hostimage/install_preflight_test.go`) failed with the exact error before the fix and passes after; the existing in-use disk/partition swap refusals still pass (`go test ./internal/hostimage`).
+- Limits: no forge image run was executed after the fix.
+- Avoid: reading host-wide kernel tables from inside a container and treating their paths as visible.
