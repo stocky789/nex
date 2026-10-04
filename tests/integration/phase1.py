@@ -216,8 +216,10 @@ def acceptance(lab, args):
             c['name'] == name and c['status'] == status for c in h['inventory']['checks'])
 
     eventually(lambda: check_status('libvirt', 'healthy'), 'fresh healthy simulated libvirt')
-    observed = host()['inventory']
-    assert observed['cpu_count'] > 0 and observed['memory_bytes'] > 0 and observed['os_version']
+    # CPU, memory and OS version are sampled on the agent's own cadence, so the first healthy report may predate them.
+    observed = eventually(lambda: (lambda inv: inv if inv and inv.get('cpu_count', 0) > 0 and inv.get('memory_bytes', 0) > 0
+                                   and inv.get('os_version') else None)(host().get('inventory')),
+                          'real CPU, memory and OS version in the inventory', timeout=60)
     lab.passed('real CPU/RAM/OS/NIC inventory and fresh independent heartbeat (libvirt simulated)')
     mode.write_text('failed')
     eventually(lambda: check_status('libvirt', 'failed'), 'libvirt failure distinguished from connectivity')

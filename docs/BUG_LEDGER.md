@@ -12608,3 +12608,12 @@ of real storage or hardware certification.
 - Regression: reproduced on the runner host in the runner image with the job's packages, `NEX_CI_LOCK=shared` and Go 1.27.1: 17 failures and 12 errors before, 786 tests OK after. The forge `contracts` job runs the same suite on every push.
 - Limits: the dumps remain in published Git history; only the current tree is clean.
 - Avoid: a test that inherits the whole process environment, and a test that changes process-wide state without restoring it.
+
+## BUG-1918 — Image update and enrollment labs read state before a loaded host had settled
+
+- Date: 2026-10-04.
+- Symptom: `image_update.py` reported a failed boot trial as `armed` instead of `rolled_back`, and the happy-path boot as not yet recorded or blessed; `phase1.py --browser` failed `assert observed['cpu_count'] > 0 ...` right after the libvirt check turned healthy.
+- Root cause: both labs read once, immediately. `nex-update status` called while the post-boot reconcile holds the engine lock returns the on-disk record with `running=true` and folds nothing in, so a read straight after boot is stale on a busy host; the agent samples CPU, memory and OS version on its own cadence, so the first healthy report can predate them; a fixed 25 s sleep and a six-line journal tail stood in for the real conditions.
+- Fix: `facts()` waits for `running=false`; the committed-record check polls the record file; the bless check reads a longer journal and accepts systemd's `Finished systemd-bless-boot`; the resumed apply is awaited to a finished operation before power is cut; the enrollment lab waits up to 60 s for the full inventory; the reconcile unit's own journal is printed when its check fails.
+- Regression: the labs are the regression checks (forge `image-build-boot` and `controller-browser`); they were run on the forge after the earlier part of this fix and progressed through every later step, and are re-run on every push.
+- Avoid: asserting on a value read once after a boot or a service start; use a bounded wait on the condition itself.

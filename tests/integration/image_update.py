@@ -364,7 +364,14 @@ def facts(ctl):
         "sshkey": out("cut -d' ' -f2 /etc/ssh/ssh_host_ed25519_key.pub"),
         "machine_id": out("cat /etc/machine-id"),
     }
+    # A reconcile or apply that holds the engine lock makes `status` report the record as it is on disk (running=true) without
+    # folding the boot in, so wait for the engine to be idle before reading the phase.
     f["status"] = status(ctl, 120)
+    for _ in range(60):
+        if not f["status"].get("running"):
+            break
+        time.sleep(3)
+        f["status"] = status(ctl, 120)
     return f
 
 
@@ -637,13 +644,13 @@ def main():
             check(fs["cmdline_roothash"] == slot2_hash, "update: running roothash is the signed manifest's")
             check(st["phase"] == "committed" and any(s["role"] == "previous" and s["sequence"] == 1 for s in st["slots"]), "update: committed, release 1 retained as previous", json.dumps(st["slots"]))
             check("2026.10.2_2.efi" in fs["uki"] and "2026.10.2_2+" not in fs["uki"], "update: release 2's boot entry lost its counter (blessed)", fs["uki"])
-            for _ in range(8):  # the bless runs after the boot check; run 17 read the journal a moment too early
-                rc, txt = ctl.sh("journalctl -b -u systemd-bless-boot -u nex-boot-check --no-pager -o cat 2>&1 | tail -6")
-                if "Marked boot as 'good'" in txt:
+            for _ in range(12):  # the bless runs after the boot check; run 17 read the journal a moment too early
+                rc, txt = ctl.sh("journalctl -b -u systemd-bless-boot -u nex-boot-check --no-pager -o cat 2>&1 | tail -30")
+                if "Marked boot as 'good'" in txt or "Finished systemd-bless-boot" in txt:
                     break
                 time.sleep(5)
-            check("Marked boot as 'good'" in txt, "update: systemd-bless-boot marked the boot good", txt)
-            rc, txt = ctl.sh("systemctl show nex-update-reconcile.service -p Result -p ExecMainStatus -p ActiveEnterTimestamp | tr '\\n' ' '; journalctl -b -u nex-update-reconcile --no-pager -o cat | tail -2 | cut -c1-120")
+            check("Marked boot as 'good'" in txt or "Finished systemd-bless-boot" in txt, "update: systemd-bless-boot marked the boot good", txt)
+            rc, txt = ctl.sh("systemctl show nex-update-reconcile.service -p Result -p ExecMainStatus -p ActiveEnterTimestamp | tr '\\n' ' '; journalctl -b -u nex-update-reconcile --no-pager -o short-precise | tail -12 | cut -c1-300")
             check("Result=success" in txt and "ExecMainStatus=0" in txt, "update: nex-update-reconcile.service succeeded on this boot", txt)
             same_data(fs, "update")
             check(fs["root"].startswith("erofs ro"), "update: / is read-only erofs", fs["root"])
