@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode/utf16"
 )
 
@@ -234,8 +235,20 @@ func mountedAt(node string) string {
 }
 
 // WithESP runs fn with the ESP on a partition node mounted: at its existing mount point, or else
-// transiently under /run/nex/esp/<node>.
-func (w *Writer) WithESP(ctx context.Context, node string, fn func(root string) error) (err error) {
+// transiently under /run/nex/esp/<node>. The transient mount is shared with nex-bless-boot, which runs
+// on every counted boot, so both hold /run/nex/esp.lock for the whole mount, use and unmount: otherwise
+// one side borrows the other's mount and the unmount that follows fails with "target is busy".
+func (w *Writer) WithESP(ctx context.Context, node string, fn func(root string) error) error {
+	unlock, err := lockESP()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return w.withESP(ctx, node, fn)
+}
+
+// withESP is WithESP for a caller that already holds the ESP lock (the lock is not reentrant).
+func (w *Writer) withESP(ctx context.Context, node string, fn func(root string) error) (err error) {
 	if mp := mountedAt(node); mp != "" {
 		return fn(mp)
 	}
@@ -252,6 +265,23 @@ func (w *Writer) WithESP(ctx context.Context, node string, fn func(root string) 
 		}
 	}()
 	return fn(dir)
+}
+
+// lockESP takes the exclusive lock every user of the transient ESP mounts holds while it mounts, uses and
+// unmounts one. Closing the file releases it, including when the holder dies.
+func lockESP() (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(espMountBase), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(espMountBase+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { f.Close() }, nil
 }
 
 // ESPNodes returns the partition nodes of every ESP, found by GPT partition name (never by md
@@ -327,8 +357,14 @@ func (w *Writer) ESPSync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// One hold for the whole sync: copyOut mounts the other ESPs while the booted one is still mounted.
+	unlock, err := lockESP()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	var desired []ESPFile
-	if err = w.WithESP(ctx, booted, func(root string) error {
+	if err = w.withESP(ctx, booted, func(root string) error {
 		desired, err = ScanESP(root)
 		if err != nil {
 			return err
@@ -354,7 +390,7 @@ func (w *Writer) copyOut(ctx context.Context, booted string, nodes []string, des
 			continue
 		}
 		w.logf("converging %s", n)
-		if err := w.WithESP(ctx, n, func(root string) error { return ConvergeESP(root, desired) }); err != nil {
+		if err := w.withESP(ctx, n, func(root string) error { return ConvergeESP(root, desired) }); err != nil {
 			return fmt.Errorf("%s: %w", n, err)
 		}
 	}

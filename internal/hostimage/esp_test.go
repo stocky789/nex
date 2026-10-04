@@ -8,7 +8,10 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf16"
 )
 
@@ -212,6 +215,39 @@ func TestESPSyncMountsUnmountedESP(t *testing.T) {
 	mp := filepath.Join(espMountBase, "vdb1")
 	if rec.index("mount -t vfat -o umask=0077,iocharset=ascii "+filepath.Join(devDir, "vdb1")+" "+mp) < 0 || rec.index("umount "+mp) < 0 {
 		t.Errorf("transient mount not used: %v", rec.calls)
+	}
+}
+
+// The engine's reconcile at boot and nex-bless-boot mount the same transient ESP directory. A user that
+// finds it mounted borrows it, so two users overlapping makes the first one's unmount fail with
+// "target is busy" (the update lab saw nex-update-reconcile.service exit 1 on it).
+func TestWithESPDoesNotOverlapOtherUsersOfTheTransientMount(t *testing.T) {
+	sandbox(t)
+	fakeSystem(t, "vda1", map[string]string{"vda1": t.TempDir()})
+	node := filepath.Join(devDir, "vdb1") // mounted nowhere, so every user mounts it transiently
+	w := &Writer{Runner: &recorder{}}
+	var active, overlapped atomic.Int32
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := w.WithESP(context.Background(), node, func(string) error {
+				if active.Add(1) > 1 {
+					overlapped.Add(1)
+				}
+				time.Sleep(20 * time.Millisecond)
+				active.Add(-1)
+				return nil
+			})
+			if err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if overlapped.Load() != 0 {
+		t.Errorf("%d users held the transient ESP mount at the same time", overlapped.Load())
 	}
 }
 

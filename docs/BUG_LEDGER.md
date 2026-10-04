@@ -12653,3 +12653,12 @@ of real storage or hardware certification.
 - Fix: those bounds are one or two minutes. They are only upper limits for a wait-until-true loop, so a passing test returns as soon as its condition holds and the assertions are unchanged.
 - Regression: `go vet ./...` and the three named tests pass on the runner host under CPU saturation; the forge `go` job runs the whole suite on every push.
 - Avoid: a fixed short deadline on work that finishes by itself; bound the wait generously and assert on the outcome.
+
+## BUG-1923 — Boot-time update reconcile failed when it raced the boot bless over the transient ESP mount
+
+- Date: 2026-10-04.
+- Symptom: after an update reboot, `nex-update-reconcile.service` exited 1 and the update record stayed `armed` instead of `committed`; the guest journal said `nex-update: /dev/vda1: umount /run/nex/esp/vda1: exit status 32: umount: /run/nex/esp/vda1: target is busy`. The same race could instead break the bless.
+- Root cause: `nex-bless-boot` (run by `systemd-bless-boot` and `nex-boot-check` on every counted boot) and the engine's `WithESP` both mount the ESP at `/run/nex/esp/<node>`, or borrow it when `findmnt`/`/proc/mounts` shows it mounted, and unmount only what they mounted. With nothing shared between them, one side borrowed the other's mount and the owner's unmount then failed with "target is busy" (or unmounted under the borrower).
+- Fix: both hold an exclusive `flock` on `/run/nex/esp.lock` for the whole mount, use and unmount: `WithESP` in Go (with `ESPSync` holding it once across its nested mounts, because the lock is not reentrant) and `nex-bless-boot` in shell, which waits up to 120 s.
+- Regression: `TestWithESPDoesNotOverlapOtherUsersOfTheTransientMount` fails on the old code (`3 users held the transient ESP mount at the same time`) and passes with the fix; the whole `internal/hostimage` package passes under `-race`; the forge `image-build-boot` lab (`nex-update-reconcile.service alone left the record committed`) exercises the boot-time race itself.
+- Avoid: mounting a shared path from two programs without a common lock, and a non-reentrant lock around code that nests.

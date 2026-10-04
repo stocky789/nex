@@ -14,6 +14,11 @@ if [ -z "$node" ]; then
     node=$(lsblk -rpno PATH,PARTTYPE | awk '$2=="c12a7328-f81f-11d2-ba4b-00a0c93ec93b"{print $1; exit}')
 fi
 [ -n "$node" ] || { echo "nex-bless-boot: no EFI system partition found" >&2; exit 1; }
+# The engine (nex-update, nex-hostimage) mounts the same directory; hold its lock until this process exits, which
+# is after the trap below has unmounted, so neither side unmounts under the other ("target is busy").
+mkdir -p /run/nex
+exec 9> /run/nex/esp.lock
+flock -w 120 9 || { echo "nex-bless-boot: the ESP is in use by another Core process" >&2; exit 1; }
 mp=$(findmnt -nro TARGET -S "$node" | head -n 1)
 if [ -z "$mp" ]; then
     mp=/run/nex/esp/$(basename "$node")

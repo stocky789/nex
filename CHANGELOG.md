@@ -20,6 +20,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- After an update reboot, the host no longer fails to record the new version when the boot assessment and the update engine use the boot partition at the same moment.
 - Installing a Nex Core image from inside a container no longer stops because the host's swap file is not visible there.
 - Release builds no longer stop because the compliance manifests recorded a different version than the release file names.
 - The Controller image boot check now finds the image the Controller appliance build produces.
