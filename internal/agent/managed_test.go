@@ -694,7 +694,7 @@ func TestBundledMediaSeedRunsOffWorkerOneAtATime(t *testing.T) {
 		t.Fatal("a second bundled media seed started while one was running")
 	case <-time.After(50 * time.Millisecond):
 	}
-	for deadline := time.Now().Add(5 * time.Second); running.Load(); time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(time.Minute); running.Load(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("finished seed did not clear its running flag")
 		}

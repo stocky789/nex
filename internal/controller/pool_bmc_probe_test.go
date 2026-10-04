@@ -21,7 +21,7 @@ func (l *joinLab) probeBMC(host string, body any, delivered *protocol.StorageCre
 	l.t.Helper()
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- callRaw(l.a, "POST", l.bmcProbePath(host), body) }()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for answer != nil && time.Now().Before(deadline) {
 		select {
 		case w := <-done:

@@ -640,7 +640,7 @@ func TestHostPlatformRefusesAnImageWithoutASequence(t *testing.T) {
 // waitFailure polls the status until the record carries a failure with the code.
 func (r *rig) waitFailure(code string) ImageStatus {
 	r.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		if st := r.status(); (st.Failure != nil && st.Failure.Code == code) || (code == "" && st.Failure == nil) {
 			return st

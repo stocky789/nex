@@ -173,7 +173,7 @@ func TestImageEditionHostServesTheWholeUpdateFlow(t *testing.T) {
 		t.Fatalf("check: %d %v", code, body)
 	}
 	waitIdle := func(id string) map[string]any {
-		deadline := time.Now().Add(10 * time.Second)
+		deadline := time.Now().Add(time.Minute)
 		for {
 			w := callLocal(s, "GET", "/api/local/v1/updates/operations/"+id, nil, cookie, csrf, "https://core.test")
 			var op map[string]any

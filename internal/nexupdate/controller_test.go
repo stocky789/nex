@@ -128,7 +128,7 @@ func TestControllerSwapResumesWithTheSequenceItStartedWith(t *testing.T) {
 	if _, _, err := r.applyController("req-ctl-0006"); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		fake.mu.Lock()
 		n := len(fake.requests)

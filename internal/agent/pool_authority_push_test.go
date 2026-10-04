@@ -106,7 +106,7 @@ func TestPoolAuthorityPushWaitsForBackupLockWithoutQueueing(t *testing.T) {
 	defer cancel()
 	waiting := make(chan error, 1)
 	go func() { waiting <- PushPoolAuthorityReplicas(ctx, s, time.Minute) }()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		poolReplicaMu.Lock()
 		inFlight := poolReplicaPushing[s.dir]

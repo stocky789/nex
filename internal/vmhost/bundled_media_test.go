@@ -226,7 +226,7 @@ func TestSeedBundledMediaDiscardsCopyWhenStorageDetachedMeanwhile(t *testing.T) 
 	done := make(chan error, 1)
 	go func() { done <- e.seedBundledMedia(context.Background(), "pool-1", "host-1", storage) }()
 	// Wait until the copy is published (or the seed finished without waiting for the lock).
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(10 * time.Millisecond) {
 		if isos, _ := filepath.Glob(filepath.Join(storage, "nex-media", "*.iso")); len(isos) > 0 {
 			break
 		}

@@ -25,7 +25,7 @@ func dial(t *testing.T, server *httptest.Server, headers string) (*client, *http
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	conn.SetDeadline(time.Now().Add(time.Minute))
 	if _, err = conn.Write([]byte("GET /console HTTP/1.1\r\nHost: x\r\n" + headers + "\r\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestHandshakeRelayPingAndClose(t *testing.T) {
 		t.Fatalf("handshake %v %v", resp.StatusCode, resp.Header)
 	}
 	peer := <-backend
-	peer.SetDeadline(time.Now().Add(5 * time.Second))
+	peer.SetDeadline(time.Now().Add(time.Minute))
 	big := strings.Repeat("rfb", 1000)
 	c.send(0x2, []byte(big))
 	got := make([]byte, len(big))

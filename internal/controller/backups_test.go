@@ -131,7 +131,7 @@ func TestOrphanRelayRejectsMismatchedRepositoryID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	conn.SetDeadline(time.Now().Add(time.Minute))
 	fmt.Fprintf(conn, "POST /api/v1/agent/stats/%s HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: nex-stats\r\nContent-Length: 0\r\n\r\n", token)
 	reader := bufio.NewReader(conn)
 	if resp, err := http.ReadResponse(reader, nil); err != nil || resp.StatusCode != 101 {

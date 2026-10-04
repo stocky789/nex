@@ -50,7 +50,7 @@ func putJSON(s *Service, path string, body any, cookie, csrf string) (int, map[s
 
 func opDone(t *testing.T, s *Service, id, cookie, csrf string) map[string]any {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		w := callLocal(s, "GET", "/api/local/v1/updates/operations/"+id, nil, cookie, csrf, "https://core.test")
 		var op map[string]any

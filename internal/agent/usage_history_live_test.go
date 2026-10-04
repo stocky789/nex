@@ -65,7 +65,7 @@ func liveQuery(t *testing.T, h *usageHistory, target string) (int, protocol.Stat
 
 func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(time.Minute); !ok(); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}

@@ -55,7 +55,7 @@ func (l *joinLab) preflight(h *joinHost, body any, answer func(protocol.PoolRequ
 	l.t.Helper()
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- callRaw(l.a, "POST", l.preflightPath(), body) }()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for answer != nil && time.Now().Before(deadline) {
 		select {
 		case w := <-done:
@@ -373,7 +373,7 @@ func (l *joinLab) postFenceProfile(body any, delivered *protocol.StorageCredenti
 	l.t.Helper()
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- callRaw(l.a, "POST", l.fencePath(l.master.id), body) }()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for delivered != nil && time.Now().Before(deadline) {
 		select {
 		case w := <-done:

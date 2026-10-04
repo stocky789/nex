@@ -16,7 +16,7 @@ import (
 // HostConsoleSession's server side speaks, and leaves c ready for message exchange.
 func rfbHandshake(t *testing.T, c net.Conn) {
 	t.Helper()
-	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(time.Minute))
 	ver := make([]byte, 12)
 	if _, err := io.ReadFull(c, ver); err != nil || string(ver) != "RFB 003.008\n" {
 		t.Fatalf("version %q %v", ver, err)
@@ -128,13 +128,13 @@ func TestHostConsoleIncrementalUpdateOnlyOnChange(t *testing.T) {
 		if err := requestFrame(conn, 0); err != nil {
 			t.Fatal(err)
 		}
-		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_ = conn.SetDeadline(time.Now().Add(time.Minute))
 		pixels := readFrame(t, conn)
 		_ = conn.SetDeadline(time.Time{})
 		return pixels
 	}
 	pixels := drain()
-	for deadline := time.Now().Add(5 * time.Second); ; {
+	for deadline := time.Now().Add(time.Minute); ; {
 		if err := requestFrame(conn, 1); err != nil {
 			t.Fatal(err)
 		}
@@ -147,7 +147,7 @@ func TestHostConsoleIncrementalUpdateOnlyOnChange(t *testing.T) {
 		}
 		// Shell startup can still change the screen after the first full frame.
 		// Only an identical reply proves the idle incremental request was answered.
-		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_ = conn.SetDeadline(time.Now().Add(time.Minute))
 		frame := make([]byte, 15+hostWidth*hostHeight*4)
 		if _, err := io.ReadFull(conn, frame); err != nil {
 			t.Fatal(err)
@@ -169,7 +169,7 @@ func TestHostConsoleIncrementalUpdateOnlyOnChange(t *testing.T) {
 	// push the deferred frame on its own rather than waiting for another request.
 	sendKey(t, conn, 'x', true)
 	sendKey(t, conn, 'x', false)
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(time.Minute))
 	readFrame(t, conn)
 	_ = conn.SetDeadline(time.Time{})
 

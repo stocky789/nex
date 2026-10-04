@@ -91,7 +91,7 @@ func promotionLab(t *testing.T, members int) *transferLab {
 
 func pushReplicas(t *testing.T, master *Store) {
 	t.Helper()
-	if err := PushPoolAuthorityReplicas(context.Background(), master, 20*time.Second); err != nil {
+	if err := PushPoolAuthorityReplicas(context.Background(), master, 2*time.Minute); err != nil {
 		t.Fatalf("replica push: %v", err)
 	}
 }

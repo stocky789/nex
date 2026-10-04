@@ -811,7 +811,7 @@ esac`)
 func testFileSignal(path string) <-chan struct{} {
 	ready := make(chan struct{})
 	go func() {
-		deadline := time.Now().Add(3 * time.Second)
+		deadline := time.Now().Add(time.Minute)
 		for time.Now().Before(deadline) {
 			if _, err := os.Stat(path); err == nil {
 				close(ready)

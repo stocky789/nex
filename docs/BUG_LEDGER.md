@@ -12644,3 +12644,12 @@ of real storage or hardware certification.
 - Fix: those bounds are 60 s in `console_controls_browser.py`, `controller_refresh_browser.py`, `managed_vm_browser.py` and `phase1_browser.py`. They are upper limits; a passing wait still returns as soon as the page updates.
 - Regression: the labs are the checks (forge `controller-browser`); the same scripts passed 26 of 26 stressed runs on the runner host before this change widened the bounds.
 - Avoid: a wait bound only slightly above the period of the timer it waits for.
+
+## BUG-1922 — Go tests used three to ten second waits that a loaded runner exceeded
+
+- Date: 2026-10-04.
+- Symptom: a different Go test failed on nearly every push: `TestPoolBackupPagedAuthorityRetainsMoreThanFiveThousandRuns` (`replica push: context deadline exceeded`), `TestRestagingDropsTheStagingDirectoryOfTheReplacedRelease` and `TestRollbackThatReachedSomeDisksIsRecordedAndRepeatable` (`operation did not finish`), after earlier ones in the same family.
+- Root cause: each waited for work to finish with a fixed three to ten second bound (`pushReplicas` 20 s, `rig.wait` 10 s, 33 `time.Now().Add(N * time.Second)` loops and socket deadlines); the work itself takes milliseconds on an idle host and seconds when the runner is saturated.
+- Fix: those bounds are one or two minutes. They are only upper limits for a wait-until-true loop, so a passing test returns as soon as its condition holds and the assertions are unchanged.
+- Regression: `go vet ./...` and the three named tests pass on the runner host under CPU saturation; the forge `go` job runs the whole suite on every push.
+- Avoid: a fixed short deadline on work that finishes by itself; bound the wait generously and assert on the outcome.

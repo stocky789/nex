@@ -439,7 +439,7 @@ func (r *rig) status() ImageStatus {
 // wait blocks until the last operation finished and returns it.
 func (r *rig) wait() Operation {
 	r.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		if op := r.status().Operation; op != nil && op.FinishedAt != nil && !r.status().Running {
 			return *op
@@ -1225,7 +1225,7 @@ func TestCancel(t *testing.T) {
 		r.pub.release(2, "v2", true)
 		r.plat.stageGate = make(chan struct{})
 		r.apply("req-apply-0001", nil)
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(time.Minute)
 		for r.status().Phase != PhaseWriting && time.Now().Before(deadline) {
 			time.Sleep(5 * time.Millisecond)
 		}

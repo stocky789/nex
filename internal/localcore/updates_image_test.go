@@ -102,7 +102,7 @@ func TestImageUpdateRoutes(t *testing.T) {
 	if code != 202 || body["id"] != "req-apply-0002" || body["kind"] != "apply" {
 		t.Fatalf("%d %v", code, body)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		w = callLocal(s, "GET", "/api/local/v1/updates", nil, cookie, csrf, "https://core.test")
 		st = nexupdate.ImageStatus{}

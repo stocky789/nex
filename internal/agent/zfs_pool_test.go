@@ -242,7 +242,7 @@ func TestPoolZFSAccessProbeFencesMembersAndReleasesConnections(t *testing.T) {
 	if access.HostID != member.State.HostID || access.Error != "" || access.PoolGUID != "pool-guid" || !access.Writable {
 		t.Fatalf("member repository access = %#v", access)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		mu.Lock()
 		remaining := open

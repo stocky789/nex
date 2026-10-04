@@ -12,7 +12,7 @@ import (
 
 func waitForProgressPhase(t *testing.T, dir, want string) nexupdate.Progress {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		if p, ok := nexupdate.ReadProgress(dir); ok && p.Phase == want {
 			return p

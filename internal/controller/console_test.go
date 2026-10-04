@@ -102,7 +102,7 @@ func TestConsoleAuthorizationPairingAndRelay(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		conn.SetDeadline(time.Now().Add(time.Minute))
 		if _, err = conn.Write([]byte(request)); err != nil {
 			t.Fatal(err)
 		}
@@ -213,7 +213,7 @@ func TestConsoleRejectsConcurrentHostTunnelBeforeUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	conn.SetDeadline(time.Now().Add(time.Minute))
 	if _, err := io.WriteString(conn, "POST /console/ticket HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: nex-console\r\nX-Test-Block-Hijack: 1\r\nContent-Length: 0\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}

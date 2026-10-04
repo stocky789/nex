@@ -52,7 +52,7 @@ func TestLocalConsoleBridgesRunningVM(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		conn.SetDeadline(time.Now().Add(time.Minute))
 		conn.Write([]byte(request))
 		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 		if err != nil {

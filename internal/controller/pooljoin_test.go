@@ -109,7 +109,7 @@ func (l *joinLab) addMember(body any, answer func(protocol.PoolRequest) protocol
 	l.t.Helper()
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- callRaw(l.a, "POST", "/api/v1/pools/"+l.master.pool+"/members", body) }()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		select {
 		case w := <-done:

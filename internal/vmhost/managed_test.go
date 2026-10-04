@@ -2176,7 +2176,7 @@ func TestAppliedSkipsPendingEntriesInFlight(t *testing.T) {
 	c := protocol.Command{OperationID: "p-live", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: v.ID, PoolID: "p", HostID: "h", Action: "start"}}
 	done := make(chan protocol.Result, 1)
 	go func() { r, _ := e.Execute(context.Background(), c, nil); done <- r }()
-	for deadline := time.Now().Add(5 * time.Second); ; {
+	for deadline := time.Now().Add(time.Minute); ; {
 		if _, err := os.Stat(filepath.Join(e.stateDir, "p-live.json")); err == nil {
 			break
 		}

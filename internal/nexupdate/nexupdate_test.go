@@ -718,7 +718,7 @@ func TestMergeProgressLeavesARunningApplyAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { close(gate); WaitApply() }()
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(5 * time.Millisecond) {
 		if p, ok := ReadProgress(dir); ok && p.Phase == "installing" {
 			break
 		}

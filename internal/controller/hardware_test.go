@@ -97,7 +97,7 @@ func TestHostHardwareRelay(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		conn.SetDeadline(time.Now().Add(time.Minute))
 		fmt.Fprintf(conn, "POST /api/v1/agent/stats/%s HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: nex-stats\r\nContent-Length: 0\r\n\r\n", tok)
 		reader := bufio.NewReader(conn)
 		resp, err := http.ReadResponse(reader, nil)
