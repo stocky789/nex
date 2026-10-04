@@ -12571,3 +12571,12 @@ of real storage or hardware certification.
 - Fix: the boot lab accepts either name.
 - Regression: none automated; the forge `controller-image` job is the check. Not run after the fix.
 - Avoid: naming a lab's input after an intermediate build file instead of the published artifact.
+
+## BUG-1914 — CI heavy-step wrapper killed its own step with a spurious SIGTERM
+
+- Date: 2026-10-04.
+- Symptom: forge steps wrapped by `scripts/ci-heavy-step.sh` ended with `Process completed with exit code 143` two to three seconds after starting and printed nothing; occasionally a step finished its work and then hung in the wrapper's cleanup.
+- Root cause: the wrapper's PPid watchdog read `/proc/<supervisor>/status` line by line with `read`. Bash rewinds a seekable file after each line and procfs regenerates it, so on a busy host the PPid line was occasionally skipped; the empty value differed from the expected wrapper PID and the watchdog sent SIGTERM to a healthy supervisor.
+- Fix: the watchdog reads the file whole and signals only when it actually parsed a PPid that differs from the wrapper's.
+- Regression: reproduced on the forge runner host by running 12 wrapper containers at once under full CPU load (failed within 5 to 14 rounds twice; one round hung); after the fix 15 consecutive rounds (180 containers) all exited 0. Not automated: the race needs a saturated host to appear.
+- Avoid: line-by-line reads of procfs files, and treating an unparsed value as "the parent died".

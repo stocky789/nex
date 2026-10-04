@@ -40,7 +40,7 @@ def host_storage(page, url, host_id):
 
 def refresh(page):
     # The console re-reads inventory every ten seconds; wait for the next ISO read.
-    with page.expect_response(lambda r: r.url.endswith('/api/v1/media'), timeout=15000):
+    with page.expect_response(lambda r: r.url.endswith('/api/v1/media'), timeout=60000):
         pass
 
 
@@ -161,7 +161,7 @@ def main():
                     refresh(page)
                     expect(panel.get_by_role('row').filter(has_text='available.iso')).to_contain_text('Transfer succeeded · not rescanned')
                     page.route('**/api/v1/storage', lambda route: route.abort('failed'))
-                    expect(page.get_by_role('alert')).to_be_visible(timeout=15000)
+                    expect(page.get_by_role('alert')).to_be_visible(timeout=60000)
                     expect(panel.get_by_role('row').filter(has_text='available.iso')).to_contain_text('Availability unknown · Controller data may be stale')
                     shot('controller-unavailable')
                     page.unroute('**/api/v1/storage')

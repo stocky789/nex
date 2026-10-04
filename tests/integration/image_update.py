@@ -698,11 +698,15 @@ def main():
             check("APPLY2: " in r1[1] and "update_in_progress" in r1[1].split("APPLY2:")[1].split("CANCEL:")[0], "exclusion: a second CLI apply while one runs is refused with update_in_progress", r1[1])
             check("CANCEL: " in r1[1] and "update_in_progress" in r1[1].split("CANCEL:")[1], "exclusion: a cancel from a second process while an apply runs is refused with update_in_progress", r1[1])
             check("rc=0" in r3[1], "exclusion: the reconcile service coexists with a running apply (reads, never writes)", r3[1])
+            # The phase turns "staged" a moment before the operation is finished and recorded; cutting power in that gap leaves
+            # an interrupted operation behind and fails every later step, so wait for the operation itself.
             t0 = time.time()
-            while time.time() - t0 < 150 and '"staged"' not in raw_phase(ctl):
-                time.sleep(1)
-            st = status(ctl)
-            op = st.get("operation") or {}
+            while True:
+                st = status(ctl)
+                op = st.get("operation") or {}
+                if (op.get("id") == f"lab-cut-{RUN}" and op.get("finished_at")) or time.time() - t0 > 300:
+                    break
+                time.sleep(2)
             check(op.get("id") == f"lab-cut-{RUN}" and op.get("phase") != "cancelled" and op.get("finished_at"), "exclusion: the resumed apply finished on its own (not cancelled by the second process)", json.dumps(op))
             check(st["phase"] == "staged" and any(s["role"] == "staged" and s["sequence"] == 2 for s in st["slots"]), "after the torn slot write: the resumed apply stages release 2 cleanly", st["phase"])
 

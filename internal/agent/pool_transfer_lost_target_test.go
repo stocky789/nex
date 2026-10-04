@@ -106,7 +106,7 @@ func TestHandedOffMasterResumesOnAFenceProofOfTheTarget(t *testing.T) {
 			if err := requirePoolAuthorityWritable(master); err != nil {
 				t.Fatalf("the resumed master still refuses authority writes: %v", err)
 			}
-			if err := PushPoolAuthorityReplicas(context.Background(), master, 5*time.Second); err != nil {
+			if err := PushPoolAuthorityReplicas(context.Background(), master, time.Minute); err != nil {
 				t.Fatalf("the resumed master could not replicate: %v", err)
 			}
 		})

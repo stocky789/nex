@@ -143,11 +143,10 @@ trap 'lock_lost=true' USR1
 supervisor_pid=$BASHPID
 bash -c '
     while [[ -r /proc/$1/status ]]; do
-        parent=
-        while read -r key value rest; do
-            if [[ $key == PPid: ]]; then parent=$value; break; fi
-        done < "/proc/$1/status" 2>/dev/null || exit 0
-        if [[ $parent != "$2" ]]; then
+        # Read the file whole: line by line, bash rewinds and procfs regenerates it between reads,
+        # so under load the PPid line can be missed, and a miss must never look like a dead wrapper.
+        { status=$(< "/proc/$1/status"); } 2>/dev/null || exit 0
+        if [[ $status =~ PPid:[[:space:]]*([0-9]+) && ${BASH_REMATCH[1]} != "$2" ]]; then
             kill -TERM "$1" 2>/dev/null || true
             exit 0
         fi
