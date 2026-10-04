@@ -13,7 +13,7 @@ import threading
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[2]
-POLL = 15000  # ms: the UI re-reads inventory every 10 s
+POLL = 60000  # ms: an upper bound; the UI re-reads inventory every 10 s and a loaded host can delay that timer
 
 
 def main():

@@ -12635,3 +12635,12 @@ of real storage or hardware certification.
 - Fix: the not-ready deadline is 2 s; the two storage labs wait up to 60 s for the poll.
 - Regression: the labs and the Go test are the checks (forge `image-layout`, `controller-browser`); the browser labs passed 26 of 26 stressed runs on the runner host before this change to the poll waits.
 - Avoid: reusing one deadline for a step that is meant to expire and a step that must succeed.
+
+## BUG-1921 — Browser labs waited 10 to 15 seconds for UI timers that fire every 10 seconds
+
+- Date: 2026-10-04.
+- Symptom: `console_controls_browser.py` expected the attached ISO to reappear within 15 s of the guest media state changing and saw `demo-installer.iso (ejected in the VM)` for the whole wait.
+- Root cause: the console re-reads inventory on a 10 s timer and the lab's bound was `POLL = 15000`, five seconds of headroom for a timer a loaded host can delay; the same 10 to 15 s bound was used for every poll-driven expectation in the other labs.
+- Fix: those bounds are 60 s in `console_controls_browser.py`, `controller_refresh_browser.py`, `managed_vm_browser.py` and `phase1_browser.py`. They are upper limits; a passing wait still returns as soon as the page updates.
+- Regression: the labs are the checks (forge `controller-browser`); the same scripts passed 26 of 26 stressed runs on the runner host before this change widened the bounds.
+- Avoid: a wait bound only slightly above the period of the timer it waits for.

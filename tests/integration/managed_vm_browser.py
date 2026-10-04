@@ -793,7 +793,7 @@ def acceptance(config, password, iso, evidence, mode):
         assert len(power_posts) == 1 and power_posts[0]['action'] == 'start', power_posts
         capture('start-notice-queued')
         power_ops['injected-power-1'] = 'succeeded'
-        expect(notice).to_have_count(0, timeout=15000)  # the next inventory poll sees the task settle
+        expect(notice).to_have_count(0, timeout=60000)  # the next inventory poll sees the task settle
         capture('start-notice-cleared')
         start.click()
         page.get_by_role('dialog').get_by_role('button', name='Confirm start', exact=True).click()

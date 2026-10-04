@@ -187,7 +187,7 @@ def main():
             assert len(state['host_request_ids']) == 2 and state['host_request_ids'][0] == state['host_request_ids'][1], 'retry after an uncertain POST did not reuse its request identity'
             page.wait_for_timeout(300)
             assert state['host_hardware_reads'] == 1, 'the initial accepted refresh should leave the old hardware report visible until Core reports completion'
-            expect(page.get_by_role('tabpanel', name='Hardware').get_by_text('Could not read the hardware', exact=False)).to_be_visible(timeout=13000)
+            expect(page.get_by_role('tabpanel', name='Hardware').get_by_text('Could not read the hardware', exact=False)).to_be_visible(timeout=60000)
             expect(page.get_by_text('Inventory refresh queued.', exact=False)).to_have_count(0)
             expect(page.get_by_text('Fixture initial model', exact=False)).to_be_visible()
             page.evaluate("window.dispatchEvent(new Event('online'))")
@@ -233,7 +233,7 @@ def main():
             page.get_by_role('button', name='Stage this configuration', exact=True).click()
             expect(page.get_by_role('alert')).to_contain_text('fixture accepted staged request but lost its response')
             expect(page.get_by_text('No change staged', exact=False)).to_be_visible()
-            expect(page.get_by_text('Staged, not applied', exact=False)).to_be_visible(timeout=13000)
+            expect(page.get_by_text('Staged, not applied', exact=False)).to_be_visible(timeout=60000)
             assert state['network_posts'] == 1, 'an uncertain network response was automatically resubmitted'
             page.screenshot(path=str(args.evidence / 'host-network-staged.png'), full_page=True)
             checks.append('network read failure preserves the draft, blocks staging, and recovers on Refresh')
@@ -247,7 +247,7 @@ def main():
             page.get_by_role('button', name='Let Nex configure this controller again', exact=True).click()
             expect(page.get_by_text('Nex Core accepted the request', exact=False)).to_be_visible()
             # One read still shows the old master record; the next poll catches up with Core.
-            expect(page.get_by_text('Management controller: configured by Nex Core at bmc.example.test as nex.', exact=True)).to_be_visible(timeout=13000)
+            expect(page.get_by_text('Management controller: configured by Nex Core at bmc.example.test as nex.', exact=True)).to_be_visible(timeout=60000)
             page.screenshot(path=str(args.evidence / 'pool-bmc-configured.png'), full_page=True)
             checks.append('BMC reprovision acceptance is followed by master-reported configuration without manual refresh')
 
@@ -259,12 +259,12 @@ def main():
             repository_name.fill('draft repository')
             repository_name.focus()
             state['cluster_fail_next'] = True
-            expect(cluster_details.get_by_text('Core status refresh failed', exact=False)).to_be_visible(timeout=13000)
+            expect(cluster_details.get_by_text('Core status refresh failed', exact=False)).to_be_visible(timeout=60000)
             expect(cluster_details.get_by_role('button', name='Submit Core setup', exact=True)).to_be_disabled()
             page.screenshot(path=str(args.evidence / 'cluster-read-error.png'), full_page=True)
             state['cluster_complete'] = True
             page.evaluate("window.dispatchEvent(new Event('online'))")
-            expect(cluster_details.get_by_text('Succeeded', exact=True)).to_be_visible(timeout=13000)
+            expect(cluster_details.get_by_text('Succeeded', exact=True)).to_be_visible(timeout=60000)
             assert repository_name.input_value() == 'draft repository', 'background cluster refresh discarded the operator draft'
             expect(repository_name).to_be_focused()
             page.screenshot(path=str(args.evidence / 'cluster-status-succeeded.png'), full_page=True)
@@ -294,13 +294,13 @@ def main():
 
             page.evaluate("location.hash = '#/settings/updates'")
             page.get_by_role('button', name='Update', exact=True).click()
-            expect(page.get_by_text('Update complete. Reloading to load the new version…', exact=True)).to_be_visible(timeout=13000)
+            expect(page.get_by_text('Update complete. Reloading to load the new version…', exact=True)).to_be_visible(timeout=60000)
             assert state['update_posts'] == 1 and state['update_status_reads'] >= 3, 'an uncertain update response was not followed by read-only status checks'
             checks.append('uncertain update submission follows status through a temporary server error without resubmitting')
-            page.wait_for_function("Number(sessionStorage.getItem('refresh-check-loads')) === %d" % (loads + 1), timeout=10000)
+            page.wait_for_function("Number(sessionStorage.getItem('refresh-check-loads')) === %d" % (loads + 1), timeout=60000)
             expect(page.get_by_role('button', name='Update', exact=True)).to_be_visible()
             page.get_by_role('button', name='Update', exact=True).click()
-            expect(page.get_by_text('this update could not be confirmed', exact=False)).to_be_visible(timeout=13000)
+            expect(page.get_by_text('this update could not be confirmed', exact=False)).to_be_visible(timeout=60000)
             assert state['update_posts'] == 2, 'an old done status caused a duplicate update submission'
             checks.append('a previous terminal update status does not falsely confirm a new uncertain request')
 

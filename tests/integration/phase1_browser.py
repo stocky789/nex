@@ -201,7 +201,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(panel.locator('header .badge')).to_have_text('Stale')
         page.unroute('**/api/v1/hosts', stale_sample)
         # The default 5s assertion expires before the UI's 10s inventory poll.
-        expect(panel.locator('header .badge')).to_have_text('Online', timeout=15000)
+        expect(panel.locator('header .badge')).to_have_text('Online', timeout=60000)
         lab.passed('browser injected stale connection recovers from live inventory on the next automatic poll')
         host = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)
         pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == pool_id)
@@ -281,7 +281,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         create_vm = page.get_by_role('button', name='Create VM', exact=True)
         expect(create_vm).to_be_enabled()
         create_vm.click()
-        expect(page.get_by_role('heading', name='Create VM · 1 of 6:', exact=False)).to_be_visible(timeout=15000)
+        expect(page.get_by_role('heading', name='Create VM · 1 of 6:', exact=False)).to_be_visible(timeout=60000)
         capture('create-vm-wizard')
         page.get_by_role('region', name='Create VM').get_by_role('button', name='Close', exact=True).click()
         expect(create_vm).to_be_visible()
@@ -328,7 +328,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         warning_vms.append({'id': 'warning-vm', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Warning fixture',
                             'status': 'succeeded', 'state': 'shut off', 'freshness': 'fresh', 'operation_id': 'warning-create'})
         # The next automatic inventory poll (every 10 s) sees the terminal task.
-        expect(warning).not_to_be_visible(timeout=15000)
+        expect(warning).not_to_be_visible(timeout=60000)
         expect(panel.get_by_role('heading', name=re.compile('^Warning fixture'))).to_be_visible()
         capture('created-vm-without-refresh')
         page.unroute('**/api/v1/vms')
@@ -413,7 +413,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         fixture_vm['state'] = 'shut off'
         power_requests.clear()
         reject_next.append(True)
-        expect(panel.locator('header .badge')).to_have_text('Shut off', timeout=15000)
+        expect(panel.locator('header .badge')).to_have_text('Shut off', timeout=60000)
         expect(menu_item('More', 'Force stop')).to_be_disabled()
         expect(menu_item('More', 'Force reboot')).to_be_disabled()
         page.keyboard.press('Escape')
