@@ -64,8 +64,12 @@ new successful boot, restore or security observation.
 Cross-cutting items:
 
 - **CI:** `.github/workflows/image.yml` and `.gitea/workflows/image.yml` exist (forge-only jobs: layout tests, host image build and boot,
-  tamper and A/B proof, Controller guest build and boot, double build). **They have not run on any forge**; `tests/test_ci_security.py`
-  pins their shape. `.github/workflows/github.yml` now also triggers on pushes to `dev` (the release-channel change, [release channels plan](2026-10-02-release-channels.md)).
+  tamper and A/B proof, Controller guest build and boot, double build). The inspected development run on 2026-10-04 passed
+  layout checks but failed before boot/build proof: the two boot jobs lacked `/dev/kvm`, and reproducibility lacked host `rsync`.
+  The prerequisite repair does not establish successful image builds, boots or reproducibility; a subsequent forge run is still required.
+  **API impact: none** — CI execution only, with no Controller/Core or client contract change.
+  **Guide impact: none** — installed operator workflows are unchanged. **State owner: none** — no durable product state.
+  `.github/workflows/github.yml` also triggers on pushes to `dev` ([release channels plan](2026-10-02-release-channels.md)).
 - **Controller update helpers:** removed only where the swap replaces them: the profile's cloud-init seed no longer carries
   `apply-update` or the update units, and the guest image has no `apt` or helper. **Still present, for the classic edition and the
   single-disk appliance:** `packaging/controller/{apply-update,nex-controller-update.path,nex-controller-update.service,postinst,prerm}`,

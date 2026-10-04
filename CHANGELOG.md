@@ -18,6 +18,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Bug Fixes
+
+- Image CI now passes KVM through to its boot jobs and snapshots reproducibility inputs without requiring `rsync` on the runner.
+
 ### Miscellaneous
 
 - Download listings now show only release links, with Stable and Development navigation, instead of exposing the website's `latest.json` metadata.

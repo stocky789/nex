@@ -91,6 +91,14 @@ The image carries no SSH host keys and an empty machine-id; `nex-firstboot.servi
 `image/mkosi.images/` (layers) belongs to the layer build, see its own scripts. The private image-host address is
 supplied through configuration or CI secrets only, never committed.
 
+The forge image boot jobs run in the runner's Ubuntu container with `/dev/kvm` passed
+through explicitly. The Docker host must provide working KVM; the runner must permit
+the device option, and the job user needs read/write access. The prerequisite check
+fails rather than skipping boot coverage or switching to software emulation. These
+jobs retain access to the Docker daemon for the existing image builders.
+The reproducibility driver freezes tracked and nonignored untracked source files with
+Git, Python 3 and GNU tar; it does not need host `rsync`.
+
 ## systemd examples
 
 The units in `packaging/systemd/` expect binaries in `/usr/local/lib/nex/`, built UI

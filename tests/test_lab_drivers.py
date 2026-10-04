@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
 """Regression tests for the pure safety logic of the image lab drivers (no Docker, KVM or QEMU): exit codes, pid
-handling, destructive-path guards, the Secure Boot verdict helpers and the repro-check digest gate."""
+handling, destructive-path guards, the Secure Boot verdict helpers and the repro-check snapshot/digest gates."""
 import importlib.util
 import io
 import json
@@ -528,6 +528,108 @@ class CoreApiWorkdirTests(TempCase):
         (given / 'mine').write_text('x')
         self.run_failing('--workdir', str(given))
         self.assertTrue((given / 'mine').exists())
+
+
+class ReproSourceSnapshotTests(TempCase):
+    def test_both_builds_use_one_frozen_git_snapshot_without_rsync(self):
+        repo = self.tmp / 'work tree'
+        (repo / 'scripts').mkdir(parents=True)
+        (repo / 'image').mkdir()
+        script = repo / 'scripts/image-repro-check.sh'
+        shutil.copy2(ROOT / 'scripts/image-repro-check.sh', script)
+        (repo / 'image/snapshot').write_text('20260921T000000Z\n')
+        (repo / '.gitignore').write_text('ignored/\n')
+        tracked = repo / 'tracked file'
+        tracked.write_text('tracked bytes\n')
+        tracked.chmod(0o751)
+        missing = repo / 'deleted tracked file'
+        missing.write_text('deleted\n')
+        (repo / 'ignored').mkdir()
+        (repo / 'ignored/tracked').write_text('tracked despite ignore\n')
+        (repo / 'tracked link').symlink_to('tracked file')
+        (repo / 'dangling link').symlink_to('missing target')
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True, capture_output=True)
+        subprocess.run(['git', 'add', '.'], cwd=repo, check=True, capture_output=True)
+        subprocess.run(['git', 'add', '-f', 'ignored/tracked'], cwd=repo, check=True, capture_output=True)
+        missing.unlink()
+        tracked.write_text('changed worktree bytes\n')
+        (repo / 'untracked file').write_text('untracked bytes\n')
+        (repo / '-leading option').write_text('literal filename\n')
+        (repo / 'line\nbreak').write_text('newline filename\n')
+        (repo / 'ignored/untracked').write_text('must not be copied\n')
+        os.utime(tracked, ns=(1700000000000000001, 1700000000000000001))
+        (repo / 'ignored').chmod(0o751)
+        os.utime(repo / 'ignored', ns=(1700000001000000001, 1700000001000000001))
+
+        builder = repo / 'image/build.sh'
+        builder.write_text(textwrap.dedent('''\
+            #!/bin/sh
+            set -eu
+            [ "$1" = base ] || exit 0
+            cd "$(dirname "$0")/.."
+            pwd > "$NEX_IMAGE_OUT/source-path"
+            tar -cf "$NEX_IMAGE_OUT/root.erofs" -- "tracked file" "untracked file" \
+                "tracked link" "dangling link" "ignored/tracked" "-leading option" "line
+            break"
+            printf 'edited during build\\n' > "$ORIGINAL_REPO/tracked file"
+            chmod 600 "$ORIGINAL_REPO/tracked file"
+            rm "$ORIGINAL_REPO/tracked link"
+            ln -s "different target" "$ORIGINAL_REPO/tracked link"
+            printf 'edited during build\\n' > "$ORIGINAL_REPO/untracked file"
+            '''))
+        builder.chmod(0o755)
+
+        tools = self.tmp / 'tools'
+        tools.mkdir()
+        # Execute container shell commands locally; only the Docker boundary is simulated.
+        docker = tools / 'docker'
+        docker.write_text(f'#!{sys.executable}\n' + textwrap.dedent('''\
+            import subprocess
+            import sys
+            args = sys.argv[1:]
+            if args[:2] == ['image', 'inspect']:
+                print('local-test-tools')
+                sys.exit(0)
+            mount = args[args.index('-v') + 1].removesuffix(':/r')
+            command = args[-1].replace('/r/', mount + '/')
+            sys.exit(subprocess.run(['sh', '-c', command]).returncode)
+            '''))
+        docker.chmod(0o755)
+        for name, body in [('go', 'exit 0'), ('rsync', 'exit 97')]:
+            tool = tools / name
+            tool.write_text('#!/bin/sh\n' + body + '\n')
+            tool.chmod(0o755)
+        report = self.tmp / 'report'
+        env = {key: value for key, value in os.environ.items() if not key.startswith('NEX_')}
+        env.update(PATH=str(tools) + os.pathsep + env['PATH'], NEX_DOCKER=str(docker),
+                   NEX_TOOLS_IMAGE='local-test-tools', ORIGINAL_REPO=str(repo))
+        # A restrictive umask must not strip the source's executable permission bits.
+        result = subprocess.run(['sh', '-c', 'umask 077; exec sh "$1" --report "$2"',
+                                 'snapshot-test', str(script), str(report)],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        source = report / 'src'
+        self.assertEqual((source / 'tracked file').read_text(), 'changed worktree bytes\n')
+        self.assertEqual((source / 'tracked file').stat().st_mode & 0o777, 0o751)
+        self.assertEqual((source / 'tracked file').stat().st_mtime_ns, 1700000000000000001)
+        self.assertEqual((source / 'untracked file').read_text(), 'untracked bytes\n')
+        self.assertEqual((source / '-leading option').read_text(), 'literal filename\n')
+        self.assertEqual((source / 'line\nbreak').read_text(), 'newline filename\n')
+        self.assertEqual((source / 'ignored/tracked').read_text(), 'tracked despite ignore\n')
+        self.assertEqual((source / 'ignored').stat().st_mode & 0o777, 0o751)
+        self.assertEqual((source / 'ignored').stat().st_mtime_ns, 1700000001000000001)
+        self.assertEqual(os.readlink(source / 'tracked link'), 'tracked file')
+        self.assertEqual(os.readlink(source / 'dangling link'), 'missing target')
+        self.assertFalse((source / 'deleted tracked file').exists())
+        self.assertFalse((source / 'ignored/untracked').exists())
+        self.assertFalse((source / '.git').exists())
+        self.assertEqual(tracked.read_text(), 'edited during build\n')
+        self.assertEqual(tracked.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(os.readlink(repo / 'tracked link'), 'different target')
+        for run in ('run1', 'run2'):
+            self.assertEqual((report / run / 'source-path').read_text().strip(), str(source))
+        self.assertEqual((report / 'run1/root.erofs').read_bytes(), (report / 'run2/root.erofs').read_bytes())
+        self.assertTrue((report / 'summary.tsv').read_text().strip().endswith('\tyes'))
 
 
 class ReproDigestGateTests(TempCase):

@@ -68,7 +68,32 @@ mkdir -p "$report/diff"
 
 src=$report/src
 mkdir -p "$src"
-(cd "$repo" && git ls-files -co --exclude-standard -z) | rsync -a --from0 --files-from=- --ignore-missing-args "$repo"/ "$src"/
+python3 - "$repo" <<'PY' > "$report/src.files"
+import os
+import subprocess
+import sys
+
+repo = sys.argv[1]
+selected = set()
+for name in subprocess.check_output(
+        ["git", "ls-files", "-co", "--exclude-standard", "-z"], cwd=repo).split(b"\0"):
+    if not name:
+        continue
+    path = os.fsdecode(name)
+    try:
+        os.lstat(os.path.join(repo, path))
+    except FileNotFoundError:
+        continue
+    selected.add(path)
+    parent = os.path.dirname(path)
+    while parent:
+        selected.add(parent)
+        parent = os.path.dirname(parent)
+sys.stdout.buffer.write(b"".join(os.fsencode(path) + b"\0" for path in sorted(selected)))
+PY
+tar -C "$repo" --format=posix --no-recursion --null -T "$report/src.files" -cf "$report/src.tar"
+tar -xpf "$report/src.tar" -C "$src"
+rm "$report/src.files" "$report/src.tar"
 srcdigest=$(cd "$src" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
 
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1790000000}

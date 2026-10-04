@@ -52,6 +52,9 @@ jobs:
     if: github.server_url != 'https://github.com' # forge-only
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    container:
+      image: docker.gitea.com/runner-images:ubuntu-latest
+      options: --device /dev/kvm:/dev/kvm
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -117,6 +120,9 @@ jobs:
     if: github.server_url != 'https://github.com' # forge-only
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    container:
+      image: docker.gitea.com/runner-images:ubuntu-latest
+      options: --device /dev/kvm:/dev/kvm
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

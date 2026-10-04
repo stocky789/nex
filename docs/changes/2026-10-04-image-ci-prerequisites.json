@@ -1,0 +1,42 @@
+{
+  "summary": "Expose KVM only to image boot job containers and freeze reproducibility source inputs without host rsync.",
+  "paths": [
+    ".github/workflows/image.yml",
+    ".gitea/workflows/image.yml",
+    "scripts/image-repro-check.sh",
+    "tests/test_lab_drivers.py",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/development.md",
+    "docs/plans/2026-10-01-immutable-nex-core.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI-only prerequisites and source freezing; installed GUI, CLI, configuration, permissions and recovery workflows are unchanged. Contributor runner requirements are updated in docs/development.md.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client-facing call, Controller operation, Core agent command or observed-state/result flow changes. docs/API.md remains accurate.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone is promoted; the plan corrects its stale no-forge-run statement and records prerequisite failure rather than image acceptance.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only disposable build inputs and job container configuration change; no durable Core or Controller state is introduced. Controller replacement behavior is unchanged."
+  },
+  "verification": {
+    "method": "Authenticated failed-job logs establish the two prerequisite failures on runner v1.0.6. PYTHONPATH=tests python3 -m unittest tests.test_lab_drivers tests.test_ci_security tests.test_release_version passed 74 tests; sh -n scripts/image-repro-check.sh passed. The actual source-copy block ran over the real checkout with exit 0 and preserved selected bytes/modes and directory modes/nanosecond mtimes while excluding .git/.cache; a nontraversable selected path failed with PermissionError. An unprivileged disposable Docker container using --device /dev/kvm:/dev/kvm returned KVM API 12 and created a VM descriptor. The permanent source-snapshot regression uses real Git/tar/files and simulated Docker/build boundaries. Independent review found and verified corrections for parent metadata and inaccessible-input handling; final review found no remaining defects. Documentation gate passed. Repository privacy failed on unrelated core.* dump files containing personal paths, left untouched. Not run: a corrected forge run, full image builds, guest boots or real-image double-build comparison.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "tests/test_lab_drivers.py",
+      "scripts/image-repro-check.sh",
+      ".github/workflows/image.yml",
+      ".gitea/workflows/image.yml"
+    ]
+  }
+}
