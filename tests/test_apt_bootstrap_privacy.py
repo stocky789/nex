@@ -46,7 +46,8 @@ class AptBootstrapPrivacyTests(unittest.TestCase):
         stub.mkdir()
         (stub / "id").write_text("#!/bin/sh\necho 0\n")
         (stub / "dpkg").write_text("#!/bin/sh\nexit 0\n")
-        (stub / "gpg").write_text("#!/bin/sh\nprintf 'sec:\\n'\n")
+        # Reports a secret key and writes whatever -o names, as the publisher expects of a real signer.
+        (stub / "gpg").write_text("#!/bin/bash\nargs=(\"$@\")\nfor i in \"${!args[@]}\"; do [[ ${args[i]} == -o ]] && : > \"${args[i+1]}\"; done\nprintf 'sec:\\n'\n")
         (stub / "visudo").write_text("#!/bin/sh\nexit 0\n")
         (stub / "install").write_text("#!/bin/bash\nargs=(\"$@\")\nif [[ $1 == -d ]]; then mkdir -p \"${args[-1]}\"; else mkdir -p \"$(dirname \"${args[-1]}\")\"; cp \"${args[-2]}\" \"${args[-1]}\"; fi\n")
         for command in stub.iterdir():

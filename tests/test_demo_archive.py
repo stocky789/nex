@@ -266,6 +266,7 @@ class FakeDocker:
 
 class DemoDeployFlowTests(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))  # the deployer's main() sets a process-wide 077 umask
         self.deployer = load_deployer()
         self.docker = FakeDocker()
         self.directory = tempfile.TemporaryDirectory()

@@ -23,3 +23,6 @@ docs/qa/**/*.gif
 
 # mkosi image build output (image/build.sh)
 image/out/
+
+# Core dumps from crashed test or tool runs
+/core.[0-9]*

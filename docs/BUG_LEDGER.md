@@ -12598,3 +12598,13 @@ of real storage or hardware certification.
 - Fix: wait up to 30 s for the provision request to be recorded before reading it.
 - Regression: the script passes locally after the change; the forge `controller-browser` job runs it on every push.
 - Avoid: reading mocked-API request logs straight after a click without waiting for the request.
+
+## BUG-1917 — Contracts job failed on tests that depended on the runner's environment and on test order
+
+- Date: 2026-10-04.
+- Symptom: the forge `contracts` job (the whole `tests/` suite) reported 26 failures and 15 errors once the `go` job passed and let it run: missing `go`, `dpkg-deb` exit 2, wrapper-serialization tests failing with `mkdir: cannot create directory ... active`, publish and reachability checks, and the privacy check.
+- Root cause: (1) the job installed no Go toolchain, but `test_core_package_retains_compiled_go_notices` runs `go mod vendor`; (2) `phase1.yml` exports `NEX_CI_LOCK=shared` workflow-wide and `test_ci_serialization` copied the environment, so tests of the exclusive lock ran shared; (3) `DemoDeployFlowTests` ran the deployer's `main()`, which sets a process-wide `umask 077`, and every later test that built a `.deb` with `dpkg-deb` created a 0700 control directory, which `dpkg-deb` rejects; (4) the apt-bootstrap test's `gpg` stub claimed a secret key but wrote no signature files; (5) `test_release_reachability` omitted `NEX_PUBLIC_VERSION`, which the release step now reads; (6) 14 core dumps had been committed and carried a personal home path.
+- Fix: `setup-go` in the contracts job (both workflow copies); the serialization helper no longer inherits `NEX_CI_LOCK`; the deploy tests restore the umask; the gpg stub writes its `-o` file; the reachability test supplies `NEX_PUBLIC_VERSION`; the core dumps are removed and `/core.[0-9]*` is ignored.
+- Regression: reproduced on the runner host in the runner image with the job's packages, `NEX_CI_LOCK=shared` and Go 1.27.1: 17 failures and 12 errors before, 786 tests OK after. The forge `contracts` job runs the same suite on every push.
+- Limits: the dumps remain in published Git history; only the current tree is clean.
+- Avoid: a test that inherits the whole process environment, and a test that changes process-wide state without restoring it.

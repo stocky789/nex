@@ -192,7 +192,8 @@ os.execv("/bin/sh", ["sh", "-c", helper])
         cwd = self.work / f"cwd-{identifier}"
         cwd.mkdir()
         env = {
-            **os.environ,
+            # The workflows export NEX_CI_LOCK=shared; a test gets the lock class it asks for, never the job's.
+            **{key: value for key, value in os.environ.items() if key != "NEX_CI_LOCK"},
             "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
             "GITHUB_WORKSPACE": str(workspace or ROOT),
             "NEX_CI_TEST_WORK": str(self.work),

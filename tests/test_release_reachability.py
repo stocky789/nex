@@ -63,7 +63,7 @@ class ReleaseReachabilityTests(unittest.TestCase):
                         with self.subTest(provider=provider, apt=apt_path, unauthorized=unauthorized, missing_version=missing_version, settling=settling):
                             requests.clear()
                             result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
-                                env={**os.environ, 'NEX_VERSION': '0.3.4', 'NEX_APT_PATH': apt_path,
+                                env={**os.environ, 'NEX_VERSION': '0.3.4', 'NEX_PUBLIC_VERSION': '0.3.4', 'NEX_APT_PATH': apt_path,
                                      'NEX_DOWNLOADS_PATH': downloads_path,
                                      'NEX_PUBLIC_URL': f'http://127.0.0.1:{server.server_port}'},
                                 text=True, capture_output=True, timeout=30, cwd=temporary.name)

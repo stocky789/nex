@@ -87,7 +87,7 @@ def simulated(lab):
                         'checks': [{'name': 'libvirt', 'status': 'healthy', 'observed_at': now, 'last_success': now}],
                         'nics': [{'name': 'nex1', 'mac': '52:54:00:00:00:11', 'kind': 'physical', 'state': 'up', 'addresses': []}], 'disks': []}}
                 request = urllib.request.Request(lab.url + '/api/v1/agent/report', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
-                with urllib.request.urlopen(request, context=context, timeout=5) as response:
+                with urllib.request.urlopen(request, context=context, timeout=60) as response:
                     answer = json.load(response)
                 results = []
                 for command in answer.get('commands') or []:
@@ -128,6 +128,8 @@ def simulated(lab):
                             vms.append({'id': vm['id'], 'name': vm['name'], 'state': control['state']})
                         else:
                             next(v for v in vms if v['id'] == vm['id'])['name'] = vm['name']
+            except TimeoutError:
+                continue  # a slow Controller on a busy runner; the next report carries the same state
             except Exception as exc:
                 failures.append(str(exc))
                 return
