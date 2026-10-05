@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Build the retained source bundle for one exact Nex ISO."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from itertools import groupby
 import json
+from operator import itemgetter
 from pathlib import Path
 import shutil
 import subprocess
@@ -143,16 +146,29 @@ def retained_dsc(directory, source, version):
     return None
 
 
-def fetch_sources(sources, destination, apt_sources, batch_size=25):
+def fetch_sources(sources, destination, apt_sources, batch_size=25, workers=6):
     options = ['-o', 'Acquire::Retries=3', '-o', 'Acquire::https::Timeout=30']
     if apt_sources:
         options += ['-o', f'Dir::Etc::sourcelist={apt_sources}', '-o', 'Dir::Etc::sourceparts=-',
                     '-o', 'Acquire::Check-Valid-Until=false']
-    for offset in range(0, len(sources), batch_size):
-        batch = sources[offset:offset + batch_size]
-        command = ['apt-get', '-y', *options, 'source', '--download-only',
-                   *[f'{source}={version}' for source, version in batch]]
-        subprocess.run(command, cwd=destination, check=True)
+
+    def download(batch):
+        subprocess.run(['apt-get', '-y', *options, 'source', '--download-only',
+                        *[f'{source}={version}' for source, version in batch]], cwd=destination, check=True)
+
+    # snapshot.debian.org serves one connection at 100-700 kB/s, so fetching a cold cache one
+    # batch at a time took 45 minutes. Versions of one source can share an orig tarball, so they
+    # stay in one batch; `sources` is sorted by name.
+    batches, batch = [], []
+    for _, versions in groupby(sources, key=itemgetter(0)):
+        batch.extend(versions)
+        if len(batch) >= batch_size:
+            batches.append(batch)
+            batch = []
+    if batch:
+        batches.append(batch)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(download, batches))
 
 
 def update_sources(apt_sources):

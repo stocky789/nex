@@ -25,8 +25,14 @@ class SourceBundleTests(unittest.TestCase):
     def test_source_downloads_are_batched_without_extraction(self):
         with mock.patch.object(source_bundle.subprocess, 'run') as run:
             source_bundle.fetch_sources([('one', '1'), ('two', '2')], Path('/tmp'), None, batch_size=1)
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(run.call_args.args[0][-3:], ['source', '--download-only', 'two=2'])
+        self.assertEqual(sorted(call.args[0][-3:] for call in run.call_args_list),
+                         [['source', '--download-only', 'one=1'], ['source', '--download-only', 'two=2']])
+
+    def test_versions_of_one_source_share_a_batch_so_parallel_downloads_never_share_a_file(self):
+        with mock.patch.object(source_bundle.subprocess, 'run') as run:
+            source_bundle.fetch_sources([('a', '1-1'), ('a', '1-2'), ('b', '1')], Path('/tmp'), None, batch_size=1)
+        self.assertEqual(sorted(call.args[0][call.args[0].index('--download-only') + 1:] for call in run.call_args_list),
+                         [['a=1-1', 'a=1-2'], ['b=1']])
 
     def test_retained_source_requires_dsc_identity_and_complete_checksums(self):
         with tempfile.TemporaryDirectory() as tmp:

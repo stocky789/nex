@@ -59,42 +59,59 @@ rebuild_iso_artifacts() {
     cp -a "$appliance_out"/. dist/appliance/
 }
 
+# Digest of everything a matched third-party build reads: its snapshot pins, then its recipe files.
+# Unchanged inputs reuse the previous output instead of compiling the same package again.
+inputs_digest() {
+    { printf '%s\n' "$1"; shift; find "$@" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum; } | sha256sum | cut -d' ' -f1
+}
+
 build_matched_dlm() {
-    local docker_bin=$1 output=.cache/nex-iso/cluster-storage-dlm deb
-    rm -rf "$output"
-    mkdir -p "$output"
-    "$docker_bin" build -t nex-dlm-pacemaker-abi -f packaging/cluster-storage/Dockerfile packaging/cluster-storage >&2
-    "$docker_bin" run --rm -v "$PWD/$output:/output" nex-dlm-pacemaker-abi >&2
+    local docker_bin=$1 output=.cache/nex-iso/cluster-storage-dlm deb digest
+    digest=$(inputs_digest '' packaging/cluster-storage)
+    if [[ $(cat "$output.inputs" 2>/dev/null) == "$digest" ]]; then
+        echo 'reusing the matched dlm-controld build: its inputs are unchanged' >&2
+    else
+        rm -rf "$output" "$output.inputs"
+        mkdir -p "$output"
+        "$docker_bin" build -t nex-dlm-pacemaker-abi -f packaging/cluster-storage/Dockerfile packaging/cluster-storage >&2
+        "$docker_bin" run --rm -v "$PWD/$output:/output" nex-dlm-pacemaker-abi >&2
+    fi
     deb=$(find "$output" -maxdepth 1 -type f -name 'dlm-controld_4.3.0-3+nex1_amd64.deb' -print -quit)
     [[ -n $deb ]] || { echo 'matched dlm-controld build did not produce its pinned package' >&2; exit 1; }
     [[ $(dpkg-deb -f "$deb" Package) == dlm-controld ]]
     dpkg-deb -f "$deb" Depends | grep -Fq 'libstonithd56 (= 3.0.0-2)'
+    printf '%s\n' "$digest" > "$output.inputs"
     printf '%s\n' "$deb"
 }
 
 build_matched_libvirt() {
     local docker_bin=$1 source_snapshot=$2 security_snapshot=$3
-    local output=.cache/nex-iso/matched-libvirt
-    rm -rf "$output"
-    mkdir -p "$output"
+    local output=.cache/nex-iso/matched-libvirt digest
     [[ -f tests/integration/libvirt_readonly_policy.py ]] || {
         echo 'matched libvirt helper-policy regression is missing' >&2
         exit 1
     }
-    (
-        local recipe
-        recipe=$(mktemp -d .cache/nex-iso/libvirt-recipe.XXXXXX)
-        trap 'rm -rf "$recipe"' EXIT
-        cp -a packaging/libvirt/. "$recipe/"
-        cp tests/integration/libvirt_readonly_policy.py "$recipe/"
-        "$docker_bin" run --rm --init --platform linux/amd64 \
-            -v nex-build-cache:/apt-cache \
-            -v "$PWD/$recipe:/recipe:ro" -v "$PWD/$output:/output" \
-            -e "NEX_DEBIAN_SOURCE_SNAPSHOT=$source_snapshot" \
-            -e "NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT=$security_snapshot" \
-            debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 \
-            /recipe/build-matched-libvirt.sh >&2
-    )
+    digest=$(inputs_digest "$source_snapshot $security_snapshot" packaging/libvirt tests/integration/libvirt_readonly_policy.py)
+    if [[ $(cat "$output.inputs" 2>/dev/null) == "$digest" ]]; then
+        echo 'reusing the matched libvirt build: its inputs are unchanged' >&2
+    else
+        rm -rf "$output" "$output.inputs"
+        mkdir -p "$output"
+        (
+            local recipe
+            recipe=$(mktemp -d .cache/nex-iso/libvirt-recipe.XXXXXX)
+            trap 'rm -rf "$recipe"' EXIT
+            cp -a packaging/libvirt/. "$recipe/"
+            cp tests/integration/libvirt_readonly_policy.py "$recipe/"
+            "$docker_bin" run --rm --init --platform linux/amd64 \
+                -v nex-build-cache:/apt-cache \
+                -v "$PWD/$recipe:/recipe:ro" -v "$PWD/$output:/output" \
+                -e "NEX_DEBIAN_SOURCE_SNAPSHOT=$source_snapshot" \
+                -e "NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT=$security_snapshot" \
+                debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 \
+                /recipe/build-matched-libvirt.sh >&2
+        )
+    fi
     [[ -f $output/SHA256SUMS && -f $output/binary-packages.txt && -f $output/source/libvirt_11.3.0-3+deb13u3+nex4.dsc ]] || {
         echo 'matched libvirt build is missing its verified source or binary manifest' >&2
         exit 1
@@ -104,6 +121,7 @@ build_matched_libvirt() {
         echo 'matched libvirt build has an unexpected local version' >&2
         exit 1
     }
+    printf '%s\n' "$digest" > "$output.inputs"
     printf '%s\n' "$output"
 }
 

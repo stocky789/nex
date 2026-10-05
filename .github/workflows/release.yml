@@ -153,6 +153,20 @@ jobs:
           fi
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
+      # libvirt and dlm are rebuilt from pinned Debian sources by a recipe that rarely changes.
+      # installer/build.sh records a digest of each build's inputs beside its output and reuses
+      # the output when the digest still matches, so a restored entry skips about eight minutes.
+      # The key names the same inputs; build.sh's digest is what makes a stale entry harmless.
+      - name: Restore the matched libvirt and dlm builds
+        uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            .cache/nex-iso/matched-libvirt
+            .cache/nex-iso/matched-libvirt.inputs
+            .cache/nex-iso/cluster-storage-dlm
+            .cache/nex-iso/cluster-storage-dlm.inputs
+          key: matched-builds-${{ hashFiles('packaging/libvirt/**', 'packaging/cluster-storage/**', 'tests/integration/libvirt_readonly_policy.py', 'installer/build.sh') }}
+
       - name: Build source archive, packages and both ISOs
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
@@ -247,9 +261,17 @@ jobs:
             $sudo apt-get update -qq
             $sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf
           fi
+          # Each guest only waits out a fixed boot window, so the two ISOs run side by side.
+          pids=()
           for name in "nex-core-${NEX_PUBLIC_VERSION}-amd64.iso" "nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso"; do
-            python3 tests/integration/iso-smoke.py "dist/$name" --accel tcg --output ".cache/iso-smoke/${name%.iso}"
+            python3 tests/integration/iso-smoke.py "dist/$name" --accel tcg --output ".cache/iso-smoke/${name%.iso}" &
+            pids+=($!)
           done
+          status=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || status=$?
+          done
+          exit "$status"
 
       - name: Smoke-start the packaged Controller
         env:
