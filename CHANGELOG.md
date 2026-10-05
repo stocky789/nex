@@ -18,9 +18,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+## [0.4.29] — 2026-10-05
+
 ### Bug Fixes
 
 - The Nex Core installer, including the net installer, no longer stops with "failed with exit code 100" during the final package step.
+
+### Miscellaneous
+
+- Release builds are faster: Debian source archives are fetched several at a time and kept on the runner's network share, the libvirt and dlm packages are reused while their recipe is unchanged, and the two ISO boot checks run together.
 
 ## [0.4.28] — 2026-10-05
 
