@@ -68,6 +68,7 @@ func TestStorageClusterFenceRequestIsDurablyOneShot(t *testing.T) {
 	}
 	close(release)
 	deadline := time.Now().Add(time.Second)
+	var recorded, settled time.Time
 	for {
 		storageClusterMu.Lock()
 		state, err := loadStorageClusters(s)
@@ -76,7 +77,15 @@ func TestStorageClusterFenceRequestIsDurablyOneShot(t *testing.T) {
 			t.Fatal(err)
 		}
 		if state.FenceRequests[request.RequestID].Status == "needs_attention" {
-			break
+			// The request goroutine rewrites the state once more after the native result
+			// is recorded; wait for that write so TempDir cleanup never races it.
+			if !state.FenceRequests[request.RequestID].UpdatedAt.Equal(recorded) {
+				recorded = state.FenceRequests[request.RequestID].UpdatedAt
+				settled = time.Now().Add(100 * time.Millisecond)
+			}
+			if time.Now().After(settled) {
+				break
+			}
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("fence outcome did not become durable")
