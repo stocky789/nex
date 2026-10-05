@@ -404,6 +404,16 @@ def boot_until(vm, budget, want, limit=8):
     return seen
 
 
+def trial_diag(vm, seen):
+    """A failing trial must fall back to release 1 after its counted boots. When it does not, the host is usually
+    rebooting, so its shell cannot be asked: print what the boot check and the loader said, from the console log."""
+    if seen and seen[-1] == "2026.10.1-1":
+        return
+    keep = re.compile(r"nex-boot-check|boot tries|bless|Marked boot|BdsDxe: loading|esp\.lock|target is busy|umount|nex-esp-sync|nex-update", re.I)
+    lines = [l.strip() for l in vm.con.log_text().splitlines() if keep.search(l)]
+    info("DIAG the failing trial never fell back; console lines: " + " | ".join(l[:160] for l in lines[-60:]))
+
+
 STATE_GUARD_METADATA = 'set -e; cat "$1"; printf "\\nNEX_LAB_RETAINED_ROOT\\n"; cat "$2"'
 
 
@@ -622,6 +632,7 @@ def main():
             t0 = time.time()
             seen = boot_until(vm, a.budget, "2026.10.1-1", limit=8)
             info(f"failing trial: boots seen {seen} after {time.time() - t0:.0f}s")
+            trial_diag(vm, seen)
             fs = facts(vm.ctl)
             ctl = vm.ctl
             st = fs["status"]
@@ -825,6 +836,7 @@ def main():
         t0 = time.time()
         seen = boot_until(vm, a.budget, "2026.10.1-1", limit=8)
         info(f"again, failing trial: boots seen {seen} after {time.time() - t0:.0f}s")
+        trial_diag(vm, seen)
         ctl = vm.ctl
         fs = facts(ctl)
         st = fs["status"]

@@ -17,12 +17,16 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf16"
 )
 
 const (
 	ukiDir     = "EFI/Linux"
 	tempSuffix = ".new" // never ends in .efi, so the boot loader ignores a half-written file
+	// espLockWait bounds the wait for the ESP lock; nex-bless-boot holds it for one short mount, so this is
+	// far above any healthy hold and only a stuck holder reaches it.
+	espLockWait = 2 * time.Minute
 )
 
 // Paths the ESP code reads, replaced by tests.
@@ -239,7 +243,7 @@ func mountedAt(node string) string {
 // on every counted boot, so both hold /run/nex/esp.lock for the whole mount, use and unmount: otherwise
 // one side borrows the other's mount and the unmount that follows fails with "target is busy".
 func (w *Writer) WithESP(ctx context.Context, node string, fn func(root string) error) error {
-	unlock, err := lockESP()
+	unlock, err := lockESP(ctx)
 	if err != nil {
 		return err
 	}
@@ -268,8 +272,9 @@ func (w *Writer) withESP(ctx context.Context, node string, fn func(root string) 
 }
 
 // lockESP takes the exclusive lock every user of the transient ESP mounts holds while it mounts, uses and
-// unmounts one. Closing the file releases it, including when the holder dies.
-func lockESP() (func(), error) {
+// unmounts one. Closing the file releases it, including when the holder dies. The wait ends with ctx or
+// after espLockWait, so a stuck holder fails this caller instead of hanging it.
+func lockESP(ctx context.Context) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(espMountBase), 0o700); err != nil {
 		return nil, err
 	}
@@ -277,11 +282,22 @@ func lockESP() (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		return nil, err
+	deadline := time.Now().Add(espLockWait)
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() { f.Close() }, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			f.Close()
+			return nil, err
+		}
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			f.Close()
+			return nil, fmt.Errorf("the ESP mount is in use by another Core process: %w", err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	return func() { f.Close() }, nil
 }
 
 // ESPNodes returns the partition nodes of every ESP, found by GPT partition name (never by md
@@ -358,7 +374,7 @@ func (w *Writer) ESPSync(ctx context.Context) error {
 		return err
 	}
 	// One hold for the whole sync: copyOut mounts the other ESPs while the booted one is still mounted.
-	unlock, err := lockESP()
+	unlock, err := lockESP(ctx)
 	if err != nil {
 		return err
 	}

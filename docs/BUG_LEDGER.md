@@ -12671,3 +12671,12 @@ of real storage or hardware certification.
 - Fix: the 63 failing waits are one minute (three that wait for something not to happen are unchanged); `nex-demo` takes its probe timeout from `healthTimeout` (three seconds) and the test raises it.
 - Regression: `go vet ./...` is clean and the three named tests pass on the runner host; the forge `go` and `image-layout` jobs run the suite on every push.
 - Avoid: a short fixed timeout on a positive wait; a timeout that fails a test while goroutines still own shared state.
+
+## BUG-1925 — ESP lock wait could hang its caller; update lab said nothing when a failing trial never fell back
+
+- Date: 2026-10-04.
+- Symptom: after the ESP lock of BUG-1923 went in, one `image-build-boot` run showed the failing trial booting release 2 eight times in a row (`boots seen ['2026.10.2-2' x 8]`) with the host shell unreachable, and the lab had nothing to say about why.
+- Root cause: not established. The lock was a blocking `flock` with no bound, so a stuck holder would hang `nex-update` and `nex-hostimage` for good; and the lab asked the guest shell, which a rebooting host cannot answer.
+- Fix: `lockESP` waits with the caller's context and a two-minute cap and then fails the caller with a plain message; `image_update.py` prints the boot check, loader and mount lines from the host-side console log whenever a failing trial does not end on release 1.
+- Regression: `internal/hostimage` passes under `-race` including the overlap test; the forge `image-build-boot` job is the check and now explains itself.
+- Avoid: an unbounded wait on a lock another program also holds; diagnostics that need the machine being diagnosed to be responsive.
