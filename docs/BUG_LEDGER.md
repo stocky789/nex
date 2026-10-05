@@ -12698,3 +12698,12 @@ of real storage or hardware certification.
 - Fix: the swap probe deadlines are 8 s and 20 s; `Lab.started` waits 180 s; the cloud image download retries on any error, up to eight times, and resumes.
 - Regression: forge `go`, `controller-browser` and `recovery-libvirt` jobs run these on every push.
 - Avoid: a retry flag that does not cover the failure the network actually produces.
+
+## BUG-1928 — Runner stalls of seconds to minutes: page-cache writeback froze every fsync
+
+- Date: 2026-10-05.
+- Symptom: tests and browser steps failed on waits that take milliseconds on an idle host and changed from push to push: a fake `virsh` killed under 8 s (a subtest took 151 s), `Page.goto` to a local server timing out at 30 s, Controller startup refused for 60 s, an SSH-less `sync` and `dockerd` both stuck.
+- Root cause: the runner kernel logged `INFO: task sync blocked for more than 122 seconds` and the same for `dockerd` (overlay unmount), both in `wb_wait_for_completion`, and `/proc/pressure/io` showed tasks fully stalled on I/O about 9% of the time while CPU pressure was zero. The host has 32 GB of RAM and a virtual disk that writes about 60 MB/s under CI, and the kernel defaults (`vm.dirty_background_ratio=10`, `vm.dirty_ratio=20`) let roughly 3 GB of dirty pages accumulate before flushing and 6 GB before throttling; draining that took minutes and every fsync, `sync` and unmount in every job waited behind it.
+- Fix (runner host, not in the repository): `/etc/sysctl.d/90-nex-ci-writeback.conf` sets `vm.dirty_background_bytes = 268435456` and `vm.dirty_bytes = 1073741824`.
+- Regression: measured on the runner with three writers putting 18 GB on disk while small fsync'd writes were timed: default settings gave a worst fsync of 995 ms, mean 70 ms, final `sync` 15 s; the capped settings gave 71 ms, 16 ms and 1 s. Not yet seen across a full CI run.
+- Avoid: kernel writeback defaults sized for fast local disks on a large-memory machine with a slow virtual disk; tuning individual test timeouts to hide a host-wide stall.
