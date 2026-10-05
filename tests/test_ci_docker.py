@@ -11,14 +11,21 @@ WRAPPER = ROOT / "scripts/ci-docker.sh"
 
 
 class CiDockerTests(unittest.TestCase):
-    def run_wrapper(self, *args):
+    def run_wrapper(self, *args, **extra_env):
         with tempfile.TemporaryDirectory() as fake:
             docker = Path(fake) / "docker"
             docker.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
             docker.chmod(0o755)
             env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}",
-                       GITHUB_WORKSPACE="/workspace/o/r", NEX_HOST_WORKSPACE="/var/lib/docker/volumes/v/_data")
+                       GITHUB_WORKSPACE="/workspace/o/r", NEX_HOST_WORKSPACE="/var/lib/docker/volumes/v/_data",
+                       **extra_env)
             return subprocess.run([str(WRAPPER), *args], env=env, capture_output=True, text=True)
+
+    def test_source_archives_come_from_the_named_host_directory_when_set(self):
+        result = self.run_wrapper("run", "image", NEX_SOURCE_CACHE="/mnt/share/sources")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("/mnt/share/sources:/cache/downloads/sources", result.stdout.split("\n"))
+        self.assertNotIn(":/cache/downloads/sources", self.run_wrapper("run", "image").stdout)
 
     def test_workspace_mounts_are_rewritten_to_the_host_path(self):
         result = self.run_wrapper("run", "--rm", "-v", "/workspace/o/r/.cache/x:/output",

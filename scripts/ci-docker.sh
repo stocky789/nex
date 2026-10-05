@@ -9,7 +9,9 @@
 #
 # Every container also gets the nex-build-cache volume, which lives on the Docker host and
 # outlives the job workspace: the Go build cache, the npm cache and the ISO's pinned Debian
-# downloads are reused by the next run instead of fetched again.
+# downloads are reused by the next run instead of fetched again. When NEX_SOURCE_CACHE names a
+# directory on the Docker host (a network share, say), the retained Debian source archives live
+# there instead, so pruning or rebuilding the Docker host never costs a slow refetch.
 set -eu
 workspace=${GITHUB_WORKSPACE:-$PWD}
 host=${NEX_HOST_WORKSPACE:?set NEX_HOST_WORKSPACE to the workspace path on the Docker host}
@@ -20,6 +22,9 @@ while (($#)); do
             if ((${#args[@]} == 0)); then
                 args+=(run -v nex-build-cache:/cache -e GOCACHE=/cache/go-build
                        -e npm_config_cache=/cache/npm -e NEX_DOWNLOADS=/cache/downloads)
+                if [[ -n ${NEX_SOURCE_CACHE:-} ]]; then
+                    args+=(-v "$NEX_SOURCE_CACHE:/cache/downloads/sources")
+                fi
             else
                 args+=("$1")
             fi ;;

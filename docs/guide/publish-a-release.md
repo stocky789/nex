@@ -82,7 +82,11 @@ its payloads from its own channel's tree.
   rather than downloading. The volume grows by a few gigabytes each time a snapshot pin
   changes; remove it with `docker volume rm nex-build-cache` on the runner host to reclaim
   the space or to force every input to be fetched again. The pinned Debian cloud image is
-  restored from the forge's cache server the same way.
+  restored from the forge's cache server the same way. To keep the retained Debian source
+  archives, the slowest download, outside Docker altogether, set the repository Actions variable
+  `NEX_SOURCE_CACHE` to a directory on the runner host, such as one on a network share; builder
+  containers then use it instead of the volume's `downloads/sources`, so a pruned volume or a
+  rebuilt runner does not lose them.
 - Heavy run steps on the shared Linux runner require `/proc`, Bash, `flock` and `setsid`. Container jobs also
   need Docker access and an inspectable current job image containing `sh`, `flock` and `cat`;
   their helper shares the `nex-ci-heavy-lock` volume on that Docker host. Native jobs use a
@@ -266,9 +270,9 @@ and the final check verifies the development URLs, not the stable ones.
   the workspace, which the Docker host cannot see. Build inputs must live under the checkout;
   the workflow points `TMPDIR` there for that reason.
 - **The Release run is slow again** — the runner's Docker host lost the `nex-build-cache`
-  volume (a `docker volume prune`, a rebuilt runner) or a snapshot pin changed, so the first
-  run fetches everything from `snapshot.debian.org`, which is slow per connection. The next run
-  at the same pins reuses it.
+  volume (a `docker volume prune`, a rebuilt runner), the `NEX_SOURCE_CACHE` directory was
+  emptied, or a snapshot pin changed, so the run fetches the Debian source archives from
+  `snapshot.debian.org`, which is slow per connection. The next run at the same pins reuses them.
 - **"gitea-release: ... HTTP 409"** — the tag is protected or another release still holds it.
   Remove the protection or the stray release and re-run.
 - **"gitea-release: <asset> attempt N failed: ..."** — the connection to the forge dropped while

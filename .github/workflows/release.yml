@@ -44,6 +44,8 @@ permissions:
   contents: write
 env:
   NEX_CI_LOCK: shared
+  # Docker-host directory for the retained Debian source archives (Actions variable; unset = the build-cache volume).
+  NEX_SOURCE_CACHE: ${{ vars.NEX_SOURCE_CACHE }}
 jobs:
   release:
     if: github.server_url != 'https://github.com'  # github.com runs github.yml only
