@@ -18,6 +18,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Bug Fixes
+
+- The Nex Core installer, including the net installer, no longer stops with "failed with exit code 100" during the final package step.
+
 ## [0.4.28] — 2026-10-05
 
 ### Bug Fixes

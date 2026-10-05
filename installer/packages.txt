@@ -21,7 +21,6 @@ cifs-utils
 smbclient
 open-iscsi
 libiscsi7
-libblkid1
 corosync
 sanlock
 python3

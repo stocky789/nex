@@ -284,8 +284,11 @@ assert len(core_depends_field) == 1, 'One nex-core-local control stanza expected
 core_depends = {d.split()[0] for d in core_depends_field[0].split(',')}
 # Supplied by the Debian base system or already pulled in by a listed package's own
 # dependencies; everything else nex-core-local needs must be downloaded explicitly.
+# libblkid1 ships in lockstep with util-linux, whose Pre-Depends pin it to the base's exact
+# version. Listing it makes APT upgrade it alone and the in-target install fails with exit 100.
 base_system = {'init-system-helpers', 'libc6', 'python3', 'openssl', 'libpam0g',
-               'libpam-modules', 'iproute2'}
+               'libpam-modules', 'iproute2', 'libblkid1'}
+assert 'libblkid1' not in packages, 'libblkid1 must come from the base system, not packages.txt'
 undownloaded = sorted(core_depends - base_system - set(packages))
 assert not undownloaded, f'nex-core-local depends on packages the ISO repo never downloads: {undownloaded}'
 assert 'python3-virt-firmware' in core_package, 'nex-core-local must depend on the Secure Boot variable tool package'

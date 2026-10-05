@@ -12716,3 +12716,12 @@ of real storage or hardware certification.
 - Fix: the helper takes the shared lock around its mount, use and unmount and keeps the command's exit status; the dump now mounts the ESP under the lock and prints `bootctl --esp-path ... list`, `loader.conf`, the `Loader*` EFI variables and the kernel command line.
 - Regression: shell logic run on the runner host; the lab itself is the check. The "booted release 1 although a bootable release 2 entry exists" outcome is not yet explained.
 - Avoid: a test helper that touches a shared resource without the lock the product code uses.
+
+## BUG-1930 — Classic and net installer failed with exit code 100 in `late-install.sh`
+
+- Date: 2026-10-05.
+- Symptom: on a bare-metal host, both installers stopped at "Execution of preseeded command `/bin/sh /cdrom/nex/late-install.sh` failed with exit code 100"; the visible log tail was only a harmless `depmod ... modules.builtin.modinfo` warning.
+- Root cause: BUG-1907's iSCSI helper added `libblkid1` to `installer/packages.txt`. The ISO carries `libblkid1 2.41.5-0+deb13u1`, but the Debian 13.6.0 base has `util-linux 2.41-5`, which Pre-Depends on `libblkid1 (= 2.41-5)`. Naming `libblkid1` made APT upgrade it alone, so the plan was unsatisfiable and `apt-get` exited 100.
+- Fix: removed `libblkid1` from `packages.txt`; `nex-core-local`'s unversioned `Depends: libblkid1` is met by the base system.
+- Regression: reproduced in a Debian chroot built from the 13.6.0 release-date snapshot with the 0.4.28-dev.280 net installer's `payloads.tsv`, `Packages` and `late-install.sh`: `apt-get --print-uris install` exited 100 with the `util-linux PreDepends libblkid1 (= 2.41-5)` conflict; without `libblkid1` the plan, download, `apt-get install` and `nex-core-local` configuration succeeded. `installer/check.sh` now fails if `libblkid1` returns to `packages.txt`. A full installer boot on hardware was not run.
+- Avoid: listing a library that ships in lockstep with a base-system package in `packages.txt`; the closure the ISO carries is resolved against an empty dpkg status and never against the real base.
