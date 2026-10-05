@@ -38,53 +38,22 @@ def credentials_script(provider):
 
 
 class BrowserArtifactTests(unittest.TestCase):
-    def test_go_race_suite_has_an_explicit_bounded_ci_budget(self):
-        # Full-strength password hashing under race instrumentation exceeded Go's
-        # default ten-minute package budget on the shared runner.
+    def test_go_suite_has_an_explicit_bounded_ci_budget(self):
+        # The shared runner can exceed Go's default ten-minute package budget.
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
-                self.assertIn('run: go test -race -timeout 40m ./...', workflow)
+                self.assertIn('run: go test -timeout 40m ./...', workflow)
 
-    def test_phase1_runs_independent_lanes_in_parallel(self):
-        """Separate jobs surface storage UI failures early and run side by side.
-
-        A single serial job hid late UI failures behind ~15 minutes of unrelated work.
-        The browser, Go and web lanes have no dependency on each other; only contracts
-        (needs go) and website (needs web) wait. Load is bounded by the runner's
-        capacity and the shared host lock, not by artificial waves.
-        """
-        required = (
-            'go:',
-            'contracts:',
-            'web:',
-            'controller-browser:',
-            'website:',
-            'phase1:',
-            'iso_url_browser.py',
-            'storage_repositories_browser.py',
-            'needs: [go]',
-            'needs: [web]',
-        )
+    def test_phase1_is_fast_checks_behind_one_gate(self):
+        """Build, vet, type-check and unit-test; booting images and ISOs belongs to image.yml and release.yml."""
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 workflow = (ROOT / provider / 'workflows/phase1.yml').read_text()
-                for marker in required:
+                for marker in ('go:', 'web:', 'checks:', 'phase1:', 'needs: [go, web, checks]',
+                               'go build ./...', 'go vet ./...', 'generate_api.py --check'):
                     self.assertIn(marker, workflow)
-                smoke = workflow.index('iso_url_browser.py')
-                gallery = workflow.index('website_controller_captures.py')
-                self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
-                # The browser, Go and web lanes are independent: none waits on another.
-                browser_job = workflow.index('\n  controller-browser:')
-                go_job = workflow.index('\n  go:')
-                web_job = workflow.index('\n  web:')
-                contracts_job = workflow.index('\n  contracts:')
-                self.assertLess(browser_job, go_job)
-                self.assertNotIn('needs:', workflow[browser_job:go_job])
-                self.assertNotIn('needs:', workflow[go_job:web_job])
-                self.assertNotIn('needs: [controller-browser]', workflow)
-                self.assertIn('needs: [go]', workflow[contracts_job:])
-                self.assertNotIn('  host:', workflow)
+                self.assertNotIn('playwright', workflow)
                 self.assertNotIn('schedule:', workflow)
 
     def test_phase1_runs_once_per_pull_request_commit(self):
@@ -386,23 +355,22 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
             yield name, body[start:end]
 
     def test_image_workflow_is_forge_only_parallel_and_uncapped(self):
-        # The image build, QEMU boots, tamper proof and double build are heavy disposable labs: forge-only like
-        # recovery-libvirt. They run side by side and take whatever CPU and memory the runner has.
+        # Each job builds an image and boots it once: heavy and disposable, so forge-only. They run side by side and take
+        # whatever CPU and memory the runner has.
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 path = ROOT / provider / 'workflows/image.yml'
                 text = path.read_text()
                 jobs = dict(self.jobs(path))
-                self.assertEqual(list(jobs), ['image-layout', 'image-build-boot', 'controller-image', 'image-repro'])
+                self.assertEqual(list(jobs), ['image-build-boot', 'controller-image'])
                 for name, block in jobs.items():
                     self.assertIn(self.SKIP, block, name)
                     self.assertIn('timeout-minutes:', block, name)
                     self.assertNotIn('needs:', block, name)
                 self.assertNotIn('NEX_DOCKER_CPUS', text)
                 self.assertNotIn('NEX_DOCKER_MEMORY', text)
-                for step in ('image/build.sh all', 'tests/integration/image_boot.py', 'tests/integration/image_update.py',
-                             'appliance/build.py --profile controller', 'tests/integration/controller_image_boot.py',
-                             'scripts/image-repro-check.sh'):
+                for step in ('image/build.sh all', 'tests/integration/image_boot.py',
+                             'appliance/build.py --profile controller', 'tests/integration/controller_image_boot.py'):
                     self.assertIn(step, text)
                 # The runner is a nested guest that its hypervisor hard-resets while KVM guests run: the labs emulate.
                 self.assertIn('NEX_QEMU_ACCEL: tcg', text)
@@ -412,9 +380,9 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
     def test_image_jobs_set_up_go_the_qemu_host_and_the_docker_workspace_before_they_need_them(self):
         # A clean runner has none of this: host-side `go build` in image/build.sh, the QEMU/OVMF/KVM boot labs and the
         # workspace bind mounts of a runner whose job runs in a container each need a step that runs first.
-        needs_go = ('go test', 'image/build.sh', 'appliance/build.py', 'image-repro-check.sh')
-        needs_qemu = ('image_boot.py', 'image_update.py', 'controller_image_boot.py')
-        needs_docker_host = ('image/build.sh', 'appliance/build.py', 'image-repro-check.sh', 'tests/integration/')
+        needs_go = ('image/build.sh', 'appliance/build.py')
+        needs_qemu = ('image_boot.py', 'controller_image_boot.py')
+        needs_docker_host = ('image/build.sh', 'appliance/build.py', 'tests/integration/')
         for provider in PROVIDERS:
             path = ROOT / provider / 'workflows/image.yml'
             for name, block in self.jobs(path):

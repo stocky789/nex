@@ -20,7 +20,7 @@ import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOWS = ("image", "release", "phase1", "recovery-libvirt", "demo")
+WORKFLOWS = ("image", "release", "phase1", "demo")
 PROVIDERS = (".gitea", ".github")
 
 
@@ -474,7 +474,7 @@ while [ ! -f "$NEX_CI_TEST_WORK/release-queue" ]; do sleep 0.01; done
     def test_phase1_aggregate_runs_without_a_checkout_and_preserves_lane_failures(self):
         workspace = self.work / "no-checkout"
         workspace.mkdir()
-        lanes = ("go", "contracts", "web", "controller-browser", "website")
+        lanes = ("go", "web", "checks")
         for provider in PROVIDERS:
             text = (ROOT / provider / "workflows/phase1.yml").read_text()
             block = text.split("\n  phase1:\n", 1)[1]

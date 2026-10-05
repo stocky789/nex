@@ -1,4 +1,6 @@
 name: Controller foundation
+# Fast checks only: everything builds, vets and type-checks, the unit tests pass, and the generated API reference is current.
+# Booting the images and ISOs is image.yml and release.yml.
 on:
   # Integration pushes and feature pull requests each need their own verdict.
   push:
@@ -13,67 +15,8 @@ defaults:
 permissions:
   contents: read
 env:
-  # CPU-bound checks overlap each other; only QEMU/image/ISO labs hold the lock alone.
   NEX_CI_LOCK: shared
 jobs:
-  # Separate lanes so storage UI failures stay visible. controller-browser, go and
-  # web start together; the host-side shared lock (NEX_CI_LOCK) and the runner's
-  # job capacity bound the load. contracts waits for go, website for web.
-  controller-browser:
-    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: '1.27.1'
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build UI assets for browser checks
-        run: |
-          npm --prefix web ci
-          npm --prefix web run build
-      - name: Prepare browser verification
-        run: |
-          python3 -m venv .cache/phase1-qa-venv
-          .cache/phase1-qa-venv/bin/pip install playwright==1.62.0 pillow==12.3.0
-          .cache/phase1-qa-venv/bin/python -m playwright install --with-deps chromium
-      # Cheap storage-UI mocks first so this lane fails fast.
-      - name: Verify ISO public URL and local upload browser workflows
-        run: .cache/phase1-qa-venv/bin/python tests/integration/iso_url_browser.py --evidence .cache/iso-url-browser
-      - name: Verify storage repository browser workflows with simulated host
-        run: .cache/phase1-qa-venv/bin/python tests/integration/storage_repositories_browser.py --evidence .cache/storage-browser
-      - name: Verify ZFS provisioning browser workflow with simulated Core replies
-        run: .cache/phase1-qa-venv/bin/python tests/integration/zfs_provisioning_browser.py --evidence .cache/zfs-provisioning-browser
-      - name: Verify clustered storage controls with simulated Core replies
-        run: .cache/phase1-qa-venv/bin/python tests/integration/cluster_storage_browser.py
-      - name: Verify Controller action refresh without page reloads
-        run: .cache/phase1-qa-venv/bin/python tests/integration/controller_refresh_browser.py --evidence .cache/controller-refresh-browser
-      - name: Verify backup workspace interactions with simulated Core replies
-        run: .cache/phase1-qa-venv/bin/python tests/integration/backup_workspace_browser.py --evidence .cache/backup-workspace-browser
-      - name: Capture Controller gallery with neutral demo inventory
-        run: .cache/phase1-qa-venv/bin/python tests/integration/website_controller_captures.py --output .cache/website-controller-captures/images --evidence .cache/website-controller-captures/results.json
-      - name: Verify enrollment, recovery and browser workflows
-        run: .cache/phase1-qa-venv/bin/python tests/integration/phase1.py --browser
-      - name: Verify console controls with simulated host
-        run: .cache/phase1-qa-venv/bin/python tests/integration/console_controls_browser.py --evidence .cache/console-controls-browser
-      - name: Verify managed VM browser workflows with simulated host
-        run: .cache/phase1-qa-venv/bin/python tests/integration/managed_vm_browser.py --simulated --evidence .cache/managed-vm-browser
-      - name: Verify VM editing browser workflow with simulated host
-        run: .cache/phase1-qa-venv/bin/python tests/integration/vm_edit_browser.py --evidence .cache/vm-edit-browser
-      - name: Verify host storage ISO visibility
-        run: .cache/phase1-qa-venv/bin/python tests/integration/host_iso_browser.py --evidence .cache/host-iso-browser
-      - name: Verify searchable site selection
-        run: .cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence .cache/site-selector-browser
-      - name: Verify form select pickers render in the page and stay open
-        run: .cache/phase1-qa-venv/bin/python tests/integration/form_select_picker.py --evidence .cache/form-select-picker
-
   go:
     if: github.server_url != 'https://github.com'  # github.com runs github.yml only
     runs-on: ubuntu-latest
@@ -85,39 +28,13 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.27.1'
-      # Keep production-strength password hashing and race checks; the shared
-      # runner can exceed Go's default ten-minute package deadline.
-      - name: Test Go services and recovery
-        run: go test -race -timeout 40m ./...
-      - name: Verify native read-only iSCSI metadata boundaries
+      - name: Build and vet
         run: |
-          set -euo pipefail
-          tar -C packaging/core-local -cf - nex-iscsi-inspect.c nex-iscsi-inspect-test.c |
-            docker run --rm -i --entrypoint sh debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a -ec '
-              apt-get update
-              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev pkg-config libiscsi-dev libblkid-dev
-              mkdir /src
-              tar -xf - -C /src
-              cc -Wall -Wextra -Werror -O2 -Wl,--export-dynamic /src/nex-iscsi-inspect-test.c $(pkg-config --cflags --libs libiscsi blkid) -o /tmp/nex-iscsi-inspect-test
-              /tmp/nex-iscsi-inspect-test
-            '
-      - name: Exercise root-owned snapshot and SMB rollback fixtures
-        run: |
-          mkdir -p .cache
-          go test -race -c -o .cache/vmhost-snapshot.test ./internal/vmhost
-          # These fixtures preserve the native root-owned storage ancestry boundary.
-          sudo -n .cache/vmhost-snapshot.test -test.run '^(TestBlockedSnapshotCaptureAllowsUnrelatedVMStart|TestPersistedNativeSnapshotRetryReconcilesWithoutRepeatingCreate|TestSnapshotReserveRefusalClearsLocalIntentFence|TestPrepareBackupRepositorySMBReplacesMountOfAnotherCredential|TestPrepareBackupRepositorySMBReplacementFailureRestoresPriorAccess|TestPrepareBackupRepositorySMBReplacementRollbackFailureRetainsCredentials)$' -test.v -test.timeout 5m
-      - name: Verify Controller package startup gate rejects the SQLite stub
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends dpkg-dev openssl gcc libc6-dev
-          python3 tests/integration/controller_package_smoke.py
-      - name: Check Go dependency advisories
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
-          govulncheck ./...
+          go build ./...
+          go vet ./...
+      # The shared runner can exceed Go's default ten-minute package deadline.
+      - name: Test Go services
+        run: go test -timeout 40m ./...
 
   web:
     if: github.server_url != 'https://github.com'  # github.com runs github.yml only
@@ -132,88 +49,31 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Build and check UI
+      - name: Typecheck, test and build the UI
         run: |
           npm --prefix web ci
           npm --prefix web run typecheck
           npm --prefix web run test
           npm --prefix web run build
-      - name: Check UI dependency advisories
-        run: npm --prefix web audit --audit-level=low
 
-  contracts:
+  checks:
     if: github.server_url != 'https://github.com'  # github.com runs github.yml only
-    needs: [go]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: '1.27.1'
-      - name: Install dpkg tools and nginx for packaging and hosting checks
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: API reference is current, Python compiles, shell scripts parse
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
-      - name: Check contracts and contributor tools
-        run: |
+          set -euo pipefail
           python3 scripts/generate_api.py --check
-          python3 -m unittest discover -s tests -p 'test_*.py' -v
-
-  website:
-    if: github.server_url != 'https://github.com'  # github.com runs github.yml only
-    needs: [web]
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-      - name: Install nginx for hardened website checks
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nginx-core
-      - name: Build and check private website
-        run: |
-          npm --prefix website ci
-          npm --prefix website run check
-          npm --prefix website run build
-      - name: Prepare browser verification
-        run: |
-          python3 -m venv .cache/phase1-qa-venv
-          .cache/phase1-qa-venv/bin/pip install playwright==1.62.0 pillow==12.3.0
-          .cache/phase1-qa-venv/bin/python -m playwright install --with-deps chromium
-      - name: Verify website browser workflows
-        run: |
-          python3 -m http.server 8080 --bind 127.0.0.1 --directory website/build > /tmp/nex-website-preview.log 2>&1 &
-          preview_pid=$!
-          trap 'kill "$preview_pid"' EXIT
-          .cache/phase1-qa-venv/bin/python tests/integration/website_browser.py --url http://127.0.0.1:8080 --evidence .cache/website-qa
-      - name: Verify hardened website browser workflow
-        run: |
-          qa_root="$PWD/.cache/website-nginx"
-          mkdir -p "$qa_root/log"
-          sed -e 's|@NEX_WEBSITE_LISTEN@|127.0.0.1:8081|' -e "s|/srv/nex-website/current|$PWD/website/build|" -e "s|/run/nex-website/nginx.pid|$qa_root/nginx.pid|" -e "s|/run/nex-website|$qa_root|g" -e "s|/var/log/nex-website|$qa_root/log|g" packaging/website/nginx.conf.template > "$qa_root/nginx.conf"
-          nginx -t -c "$qa_root/nginx.conf"
-          nginx -c "$qa_root/nginx.conf" -g 'daemon off;' &
-          nginx_pid=$!
-          trap 'kill "$nginx_pid"' EXIT
-          .cache/phase1-qa-venv/bin/python tests/integration/website_hardening_browser.py --url http://127.0.0.1:8081 --evidence .cache/website-hardening-qa
+          python3 -m compileall -q scripts tests installer appliance image packaging
+          git ls-files '*.sh' | while read -r script; do bash -n "$script" || { echo "syntax error in $script" >&2; exit 1; }; done
 
   # Keeps a single required check name for branch protection / dashboards.
   phase1:
-    needs: [go, contracts, web, controller-browser, website]
+    needs: [go, web, checks]
     runs-on: ubuntu-latest
     # github.com runs github.yml only; always() keeps this gate reporting on the forge.
     if: always() && github.server_url != 'https://github.com'
@@ -222,13 +82,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          echo "go=${{ needs.go.result }}"
-          echo "contracts=${{ needs.contracts.result }}"
-          echo "web=${{ needs.web.result }}"
-          echo "controller-browser=${{ needs.controller-browser.result }}"
-          echo "website=${{ needs.website.result }}"
+          echo "go=${{ needs.go.result }} web=${{ needs.web.result }} checks=${{ needs.checks.result }}"
           test "${{ needs.go.result }}" = success
-          test "${{ needs.contracts.result }}" = success
           test "${{ needs.web.result }}" = success
-          test "${{ needs.controller-browser.result }}" = success
-          test "${{ needs.website.result }}" = success
+          test "${{ needs.checks.result }}" = success

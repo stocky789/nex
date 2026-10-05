@@ -18,6 +18,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Miscellaneous
+
+- Pushes now run a short set of checks (build, vet, unit tests, UI type-check and build, API reference, script syntax) and boot-test the built host image, Controller image and both ISOs. The browser labs, update/tamper/rollback labs, reproducibility build, libvirt recovery lab and the website checks no longer run on every push.
+
 ### Bug Fixes
 
 - After an update reboot, the host no longer fails to record the new version when the boot assessment and the update engine use the boot partition at the same moment.

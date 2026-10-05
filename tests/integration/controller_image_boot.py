@@ -141,7 +141,8 @@ def ready(cert, deadline, vm, exit_means_not_ready=False):
         if not vm.alive():
             if exit_means_not_ready:  # the guest panicked on the failed root and qemu runs with -no-reboot
                 return None
-            raise RuntimeError(f"{vm.name}: qemu exited: {vm.proc.stderr.read().decode()[-400:]}")
+            console = "\n".join(l.strip() for l in vm.serial().splitlines() if l.strip())[-2500:]
+            raise RuntimeError(f"{vm.name}: qemu exited with status {vm.proc.returncode}: {vm.proc.stderr.read().decode()[-400:]}\n--- guest console tail ---\n{console}")
         try:
             with urllib.request.urlopen(f"https://127.0.0.1:{PORT}/appliance-ready.json", context=ctx, timeout=3) as r:
                 if r.status == 200:

@@ -32,6 +32,13 @@ def archive(files, modes=None):
     return gzip.compress(data)
 
 
+def drawn(ppm):
+    """True when a binary PPM screendump shows anything but black."""
+    data = ppm.read_bytes()
+    header = data.split(b'\n', 3)
+    return len(header) == 4 and header[0] == b'P6' and any(header[3])
+
+
 def qmp(path, command, arguments=None):
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(10)
@@ -50,7 +57,8 @@ def qmp(path, command, arguments=None):
         return reply['return']
 
 
-def run_vm(args, label, extra, seconds=15, completion=False, accel='kvm'):
+def run_vm(args, label, extra, seconds=15, completion=False):
+    accel = args.accel
     qmp_path = args.output / f'{label}.sock'
     serial = args.output / f'{label}.serial.log'
     command = ['qemu-system-x86_64', '-accel', accel, '-cpu', 'host' if accel == 'kvm' else 'max', '-m', '3072', '-smp', '2',
@@ -61,7 +69,7 @@ def run_vm(args, label, extra, seconds=15, completion=False, accel='kvm'):
     with (args.output / f'{label}.qemu.log').open('w') as log:
         process = subprocess.Popen(command, stdout=log, stderr=log)
         try:
-            deadline = time.monotonic() + seconds
+            deadline = time.monotonic() + seconds * (4 if accel == 'tcg' else 1)
             next_capture = time.monotonic() + 8
             while process.poll() is None and time.monotonic() < deadline:
                 time.sleep(1)
@@ -74,6 +82,11 @@ def run_vm(args, label, extra, seconds=15, completion=False, accel='kvm'):
                 raise RuntimeError(f'{label} QEMU failed: {process.returncode}')
             if not completion and process.poll() is not None:
                 raise RuntimeError(f'{label} exited before capture; inspect QEMU log')
+            if not completion:
+                shot = args.output / f'{label}.ppm'
+                qmp(qmp_path, 'screendump', {'filename': str(shot)})
+                if not drawn(shot):
+                    raise RuntimeError(f'{label}: the screen is blank, so the ISO never reached a boot menu; inspect {shot}')
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -242,7 +255,7 @@ def main():
     parser.add_argument('--initrd', type=Path)
     parser.add_argument('--netinst', action='store_true', help='Enable disposable VM networking for a network installer ISO')
     parser.add_argument('--uefi-code', type=Path, help='OVMF CODE file; matching VARS file must be beside it')
-    parser.add_argument('--uefi-accel', choices=['kvm', 'tcg'], default='kvm')
+    parser.add_argument('--accel', choices=['kvm', 'tcg'], default='kvm', help='QEMU accelerator for every guest (tcg when the host has no /dev/kvm)')
     args = parser.parse_args()
     args.iso = args.iso.resolve(strict=True)
     if not args.iso.is_file():
@@ -261,7 +274,7 @@ def main():
     shutil.copyfile(source_vars, nvram)
     code = code.resolve(strict=True)
     uefi = ['-machine', 'q35,smm=on', '-drive', f'if=pflash,format=raw,readonly=on,file={code}', '-drive', f'if=pflash,format=raw,file={nvram}']
-    run_vm(args, 'uefi-menu', [*uefi, *iso], seconds=60, accel=args.uefi_accel)
+    run_vm(args, 'uefi-menu', [*uefi, *iso], seconds=60)
     if args.kernel:
         disk = args.output / 'disposable.raw'
         with disk.open('xb') as handle:

@@ -233,6 +233,23 @@ jobs:
             --iso "$iso" --source "$source" --compliance-manifest "$manifest" \
             --netinst-iso "$netinst" --netinst-manifest "$netinst_manifest" "${payload_args[@]}"
 
+      # The ISO has to start: the BIOS and the UEFI boot menus must come up under QEMU. Emulated, because the runner is a
+      # nested guest. A full install is not run here.
+      - name: Boot both ISOs under QEMU
+        env:
+          NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
+        run: |
+          set -euo pipefail
+          if ! command -v qemu-system-x86_64 > /dev/null || [ ! -e /usr/share/OVMF/OVMF_CODE_4M.fd ]; then
+            sudo=''
+            [ "$(id -u)" = 0 ] || sudo=sudo
+            $sudo apt-get update -qq
+            $sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf
+          fi
+          for name in "nex-core-${NEX_PUBLIC_VERSION}-amd64.iso" "nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso"; do
+            python3 tests/integration/iso-smoke.py "dist/$name" --accel tcg --output ".cache/iso-smoke/${name%.iso}"
+          done
+
       - name: Smoke-start the packaged Controller
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
