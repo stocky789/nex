@@ -12707,3 +12707,12 @@ of real storage or hardware certification.
 - Fix (runner host, not in the repository): `/etc/sysctl.d/90-nex-ci-writeback.conf` sets `vm.dirty_background_bytes = 268435456` and `vm.dirty_bytes = 1073741824`.
 - Regression: measured on the runner with three writers putting 18 GB on disk while small fsync'd writes were timed: default settings gave a worst fsync of 995 ms, mean 70 ms, final `sync` 15 s; the capped settings gave 71 ms, 16 ms and 1 s. Not yet seen across a full CI run.
 - Avoid: kernel writeback defaults sized for fast local disks on a large-memory machine with a slow virtual disk; tuning individual test timeouts to hide a host-wide stall.
+
+## BUG-1929 — Update lab raced the engine's ESP mount; its diagnostics could not see the loader
+
+- Date: 2026-10-05.
+- Symptom: under TCG, `image_update.py` failed `boot 1: ESP readable only by an explicit mount` with `mount: /run/lab-esp: /dev/vda1 already mounted on /run/nex/esp/vda1`; and once more the host came back from `apply -activate reboot` on release 1 with release 2's `+3` entry still on the ESP, with `bootctl` unable to say why because it found no ESP.
+- Root cause: the lab's own ESP helper mounted the partition without the `/run/nex/esp.lock` that Core and `nex-bless-boot` now share, so it collided with the boot-time reconcile's transient mount (slower TCG boots stretch that overlap); the diagnostic dump ran `bootctl list` with no ESP mounted.
+- Fix: the helper takes the shared lock around its mount, use and unmount and keeps the command's exit status; the dump now mounts the ESP under the lock and prints `bootctl --esp-path ... list`, `loader.conf`, the `Loader*` EFI variables and the kernel command line.
+- Regression: shell logic run on the runner host; the lab itself is the check. The "booted release 1 although a bootable release 2 entry exists" outcome is not yet explained.
+- Avoid: a test helper that touches a shared resource without the lock the product code uses.

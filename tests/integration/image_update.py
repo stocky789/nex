@@ -328,10 +328,12 @@ ESP_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 
 
 # Shell: $m is the ESP mount point. Core mounts the ESP transiently under /run/nex/esp/<node> while it works, so an existing
-# mount is reused; otherwise it is mounted at /run/lab-esp (option $1) and ESP_DONE unmounts it again.
-ESP_MOUNT = ("d=$(lsblk -rpno PATH,PARTTYPE | awk '$2==\"%s\"{print $1; exit}'); m=$(findmnt -nro TARGET -S \"$d\" | head -n 1); own=; "
+# mount is reused; otherwise it is mounted at /run/lab-esp (option $1) and ESP_DONE unmounts it again. The lab takes the same
+# /run/nex/esp.lock as Core and nex-bless-boot (fd 8) around the whole use, so it never collides with their transient mount.
+ESP_MOUNT = ("mkdir -p /run/nex; exec 8>/run/nex/esp.lock; flock -w 120 8; "
+             "d=$(lsblk -rpno PATH,PARTTYPE | awk '$2==\"%s\"{print $1; exit}'); m=$(findmnt -nro TARGET -S \"$d\" | head -n 1); own=; "
              "if [ -z \"$m\" ]; then m=/run/lab-esp; mkdir -p $m; mount -o %%s \"$d\" $m && own=1; fi; ") % ESP_TYPE
-ESP_DONE = "; [ -z \"$own\" ] || umount $m"
+ESP_DONE = "; r=$?; [ -z \"$own\" ] || umount $m || r=1; exec 8>&-; (exit $r)"
 
 
 def esp_ls(ctl):
@@ -362,9 +364,13 @@ def await_commit(ctl, patience=150):
         time.sleep(5)
         phase_raw = raw_phase(ctl)
     if '"committed"' not in phase_raw:
-        info("DIAG " + ctl.sh("cat /tmp/lastcmd.out | tail -15; echo == build; . /usr/lib/os-release; echo $BUILD_ID; echo == bootctl; bootctl list --no-pager 2>&1 | head -40; "
+        info("DIAG " + ctl.sh("cat /tmp/lastcmd.out | tail -15; echo == build; . /usr/lib/os-release; echo $BUILD_ID; echo == cmdline; cat /proc/cmdline | cut -c1-200; "
+                              "echo == loader variables; ls /sys/firmware/efi/efivars | grep -i -E 'loader|boot' | head -30; "
+                              "for v in LoaderEntryDefault LoaderEntryOneShot LoaderEntryLastBooted LoaderEntrySelected LoaderBootCountPath; do "
+                              "f=$(ls /sys/firmware/efi/efivars/$v-* 2>/dev/null | head -1); [ -n \"$f\" ] && echo \"$v=$(tail -c +5 $f | tr -d '\\\\000')\"; done; "
+                              "echo == loader view; " + (ESP_MOUNT % "ro") + "bootctl --esp-path=$m --no-pager list 2>&1 | head -50; echo == loader.conf; cat $m/loader/loader.conf; ls -la $m/EFI/Linux" + ESP_DONE + "; "
                               "echo == this boot; journalctl -b 0 --no-pager | grep -E 'nex-update|nex-boot-check|bless|systemd-boot|reboot' | tail -40 | cut -c1-250; "
-                              "echo == previous boot; journalctl -b -1 --no-pager | grep -E 'nex-update|nex-boot-check|bless|reboot|Reached target' | tail -30 | cut -c1-250", 90)[1])
+                              "echo == previous boot; journalctl -b -1 --no-pager | grep -E 'nex-update|nex-boot-check|bless|reboot|Reached target' | tail -30 | cut -c1-250", 120)[1])
     return phase_raw
 
 
