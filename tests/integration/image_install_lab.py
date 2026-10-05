@@ -91,7 +91,7 @@ API_PORT = 19443  # the guest's nex-core-local listens on its own address (10.0.
 
 def qemu(work, disks, *, iso=None, ctl=None, uefi=True, vars_file=None, code=None, tpm=None, log="console.log", extra=()):
     """Start one VM. disks: [(path, serial)]. Returns (proc, Console)."""
-    cmd = ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-machine", "q35,smm=on" if code and "secboot" in code else "q35",
+    cmd = ["qemu-system-x86_64", *lab.qemu_accel(), "-machine", "q35,smm=on" if code and "secboot" in code else "q35",
            "-m", "2048", "-smp", "2", "-display", "none", "-monitor", "none", "-serial", "stdio", "-serial", f"unix:{work}/ctl.sock,server=on,wait=off", "-no-reboot"]
     if uefi:
         cmd += ["-drive", f"if=pflash,format=raw,unit=0,file={code or lab.OVMF_CODE},readonly=on",

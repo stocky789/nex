@@ -12680,3 +12680,12 @@ of real storage or hardware certification.
 - Fix: `lockESP` waits with the caller's context and a two-minute cap and then fails the caller with a plain message; `image_update.py` prints the boot check, loader and mount lines from the host-side console log whenever a failing trial does not end on release 1.
 - Regression: `internal/hostimage` passes under `-race` including the overlap test; the forge `image-build-boot` job is the check and now explains itself.
 - Avoid: an unbounded wait on a lock another program also holds; diagnostics that need the machine being diagnosed to be responsive.
+
+## BUG-1926 — The runner VM was hard-reset while the image labs ran KVM guests
+
+- Date: 2026-10-05.
+- Symptom: the forge runner (a Xen HVM guest with nested virtualization) rebooted with no panic, shutdown record or log entry five times in nine hours (16:04, 18:12, 20:33 and 01:45, plus the 04:56 planned kernel update before them), each time while `image.yml` was running QEMU/KVM guests; every job of the run died with it. Pinning the older kernel did not stop it (the 01:45 reset was on 6.8.0-139).
+- Root cause: not proven from inside the guest. The resets coincide with nested KVM guests; `recovery-libvirt`, which emulates with TCG, never preceded one, and memory use was about 5% at the last sample before a reset.
+- Fix: `tests/integration/image_boot.py` gains `NEX_QEMU_ACCEL` (`kvm` by default, with VMX hidden from the guest; `tcg` for software emulation) and `NEX_QEMU_SLOWDOWN`, which stretches every wait the labs make on a guest; the update, controller-image, install and Secure Boot labs use it; `image.yml` selects `tcg` with a factor of 8, drops the `/dev/kvm` device and prerequisite check, and allows 360 and 240 minutes for the two QEMU jobs.
+- Regression: `test_accelerator_switch_selects_kvm_or_emulation_and_stretches_waits` and `tests/test_ci_security.py` (pass on the runner host in the contracts container); whether emulation finishes inside the budgets is checked by the forge `image-build-boot` and `controller-image` runs, not yet observed.
+- Avoid: running KVM guests inside a nested guest without a way to see the hypervisor's log; fixed lab budgets that assume hardware acceleration.

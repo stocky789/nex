@@ -29,6 +29,10 @@ permissions:
   contents: read
 env:
   NEX_CI_LOCK: shared
+  # The runner is a nested guest whose hypervisor hard-resets it while KVM guests run, so the QEMU labs emulate
+  # (NEX_QEMU_ACCEL=tcg) and every wait they make on a guest is stretched by NEX_QEMU_SLOWDOWN.
+  NEX_QEMU_ACCEL: tcg
+  NEX_QEMU_SLOWDOWN: "8"
 jobs:
   image-layout:
     if: github.server_url != 'https://github.com' # forge-only
@@ -51,10 +55,9 @@ jobs:
   image-build-boot:
     if: github.server_url != 'https://github.com' # forge-only
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     container:
       image: docker.gitea.com/runner-images:ubuntu-latest
-      options: --device /dev/kvm:/dev/kvm
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -63,7 +66,7 @@ jobs:
         with:
           go-version: '1.27.1'
       # The boot labs run QEMU on the runner itself: name every missing prerequisite here instead of deep in a lab.
-      - name: QEMU lab prerequisites (qemu, OVMF, mtools, dosfstools, openssl, sfdisk, /dev/kvm)
+      - name: QEMU lab prerequisites (qemu, OVMF, mtools, dosfstools, openssl, sfdisk)
         run: |
           set -euo pipefail
           missing() {
@@ -82,7 +85,6 @@ jobs:
           fi
           left=$(missing | tr '\n' ' ')
           [ -z "$left" ] || { echo "still missing: $left" >&2; exit 1; }
-          [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "/dev/kvm is not usable: the runner must expose KVM to the job" >&2; exit 1; }
       # The labs and builds bind-mount workspace paths into containers: on a runner whose job runs in a container the
       # workspace is a Docker volume, so name where the Docker host sees it (as release.yml does).
       - name: Locate the workspace on the Docker host
@@ -119,10 +121,9 @@ jobs:
   controller-image:
     if: github.server_url != 'https://github.com' # forge-only
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     container:
       image: docker.gitea.com/runner-images:ubuntu-latest
-      options: --device /dev/kvm:/dev/kvm
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -131,7 +132,7 @@ jobs:
         with:
           go-version: '1.27.1'
       # The boot labs run QEMU on the runner itself: name every missing prerequisite here instead of deep in a lab.
-      - name: QEMU lab prerequisites (qemu, OVMF, mtools, dosfstools, openssl, sfdisk, /dev/kvm)
+      - name: QEMU lab prerequisites (qemu, OVMF, mtools, dosfstools, openssl, sfdisk)
         run: |
           set -euo pipefail
           missing() {
@@ -150,7 +151,6 @@ jobs:
           fi
           left=$(missing | tr '\n' ' ')
           [ -z "$left" ] || { echo "still missing: $left" >&2; exit 1; }
-          [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "/dev/kvm is not usable: the runner must expose KVM to the job" >&2; exit 1; }
       # The labs and builds bind-mount workspace paths into containers: on a runner whose job runs in a container the
       # workspace is a Docker volume, so name where the Docker host sees it (as release.yml does).
       - name: Locate the workspace on the Docker host

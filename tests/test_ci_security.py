@@ -404,6 +404,10 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
                              'appliance/build.py --profile controller', 'tests/integration/controller_image_boot.py',
                              'scripts/image-repro-check.sh'):
                     self.assertIn(step, text)
+                # The runner is a nested guest that its hypervisor hard-resets while KVM guests run: the labs emulate.
+                self.assertIn('NEX_QEMU_ACCEL: tcg', text)
+                self.assertIn('NEX_QEMU_SLOWDOWN:', text)
+                self.assertNotIn('/dev/kvm', text)
 
     def test_image_jobs_set_up_go_the_qemu_host_and_the_docker_workspace_before_they_need_them(self):
         # A clean runner has none of this: host-side `go build` in image/build.sh, the QEMU/OVMF/KVM boot labs and the
@@ -424,8 +428,8 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
                         self.assertLess(go, first(needs_go))
                         self.assertRegex(steps[go], r'setup-go@[0-9a-f]{40} ')
                     if first(needs_qemu) is not None:
-                        kvm = first(('/dev/kvm',))
-                        self.assertIsNotNone(kvm, 'a QEMU lab job must check /dev/kvm')
+                        kvm = first(('QEMU lab prerequisites',))
+                        self.assertIsNotNone(kvm, 'a QEMU lab job must check its prerequisites')
                         self.assertLess(kvm, first(needs_qemu))
                         if 'controller_image_boot.py' in block:
                             for tool in ('openssl', 'sfdisk', 'mcopy', 'mkfs.vfat'):

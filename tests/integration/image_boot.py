@@ -29,6 +29,29 @@ OVMF_CODE = next((p for p in ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/edk
 OVMF_VARS = next((p for p in ("/usr/share/OVMF/OVMF_VARS_4M.fd", "/usr/share/edk2/OVMF_VARS_4M.fd", "/usr/share/OVMF/x64/OVMF_VARS.4m.fd") if os.path.exists(p)), None)
 DISK_BYTES = 14 << 30
 
+# The QEMU labs run on KVM by default. A runner that is itself a nested guest can be reset by its hypervisor while
+# a KVM guest runs, so NEX_QEMU_ACCEL=tcg selects software emulation instead, and NEX_QEMU_SLOWDOWN (default 1)
+# stretches every wait the labs make on the guest by the factor emulation costs.
+ACCEL = os.environ.get("NEX_QEMU_ACCEL", "kvm")
+SLOWDOWN = float(os.environ.get("NEX_QEMU_SLOWDOWN", "1"))
+
+
+def scaled(seconds):
+    """A wait on the guest, stretched for the accelerator in use."""
+    return int(seconds * SLOWDOWN)
+
+
+def qemu_accel():
+    """QEMU arguments for the accelerator. KVM guests do not see VMX: nothing in a lab starts a nested guest."""
+    if ACCEL == "tcg":
+        return ["-accel", "tcg,thread=multi", "-cpu", "max"]
+    return ["-enable-kvm", "-cpu", "host,-vmx"]
+
+
+def need_accelerator():
+    if ACCEL == "kvm" and not os.access("/dev/kvm", os.R_OK | os.W_OK):
+        sys.exit("no usable /dev/kvm (the QEMU labs need KVM: the runner must expose it and the user must be in the kvm group)")
+
 SEED = r"""
 set -eu
 mkdir -p /seed/systemd/system/multi-user.target.wants /seed/systemd/system-preset
@@ -100,7 +123,7 @@ class Console:
         return self.text.replace("\r", "")
 
     def expect(self, text, timeout=240):
-        end = time.time() + timeout
+        end = time.time() + scaled(timeout)
         while time.time() < end:
             i = self.buf.find(text)
             if i >= 0:
@@ -120,7 +143,7 @@ class Console:
         # the terminal echoes the command; only the expanded status line (digits) matches the pattern
         self.proc.stdin.write(f"{cmd}; echo {mark}$?\n".encode())
         self.proc.stdin.flush()
-        end = time.time() + timeout
+        end = time.time() + scaled(timeout)
         rx = re.compile(re.escape(mark) + r"(\d+)\r?\n")
         while time.time() < end:
             m = rx.search(self.buf)
@@ -211,8 +234,7 @@ def require_host_tools():
                        (shutil.which("docker"), "docker"), (shutil.which("qemu-system-x86_64"), "qemu-system-x86_64")):
         if not need:
             sys.exit(f"missing {hint}")
-    if not os.access("/dev/kvm", os.R_OK | os.W_OK):
-        sys.exit("no usable /dev/kvm (the QEMU labs need KVM: the runner must expose it and the user must be in the kvm group)")
+    need_accelerator()
 
 
 def install(work, release, hostimage, layout, disks, timeout):
@@ -266,7 +288,7 @@ def clear_newer_md_fields(path):
 
 
 def boot(work, disks, vars_file, log):
-    cmd = ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-machine", "q35", "-m", "2048", "-smp", "2",
+    cmd = ["qemu-system-x86_64", *qemu_accel(), "-machine", "q35", "-m", "2048", "-smp", "2",
            "-display", "none", "-monitor", "none", "-serial", "stdio",
            "-drive", f"if=pflash,format=raw,unit=0,file={OVMF_CODE},readonly=on",
            "-drive", f"if=pflash,format=raw,unit=1,file={vars_file}"]
@@ -325,7 +347,7 @@ def main():
     ap.add_argument("--workdir", help="directory for disk images and logs (default: a new one beside --release)")
     ap.add_argument("--hostimage", help="static nex-hostimage (default: <release>/../nex-hostimage)")
     ap.add_argument("--install-timeout", type=int, default=300, help="seconds for the install step")
-    ap.add_argument("--boot-timeout", type=int, default=240, help="seconds for each boot to reach the probe")
+    ap.add_argument("--boot-timeout", type=int, default=240, help="seconds for each boot to reach the probe (scaled by NEX_QEMU_SLOWDOWN)")
     a = ap.parse_args()
     require_host_tools()
     if a.step != "boot" and not os.path.exists(os.path.join(a.release, "manifest.json")):

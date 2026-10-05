@@ -44,6 +44,19 @@ class LabHelperTests(unittest.TestCase):
             os.environ.update(NEX_DOCKER_CPUS='3', NEX_DOCKER_MEMORY='6g')
             self.assertEqual(image_boot.docker_caps(), ['--cpus', '3', '--memory', '6g'])
 
+    def test_accelerator_switch_selects_kvm_or_emulation_and_stretches_waits(self):
+        with mock.patch.object(image_boot, 'ACCEL', 'kvm'), mock.patch.object(image_boot, 'SLOWDOWN', 1.0):
+            args = image_boot.qemu_accel()
+            self.assertIn('-enable-kvm', args)
+            self.assertIn('host,-vmx', args)  # a guest is never offered VMX: nothing in a lab starts a nested guest
+            self.assertEqual(image_boot.scaled(240), 240)
+        with mock.patch.object(image_boot, 'ACCEL', 'tcg'), mock.patch.object(image_boot, 'SLOWDOWN', 8.0):
+            args = image_boot.qemu_accel()
+            self.assertNotIn('-enable-kvm', args)
+            self.assertIn('tcg,thread=multi', args)
+            self.assertEqual(image_boot.scaled(240), 1920)
+            image_boot.need_accelerator()  # emulation needs no /dev/kvm
+
     def test_mount_sources_follow_the_docker_hosts_view_of_the_workspace(self):
         with mock.patch.dict(os.environ, {'GITHUB_WORKSPACE': '/job/ws', 'NEX_HOST_WORKSPACE': '/var/lib/docker/volumes/v/_data'}):
             self.assertEqual(image_boot.host_mount('/job/ws/.cache/out'), '/var/lib/docker/volumes/v/_data/.cache/out')

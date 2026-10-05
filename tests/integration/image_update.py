@@ -128,7 +128,7 @@ class Ctl:
         self.buf = ""
 
     def expect(self, text, timeout):
-        end = time.time() + timeout
+        end = time.time() + lab.scaled(timeout)
         while text not in self.buf:
             if not self._read(end):
                 raise TimeoutError(f"{text!r} not seen in {timeout}s; tail {self.buf[-400:]!r}")
@@ -141,7 +141,7 @@ class Ctl:
         mark = f"__END{time.monotonic_ns()}__"
         self.send(f"{cmd}; echo {mark}$?")
         rx = re.compile(re.escape(mark) + r"(\d+)\n")
-        end = time.time() + timeout
+        end = time.time() + lab.scaled(timeout)
         while True:
             m = rx.search(self.buf)
             if m:
@@ -259,7 +259,7 @@ class VM:
         for stale in (sock, os.path.join(self.work, "qmp.sock")):
             if os.path.exists(stale):
                 os.unlink(stale)
-        cmd = ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-machine", "q35", "-m", "2048", "-smp", "2",
+        cmd = ["qemu-system-x86_64", *lab.qemu_accel(), "-machine", "q35", "-m", "2048", "-smp", "2",
                "-display", "none", "-monitor", "none", "-serial", "stdio", "-serial", f"unix:{sock},server=on,wait=off",
                "-qmp", f"unix:{self.work}/qmp.sock,server=on,wait=off",
                "-drive", f"if=pflash,format=raw,unit=0,file={lab.OVMF_CODE},readonly=on",
@@ -287,7 +287,7 @@ class VM:
         t0 = time.time()
         uuid = re.compile(r"BOOTID=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
         knock = 0
-        while time.time() - t0 < timeout:
+        while time.time() - t0 < lab.scaled(timeout):
             if time.time() >= knock and self.kernel_running():
                 self.ctl.send("echo BOOTID=$(cat /proc/sys/kernel/random/boot_id)")
                 knock = time.time() + 3
@@ -356,7 +356,7 @@ def await_commit(ctl, patience=150):
     The assessment, the bless and the reconcile service run after the control shell is up, and a loaded runner takes longer than any
     fixed pause. When it never commits, print what booted, the loader's entries, the update command's output and both boots' logs."""
     phase_raw = raw_phase(ctl)
-    for _ in range(patience // 5):
+    for _ in range(lab.scaled(patience) // 5):
         if '"committed"' in phase_raw:
             break
         time.sleep(5)
@@ -490,7 +490,7 @@ def prove_state_guard(vm, budget, same_data, rel1_state_format):
     check(builds[:1] == ["2026.10.1-1"] and lines[0].strip() == "failed" and lines[1].split()[:1] not in ([], ["active"]),
           "state guard (observed live): release 1 booted over newer state, its guard failed and libvirtd did not start", repr(first))
     check(builds[-1] == "2026.10.2-2", "state guard: the counted boots ran out and the host is back on release 2 (reads 3)", str(builds))
-    time.sleep(20)
+    time.sleep(lab.scaled(20))
     fs = facts(ctl)
     info(f"state guard final: ESP {fs['uki']} phase {fs['status']['phase']} failure {fs['status'].get('failure')}")
     check(ctl.sh("nex-update state-guard")[0] == 0, "state guard: release 2 reads the retained state")
@@ -679,7 +679,7 @@ def main():
             # ---- 5. rollback
             reboot_cmd(f"nex-update rollback -request-id lab-roll1-{RUN}", "rollback")
             ctl = vm.ctl
-            time.sleep(20)
+            time.sleep(lab.scaled(20))
             fs = facts(ctl)
             check(fs["build_id"] == "2026.10.1-1", "rollback: release 1 runs again", fs["build_id"])
             same_data(fs, "rollback")
@@ -780,7 +780,7 @@ def main():
             vm.ctl.send(f"nex-update activate -request-id lab-act3-{RUN} > /tmp/act3.out 2>&1")
             t0 = time.time()
             ok = False
-            while time.time() - t0 < 150 and not ok:
+            while time.time() - t0 < lab.scaled(150) and not ok:
                 t = vm.con.log_text()
                 ok = slot2_hash in t[max(t.rfind("BdsDxe: loading"), 0):] and "Linux version" in t[max(t.rfind("BdsDxe: loading"), 0):]
                 time.sleep(0.5)
@@ -821,7 +821,7 @@ def main():
         # rollback, then a failing boot check (fallback to release 1 after the counted boots), then the happy path.
         reboot_cmd(f"nex-update rollback -request-id lab-roll3-{RUN}", "second rollback")
         ctl = vm.ctl
-        time.sleep(20)
+        time.sleep(lab.scaled(20))
         fs = facts(ctl)
         check(fs["build_id"] == "2026.10.1-1", "again: rollback to release 1 works once the state needs no newer format", fs["build_id"])
         same_data(fs, "again: rollback")

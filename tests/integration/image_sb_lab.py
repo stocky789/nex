@@ -48,7 +48,7 @@ class SBVM(up.VM):
             if os.path.exists(stale):
                 os.unlink(stale)
         code = SECBOOT_CODE if self.secure else lab.OVMF_CODE
-        cmd = ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-machine", "q35,smm=on" if self.secure else "q35",
+        cmd = ["qemu-system-x86_64", *lab.qemu_accel(), "-machine", "q35,smm=on" if self.secure else "q35",
                "-m", "2048", "-smp", "2", "-display", "none", "-monitor", "none", "-serial", "stdio", "-serial", f"unix:{sock},server=on,wait=off",
                "-qmp", f"unix:{self.work}/qmp.sock,server=on,wait=off"]
         if self.secure:

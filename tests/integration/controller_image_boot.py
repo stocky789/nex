@@ -77,7 +77,7 @@ class VM:
         self.qga = f"{work}/{name}.qga.sock"
         vars_copy = f"{work}/{name}.vars.fd"
         shutil.copy(OVMF_VARS, vars_copy)
-        argv = ["qemu-system-x86_64", "-enable-kvm", "-machine", "q35", "-cpu", "host", "-smp", "2", "-m", "2048", "-display", "none", "-no-reboot",
+        argv = ["qemu-system-x86_64", *lab.qemu_accel(), "-machine", "q35", "-smp", "2", "-m", "2048", "-display", "none", "-no-reboot",
                 "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={OVMF_CODE}", "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}",
                 "-drive", f"file={system},format=raw,if=none,id=system,readonly=on", "-device", "virtio-blk-pci,drive=system,bootindex=1",
                 "-drive", f"file={data},format=qcow2,if=none,id=data", "-device", "virtio-blk-pci,drive=data",
@@ -101,7 +101,7 @@ class VM:
             if graceful:
                 try:
                     self.guest("systemctl poweroff", wait=False)
-                    self.proc.wait(timeout=60)
+                    self.proc.wait(timeout=lab.scaled(60))
                 except Exception:
                     pass
             if self.alive():
@@ -111,7 +111,7 @@ class VM:
     def guest(self, command, wait=True, timeout=60):
         """Run a shell command in the guest through the guest agent; returns (exit code, stdout)."""
         s = socket.socket(socket.AF_UNIX)
-        s.settimeout(timeout)
+        s.settimeout(lab.scaled(timeout))
         s.connect(self.qga)
         f = s.makefile("rwb")
 
@@ -123,7 +123,7 @@ class VM:
         pid = call("guest-exec", {"path": "/bin/sh", "arg": ["-c", command], "capture-output": True})["pid"]
         if not wait:
             return 0, ""
-        end = time.time() + timeout
+        end = time.time() + lab.scaled(timeout)
         while time.time() < end:
             st = call("guest-exec-status", {"pid": pid})
             if st["exited"]:
@@ -136,7 +136,7 @@ def ready(cert, deadline, vm, exit_means_not_ready=False):
     """Wait for the readiness marker over HTTPS with only this deployment's certificate trusted."""
     ctx = ssl.create_default_context(cafile=cert)
     ctx.check_hostname = False
-    end = time.time() + deadline
+    end = time.time() + lab.scaled(deadline)
     while time.time() < end:
         if not vm.alive():
             if exit_means_not_ready:  # the guest panicked on the failed root and qemu runs with -no-reboot
@@ -182,8 +182,7 @@ def main():
     for tool in ("qemu-system-x86_64", "mkfs.vfat", "mcopy", "openssl", "sfdisk"):
         if not shutil.which(tool):
             sys.exit(f"missing {tool}")
-    if not os.access("/dev/kvm", os.R_OK | os.W_OK):
-        sys.exit("no usable /dev/kvm (the QEMU labs need KVM: the runner must expose it and the user must be in the kvm group)")
+    lab.need_accelerator()
     # image/build.sh controller writes system.img; appliance/build.py --profile controller copies it as controller-system.img.
     system = next((p for p in (os.path.join(args.release, n) for n in ("system.img", "controller-system.img")) if os.path.isfile(p)), None)
     if system is None:
