@@ -12689,3 +12689,12 @@ of real storage or hardware certification.
 - Fix: `tests/integration/image_boot.py` gains `NEX_QEMU_ACCEL` (`kvm` by default, with VMX hidden from the guest; `tcg` for software emulation) and `NEX_QEMU_SLOWDOWN`, which stretches every wait the labs make on a guest; the update, controller-image, install and Secure Boot labs use it; `image.yml` selects `tcg` with a factor of 8, drops the `/dev/kvm` device and prerequisite check, and allows 360 and 240 minutes for the two QEMU jobs.
 - Regression: `test_accelerator_switch_selects_kvm_or_emulation_and_stretches_waits` and `tests/test_ci_security.py` (pass on the runner host in the contracts container); whether emulation finishes inside the budgets is checked by the forge `image-build-boot` and `controller-image` runs, not yet observed.
 - Avoid: running KVM guests inside a nested guest without a way to see the hypervisor's log; fixed lab budgets that assume hardware acceleration.
+
+## BUG-1927 — Swap probe budgets, Controller startup wait and cloud-image download still sized for an idle host
+
+- Date: 2026-10-05.
+- Symptom: `TestSwapKeepsCheckpointWhenAlreadyDefinedNewImageStoppedAfterWriting` failed with `virsh failed: signal: killed` under a two second probe deadline; the gallery capture failed with `controller startup; last transport error: Connection refused` after 60 s; `recovery-libvirt` failed on `curl: (56) ... unexpected eof` fetching the Debian cloud image at about 19 KB/s.
+- Root cause: waits sized for an idle host (2 s and 5 s probe budgets for a forked fake `virsh`, a 60 s Controller startup that the code's own comment says should be far longer, a download retried only on errors curl considers transient).
+- Fix: the swap probe deadlines are 8 s and 20 s; `Lab.started` waits 180 s; the cloud image download retries on any error, up to eight times, and resumes.
+- Regression: forge `go`, `controller-browser` and `recovery-libvirt` jobs run these on every push.
+- Avoid: a retry flag that does not cover the failure the network actually produces.

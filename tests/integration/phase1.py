@@ -69,7 +69,7 @@ class Lab:
         self.processes.append(process)
         return process
 
-    def started(self, name='controller', timeout=60):
+    def started(self, name='controller', timeout=180):
         """Wait for a just-started Controller to answer, then say why if it never does.
 
         Startup is a tenth of a second on an idle machine. CI runs every lane on one

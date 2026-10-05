@@ -159,8 +159,8 @@ func (l *swapLab) probe(ctx context.Context, url string) error {
 // notReadyDeadline. The same deadline bounds each probe, including the one that confirms the old image
 // is back during a restore, so both must sit far above one fake virsh call on a loaded runner.
 const (
-	readyDeadline    = 5 * time.Second
-	notReadyDeadline = 2 * time.Second
+	readyDeadline    = 20 * time.Second
+	notReadyDeadline = 8 * time.Second
 )
 
 // setNewReady chooses whether the new image boots, and the probe budget that fits the outcome.

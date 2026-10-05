@@ -1436,7 +1436,9 @@ def apparmor_guest_run(evidence: Path, candidate_dir: Path,
             "  - systemctl restart ssh\n"
         )
         meta_data.write_text(f"instance-id: {guest}\nlocal-hostname: {guest}\n")
-        run(["curl", "--fail", "--location", "--retry", "3", "--output", str(base), CLOUD_IMAGE_URL])
+        # A stalled or cut transfer (curl 56) is not retried by --retry alone; resume it rather than start over.
+        run(["curl", "--fail", "--location", "--retry", "8", "--retry-all-errors", "--retry-delay", "5",
+             "--continue-at", "-", "--output", str(base), CLOUD_IMAGE_URL])
         digest = subprocess.run(["sha256sum", str(base)], check=True, text=True,
                                 capture_output=True).stdout.split()[0]
         if digest != CLOUD_IMAGE_SHA256:
