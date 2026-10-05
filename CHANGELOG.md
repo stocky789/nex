@@ -18,9 +18,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
-### Miscellaneous
-
-- Pushes now run a short set of checks (build, vet, unit tests, UI type-check and build, API reference, script syntax) and boot-test the built host image, Controller image and both ISOs. The browser labs, update/tamper/rollback labs, reproducibility build, libvirt recovery lab and the website checks no longer run on every push.
+## [0.4.28] — 2026-10-05
 
 ### Bug Fixes
 
@@ -30,9 +28,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The Controller image boot check now finds the image the Controller appliance build produces.
 - Backup forgetting and SFTP read-only tests, and the host-network tests, no longer depend on running as a normal user or on a systemd host, so they pass in CI.
 - A Nex Core host no longer races its own report counter while registering the two-host witness, and a large pool authority push is no longer cut off by a fixed 15-second request limit.
+- Updated the Go cryptography library to a release that clears its published security advisories.
+- Removed memory-dump files that had been committed to the repository by mistake.
+- CI jobs no longer stop themselves at random when the machine is busy, and downloads of the Debian cloud image retry instead of failing the build.
 
 ### Miscellaneous
 
+- Pushes now run a short set of checks: build, vet, unit tests, UI type-check and build, API reference, and script syntax. The host image, the Controller image and both ISOs are built and boot-tested. The browser labs, the update, tamper and rollback labs, the reproducibility build, the libvirt recovery lab and the website checks no longer run on every push.
+- Image boot checks now run emulated, so they work on a build machine without hardware virtualization.
 - CI checks no longer fail on the website navigation and gallery assertions that predated the Download link, and the appliance swap tests allow more time when the build machine is busy.
 
 ## [0.4.27] — 2026-10-04
