@@ -55,13 +55,24 @@ echo "nex-boot-check:$problems" >&2
 if [ -e /run/nex/maintenance-hold ]; then
     exit 1
 fi
-# A counted boot: sd-boot already decremented the entry's counter for this boot (LoaderBootCountPath names the
-# renamed file, "...+<left>-<done>.efi"). While tries are left the failure only costs this boot: reboot and let the
-# loader try again. On the last try mark the entry bad (systemd-bless-boot bad) so the next boot is the previous
-# image even if the loader would otherwise keep the entry; either way sd-boot then falls back by itself.
-var=$(ls /sys/firmware/efi/efivars/LoaderBootCountPath-* 2> /dev/null | head -n 1)
-if [ -n "$var" ]; then
-    left=$(cat "$var" | tail -c +5 | tr -d '\000' | sed -n 's/.*+\([0-9][0-9]*\)\(-[0-9][0-9]*\)\{0,1\}\.efi.*/\1/p')
+# A counted boot: the loader already decremented the entry's counter for this boot. While tries are left the
+# failure only costs this boot: reboot and let the loader try again. On the last try mark the entry bad
+# (nex-bless-boot bad) so the next boot is the previous image; the loader then falls back by itself.
+# UEFI: LoaderBootCountPath names the renamed file, "...+<left>-<done>.efi". BIOS: nex-hostimage boot-tries prints
+# the tries left (0 = exhausted) and nothing once the running entry is blessed.
+counted=
+left=
+if [ -d /sys/firmware/efi ]; then
+    var=$(ls /sys/firmware/efi/efivars/LoaderBootCountPath-* 2> /dev/null | head -n 1)
+    if [ -n "$var" ]; then
+        counted=yes
+        left=$(cat "$var" | tail -c +5 | tr -d '\000' | sed -n 's/.*+\([0-9][0-9]*\)\(-[0-9][0-9]*\)\{0,1\}\.efi.*/\1/p')
+    fi
+else
+    left=$(/usr/bin/nex-hostimage boot-tries 2> /dev/null || true)
+    [ -z "$left" ] || counted=yes
+fi
+if [ -n "$counted" ]; then
     if [ -n "$left" ] && [ "$left" -gt 0 ]; then
         echo "nex-boot-check: $left boot tries left, rebooting to try again" >&2
     else

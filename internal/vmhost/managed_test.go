@@ -338,11 +338,11 @@ func TestStorageCorePathsAllocatesISCSIMount(t *testing.T) {
 	}
 }
 
-func TestStorageProjectionUpgradesLegacyClusteredISCSICapabilities(t *testing.T) {
+func TestStorageProjectionFillsClusteredISCSICapabilities(t *testing.T) {
 	storage := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-1", Generation: 1, Kind: protocol.StorageKindISCSI, Source: protocol.StorageSource{ISCSI: &protocol.ISCSIStorageSource{Mode: "clustered_gfs2", EligibleHostIDs: []string{"host-1", "host-2", "host-3"}}}}
 	got := storageProjection([]managedJournal{{Command: protocol.Command{Kind: "storage-register", Storage: &storage}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &storage}})[storage.ID]
 	if !got.Capabilities.VMDisk || !got.Capabilities.Shared || !reflect.DeepEqual(got.Capabilities.EligibleHostIDs, storage.Source.ISCSI.EligibleHostIDs) {
-		t.Fatalf("legacy clustered iSCSI capabilities = %#v", got.Capabilities)
+		t.Fatalf("clustered iSCSI capabilities = %#v", got.Capabilities)
 	}
 }
 
@@ -518,10 +518,10 @@ func TestISCSISourceChangeIgnoresCoreMountPathButConflictsWithOtherRepository(t 
 	}
 }
 
-func TestZFSCoreAliasIsProjectedWithoutRepointingLegacyMount(t *testing.T) {
+func TestZFSCoreAliasIsProjectedWithoutRepointingDirectMount(t *testing.T) {
 	alias := filepath.Join(storageMountRoot, "zfs-new")
-	legacy := protocol.StorageRegistration{
-		ID: "zfs-legacy", PoolID: "pool-1", HostID: "host-1", Name: "legacy", Kind: protocol.StorageKindZFS,
+	direct := protocol.StorageRegistration{
+		ID: "zfs-direct", PoolID: "pool-1", HostID: "host-1", Name: "direct", Kind: protocol.StorageKindZFS,
 		Path: "/srv/prototype", Generation: 1,
 		Source: protocol.StorageSource{ZFS: &protocol.ZFSStorageSource{Pool: "tank", Dataset: "prototype", MountPath: "/srv/prototype"}},
 	}
@@ -532,15 +532,15 @@ func TestZFSCoreAliasIsProjectedWithoutRepointingLegacyMount(t *testing.T) {
 	newApplied := newRequest
 	newApplied.ID, newApplied.Generation, newApplied.Path = "zfs-new", 1, alias
 	js := []managedJournal{
-		{Command: protocol.Command{Kind: "storage-register", Storage: &legacy}, Result: protocol.Result{Status: "succeeded"}},
+		{Command: protocol.Command{Kind: "storage-register", Storage: &direct}, Result: protocol.Result{Status: "succeeded"}},
 		{Command: protocol.Command{Kind: "storage-register", Storage: &newRequest}, Result: protocol.Result{Status: "succeeded"}, AppliedStorage: &newApplied},
 	}
 	projected := storageProjection(js)
 	if got := storageRegistrationPath(projected["zfs-new"]); got != alias {
 		t.Fatalf("new ZFS repository path = %q, want Core alias %q", got, alias)
 	}
-	if got := storageRegistrationPath(projected["zfs-legacy"]); got != "/srv/prototype" {
-		t.Fatalf("legacy ZFS repository was repointed to %q", got)
+	if got := storageRegistrationPath(projected["zfs-direct"]); got != "/srv/prototype" {
+		t.Fatalf("direct-mount ZFS repository was repointed to %q", got)
 	}
 	v := managedTestVM()
 	v.Disks = []protocol.VMDisk{{StorageID: "zfs-new", Name: "system", SizeGiB: 20, Bus: "virtio", Thin: true}}
@@ -571,15 +571,6 @@ func TestSMBMarkerBackingConflictPrefersDurableMarker(t *testing.T) {
 	if storageSameBacking(identity(markerA, "shared-diagnostic"), identity(markerB, "shared-diagnostic")) {
 		t.Fatal("distinct durable SMB markers collided on a volatile filesystem ID")
 	}
-	if !storageSameBacking(identity("", "legacy-fs"), identity("", "legacy-fs")) {
-		t.Fatal("legacy SMB filesystem identity was not retained")
-	}
-	if !storageSameBacking(identity(markerA, "legacy-fs"), identity("", "legacy-fs")) {
-		t.Fatal("marker and legacy SMB identities lost their matching legacy filesystem collision")
-	}
-	if storageSameBacking(identity(markerA, "marker-fs"), identity("", "legacy-fs")) {
-		t.Fatal("mixed SMB profiles with distinct filesystem IDs collided")
-	}
 
 	storage := func(id, server, share, marker, fs string) protocol.StorageRegistration {
 		return protocol.StorageRegistration{ID: id, PoolID: "pool-1", HostID: "host-1", Name: id, Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: server, Share: share}}, Identity: identity(marker, fs)}
@@ -587,8 +578,6 @@ func TestSMBMarkerBackingConflictPrefersDurableMarker(t *testing.T) {
 	old := storage("first", "one.example.test", "vms", markerA, "volatile-one")
 	sameMarker := storage("second", "two.example.test", "other", markerA, "volatile-two")
 	differentMarker := storage("third", "three.example.test", "other", markerB, "volatile-one")
-	legacyDifferentFS := storage("legacy-other", "four.example.test", "other", "", "legacy-fs")
-	legacySameFS := storage("legacy-same", "five.example.test", "other", "", "volatile-one")
 	for _, status := range []string{"succeeded", "pending", "needs_attention"} {
 		t.Run(status, func(t *testing.T) {
 			js := []managedJournal{{Command: protocol.Command{OperationID: "first", Kind: "storage-register", Storage: &old}, Result: protocol.Result{Status: status}}}
@@ -597,12 +586,6 @@ func TestSMBMarkerBackingConflictPrefersDurableMarker(t *testing.T) {
 			}
 			if err := registrationConflict(js, protocol.Command{OperationID: "third", Kind: "storage-register", Storage: &differentMarker}); err != nil {
 				t.Fatalf("different-marker SMB alias collided on filesystem diagnostic: %v", err)
-			}
-			if err := registrationConflict(js, protocol.Command{OperationID: "legacy-other", Kind: "storage-register", Storage: &legacyDifferentFS}); err != nil {
-				t.Fatalf("unrelated legacy SMB source was globally blocked: %v", err)
-			}
-			if err := registrationConflict(js, protocol.Command{OperationID: "legacy-same", Kind: "storage-register", Storage: &legacySameFS}); err == nil {
-				t.Fatal("mixed SMB profiles with matching legacy filesystem ID did not collide")
 			}
 		})
 	}
@@ -768,7 +751,7 @@ func TestPendingResourceRemovalReturnsExactDurableCommand(t *testing.T) {
 	}
 	got, err = e.PendingResourceRemoval(context.Background(), "pool-1", "host-1")
 	if err != nil || got == nil || got.Command.OperationID != "terminal" {
-		t.Fatalf("legacy failed removal was not selected for safe exact reconciliation: %+v, %v", got, err)
+		t.Fatalf("failed removal was not selected for safe exact reconciliation: %+v, %v", got, err)
 	}
 }
 
@@ -2339,7 +2322,7 @@ func TestManagedCreateStartOutcomeUnknownMarkerNeedsAttention(t *testing.T) {
 	c := protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}
 	j := managedJournal{
 		Command: c, Result: protocol.Result{OperationID: c.OperationID, Status: "succeeded"},
-		Stage: "started", Start: "legacy refusal text", StartOutcome: "future-state",
+		Stage: "started", Start: "recorded refusal text", StartOutcome: "future-state",
 	}
 	if err := e.save(j); err != nil {
 		t.Fatal(err)
@@ -2381,9 +2364,9 @@ func TestManagedInterruptedStartSettlesFromLibvirt(t *testing.T) {
 	}
 	// Left behind by a dead process: report settles it without a re-sent operation.
 	stopped := seed("stopped", "12345678-1234-4234-8234-123456789022", "pending", "")
-	legacy := seed("legacy", "12345678-1234-4234-8234-123456789023", "needs_attention", "libvirt refused the start request; inspect the VM on its host")
+	refused := seed("refused", "12345678-1234-4234-8234-123456789023", "needs_attention", "libvirt refused the start request; inspect the VM on its host")
 	t.Setenv("VMHOST_STATE", "shut off")
-	t.Setenv("VMHOST_DOMAINS", running.VM.ID+" "+stopped.VM.ID+" "+legacy.VM.ID)
+	t.Setenv("VMHOST_DOMAINS", running.VM.ID+" "+stopped.VM.ID+" "+refused.VM.ID)
 	got, _ := e.Applied(context.Background())
 	if len(got.VMs) != 3 || len(got.Outcomes) != 5 {
 		t.Fatalf("settled creations: %+v", got)
@@ -2395,16 +2378,16 @@ func TestManagedInterruptedStartSettlesFromLibvirt(t *testing.T) {
 	if o := by["stopped:start"]; o.Kind != "vm-power" || o.Status != "needs_attention" || o.ID != stopped.VM.ID || o.Error != "VM created but not started: interrupted before the automatic start completed" {
 		t.Fatalf("interrupted start outcome %+v", o)
 	}
-	if o := by["legacy:start"]; o.Status != "needs_attention" || o.Error != "VM created but not started: libvirt refused the start request; inspect the VM on its host" {
+	if o := by["refused:start"]; o.Status != "needs_attention" || o.Error != "VM created but not started: libvirt refused the start request; inspect the VM on its host" {
 		t.Fatalf("recorded reason overwritten: %+v", o)
 	}
 	if outcome, found, err := e.CreateStartOutcome(context.Background(), stopped.OperationID); err != nil || !found || outcome != by["stopped:start"] {
 		t.Fatalf("interrupted create start outcome = %+v, found %t, err %v", outcome, found, err)
 	}
-	if outcome, found, err := e.CreateStartOutcome(context.Background(), legacy.OperationID); err != nil || !found || outcome != by["legacy:start"] {
-		t.Fatalf("legacy create start outcome = %+v, found %t, err %v", outcome, found, err)
+	if outcome, found, err := e.CreateStartOutcome(context.Background(), refused.OperationID); err != nil || !found || outcome != by["refused:start"] {
+		t.Fatalf("refused create start outcome = %+v, found %t, err %v", outcome, found, err)
 	}
-	for _, op := range []string{"stopped", "legacy"} {
+	for _, op := range []string{"stopped", "refused"} {
 		if saved, err := e.readJournal(op + ".json"); err != nil || saved.Result.Status != "succeeded" || saved.Stage != "started" {
 			t.Fatalf("%s not durably succeeded: %+v %v", op, saved, err)
 		}

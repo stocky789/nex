@@ -555,11 +555,10 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   release it. Do not force a change or detach the share on the member.
 - **Credential rotation is refused:** shut off every VM using the
   repository and settle pending operations, then retry.
-- **An APT removal or downgrade is refused:** retained repository state needs a matching
-  storage-capable package. Hosts with ZFS provisioning records and Controllers managing
-  ZFS-provisioning Cores require the newer ZFS-capable package. Restore that matching build;
-  do not delete journals to bypass the guard. A manual `dpkg` transaction bypasses this
-  protection and is unsupported.
+- **A roll-back or downgrade is refused (`state_format_downgrade`):** retained repository state needs a release that can
+  read it. Hosts with ZFS provisioning records and Controllers managing
+  ZFS-provisioning Cores require the newer ZFS-capable release. Stay on or restore that release;
+  do not delete journals to bypass the guard.
 
 ## Verification
 

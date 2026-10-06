@@ -146,7 +146,7 @@ func TestClusterBootUsesCompletedActivationDespiteLastDegradedObservation(t *tes
 		return protocol.StorageRegistration{}, nil
 	}
 	if err := ClusterStorageBootReadyFromDir(context.Background(), s.dir); err == nil || calls != 0 {
-		t.Fatalf("legacy degraded projection bypassed activation receipt: calls=%d err=%v op=%#v", calls, err, op)
+		t.Fatalf("degraded projection bypassed activation receipt: calls=%d err=%v op=%#v", calls, err, op)
 	}
 }
 

@@ -46,18 +46,18 @@ func TestZFSProvisionCommandRequiresZFSPreflight(t *testing.T) {
 	}
 }
 
-func TestZFSLegacyPreflightOmitsPoolLocalRegistrationFields(t *testing.T) {
+func TestZFSPreflightOmitsPoolLocalRegistrationFields(t *testing.T) {
 	managed := &protocol.ManagedState{Storage: []protocol.StorageRegistration{
 		{ID: "local", Kind: protocol.StorageKindLocal},
 		{ID: "zfs-owned", Kind: protocol.StorageKindZFS, ZFSProvisioned: true, ZFSScope: "pool", ZFSHostAccess: []protocol.ZFSHostAccess{{HostID: "host-1", Readable: true}}},
 	}, ZFSProvisions: []protocol.ZFSProvisionHostResult{{RepositoryID: "zfs-owned", HostID: "host-1", Status: "succeeded"}}}
-	projected := zfsLegacyManagedProjection(managed)
+	projected := zfsV1ManagedProjection(managed)
 	if len(projected.Storage) != 1 || projected.Storage[0].ID != "local" || len(projected.ZFSProvisions) != 0 {
-		t.Fatalf("legacy projection retained pool-local ZFS state: %#v", projected)
+		t.Fatalf("v1 projection retained pool-local ZFS state: %#v", projected)
 	}
 	raw, err := json.Marshal(projected)
 	if err != nil || bytes.Contains(raw, []byte(`"zfs_`)) {
-		t.Fatalf("legacy managed JSON contains ZFS extension fields: %s (%v)", raw, err)
+		t.Fatalf("v1 managed JSON contains ZFS extension fields: %s (%v)", raw, err)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestZFSPoolObservationIsStrippedUntilReplaceAcknowledgement(t *testing.T) {
 		t.Fatal("report projection mutated Core-owned pool observation")
 	}
 	if projected.Storage[0].Access.ZFSPool != nil || projected.Storage[1].Access.ZFSPool != nil || projected.Storage[1].ZFSHostAccess[0].Pool != nil {
-		t.Fatalf("legacy projection retained unsupported pool fields: %#v", projected)
+		t.Fatalf("v1 projection retained unsupported pool fields: %#v", projected)
 	}
 	raw, err = json.Marshal(projected.Storage[0].Access)
 	if err != nil {
@@ -152,44 +152,6 @@ func TestCredentialRetirementRequiresPreflight(t *testing.T) {
 	}
 	if got := s.State.Journal[cmd.OperationID].Command; got == nil || got.CredentialRetire == nil || got.CredentialRetire.Receipt != "receipt-1" {
 		t.Fatalf("credential retirement was not durably admitted: %+v", got)
-	}
-}
-
-func TestStoragePreflightFallsBackToStrictV1WhenSafe(t *testing.T) {
-	var reports []protocol.ReportRequest
-	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request protocol.ReportRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
-			return
-		}
-		reports = append(reports, request)
-		if request.Version == protocol.Version {
-			http.Error(w, "unsupported protocol version", http.StatusConflict)
-			return
-		}
-		if request.Version != protocol.LegacyVersion || request.Inventory.Managed != nil {
-			t.Errorf("unsafe legacy fallback: %+v", request)
-		}
-		json.NewEncoder(w).Encode(protocol.ReportResponse{})
-	}))
-	s := testStore(t)
-	s.State = identity
-	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
-		t.Fatal(err)
-	}
-	if !s.State.StorageProtocolLegacy || s.State.StorageProtocolReady || len(reports) != 2 {
-		t.Fatalf("preflight did not make one safe legacy retry: state=%+v reports=%d", s.State, len(reports))
-	}
-}
-
-func TestStoragePreflightDoesNotFallbackWithRepositoryState(t *testing.T) {
-	state := State{Journal: map[string]JournalEntry{"repo": {Command: &protocol.Command{Kind: "storage-register", Storage: &protocol.StorageRegistration{Kind: protocol.StorageKindNFS}}}}}
-	if legacyStorageSafe(state, &protocol.ManagedState{}, true) {
-		t.Fatal("repository state allowed legacy fallback")
-	}
-	if legacyStorageSafe(State{}, &protocol.ManagedState{Outcomes: []protocol.ManagedOutcome{{Kind: "storage-register", Status: "failed"}}}, true) {
-		t.Fatal("storage history allowed legacy fallback")
 	}
 }
 
@@ -259,7 +221,7 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 		t.Fatalf("report projection mutated Core-owned member state: %+v", got)
 	}
 	if len(projected[0].Operations[0].Members) != 1 || projected[0].Operations[0].Members[0].Status.SessionMonitorReady {
-		t.Fatalf("legacy projection retained unsupported member data: %+v", projected)
+		t.Fatalf("v1 projection retained unsupported member data: %+v", projected)
 	}
 	raw, err = json.Marshal(protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Results: []protocol.Result{}, StorageClusters: projected})
 	if err != nil {
@@ -268,7 +230,7 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 	decoder = json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&rejected); err != nil {
-		t.Fatalf("old strict schema rejected legacy projection: %v", err)
+		t.Fatalf("old strict schema rejected v1 projection: %v", err)
 	}
 	oldReports := 0
 	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -369,11 +331,11 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 func TestISODownloadProgressRequiresControllerAcknowledgement(t *testing.T) {
 	progress := protocol.ISODownloadProgress{OperationID: "download", ReceivedBytes: 4096, TotalBytes: 8192}
 	managed := &protocol.ManagedState{ISODownloads: []protocol.ISODownloadProgress{progress}}
-	legacy := managedExtensionsForController(managed, false, false)
-	if len(legacy.ISODownloads) != 0 || len(managed.ISODownloads) != 1 {
+	v1 := managedExtensionsForController(managed, false, false)
+	if len(v1.ISODownloads) != 0 || len(managed.ISODownloads) != 1 {
 		t.Fatal("compatibility projection changed Core observation")
 	}
-	raw, err := json.Marshal(legacy)
+	raw, err := json.Marshal(v1)
 	if err != nil {
 		t.Fatal(err)
 	}

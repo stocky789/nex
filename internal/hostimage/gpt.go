@@ -409,7 +409,13 @@ func (d *Disk) WriteTable(t *Table) error {
 		le.PutUint32(b[16:], crc32.ChecksumIEEE(b[:gptHeaderSize]))
 		return b
 	}
+	// The boot code of a BIOS host's GRUB lives in the first 446 bytes of this sector and must survive every
+	// table rewrite (each slot write changes partition GUIDs); only the protective entry is ours. A disk that was
+	// never given boot code, or a blank one, reads as zeros there.
 	mbr := make([]byte, ss)
+	if _, err := d.File.ReadAt(mbr[:446], 0); err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%s: read the MBR: %w", d.Path, err)
+	}
 	mbr[446+2], mbr[446+4] = 2, 0xee // CHS start 0/0/2, type EFI protective
 	mbr[446+5], mbr[446+6], mbr[446+7] = 0xff, 0xff, 0xff
 	le.PutUint32(mbr[446+8:], 1)

@@ -58,7 +58,7 @@ func TestPoolMaintenanceWireShape(t *testing.T) {
 		t.Fatalf("member wire shape: %s", member)
 	}
 	// A host that is not drained reports no flag and a zero time; nothing else about the
-	// membership an older Controller already understands changes.
+	// membership a strict Controller decoder already understands changes.
 	plain, err := json.Marshal(PoolMember{HostID: "member-2", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"})
 	if err != nil {
 		t.Fatal(err)

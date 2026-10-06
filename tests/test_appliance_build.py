@@ -26,25 +26,22 @@ def module(name):
 
 class ApplianceTests(unittest.TestCase):
     def test_guest_enables_root_password_ssh(self):
-        script = (ROOT / 'appliance/build-inside.sh').read_text()
-        self.assertIn('install cloud-init qemu-guest-agent python3 ca-certificates corosync-qnetd openssh-server', script)
-        self.assertIn('PermitRootLogin yes\\nPasswordAuthentication yes\\n', script)
-        self.assertIn('/etc/ssh/sshd_config.d/00-nex-controller.conf; systemctl enable ssh', script)
+        packages = (ROOT / 'image/controller/controller.packages').read_text().split()
+        self.assertIn('corosync-qnetd', packages)
+        config = (ROOT / 'image/controller/mkosi.extra/etc/ssh/sshd_config.d/00-nex-controller.conf').read_text()
+        self.assertIn('PermitRootLogin yes', config)
+        self.assertIn('PasswordAuthentication yes', config)
+        self.assertIn('ssh', (ROOT / 'image/controller/mkosi.postinst.chroot').read_text())
 
-    def test_build_profiles_require_their_own_inputs_before_any_container_runs(self):
+    def test_build_refuses_a_dirty_output_directory_before_any_container_runs(self):
         build = str(ROOT / 'appliance/build.py')
         with tempfile.TemporaryDirectory() as temporary:
             (Path(temporary) / 'leftover').write_text('x')
-            # The controller profile needs no Debian cloud image or signing key, but still refuses a dirty output directory.
-            result = subprocess.run(['python3', build, '--profile', 'controller', '--version', '1', '--output', temporary, '--docker', 'false'], capture_output=True, text=True)
+            result = subprocess.run(['python3', build, '--version', '1', '--output', temporary, '--docker', 'false'], capture_output=True, text=True)
             self.assertEqual(result.returncode, 2)
             self.assertIn('output directory must be empty', result.stderr)
-            # The single-disk profile still needs all three.
-            result = subprocess.run(['python3', build, '--version', '1', '--output', temporary], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 2)
-            self.assertIn('--base-image, --base-sha256 and --signing-key are required', result.stderr)
 
-    def test_both_profiles_stage_every_file_the_dockerfile_copies(self):
+    def test_build_stages_every_file_the_dockerfile_copies(self):
         spec = importlib.util.spec_from_file_location('appliance_build', ROOT / 'appliance/build.py')
         build = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(build)
@@ -55,38 +52,30 @@ class ApplianceTests(unittest.TestCase):
         class Stop(Exception):
             pass
 
-        for profile in ('single-disk', 'controller'):
-            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
-                temporary = Path(temporary)
-                fake_root = temporary / 'repo'
-                (fake_root / 'dist').mkdir(parents=True)
-                with tarfile.open(fake_root / 'dist/nex-source.tar.gz', 'w:gz') as archive:
-                    for path in (ROOT / 'appliance').iterdir():
-                        if path.is_file():
-                            archive.add(path, arcname='nex-source/appliance/' + path.name)
-                base = temporary / 'base.qcow2'
-                base.write_bytes(b'base')
-                key = temporary / 'key.pem'
-                key.write_text('key')
-                key.chmod(0o600)
-                staged = []
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            fake_root = temporary / 'repo'
+            (fake_root / 'dist').mkdir(parents=True)
+            with tarfile.open(fake_root / 'dist/nex-source.tar.gz', 'w:gz') as archive:
+                for path in (ROOT / 'appliance').iterdir():
+                    if path.is_file():
+                        archive.add(path, arcname='nex-source/appliance/' + path.name)
+            staged = []
 
-                def fake_run(argv, **kwargs):
-                    if argv[1:2] == ['build']:
-                        staged.extend(sorted(p.name for p in Path(argv[-1]).iterdir()))
-                    elif argv[1:2] == ['run']:
-                        raise Stop
-                    return subprocess.CompletedProcess(argv, 0)
+            def fake_run(argv, **kwargs):
+                if argv[1:2] == ['build']:
+                    staged.extend(sorted(p.name for p in Path(argv[-1]).iterdir()))
+                elif argv[1:2] == ['run']:
+                    raise Stop
+                return subprocess.CompletedProcess(argv, 0)
 
-                argv = ['build.py', '--profile', profile, '--version', '1', '--output', str(temporary / 'out'), '--docker', 'docker']
-                if profile == 'single-disk':
-                    argv += ['--base-image', str(base), '--base-sha256', hashlib.sha256(b'base').hexdigest(), '--signing-key', str(key)]
-                with patch.object(build, 'ROOT', fake_root), patch.object(build.subprocess, 'run', fake_run), \
-                        patch('sys.argv', argv), self.assertRaises(Stop):
-                    build.main()
-                self.assertTrue(set(copied) | {'Dockerfile'} <= set(staged), (profile, staged))
+            argv = ['build.py', '--version', '1', '--output', str(temporary / 'out'), '--docker', 'docker']
+            with patch.object(build, 'ROOT', fake_root), patch.object(build.subprocess, 'run', fake_run), \
+                    patch('sys.argv', argv), self.assertRaises(Stop):
+                build.main()
+            self.assertTrue(set(copied) | {'Dockerfile'} <= set(staged), staged)
 
-    def test_both_debian_builders_verify_supported_go_before_extracting(self):
+    def test_debian_builders_verify_supported_go_before_extracting(self):
         expected = '63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445'
         for name in ('appliance/Dockerfile', 'packaging/core-local/Dockerfile'):
             with self.subTest(builder=name), tempfile.TemporaryDirectory() as temporary:
@@ -104,20 +93,11 @@ class ApplianceTests(unittest.TestCase):
                 valid = command.replace(expected, hashlib.sha256(archive.read_bytes()).hexdigest()).replace('/tmp/go.tar.gz', str(archive))
                 self.assertEqual(subprocess.run(['/bin/sh', '-c', valid], capture_output=True).returncode, 0)
 
-    def test_public_guest_assets_are_readable_by_service_user(self):
-        script = (ROOT / 'appliance/build-inside.sh').read_text()
-        self.assertIn('--upload /build/ARTWORK-LICENSE.md:/usr/local/share/nex/ARTWORK-LICENSE.md', script)
+    def test_payload_installs_public_guest_assets_readable_by_service_user(self):
+        script = (ROOT / 'appliance/build-controller-payload.sh').read_text()
+        self.assertIn('umask 022', script)
+        self.assertIn('install -m 644 /build/ARTWORK-LICENSE.md "$t/usr/local/share/nex/ARTWORK-LICENSE.md"', script)
         self.assertIn('ARTWORK-LICENSE.md /output/', script)
-        command = re.search(r'chmod -R [^;]+ /usr/local/share/nex', script).group(0)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            share = root / 'share'
-            share.mkdir(mode=0o700)
-            (share / 'index.html').touch(mode=0o600)
-            (share / 'nex-source.tar.gz').touch(mode=0o600)
-            subprocess.run(['/bin/sh', '-c', command.replace('/usr/local/share/nex', str(share))], check=True)
-            self.assertEqual(share.stat().st_mode & 0o005, 0o005)
-            self.assertTrue(all(path.stat().st_mode & 0o004 for path in share.iterdir()))
 
     def test_firstboot_has_no_debian_cloud_final_ordering_cycle(self):
         # Debian13 cloud-final and cloud-init.target both run after multi-user.target.
@@ -137,20 +117,6 @@ class ApplianceTests(unittest.TestCase):
             result = subprocess.run(['systemd-analyze', 'verify', '--man=no', str(root / 'cloud-init.target'), str(root / 'multi-user.target')], env=dict(os.environ, SYSTEMD_UNIT_PATH=str(root) + ':/usr/lib/systemd/system', LC_ALL='C'), text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn('ordering cycle', result.stderr.lower())
-
-    def test_guest_inventory_preserves_dpkg_format_variables(self):
-        script = (ROOT / 'appliance/build-inside.sh').read_text()
-        command = re.search(r"--run-command '(dpkg-query[^']+)'", script).group(1)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            query = root / 'dpkg-query'
-            query.write_text('#!/bin/sh\nprintf "%s" "$2"\n')
-            query.chmod(0o755)
-            target = root / 'inventory'
-            command = command.replace('/usr/local/share/nex/components.tsv', str(target))
-            subprocess.run(['/bin/sh', '-c', command], env=dict(os.environ, PATH=temporary), check=True)
-            self.assertIn('${source:Package}', target.read_text())
-            self.assertIn('${Version}', target.read_text())
 
     def test_bootstrap_rejects_missing_and_multiline_password(self):
         firstboot = module('firstboot')

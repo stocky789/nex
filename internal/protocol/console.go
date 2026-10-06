@@ -9,7 +9,7 @@ const ConsoleCapability = "console-v1"
 // rendered as RFB) honours this Controller's ticketing. It is distinct from
 // ConsoleCapability, which every agent old enough to support VM consoles already
 // advertises: without a separate capability, a new Controller would enable the
-// host console tab against an old Core that has never implemented it, issue a
+// host console tab against a Core that has never implemented it, issue a
 // ticket, and leave the browser to hang until the 504 timeout instead of getting
 // the immediate "upgrade Nex Core" refusal.
 const HostConsoleCapability = "host-console-v1"

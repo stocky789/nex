@@ -21,14 +21,8 @@ SHARE=$ROOT/usr/share/nex-installer
 TIMEZONES=$SHARE/timezones
 PREPARE=$ROOT/usr/lib/nex-installer/prepare
 VALIDATE=$ROOT/usr/lib/nex-installer/validate-config # nex-config, validate only
-MIN_SECTORS=33554432 # 16 GiB in 512-byte sectors, the same floor nex-config enforces
-# The image edition (selected by media, like nex-config) needs room for two slots and a nex-data that
-# holds a staged update, the payloads and the VM store.
-image_edition=no
-if [ "$(cat "$ROOT/cdrom/nex/edition" 2>/dev/null)" = image ] && ! grep -q 'nex.edition=classic' "$ROOT/proc/cmdline" 2>/dev/null; then
-    image_edition=yes
-    MIN_SECTORS=50331648 # 24 GiB
-fi
+# Two slots and a nex-data that holds a staged update, the payloads and the VM store; nex-config enforces the same floor.
+MIN_SECTORS=50331648 # 24 GiB in 512-byte sectors
 OFFLINE='Offline (no management network)' # the graphical wizard's wording
 
 umask 077
@@ -510,7 +504,7 @@ step_repairdisk() {
     v_disks=$(printf '%s\n' "$found_disks" | tr ',' '\n' | sed 's|^/dev/||' | tr '\n' ' ')
     for name in $v_disks; do
         case " $disks " in *" $name "*) ;; *)
-            fail_note nex-installer/disk-error "$name holds the Nex Core data but is below the image edition's $((MIN_SECTORS / 2097152)) GiB minimum or is not eligible. Use Erase and install, or attach the original disks."
+            fail_note nex-installer/disk-error "$name holds the Nex Core data but is below the $((MIN_SECTORS / 2097152)) GiB minimum or is not eligible. Use Erase and install, or attach the original disks."
             exit 1 ;;
         esac
     done
@@ -585,10 +579,10 @@ v_dns=
 v_disks=
 v_mode=install
 
-# Repair image is offered only on image-edition media and only when a complete Nex Core data
-# volume (a single nex-data or every member of a nex-data mirror) is on the disks.
+# Repair image is offered only when a complete Nex Core data volume (a single nex-data or every member of a
+# nex-data mirror) is on the disks.
 found_disks=
-if [ "$image_edition" = yes ] && probe=$(sh "$ROOT/cdrom/nex/nex-image-install.sh" probe 2>/dev/null); then
+if probe=$(sh "$ROOT/cdrom/nex/nex-image-install.sh" probe 2>/dev/null); then
     found_disks=$(printf '%s\n' "$probe" | sed -n 's/^disks=//p')
 fi
 

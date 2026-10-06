@@ -5,8 +5,8 @@ import type { StatsHistory } from "./stats";
 import { loadHostStats } from "./stats-cache";
 import { HostPanel, addresses, coreVersion, hostStatus, hostUsage, uptime } from "./host-panel";
 import { hostConsoleBlocker } from "./host-model";
-import { versionLight } from "./updates";
 import { relativeTime } from "./labels";
+import { ImageUpdateBadge } from "./image-updates";
 import { Badge, MiniBar, MissingPanel, Panel, badgeTone } from "./ui";
 
 export { hostHealth, hostConsoleBlocker } from "./host-model";
@@ -31,12 +31,12 @@ function useHostHistories(hosts: Host[], api: API) {
 }
 
 type HostListProps = {
-  data: Data; hosts: Host[]; selectedID?: string; api: API; busy: boolean; unavailable: boolean; loading: boolean; coreAvailable?: string;
+  data: Data; hosts: Host[]; selectedID?: string; api: API; busy: boolean; unavailable: boolean; loading: boolean;
   openHostConsole: (id: string) => Promise<string>; onRefreshInventory: () => void; onReenroll: () => void; onRevoke: () => void;
 };
 
 // HostList is the Hosts screen: every host in scope, and the selected host's slide-over panel.
-export function HostList({ data, hosts, selectedID, api, busy, unavailable, loading, coreAvailable, openHostConsole, onRefreshInventory, onReenroll, onRevoke }: HostListProps) {
+export function HostList({ data, hosts, selectedID, api, busy, unavailable, loading, openHostConsole, onRefreshInventory, onReenroll, onRevoke }: HostListProps) {
   const scoped = hosts.find(h => h.id === selectedID);
   const known = data.hosts.find(h => h.id === selectedID);
   // A panel opened for a host outside the scope still needs that host's usage once the operator
@@ -54,7 +54,6 @@ export function HostList({ data, hosts, selectedID, api, busy, unavailable, load
     {hosts.length ? <div className="table-scroll"><table className="list">
       <thead><tr><th>Name</th><th>Pool</th><th>Role</th><th>Status</th><th>IP address</th><th>CPU</th><th>Memory</th><th>VMs</th><th>Nex Core</th><th>Uptime</th></tr></thead>
       <tbody>{hosts.map(h => {
-        const light = h.inventory && versionLight(h.inventory.os_version, coreAvailable);
         const isMaster = data.pools.some(p => p.id === h.pool_id && p.master_host_id === h.id);
         const status = hostStatus(h, unavailable);
         const usage = hostUsage(h.connection === "fresh" ? histories[h.id] : null);
@@ -62,18 +61,18 @@ export function HostList({ data, hosts, selectedID, api, busy, unavailable, load
           <td><span className={`dot ${badgeTone(status.value)}`} aria-hidden="true" /><a className="row-lead" href={`#/hosts/${encodeURIComponent(h.id)}`} onClick={e => e.stopPropagation()}>{h.hostname || h.id}</a></td>
           <td>{poolName(h.pool_id)}</td>
           <td><Badge value={isMaster ? "master" : "member"} label={isMaster ? "Master" : "Member"} /></td>
-          <td>{status.value === "online" ? status.label : <><Badge value={status.value} label={status.label} />{h.last_seen && <span className="muted"> Last report {relativeTime(h.last_seen)}</span>}</>}</td>
+          <td>{status.value === "online" ? status.label : <><Badge value={status.value} label={status.label} />{h.last_seen && <span className="muted"> Last report {relativeTime(h.last_seen)}</span>}</>}<ImageUpdateBadge host={h} /></td>
           <td className="mono">{addresses(h)[0] || "—"}</td>
           <td><MiniBar percent={usage.cpu} /></td>
           <td><MiniBar percent={usage.memory} /></td>
           <td>{vmCounts.get(h.id) || 0}</td>
-          <td title={h.inventory?.os_version}>{h.inventory ? coreVersion(h.inventory.os_version) : "—"}{light && light.level !== "current" && <> <Badge value="warning" label="Update" /></>}</td>
+          <td title={h.inventory?.os_version}>{h.inventory ? coreVersion(h.inventory.os_version) : "—"}</td>
           <td>{uptime(h) ?? <span className="muted">—</span>}</td>
         </tr>;
       })}</tbody>
     </table></div> : <p className="empty">{loading ? "Loading…" : "No hosts in this scope. Use Add host in the scope menu to connect a Nex Core host."}</p>}
     <p className="note">A stale connection means reachability is unknown. It does not mean virtual machines have stopped.</p>
-    {selectedID && (scoped ? <HostPanel key={scoped.id} data={data} host={scoped} history={histories[scoped.id]} api={api} busy={busy} unavailable={unavailable} coreAvailable={coreAvailable}
+    {selectedID && (scoped ? <HostPanel key={scoped.id} data={data} host={scoped} history={histories[scoped.id]} api={api} busy={busy} unavailable={unavailable}
       consoleBlocker={hostConsoleBlocker(scoped)}
       openHostConsole={openHostConsole} onRefreshInventory={onRefreshInventory} onReenroll={onReenroll} onRevoke={onRevoke} onClose={close} />
     : known ? <Panel icon="host" title={known.hostname || known.id} onClose={close}>

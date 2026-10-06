@@ -37,6 +37,48 @@ func verityImage(data, salt []byte) ([]byte, string, error) {
 	return append(sb, tree...), hex.EncodeToString(root), nil
 }
 
+// SyntheticUKI is a minimal PE file with the three sections a BIOS boot entry is made of: a kernel, an initrd and
+// a command line with the root hash. It is not bootable; it parses like a UKI.
+func SyntheticUKI(label string, sequence int, seed int64, rootHash string) []byte {
+	secs := []struct {
+		name string
+		data []byte
+	}{
+		{sectionLinux, []byte(fmt.Sprintf("kernel-%s-%d-%d", label, sequence, seed))},
+		{sectionInitrd, []byte(fmt.Sprintf("initrd-%s-%d-%d", label, sequence, seed))},
+		{sectionCmdline, []byte("roothash=" + rootHash + " ro console=tty0 panic=10\x00")},
+	}
+	const peOff, optSize = 0x40, 240
+	hdrEnd := peOff + 4 + 20 + optSize + 40*len(secs)
+	raw := (hdrEnd + 511) / 512 * 512
+	hdr := make([]byte, raw)
+	copy(hdr, "MZ")
+	le.PutUint32(hdr[0x3c:], peOff)
+	copy(hdr[peOff:], "PE\x00\x00")
+	coff := hdr[peOff+4:]
+	le.PutUint16(coff[0:], 0x8664)
+	le.PutUint16(coff[2:], uint16(len(secs)))
+	le.PutUint16(coff[16:], optSize)
+	le.PutUint16(coff[18:], 0x0022)
+	opt := coff[20:]
+	le.PutUint16(opt[0:], 0x20b)
+	le.PutUint32(opt[108:], 16) // NumberOfRvaAndSizes
+	var body []byte
+	for i, s := range secs {
+		padded := (len(s.data) + 511) / 512 * 512
+		h := coff[20+optSize+40*i:]
+		copy(h[0:8], s.name)
+		le.PutUint32(h[8:], uint32(len(s.data)))    // VirtualSize: the content, without the padding
+		le.PutUint32(h[12:], uint32(0x1000*(i+1)))  // VirtualAddress
+		le.PutUint32(h[16:], uint32(padded))        // SizeOfRawData
+		le.PutUint32(h[20:], uint32(raw+len(body))) // PointerToRawData
+		le.PutUint32(h[36:], 0x40000040)            // initialised data, readable
+		body = append(body, s.data...)
+		body = append(body, make([]byte, padded-len(s.data))...)
+	}
+	return append(hdr, body...)
+}
+
 // SyntheticRelease writes a tiny but fully valid release directory (erofs-sized random blocks, a real
 // hash tree, a UKI and an ESP tree) into dir. The seed makes every release different, which gives it
 // a different root hash.
@@ -53,7 +95,7 @@ func SyntheticRelease(dir, label string, sequence int, seed int64, blocks int) e
 		"root.erofs":  data,
 		"root.verity": verity,
 		"roothash":    []byte(rootHash + "\n"),
-		fmt.Sprintf("nex-core_%s_%d.efi", label, sequence): []byte(fmt.Sprintf("uki-%s-%d-%d", label, sequence, seed)),
+		fmt.Sprintf("nex-core_%s_%d.efi", label, sequence): SyntheticUKI(label, sequence, seed, rootHash),
 		"esp/EFI/BOOT/BOOTX64.EFI":                         []byte("boot-loader"),
 		"esp/loader/loader.conf":                           []byte("timeout 0\n"),
 	}
@@ -78,11 +120,17 @@ func SyntheticRelease(dir, label string, sequence int, seed int64, blocks int) e
 
 // SandboxMounts points the transient mount directories at base and returns the function that
 // restores them, so a test can run the slot writer and the ESP code without root or real mounts
-// (pair it with a Runner that does nothing).
+// (pair it with a Runner that does nothing). The simulated host started through UEFI.
 func SandboxMounts(base string) (restore func()) {
-	oldBase, oldESP, oldMD := mountBase, espMountBase, mdDevDir
+	oldBase, oldESP, oldMD, oldEFI, oldSys := mountBase, espMountBase, mdDevDir, efiFirmwareDir, mdSysBlock
 	mountBase, espMountBase, mdDevDir = filepath.Join(base, "run"), filepath.Join(base, "run", "esp"), filepath.Join(base, "md")
-	return func() { mountBase, espMountBase, mdDevDir = oldBase, oldESP, oldMD }
+	mdSysBlock = filepath.Join(base, "sys-block")
+	// The simulated host is a UEFI one, whatever the machine running the test is.
+	efiFirmwareDir = filepath.Join(base, "efi")
+	os.MkdirAll(efiFirmwareDir, 0o755)
+	return func() {
+		mountBase, espMountBase, mdDevDir, efiFirmwareDir, mdSysBlock = oldBase, oldESP, oldMD, oldEFI, oldSys
+	}
 }
 
 // ESPRoot is where SandboxMounts puts the (not really mounted) ESP of a partition node.

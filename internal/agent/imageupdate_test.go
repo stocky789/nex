@@ -127,10 +127,10 @@ func TestRelayedImageUpdateRunsOnTheHostsEngine(t *testing.T) {
 		t.Fatalf("an invalid command reached the engine: %v", engine.calls[before:])
 	}
 
-	// A host without an engine (classic) refuses with the stable code instead of pretending.
+	// A host without an engine refuses with the stable code instead of pretending.
 	SetImageUpdater(nil)
-	if result = ExecuteImageUpdate(context.Background(), imageCommand("check", nil)); result.Status != "failed" || !strings.HasPrefix(result.Error, "unsupported_edition: ") {
-		t.Fatalf("classic host: %+v", result)
+	if result = ExecuteImageUpdate(context.Background(), imageCommand("check", nil)); result.Status != "failed" || !strings.HasPrefix(result.Error, "no_image_update_engine: ") {
+		t.Fatalf("host without an engine: %+v", result)
 	}
 	if got := commandHost(imageCommand("check", nil)); got != "host-1" || !managedCommand(protocol.ImageUpdateCommandKind) {
 		t.Fatalf("command host %q", got)

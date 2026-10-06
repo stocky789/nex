@@ -13,7 +13,7 @@ import (
 	"nex.local/nex/internal/vmhost"
 )
 
-// offlineService is an image-edition host with a signed tree as its update server and an inbox, whose
+// offlineService is a host with a signed tree as its update server and an inbox, whose
 // update.conf lives in the test directory.
 func offlineService(t *testing.T) (s *Service, tree signedTree, inbox, conf, cookie, csrf string) {
 	t.Helper()
@@ -145,60 +145,5 @@ func TestSettingsMediaImportAndFetchRoutes(t *testing.T) {
 	op := opDone(t, s, "req-fetch-0001", cookie, csrf)
 	if e, _ := op["error"].(map[string]any); e == nil || e["code"] != "not_on_demand" {
 		t.Fatalf("%v", op)
-	}
-}
-
-func TestClassicHostRefusesOfflineRoutes(t *testing.T) {
-	s, _ := testService(t)
-	cookie, csrf := loginLocal(t, s)
-	// settings is the one route a package-edition host answers; the others need the image engine.
-	if w := callLocal(s, "GET", "/api/local/v1/updates/media", nil, cookie, csrf, "https://core.test"); w.Code != 409 {
-		t.Errorf("media: %d", w.Code)
-	}
-	for _, p := range []string{"import", "components/base/fetch"} {
-		if code, body := post(s, "/api/local/v1/updates/"+p, map[string]any{"request_id": "req-classic-001", "media": "inbox"}, cookie, csrf); code != 409 || body["code"] != "unsupported_edition" {
-			t.Errorf("%s: %d %v", p, code, body)
-		}
-	}
-}
-
-// A package-edition host has no update server: it takes a channel, kept as the archive URL it reads.
-func TestClassicHostChoosesItsChannelThroughItsArchive(t *testing.T) {
-	s, _ := testService(t)
-	cookie, csrf := loginLocal(t, s)
-	conf := filepath.Join(t.TempDir(), "updates.conf")
-	previous := nexupdate.UpdatesConfig
-	nexupdate.UpdatesConfig = conf
-	t.Cleanup(func() { nexupdate.UpdatesConfig = previous })
-	t.Setenv("NEX_UPDATE_REPO", "")
-	if err := os.WriteFile(conf, []byte("repo_url=https://mirror.example.test/nex\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	code, body := putJSON(s, "/api/local/v1/updates/settings", map[string]any{"channel": "dev"}, cookie, csrf)
-	if code != 200 || body["channel"] != "dev" || body["base_url"] != "" {
-		t.Fatalf("%d %v", code, body)
-	}
-	if b, _ := os.ReadFile(conf); string(b) != "repo_url=https://mirror.example.test/nex/dev\n" {
-		t.Fatalf("the channel is the archive subtree: %q", b)
-	}
-	for _, c := range []struct {
-		body map[string]any
-		code string
-	}{
-		{map[string]any{"channel": "testing"}, "invalid_channel"},
-		{map[string]any{"channel": "dev", "base_url": "https://updates.example.test"}, "invalid_base_url"},
-	} {
-		if code, body := putJSON(s, "/api/local/v1/updates/settings", c.body, cookie, csrf); code != 400 || body["code"] != c.code {
-			t.Errorf("%v: %d %v", c.body, code, body)
-		}
-	}
-	if b, _ := os.ReadFile(conf); string(b) != "repo_url=https://mirror.example.test/nex/dev\n" {
-		t.Fatalf("a refused request changes nothing: %q", b)
-	}
-	if code, body = putJSON(s, "/api/local/v1/updates/settings", map[string]any{"channel": "stable"}, cookie, csrf); code != 200 || body["channel"] != "stable" {
-		t.Fatalf("%d %v", code, body)
-	}
-	if b, _ := os.ReadFile(conf); string(b) != "repo_url=https://mirror.example.test/nex\n" {
-		t.Fatalf("stable returns to the archive root: %q", b)
 	}
 }

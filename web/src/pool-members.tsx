@@ -8,7 +8,7 @@ import {
   type MemberFence, type Promotion, type PromotionVerdict, type Restricted,
 } from "./pool-promotion";
 import { Badge, Section, badgeTone, date, type Tone } from "./ui";
-import { versionLight } from "./updates";
+import { ImageUpdateBadge } from "./image-updates";
 import type { Host } from "./types";
 import { capitalize, checkLabel, relativeTime, statusLabel } from "./labels";
 
@@ -364,8 +364,8 @@ export function poolChecks(report: Report): StatusCheck[] {
   return checks;
 }
 
-export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance, busyHost, onMasterChange, onEject, onPromote, onFenceProfile, onBMCProvisioning, bmcBusy, blockedReason, onHostFencing, hostFencingBusy }: {
-  report: Report; hosts?: Host[]; coreAvailable?: string; onMaintenance?: (member: Member) => void; busyHost?: string;
+export function MembersTable({ report, hosts = [], onMaintenance, busyHost, onMasterChange, onEject, onPromote, onFenceProfile, onBMCProvisioning, bmcBusy, blockedReason, onHostFencing, hostFencingBusy }: {
+  report: Report; hosts?: Host[]; onMaintenance?: (member: Member) => void; busyHost?: string;
   onMasterChange?: (member: Member) => void; onEject?: (member: Member) => void;
   onPromote?: (member: Member) => void; onFenceProfile?: (member: Member) => void;
   onBMCProvisioning?: (member: Member) => void; bmcBusy?: string; blockedReason?: string;
@@ -392,14 +392,15 @@ export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance,
       const failures = authoritative ? member.failures || [] : [];
       const outcome = authoritative ? maintenanceResultText(member.last_maintenance) : "";
       // The Core version is the host's own inventory report, as on the Hosts list.
-      const version = hosts.find(h => h.id === member.host_id)?.inventory?.os_version;
-      const light = version ? versionLight(version, coreAvailable) : undefined;
+      const memberHost = hosts.find(h => h.id === member.host_id);
+      const version = memberHost?.inventory?.os_version;
       return <li key={member.host_id} className="pool-member" data-host-id={member.host_id}>
         <div className="pool-member-head">
           {hosts.some(h => h.id === member.host_id)
             ? <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a>
             : <span>{member.name || member.host_id}</span>} <Badge value={member.role} label={member.role === "master" ? "Pool master" : "Member"} />
-          <small className="pool-version">Nex Core {version?.replace(/^Nex Core /, "") || "not reported"}{light && light.level !== "current" && <> <Badge value="warning" label="Update" /></>}</small>
+          <small className="pool-version">Nex Core {version?.replace(/^Nex Core /, "") || "not reported"}</small>
+          {memberHost && <ImageUpdateBadge host={memberHost} />}
           {/* When the host joined, as the pool master records it. */}
           <small className="muted">Joined {member.joined_at ? <time dateTime={member.joined_at} title={date(member.joined_at)}>{relativeTime(member.joined_at)}</time> : "—"}</small>
           {actions && <MemberActions report={report} member={member} onMasterChange={() => onMasterChange!(member)} onEject={() => onEject!(member)} blockedReason={blockedReason}
@@ -557,7 +558,7 @@ export function MaintenanceDialog({ member, busy, submitError, submitReady, read
   </dialog>;
 }
 
-export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, onEnrollHost }: { poolID: string; api: API; unavailable: boolean; hosts?: Host[]; coreAvailable?: string; onEnrollHost?: () => void }) {
+export function PoolMembers({ poolID, api, unavailable, hosts, onEnrollHost }: { poolID: string; api: API; unavailable: boolean; hosts?: Host[]; onEnrollHost?: () => void }) {
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -833,7 +834,7 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
     {report && !writesDisabled && <TransferStrip report={report} onCancel={() => void cancelTransfer()} cancelBusy={cancelBusy} cancelError={cancelError}
       onResume={() => { setCancelError(""); setNotice(""); setResumeOpen(true); }} />}
     {report && <PromotionStrip report={report} />}
-    {report ? <MembersTable report={report} hosts={hosts} coreAvailable={coreAvailable} busyHost={drainTarget?.host_id} blockedReason={blockedReason}
+    {report ? <MembersTable report={report} hosts={hosts} busyHost={drainTarget?.host_id} blockedReason={blockedReason}
       onMaintenance={writesDisabled ? undefined : member => { setDrainError(""); setNotice(""); setDrainTarget(member); }}
       onMasterChange={writesDisabled ? undefined : member => { setTransferError(""); setNotice(""); setPromoteTarget(member); }}
       onEject={writesDisabled ? undefined : member => { setTransferError(""); setNotice(""); setEjectTarget(member); }}

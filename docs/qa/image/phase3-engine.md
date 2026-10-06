@@ -11,7 +11,7 @@ systemd-boot and no `systemd-bless-boot` was involved. The boot loader's entry o
 first, higher sequence first, exhausted entries last): **[INFERENCE]** until a QEMU/OVMF run checks them against the real loader.
 Nothing below was observed on hardware or in a VM.
 
-- API impact: **changed contract** (host-local `GET /api/local/v1/updates`, `POST …/updates/apply` on an image-edition host) and
+- API impact: **changed contract** (host-local `GET /api/local/v1/updates`, `POST …/updates/apply`) and
   **new contract** (`POST …/updates/check`, `activate`, `rollback`, `cancel`; additive `Inventory.image` types and the
   `image-update-v1` capability constant, no producer yet). `docs/API.md`, `docs/api/local-openapi.json`, `docs/api/openapi.json` and
   the generated HTML were updated; `scripts/generate_api.py --check` and `tests/test_api_contract.py` pass.
@@ -33,7 +33,7 @@ Nothing below was observed on hardware or in a VM.
 | `internal/nexupdate/platform.go` | Edition check (os-release `IMAGE_ID=nex-core`), `ImageSettings` (no built-in base URL), `HostPlatform` (running root hash from `/proc/cmdline`, identity from `BUILD_ID`), safe extraction of the slot-image blob (zstd-compressed tar, decompressed while it is unpacked) |
 | `internal/nexupdate/stateformat.go` | `RequiredStateFormat`: port of `core_storage_format` / `has_core_v2_state` from `storage-downgrade-guard.py` |
 | `internal/hostimage/update.go` | `Host.StageSlot` (prunes stale UKIs, picks the inactive slot by GPT GUID, S2 slot write), `Arm`, `Rollback`, `Entries`; `Bless`, `MarkTried`, `BootOrder`, `ParseUKIName`; `ESPSync` now ignores exhausted entries when it asks whether the running entry is blessed |
-| `internal/localcore/updates.go`, `service.go` | Routes `GET /updates`, `POST /updates/{check,apply,activate,rollback,cancel}`; classic apt path unchanged on classic hosts |
+| `internal/localcore/updates.go`, `service.go` | Routes `GET /updates`, `POST /updates/{check,apply,activate,rollback,cancel}` |
 | `internal/protocol/protocol.go` | `Inventory.Image`, `ImageStatus`, `ImageRelease`, `ImageOperation`, `ImageError`, `ImageUpdateCapability` |
 
 ## Verified (all by `go test`, unit level)
@@ -55,7 +55,7 @@ pass. Python: `scripts/generate_api.py --check`, `tests/test_api_contract.py` (7
 | md superblock gate (phase2-build.md defect 4) | `TestCheckMD`, `TestStateFormatAndMDGuards/md generation` | pass (gate logic only; no kernel pair was run, see below) |
 | `request_id` idempotency | `TestRequestIDIdempotency`, `TestImageUpdateRoutes` | pass |
 | Cancel and running-VM policy | `TestCancel`, `TestRunningVMsPolicy` | pass |
-| HTTP routes, auth, refusal shape | `TestImageUpdateRoutes`, `TestClassicHostRefusesImageOnlyRoutes`, existing classic `TestLocalUpdatesAuthAndApply` | pass |
+| HTTP routes, auth, refusal shape | `TestImageUpdateRoutes` | pass |
 
 ### Found by the tests
 

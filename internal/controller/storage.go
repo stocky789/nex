@@ -465,7 +465,7 @@ func (c *Controller) mirrorStorageProjection(tx *sql.Tx, pool, host string, stor
 	if err != sql.ErrNoRows {
 		return err
 	}
-	// Older Controller projections could be removed while retaining their
+	// Controller projections could be removed while retaining their
 	// successful adopt-storage operation. A later Core report must reconnect that
 	// exact host-scoped operation rather than inserting the same request ID again.
 	adoptRequestID := "adopt-storage:" + host + ":" + storage.ID

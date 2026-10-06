@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"nex.local/nex/internal/agent"
 	"nex.local/nex/internal/localcore"
-	"nex.local/nex/internal/nexupdate"
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 	"os"
@@ -111,8 +110,6 @@ func main() {
 	if err = s.Resume(); err != nil {
 		log.Fatal("cannot resume agent identity: ", err)
 	}
-	s.WatchPostUpdate()
-	nexupdate.PrepareReboot = s.PrepareUpdateReboot
 	server := &http.Server{Addr: listen, Handler: s.Handler(), TLSConfig: s.TLSConfig(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	peerServer := &http.Server{Addr: agent.PoolPeerListen, Handler: s.PoolPeerHandler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return s.PoolPeerTLSConfig() }}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -320,7 +320,7 @@ func TestManagedLiveEditPreservesExistingTuning(t *testing.T) {
 	want = managedDomain{}
 	xml.Unmarshal(updated, &want)
 	if want.IOThreads != 0 || controllerIOThread(want.Devices.Controllers[0]) != 0 {
-		t.Fatalf("legacy SCSI controller changed while running: %s", updated)
+		t.Fatalf("existing SCSI controller changed while running: %s", updated)
 	}
 }
 

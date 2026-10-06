@@ -141,22 +141,29 @@ func (r *ZFSReplacer) replace(ctx context.Context, path string, journal *zfsRepl
 	return nil
 }
 
-// checkZFSReplaceDevice revalidates the chosen disk. requireFingerprint is false only
-// after wipe-started; erase confirmation is always enforced when the live disk needs it.
+// zfsReplaceDiscover lists the disks the host can offer as a replacement.
+var zfsReplaceDiscover = DiscoverZFSDevices
+
+// checkZFSReplaceDevice repeats the discovery listing's own eligibility rules against a fresh
+// observation, so a device that became busy, changed or lost its typed erase confirmation since
+// the operator picked it is refused rather than wiped. requireFingerprint is false only after
+// wipe-started, when the fingerprint cannot match any more and the disk this host wiped itself
+// has no old data left to confirm; erase confirmation is always enforced when the live disk
+// needs it.
 func checkZFSReplaceDevice(ctx context.Context, device protocol.ZFSProvisionDevice, requireFingerprint bool) error {
-	if err := checkSystemDiskDevice(ctx, device, requireFingerprint); err != nil {
-		return err
-	}
-	if requireFingerprint {
-		return nil
-	}
-	candidates, err := mdDiscoverDevice(ctx)
+	candidates, err := zfsReplaceDiscover(ctx)
 	if err != nil {
 		return errors.New("the replacement disk cannot be safely observed")
 	}
 	for _, candidate := range candidates {
 		if candidate.ByID != device.ByID {
 			continue
+		}
+		if !candidate.Eligible || candidate.Serial != device.Serial || candidate.SizeBytes != device.SizeBytes {
+			return errors.New("the replacement disk changed since it was selected, or is in use")
+		}
+		if requireFingerprint && candidate.Fingerprint != device.Fingerprint {
+			return errors.New("the replacement disk changed since it was selected, or is in use")
 		}
 		if candidate.RequiresErase && device.EraseConfirmation != device.ByID {
 			return errors.New("the replacement disk holds old data and was not confirmed for erasure")
@@ -170,7 +177,7 @@ func checkZFSReplaceDevice(ctx context.Context, device protocol.ZFSProvisionDevi
 // failed disk itself when still listed, otherwise an ONLINE data sibling. Unknown size
 // skips the check rather than blocking a replace Core cannot measure.
 func zfsReplaceMinSize(ctx context.Context, status *protocol.ZFSPoolStatus, oldDevice string) (uint64, bool) {
-	candidates, err := mdDiscoverDevice(ctx)
+	candidates, err := zfsReplaceDiscover(ctx)
 	if err != nil {
 		return 0, false
 	}

@@ -298,7 +298,7 @@ func TestManagedRecoveryReservationFencesStorageDetach(t *testing.T) {
 	}
 	// A later tombstone removes the live definition reference; the retained recovery
 	// reservation must independently keep its disk repository attached.
-	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "legacy-delete", Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID}}, Result: protocol.Result{OperationID: "legacy-delete", Status: "succeeded"}}); err != nil {
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "vm-delete", Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID}}, Result: protocol.Result{OperationID: "vm-delete", Status: "succeeded"}}); err != nil {
 		t.Fatal(err)
 	}
 	command := protocol.Command{OperationID: "detach", Kind: "storage-detach", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "detach", RepositoryID: storage.ID, PoolID: storage.PoolID, HostID: storage.HostID, ExpectedGeneration: 1}}

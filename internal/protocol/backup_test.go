@@ -18,11 +18,11 @@ func TestBackupRepositoryPreservesNFSAndRejectsLocal(t *testing.T) {
 	}
 	raw, err := json.Marshal(repo)
 	if err != nil || !strings.Contains(string(raw), `"source":`) {
-		t.Fatalf("legacy NFS source omitted: %s, %v", raw, err)
+		t.Fatalf("NFS source omitted: %s, %v", raw, err)
 	}
 	var decoded BackupRepository
 	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.Valid() != nil {
-		t.Fatalf("legacy NFS round trip: %v, %v", err, decoded.Valid())
+		t.Fatalf("NFS round trip: %v, %v", err, decoded.Valid())
 	}
 	repo.Kind = "local"
 	if err := repo.Valid(); err == nil {
@@ -59,7 +59,7 @@ func TestBackupRepositoryTypedSources(t *testing.T) {
 				t.Fatal(err)
 			}
 			if strings.Contains(string(raw), `"source":`) {
-				t.Fatalf("legacy NFS source emitted for %s: %s", tc.kind, raw)
+				t.Fatalf("NFS source emitted for %s: %s", tc.kind, raw)
 			}
 			var decoded BackupRepository
 			if err := json.Unmarshal(raw, &decoded); err != nil || decoded.Valid() != nil {
@@ -179,7 +179,7 @@ func TestBackupRunManifestDigestValidation(t *testing.T) {
 	}
 	run.ManifestSHA256 = ""
 	if err := run.Valid(); err != nil {
-		t.Fatalf("legacy run must remain readable for fail-closed reconciliation: %v", err)
+		t.Fatalf("run without a manifest digest must remain readable for fail-closed reconciliation: %v", err)
 	}
 }
 

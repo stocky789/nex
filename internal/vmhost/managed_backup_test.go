@@ -56,80 +56,6 @@ func TestVerifyBackupRepositoryRejectsWrongMountedSource(t *testing.T) {
 	}
 }
 
-func TestPrepareBackupRepositoryMigratesLegacyNFSHardeningOptions(t *testing.T) {
-	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
-	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
-	root := t.TempDir()
-	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
-	repo := protocol.BackupRepository{
-		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindNFS,
-		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
-	}
-	registration := backupStorageRegistration(repo)
-	path := remoteMountPath(registration)
-	unit, unitPath := remoteUnitPath(registration)
-	source := repo.Source.Server + ":" + repo.Source.Export
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
-		t.Fatal(err)
-	}
-	legacy := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev")
-	if err := os.WriteFile(unitPath, legacy, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(path, 0755); err != nil {
-		t.Fatal(err)
-	}
-	restarted := false
-	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		switch name {
-		case "findmnt":
-			return []byte(source + " nfs4 rw,vers=4,hard,nosuid,nodev,noexec " + path + "\n"), nil
-		case "systemctl":
-			if len(args) > 0 && args[0] == "restart" && args[len(args)-1] == unit {
-				restarted = true
-			}
-			return nil, nil
-		}
-		return nil, nil
-	}
-	ctx := allowBackupNFSHardeningRemount(context.Background(), registration)
-	if !storageRemountAllowed(ctx) {
-		t.Fatal("legacy hardening-only unit did not allow remount")
-	}
-	if _, err := prepareRemote(ctx, registration, source, "nfs4", "vers=4,hard,_netdev"+backupNFSHardeningOpts); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(unitPath)
-	if err != nil || !strings.Contains(string(got), "Options=vers=4,hard,_netdev,nosuid,nodev,noexec\n") {
-		t.Fatalf("legacy unit was not migrated: %s, %v", got, err)
-	}
-	if !restarted {
-		t.Fatal("hardening migrate did not restart the mount unit")
-	}
-	if err := os.WriteFile(unitPath, legacy, 0644); err != nil {
-		t.Fatal(err)
-	}
-	restarted = false
-	_, _ = PrepareBackupRepository(context.Background(), repo)
-	got, err = os.ReadFile(unitPath)
-	if err != nil || !strings.Contains(string(got), "Options=vers=4,hard,_netdev,nosuid,nodev,noexec\n") {
-		t.Fatalf("PrepareBackupRepository did not migrate legacy hardening options: %s, %v", got, err)
-	}
-	if !restarted {
-		t.Fatal("PrepareBackupRepository did not remount the migrated hardening unit")
-	}
-	foreign := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev,soft")
-	if err := os.WriteFile(unitPath, foreign, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if storageRemountAllowed(allowBackupNFSHardeningRemount(context.Background(), registration)) {
-		t.Fatal("non-hardening option change allowed remount")
-	}
-	if _, err := PrepareBackupRepository(context.Background(), repo); err == nil || !strings.Contains(err.Error(), "block repository dependencies") {
-		t.Fatalf("non-hardening option change was migrated: %v", err)
-	}
-}
-
 func TestSMBBackupRegistrationUsesSealedMountAndPrivateCredential(t *testing.T) {
 	repo := protocol.BackupRepository{
 		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
@@ -1625,7 +1551,7 @@ func TestCleanupTestRestoredVMKeepsCreatorBindingThroughDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result, err := e.CleanupTestRestoredVM(context.Background(), "test-restore-1", vm, "test-clean-1"); err != nil || result.Status != "failed" || observed != 0 {
-		t.Fatalf("legacy creator must be refused: %+v %v", result, err)
+		t.Fatalf("creator without the backup-restore marker must be refused: %+v %v", result, err)
 	}
 	creator.BackupRestore = true
 	if err := e.save(creator); err != nil {

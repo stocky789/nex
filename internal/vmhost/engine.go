@@ -1028,7 +1028,6 @@ func (e *Engine) appendUpdateBootstrap(b *strings.Builder) error {
 		{"appliance-firstboot", "/usr/local/lib/nex/appliance-firstboot", "0755"},
 		{"nex-controller-update.path", "/etc/systemd/system/nex-controller-update.path", "0644"},
 		{"nex-controller-update.service", "/etc/systemd/system/nex-controller-update.service", "0644"},
-		{"updates.conf", "/etc/nex/updates.conf", "0644"},
 	}
 	missing := false
 	for _, f := range files {

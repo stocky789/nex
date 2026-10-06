@@ -48,12 +48,13 @@ def publish_release(root, directory, version, keep=3, content=b"iso-bytes"):
 
 
 class PublishTests(unittest.TestCase):
-    def test_hash_pinned_release_payload_accepts_matched_libvirt_packages(self):
-        for package in ('libvirt0', 'libvirt-daemon-driver-qemu', 'libnss-libvirt'):
-            with self.subTest(package=package):
-                self.assertRegex(f'{package}-' + 'a' * 64 + '.deb', publish.PAYLOAD_NAME)
-        self.assertIsNone(publish.PAYLOAD_NAME.fullmatch('libvirt0-' + 'a' * 63 + '.deb'))
-        self.assertIsNone(publish.PAYLOAD_NAME.fullmatch('unrelated-' + 'a' * 64 + '.deb'))
+    def test_hash_pinned_release_payload_is_the_hash_then_the_file_name(self):
+        for name in ('root.erofs', 'manifest.json', 'nex-core_dev_0.efi', 'controller.qcow2', 'loader.conf'):
+            with self.subTest(name=name):
+                self.assertRegex('a' * 64 + '-' + name, publish.PAYLOAD_NAME)
+        self.assertIsNone(publish.PAYLOAD_NAME.fullmatch('a' * 63 + '-root.erofs'))
+        self.assertIsNone(publish.PAYLOAD_NAME.fullmatch('root.erofs-' + 'a' * 64))
+        self.assertIsNone(publish.PAYLOAD_NAME.fullmatch('a' * 64 + '-../root.erofs'))
 
     def test_publishes_iso_with_checksum_and_latest_link(self):
         with tempfile.TemporaryDirectory() as tmp:

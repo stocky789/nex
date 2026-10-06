@@ -206,7 +206,7 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr, controller, t
 			entry.Acknowledged = true
 			next.Journal[id] = entry
 		}
-		// A replacement Controller must acknowledge v2 support before Core sends it
+		// A replacement Controller must acknowledge support before Core sends it
 		// any repository commands or inventory extensions.
 		next.StorageProtocolReady = false
 		next.ZFSProvisionProtocolReady = false
@@ -216,13 +216,12 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr, controller, t
 		next.ISODownloadProgressReady = false
 		next.DetectedOSReady = false
 		next.ImageUpdateReady = false
-		next.StorageProtocolLegacy = false
 	}
 	next.Controller, next.TrustPEM, next.ControllerServerName = controller, trust, serverName
 	next.HostID = r.HostID
 	next.PendingHostID = ""
 	if next.PoolID == "" {
-		// Older hosts adopt the pool identity the Controller holds for them.
+		// Adopt the pool identity the Controller holds for this host.
 		next.PoolID, next.PoolName = r.PoolID, r.PoolName
 	}
 	next.KeyPEM = key
@@ -319,9 +318,7 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost, s
 	}
 	defer c.CloseIdleConnections()
 	var r protocol.EnrollResponse
-	// Enrollment has no repository fields, so retain the v1 shape until the
-	// authenticated report preflight establishes Controller v2 support.
-	req := protocol.EnrollRequest{Version: protocol.LegacyVersion, Token: strings.TrimSpace(token), CSRPEM: csr, Hostname: hostname, HostID: cmp.Or(s.State.HostID, s.State.PendingHostID), PoolID: s.State.PoolID, PoolName: s.State.PoolName}
+	req := protocol.EnrollRequest{Version: protocol.Version, Token: strings.TrimSpace(token), CSRPEM: csr, Hostname: hostname, HostID: cmp.Or(s.State.HostID, s.State.PendingHostID), PoolID: s.State.PoolID, PoolName: s.State.PoolName}
 	if err = post(ctx, c, controller, "/api/v1/agent/enroll", req, &r); err != nil {
 		return err
 	}
@@ -347,7 +344,7 @@ func Rotate(ctx context.Context, s *Store) error {
 		return err
 	}
 	var r protocol.EnrollResponse
-	if err = post(ctx, c, s.State.Controller, "/api/v1/agent/rotate", protocol.RotateRequest{Version: protocol.LegacyVersion, CSRPEM: s.State.PendingCSRPEM}, &r); err != nil {
+	if err = post(ctx, c, s.State.Controller, "/api/v1/agent/rotate", protocol.RotateRequest{Version: protocol.Version, CSRPEM: s.State.PendingCSRPEM}, &r); err != nil {
 		return err
 	}
 	if r.HostID != s.State.HostID {

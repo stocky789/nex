@@ -11,7 +11,7 @@ one VM at a time. Peak use was not sampled. The VM disk and the intermediate tre
 this work is left running.
 
 - API impact: none (no route, request or response changed; the harness calls the existing host-local contract). Guide impact: none (no
-  operator step changed; the image edition is not yet installable by operators). State owner: none new; the image holds no state, the host
+  operator step changed; the image is not yet installable by operators). State owner: none new; the image holds no state, the host
   keeps its TLS certificate and agent state on `nex-data` (`/var/lib/nex/core-local`, `/var/lib/nex-core-agent`).
 
 ## What was built
@@ -23,7 +23,7 @@ this work is left running.
 | `image/packages.lock` | 318 packages: the 317 Debian packages unchanged plus `nex-core-local ... origin=nex sha256=<deb>`. `scripts/image-lock.py check` matched all 318 against the build's package list |
 
 The deb is built by `packaging/core-local/build.py --edition image --source <nex-source.tar.gz> --version ...`, which the image build consumes
-through `NEX_PACKAGE_DIRS` (the existing `image/build.sh` hook; `build.sh` needed no change). The image edition of the package:
+through `NEX_PACKAGE_DIRS` (the existing `image/build.sh` hook; `build.sh` needed no change). The package:
 
 - has **no maintainer scripts**, no apt source/keyring/hook, no initramfs hook, no `nex-root-ro.service`, no `/etc/nex/core-release` stamp,
   no os-release divert, no `libvirtd-apparmor-policy`, `storage-downgrade-guard` or `corosync-pristine` (the image has no AppArmor package and
@@ -33,7 +33,7 @@ through `NEX_PACKAGE_DIRS` (the existing `image/build.sh` hook; `build.sh` neede
 - drops the cluster, ZFS and SMB packages from `Depends:` and has no `Recommends:` (layers own them): `Depends` is the 22 base-provided
   packages, so the Debian closure of the image did not change;
 - carries the AGPL source archive as a regular file at `/usr/share/nex/core-local/nex-source.tar.gz` (what `--source-archive` serves) and no
-  Controller appliance, no appliance update helpers and no `release.pub`: the image edition deploys the Controller from the signed system
+  Controller appliance, no appliance update helpers and no `release.pub`: the host deploys the Controller from the signed system
   image (`core-local-setup configure --controller-image-sha256`), not from the single-disk appliance.
 
 Reproducibility inputs changed: the builder now starts from the same digest-pinned `debian:trixie-slim` as `image/tools/Dockerfile`, takes
@@ -75,7 +75,7 @@ Run 1 (10 failed) and run 2 (3 failed) were **harness defects only**; the produc
 
 1. **The source archive omitted the package's own preset.** `scripts/build-source.py` copied `packaging/core-local` files by suffix and
    `.preset` was missing, so the first deb build from a fresh archive stopped at `install: cannot stat '.../30-nex-core-local.preset'`
-   (the file was added with the layers work). Fixed: `.preset` added to the suffix set. This also affects the classic ISO build, which uses
+   (the file was added with the layers work). Fixed: `.preset` added to the suffix set. This also affects the ISO build, which uses
    the same archive. `tests/test_build_source.py` still passes.
 2. The package builder reached the live archive (`FROM debian:13`, `apt-get update`) and Debian's `npm`; pinned as described above. Not a
    boot defect, but the plan's "Gaps found" list (`packaging/core-local/Dockerfile:2-3`) is now closed for this recipe; the libvirt and

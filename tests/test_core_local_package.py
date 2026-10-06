@@ -3,11 +3,7 @@
 import importlib.machinery
 import importlib.util
 import json
-import hashlib
-import os
-import shutil
 import sys
-import tarfile
 from pathlib import Path
 import subprocess
 import tempfile
@@ -22,7 +18,7 @@ loader.exec_module(setup)
 
 
 class CoreLocalPackageTests(unittest.TestCase):
-    def test_firstboot_root_login_removes_legacy_credentials_and_keeps_tls(self):
+    def test_firstboot_keeps_tls_and_creates_no_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             real_path = Path
@@ -42,12 +38,8 @@ class CoreLocalPackageTests(unittest.TestCase):
                 self.assertFalse((root / 'state/initial-password').exists())
                 self.assertFalse((root / 'state/credentials.json').exists())
                 self.assertEqual((root / 'state').stat().st_mode & 0o777, 0o700)
-                (root / 'state/initial-password').write_text('legacy-password')
-                (root / 'state/credentials.json').write_text('{"legacy": true}')
                 cert = (root / 'state/tls.crt').read_bytes()
                 setup.initialize({'address': '192.0.2.5'})
-                self.assertFalse((root / 'state/initial-password').exists())
-                self.assertFalse((root / 'state/credentials.json').exists())
                 self.assertEqual(cert, (root / 'state/tls.crt').read_bytes())
                 details = subprocess.check_output(['openssl', 'x509', '-in', str(root / 'state/tls.crt'), '-noout', '-ext', 'subjectAltName'], text=True)
                 self.assertIn('192.0.2.5', details)
@@ -156,209 +148,6 @@ class CoreLocalPackageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'root must run'):
                 setup.discover()
 
-    def test_package_rejects_tampered_bundle_before_docker(self):
-        with tempfile.TemporaryDirectory() as directory:
-            stage = Path(directory)
-            subprocess.run(['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(stage / 'private.pem')], check=True)
-            public = subprocess.check_output(['openssl', 'pkey', '-in', str(stage / 'private.pem'), '-pubout', '-outform', 'DER'])
-            (stage / 'public.raw').write_bytes(public[-32:])
-            (stage / 'manifest.json').write_text(json.dumps({'image_sha256': hashlib.sha256(b'original').hexdigest()}))
-            subprocess.run(['openssl', 'pkeyutl', '-sign', '-inkey', str(stage / 'private.pem'), '-rawin',
-                            '-in', str(stage / 'manifest.json'), '-out', str(stage / 'manifest.sig')], check=True)
-            (stage / 'controller.qcow2').write_bytes(b'tampered')
-            (stage / 'source.tar.gz').write_bytes(b'not reached')
-            for name in ['nex-source.tar.gz', 'components.tsv', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'build-inputs.json']:
-                (stage / name).write_bytes(b'not reached')
-            result = subprocess.run([sys.executable, str(ROOT / 'packaging/core-local/build.py'),
-                                     '--source', str(stage / 'source.tar.gz'), '--bundle', str(stage),
-                                     '--trusted-key', str(stage / 'public.raw'), '--output', str(stage / 'output'),
-                                     '--docker', '/must-not-execute-docker'], capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('digest does not match', result.stderr)
-            (stage / 'public.raw').write_bytes(b'0' * 32)
-            result = subprocess.run([sys.executable, str(ROOT / 'packaging/core-local/build.py'),
-                                     '--source', str(stage / 'source.tar.gz'), '--bundle', str(stage),
-                                     '--trusted-key', str(stage / 'public.raw'), '--output', str(stage / 'output'),
-                                     '--docker', '/must-not-execute-docker'], capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertNotIn('must-not-execute-docker', result.stderr)
-            (stage / 'public.raw').write_bytes(public[-32:])
-            (stage / 'controller.qcow2').write_bytes(b'original')
-            with tarfile.open(stage / 'source.tar.gz', 'w:gz') as archive:
-                for name in ['Dockerfile', 'build-inside.sh']:
-                    archive.add(ROOT / 'packaging/core-local' / name, arcname='nex-source/packaging/core-local/' + name)
-            shutil.copyfile(stage / 'source.tar.gz', stage / 'nex-source.tar.gz')
-            docker = stage / 'docker-check'
-            docker.write_text('#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\n'
-                              'if sys.argv[1] == "run":\n'
-                              '    mount = next(x for x in sys.argv if x.endswith(":/input:ro"))\n'
-                              '    assert (Path(mount.removesuffix(":/input:ro")) / "bundle").is_dir()\n')
-            docker.chmod(0o755)
-            result = subprocess.run([sys.executable, str(ROOT / 'packaging/core-local/build.py'),
-                                     '--source', str(stage / 'source.tar.gz'), '--bundle', str(stage),
-                                     '--trusted-key', str(stage / 'public.raw'), '--output', str(stage / 'output'),
-                                     '--docker', str(docker)], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_package_rejects_source_mismatch_before_docker(self):
-        with tempfile.TemporaryDirectory() as directory:
-            stage = Path(directory)
-            subprocess.run(['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(stage / 'private.pem')], check=True)
-            public = subprocess.check_output(['openssl', 'pkey', '-in', str(stage / 'private.pem'), '-pubout', '-outform', 'DER'])
-            (stage / 'public.raw').write_bytes(public[-32:])
-            (stage / 'controller.qcow2').write_bytes(b'image')
-            (stage / 'manifest.json').write_text(json.dumps({'image_sha256': hashlib.sha256(b'image').hexdigest()}))
-            subprocess.run(['openssl', 'pkeyutl', '-sign', '-inkey', str(stage / 'private.pem'), '-rawin',
-                            '-in', str(stage / 'manifest.json'), '-out', str(stage / 'manifest.sig')], check=True)
-            (stage / 'source.tar.gz').write_bytes(b'core source')
-            (stage / 'nex-source.tar.gz').write_bytes(b'appliance source')
-            for name in ['components.tsv', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'build-inputs.json']:
-                (stage / name).write_bytes(b'present')
-            result = subprocess.run([sys.executable, str(ROOT / 'packaging/core-local/build.py'),
-                                     '--source', str(stage / 'source.tar.gz'), '--bundle', str(stage),
-                                     '--trusted-key', str(stage / 'public.raw'), '--output', str(stage / 'output'),
-                                     '--docker', '/must-not-execute-docker'], capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('does not match appliance bundle source', result.stderr)
-            self.assertNotIn('must-not-execute-docker', result.stderr)
-
-    def test_package_source_path_reuses_verified_appliance_archive(self):
-        build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
-        self.assertIn('ln -s ../appliance/nex-source.tar.gz "$pkg/usr/share/nex/core-local/nex-source.tar.gz"', build)
-        with tempfile.TemporaryDirectory() as directory:
-            package = Path(directory) / 'package'
-            appliance_source = package / 'usr/share/nex/appliance/nex-source.tar.gz'
-            core_source = package / 'usr/share/nex/core-local/nex-source.tar.gz'
-            appliance_source.parent.mkdir(parents=True)
-            core_source.parent.mkdir(parents=True)
-            appliance_source.write_bytes(b'matching source')
-            core_source.symlink_to('../appliance/nex-source.tar.gz')
-            control = package / 'DEBIAN/control'
-            control.parent.mkdir()
-            control.write_text('Package: nex-test\nVersion: 1\nArchitecture: all\nDescription: test\n')
-            deb = Path(directory) / 'nex-test.deb'
-            subprocess.run(['dpkg-deb', '--root-owner-group', '--build', str(package), str(deb)], check=True, capture_output=True)
-            extracted = Path(directory) / 'extracted'
-            subprocess.run(['dpkg-deb', '-x', str(deb), str(extracted)], check=True, capture_output=True)
-            source = extracted / 'usr/share/nex/core-local/nex-source.tar.gz'
-            self.assertTrue(source.is_symlink())
-            self.assertEqual(source.readlink(), Path('../appliance/nex-source.tar.gz'))
-            self.assertEqual(source.read_bytes(), b'matching source')
-
-
-    def test_postinst_owns_release_identity_from_package_version(self):
-        for tool in ('dpkg-divert', 'dpkg-query'):
-            if not shutil.which(tool):
-                self.skipTest(f'{tool} missing: Debian dpkg tools are required for this check')
-        with tempfile.TemporaryDirectory(prefix='nex-postinst-') as directory:
-            root = Path(directory)
-            for sub in ('usr/lib', 'etc', 'var/lib/dpkg', 'bin'):
-                (root / sub).mkdir(parents=True)
-            (root / 'usr/lib/os-release').write_text('PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nID=debian\nVERSION_CODENAME=trixie\n')
-            (root / 'etc/os-release').symlink_to('../usr/lib/os-release')
-            (root / 'etc/motd').write_text('Nex Core 0.1.0-alpha1 — Debian 13 virtualization host\n')
-            (root / 'etc/issue').write_text('Nex Core 0.1.0-alpha1 (Debian 13)\nHost: \\n  Console: \\l\n\n')
-            helper = root / 'bin/deb-systemd-helper'
-            helper.write_text('#!/bin/sh\nexit 0\n')
-            helper.chmod(0o755)
-
-            def configure(version):
-                (root / 'var/lib/dpkg/status').write_text(
-                    f'Package: nex-core-local\nStatus: install ok half-configured\nArchitecture: amd64\nVersion: {version}\n\n')
-                env = dict(os.environ, DPKG_ROOT=str(root), DPKG_ADMINDIR=str(root / 'var/lib/dpkg'),
-                           PATH=f"{root / 'bin'}:{os.environ['PATH']}")
-                subprocess.run(['sh', str(ROOT / 'packaging/core-local/postinst'), 'configure'],
-                               env=env, check=True, capture_output=True, text=True)
-                return (root / 'etc/os-release').read_text()
-
-            release = configure('1.2.3~alpha1')
-            self.assertFalse((root / 'etc/os-release').is_symlink())
-            for line in ('NAME="Nex Core"', 'PRETTY_NAME="Nex Core 1.2.3~alpha1"', 'ID=nex-core', 'ID_LIKE=debian',
-                         'VERSION="1.2.3~alpha1"', 'VERSION_ID=1.2.3~alpha1', 'DEBIAN_CODENAME=trixie'):
-                self.assertIn(line + '\n', release)
-            # Debian's symlink survives under the diverted name; upstream metadata is untouched.
-            self.assertTrue((root / 'etc/os-release.debian').is_symlink())
-            self.assertIn('ID=debian\n', (root / 'usr/lib/os-release').read_text())
-            self.assertEqual((root / 'etc/motd').read_text(), 'Nex Core 1.2.3~alpha1 — Debian 13 virtualization host\n')
-            self.assertTrue((root / 'etc/issue').read_text().startswith('Nex Core 1.2.3~alpha1 (Debian 13)\nHost: \\n  Console: \\l\n'))
-            # Upgrade: identity follows the new package version without a second diversion.
-            release = configure('1.2.4')
-            self.assertIn('PRETTY_NAME="Nex Core 1.2.4"\n', release)
-            self.assertIn('VERSION_ID=1.2.4\n', release)
-            self.assertTrue((root / 'etc/os-release.debian').is_symlink())
-            self.assertEqual((root / 'etc/motd').read_text(), 'Nex Core 1.2.4 — Debian 13 virtualization host\n')
-            self.assertEqual((root / 'etc/nex/updates.conf').read_text(), 'repo_url=https://nexvirtualization.com/apt\n')
-            # The Nex APT source is configured out of the box, signed by the packaged key.
-            sources = (root / 'etc/apt/sources.list.d/nex.sources').read_text()
-            for line in ('Types: deb', 'URIs: https://nexvirtualization.com/apt', 'Suites: nex',
-                         'Components: main', 'Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg'):
-                self.assertIn(line + '\n', sources)
-            # Hosts provisioned before the install guard shipped get the system stamp
-            # backfilled, so their next upgrade is not refused by preinst.
-            self.assertEqual((root / 'etc/nex/core-release').read_text(),
-                             'NEX_CORE=1\nINSTALLED_BY=package-upgrade\n')
-            grub_cfg = (root / 'etc/default/grub.d/nex-core.cfg').read_text()
-            self.assertIn('GRUB_DISTRIBUTOR="Nex Core"\n', grub_cfg)
-            self.assertIn('systemd.ssh_auto=no', grub_cfg)
-
-    def test_postinst_keeps_the_installer_provenance_stamp(self):
-        for tool in ('dpkg-divert', 'dpkg-query'):
-            if not shutil.which(tool):
-                self.skipTest(f'{tool} missing: Debian dpkg tools are required for this check')
-        with tempfile.TemporaryDirectory(prefix='nex-stamp-') as directory:
-            root = Path(directory)
-            for sub in ('usr/lib', 'etc/nex', 'var/lib/dpkg', 'bin'):
-                (root / sub).mkdir(parents=True)
-            (root / 'usr/lib/os-release').write_text('ID=debian\nVERSION_CODENAME=trixie\n')
-            (root / 'etc/os-release').symlink_to('../usr/lib/os-release')
-            # An ISO-installed host records that provenance; postinst must not rewrite it.
-            (root / 'etc/nex/core-release').write_text('NEX_CORE=1\nINSTALLED_BY=nex-core-iso\n')
-            helper = root / 'bin/deb-systemd-helper'
-            helper.write_text('#!/bin/sh\nexit 0\n')
-            helper.chmod(0o755)
-            (root / 'var/lib/dpkg/status').write_text(
-                'Package: nex-core-local\nStatus: install ok half-configured\nArchitecture: amd64\nVersion: 0.1.5~alpha1\n\n')
-            env = dict(os.environ, DPKG_ROOT=str(root), DPKG_ADMINDIR=str(root / 'var/lib/dpkg'),
-                       PATH=f"{root / 'bin'}:{os.environ['PATH']}")
-            subprocess.run(['sh', str(ROOT / 'packaging/core-local/postinst'), 'configure'],
-                           env=env, check=True, capture_output=True, text=True)
-            self.assertEqual((root / 'etc/nex/core-release').read_text(),
-                             'NEX_CORE=1\nINSTALLED_BY=nex-core-iso\n')
-
-    def test_apt_source_uri_follows_configured_repo_url(self):
-        for tool in ('dpkg-divert', 'dpkg-query'):
-            if not shutil.which(tool):
-                self.skipTest(f'{tool} missing: Debian dpkg tools are required for this check')
-        with tempfile.TemporaryDirectory(prefix='nex-aptsrc-') as directory:
-            root = Path(directory)
-            for sub in ('usr/lib', 'etc/nex', 'var/lib/dpkg', 'bin'):
-                (root / sub).mkdir(parents=True)
-            (root / 'usr/lib/os-release').write_text('ID=debian\nVERSION_CODENAME=trixie\n')
-            (root / 'etc/os-release').symlink_to('../usr/lib/os-release')
-            (root / 'etc/nex/updates.conf').write_text('repo_url=https://apt.example.test/nex\n')
-            helper = root / 'bin/deb-systemd-helper'
-            helper.write_text('#!/bin/sh\nexit 0\n')
-            helper.chmod(0o755)
-            (root / 'var/lib/dpkg/status').write_text(
-                'Package: nex-core-local\nStatus: install ok half-configured\nArchitecture: amd64\nVersion: 0.1.5~alpha1\n\n')
-            env = dict(os.environ, DPKG_ROOT=str(root), DPKG_ADMINDIR=str(root / 'var/lib/dpkg'),
-                       PATH=f"{root / 'bin'}:{os.environ['PATH']}")
-            subprocess.run(['sh', str(ROOT / 'packaging/core-local/postinst'), 'configure'],
-                           env=env, check=True, capture_output=True, text=True)
-            # A non-default (public) repo_url is honored; a private/lab URL would be reset earlier.
-            self.assertIn('URIs: https://apt.example.test/nex\n',
-                          (root / 'etc/apt/sources.list.d/nex.sources').read_text())
-
-    def test_package_ships_archive_keyring_and_builds_the_apt_source(self):
-        keyring = ROOT / 'packaging/core-local/nex-archive-keyring.gpg'
-        self.assertTrue(keyring.is_file(), 'the Nex APT archive keyring must be committed')
-        head = keyring.read_bytes()[:1]
-        self.assertIn(head, (b'\x98', b'\x99'), 'keyring must be a dearmored (binary) GPG public key packet, not ASCII armor')
-        build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
-        self.assertIn('/usr/share/keyrings/nex-archive-keyring.gpg', build)
-        # The prerm removes the generated source so removal leaves no source with a missing key.
-        self.assertIn('/etc/apt/sources.list.d/nex.sources', (ROOT / 'packaging/core-local/prerm').read_text())
-
     def test_core_package_retains_compiled_go_notices(self):
         build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
         start = build.index('for file in \\\n    vendor/github.com/aws/aws-sdk-go-v2/LICENSE.txt')
@@ -383,11 +172,7 @@ class CoreLocalPackageTests(unittest.TestCase):
             self.assertNotEqual(run_copy().returncode, 0)
 
     def test_depends_cover_what_core_runs(self):
-        """A host that installs this package on its own must get the tools Core execs.
-
-        The ISO can mask a missing package dependency, but hosts upgraded through
-        the package must receive every command the agent invokes.
-        """
+        """The image must get every tool Core execs from this package's dependencies."""
         import re
         build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
         line = re.search(r'^Depends: (.*)$', build, re.M)
@@ -411,20 +196,6 @@ class CoreLocalPackageTests(unittest.TestCase):
                 self.assertIn(needed, source, 'this check is stale: Core no longer uses ' + needed)
                 self.assertIn(package, depends, needed + ' needs the ' + package + ' package at runtime')
 
-    def test_removal_never_erases_guest_or_state(self):
-        import re
-        script = (ROOT / 'packaging/core-local/prerm').read_text()
-        self.assertIn('deb-systemd-invoke stop nex-core-local.service', script)
-        self.assertNotIn('virsh ', script)
-        # Removal may clean up the generated apt source, but never guest disks, VM
-        # definitions, configuration, credentials or any recursive delete.
-        for forbidden in ('/var/lib/libvirt', '/var/lib/nex', '/etc/nex', 'images', 'rm -rf', 'rm -r '):
-            self.assertNotIn(forbidden, script)
-        for removal in re.findall(r'\brm\b[^\n]*', script):
-            self.assertIn('/etc/apt/sources.list.d/nex.sources', removal)
-        service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
-        self.assertIn('UMask=0077', service)
-
     def test_embedded_agent_keeps_the_qemu_probe_identity_capability(self):
         """BUG-0093: the embedded agent uses runuser during ISO storage registration."""
         service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
@@ -437,12 +208,13 @@ class CoreLocalPackageTests(unittest.TestCase):
         service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()
         self.assertIn('StateDirectory=nex/core-local nex-core-agent', service)
         self.assertIn('StateDirectoryMode=0700', service)
+        self.assertIn('UMask=0077', service)
 
     def test_local_service_restarts_after_a_clean_exit_for_the_network_rollback(self):
         """The embedded agent rolls a management-network change back only while it runs.
 
         Restart=on-failure would leave an exit 0 (or a signal reaped as success) with nothing
-        armed during the rollback window; `systemctl stop`, which prerm and upgrades use,
+        armed during the rollback window; `systemctl stop`
         still stops a Restart=always unit.
         """
         service = (ROOT / 'packaging/core-local/nex-core-local.service').read_text()

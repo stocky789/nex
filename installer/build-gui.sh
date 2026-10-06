@@ -7,10 +7,9 @@ cache=/work/.cache/nex-iso/gui
 stage=/work/.cache/nex-iso/stage
 source=$cache/cdebconf
 mkdir -p "$cache"
-# Same immutable snapshots as the offline package closure (NEX_SNAPSHOT_SOURCES).
+# The immutable snapshots the corresponding-source archive uses (NEX_SNAPSHOT_SOURCES).
 # A bare apt-get source against the builder image failed in release run 4228 with
-# "You must put some 'deb-src' URIs in your sources.list" after the ISO build
-# pinned binary downloads through an isolated sources.list.
+# "You must put some 'deb-src' URIs in your sources.list".
 snapshot_sources=${NEX_SNAPSHOT_SOURCES:?NEX_SNAPSHOT_SOURCES required}
 apt_snapshot=(
     -o "Dir::Etc::sourcelist=$snapshot_sources"
@@ -189,8 +188,8 @@ install -m 644 installer/gui/wizard-text.templates "$overlay/usr/share/nex-insta
 install -m 755 installer/gui/netinst-network.sh "$overlay/usr/lib/nex-installer/netinst-network"
 install -m 755 installer/gui/dhcp-preview.sh "$overlay/usr/lib/nex-installer/dhcp-preview"
 install -m 644 installer/gui/start.sh "$overlay/usr/lib/debian-installer.d/S66nex-wizard"
-# Load safe package/account defaults before the GUI; no file-preseed screen.
-sed '/^d-i preseed\/early_command /d' installer/preseed.cfg > "$overlay/preseed.cfg"
+# Load the root-only account policy before the GUI; no file-preseed screen.
+install -m 644 installer/preseed.cfg "$overlay/preseed.cfg"
 { echo UTC; awk '!/^#/ {print $3}' /usr/share/zoneinfo/zone.tab; } | sort -u > "$overlay/usr/share/nex-installer/timezones"
 install -m 644 installer/assets/nex-core-lockup.png "$overlay/usr/share/nex-installer/nex-core-lockup.png"
 install -m 644 "$source/src/modules/frontend/gtk/gtk.so" "$overlay/usr/lib/cdebconf/frontend/gtk.so"

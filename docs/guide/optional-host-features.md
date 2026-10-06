@@ -1,12 +1,12 @@
-# Check and switch optional host features (image edition)
+# Check and switch optional host features
 
 ## Status
 
-Development build, **image edition only**, operated from the host's own root shell. Optional features such as
+Development build, operated from the host's own root shell. Optional features such as
 OpenZFS storage (`nex-zfs`) and the cluster stack (`nex-cluster`) are separate signed **layers**: the system image
 stays small and a host that never uses a feature does not carry it. The layer manager is implemented in Nex Core
 and exercised in a disposable QEMU/KVM guest; it has not run on a booted installed image, on Secure Boot, or on
-physical hardware. The Classic edition has no layers and ignores this page.
+physical hardware.
 
 Not available yet, so do not expect it: a Controller screen or API for layers and automatic enabling when you create a
 ZFS pool. The `nex-zfs` layer is for internal lab use only until the project owner decides on redistributing prebuilt
@@ -15,7 +15,7 @@ and Pacemaker started); the product's `dlm-controld` and libvirt builds were not
 
 ## Prerequisites
 
-- An image-edition host you can log in to as root (console or SSH).
+- A host you can log in to as root (console or SSH).
 - The layer file in the host's layer store, `/var/lib/nex/layers/store/sha256-<digest>.raw`, next to the signed
   release manifest for the running image under `/var/lib/nex/layers/releases/<build id>/`. The update engine stages
   both together with the system image when it applies a release that carries layers (covered by unit tests; it has not
@@ -84,6 +84,6 @@ boot, stayed merged and `layers list` showed it as `merged` but not `verified`: 
 not remove a running layer. A unit test (not a VM) shows that, after a reboot, a tampered file is neither linked nor merged. `nex-cluster`
 was built with the stock Debian cluster packages and live-merged in a disposable three-host lab (Corosync formed a quorate
 cluster; see the [lab record](../qa/image/phase6-lab3.md)); the lab laid its store files in by hand. Not exercised in a guest:
-a reboot with a tampered file, an installed image edition, Secure Boot module enforcement, layer staging by the update engine
+a reboot with a tampered file, an installed host, Secure Boot module enforcement, layer staging by the update engine
 on a booted host, double-build reproducibility of layers, and the steps above on a real host. See the
 [layers QA record](../qa/image/phase2-layers.md) and the [command contract](../API.md#optional-feature-layers-nex-core-local-layers).

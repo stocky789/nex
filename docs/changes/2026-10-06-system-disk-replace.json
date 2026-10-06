@@ -1,0 +1,74 @@
+{
+  "summary": "Replacing a failed system disk is rebuilt for the Nex Core image layout, Core first. When one disk of a two-disk host fails and an operator fits a blank disk, Core (internal/hostimage Host.ReplaceDisk, run by the agent on a goroutine of its own) revalidates the selected disk against a fresh observation, refuses the disk the running system started from and any non-blank disk without the typed erase confirmation, lays the surviving disk's identical GPT (nex-esp, slots A and B with their verity partitions, nex-data, nex-bios) on the replacement, copies the surviving disk's slots after verifying their whole dm-verity hash tree and verifies the copy read back from the medium, formats the boot partition once and fills it from the booted one through the host's boot method (systemd-boot and a firmware boot entry on UEFI, GRUB files plus grub-install on BIOS), and adds the replacement's nex-data partition to the md mirror with mdadm --add. The work is one durable record (<agent state dir>/system-disk/replace.json) keyed by request ID: the GPT disk GUID it writes is how a continued attempt recognises the disk as its own, so a replayed, retried (new request ID, same disk), interrupted or restarted replacement converges and never repeats a destructive step. A new disk lock serialises it with the update steps and the boot-partition sync. The Controller route POST /api/v1/hosts/{id}/system-disk and the capability host-system-disk-replace-v1 return in the same shape as before, without the array field; the host hardware report gains the optional system_disk member (the disk the host runs from and the replacement record with the kernel's resync progress). The host panel's Storage tab regains a Replace disk action.",
+  "paths": [
+    "internal/hostimage/replace.go",
+    "internal/hostimage/replace_test.go",
+    "internal/hostimage/esp.go",
+    "internal/hostimage/boot.go",
+    "internal/hostimage/bios.go",
+    "internal/hostimage/layout.go",
+    "internal/hostimage/slot.go",
+    "internal/hostimage/update.go",
+    "internal/hostimage/testsupport.go",
+    "internal/protocol/systemdisk.go",
+    "internal/protocol/hardware.go",
+    "internal/protocol/protocol.go",
+    "internal/agent/systemdisk_replace.go",
+    "internal/agent/systemdisk_report.go",
+    "internal/agent/systemdisk_replace_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/agent/usage_history_channel.go",
+    "internal/controller/systemdisk.go",
+    "internal/controller/systemdisk_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "web/src/md.tsx",
+    "web/src/md.test.mjs",
+    "web/src/stats.tsx",
+    "web/src/stats.test.mjs",
+    "web/src/host-panel.tsx",
+    "web/src/zfs.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/replace-a-failed-system-disk.md",
+    "docs/guide/README.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "A new operator workflow: reading the system disk mirror on a host's Storage tab and replacing a failed disk, including the typed erase confirmation, what Nex Core does in which order, how it continues after an interruption, every refusal, and the limits (not run on real disks).",
+    "pages": [
+      "docs/guide/replace-a-failed-system-disk.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "POST /api/v1/hosts/{id}/system-disk is an admin-authenticated, CSRF-protected route relaying the durable managed command host-system-disk-replace (SystemDiskReplaceRequest), gated on the host-system-disk-replace-v1 capability; the host hardware report is a changed contract in the same slice, gaining the optional system_disk member. Both sides are implemented, with the refusals, the replay and retry rules, the lock against update steps and the interruption behaviour in the reference.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Rebuilds a feature of the immutable Nex Core plan (D3: repair is re-lay GPT, copy verity-verified slots, mdadm --add data) as planned; no published milestone changed status."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The mirror, the slots and the boot partitions are the host's own and nothing about them is pool-scoped. The Controller keeps only the task row it keeps for every host command.",
+    "record": "The disks themselves (GPT, slots, boot partitions, md superblocks) and the host's replacement record /var/lib/nex-core-agent/system-disk/replace.json (request ID, selected disk, the GPT disk GUID the operation writes, boot-partition progress flags, phase, status, error, times).",
+    "recovery": "Nothing to re-enter. A fresh Controller reads system_disk and md_arrays from the host's hardware report as soon as the host reconnects; an unfinished replacement continues by itself after a restart of Core."
+  },
+  "verification": {
+    "method": "Go unit tests on file-backed disks with a fake block layer and a simulated md sysfs (WSL, go test ./internal/hostimage/... ./internal/protocol/... and the focused agent and controller tests; go vet; the hostimage and agent replacement tests also under -race), plus python3 scripts/generate_api.py, the API contract tests and python3 scripts/check_docs.py --worktree. Covered: both boot methods; the full rebuild; a power cut at every named step, retried with the same and with a new request ID; refusal of the running disk (also through an alias), of non-blank disks without the erase confirmation, of undersized disks, of a healthy, rebuilding, missing or non-RAID1 mirror, of a corrupt running slot, of an unblessed boot entry and of a wrong root hash; a corrupt previous slot skipped; a recorded failure continued by a new request; the disk lock against update steps and the boot-partition sync; agent admission, refusals, replay, the still-running answer, resumption after a restart and the report; the Controller relay, replay, refusals and CSRF. NOT verified: no real disk, md array, firmware boot or grub-install was exercised and the dialog was not walked through in a browser; no lab was run.",
+    "evidence": [
+      "internal/hostimage/replace_test.go",
+      "internal/agent/systemdisk_replace_test.go",
+      "internal/controller/systemdisk_test.go",
+      "web/src/md.test.mjs"
+    ]
+  }
+}

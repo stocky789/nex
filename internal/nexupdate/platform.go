@@ -21,7 +21,7 @@ import (
 	"nex.local/nex/internal/vmhost"
 )
 
-// Paths of the image edition. Tests replace them; a host never does.
+// Paths of the host image. Tests replace them; a host never does.
 var (
 	OSReleasePath   = "/usr/lib/os-release"
 	CmdlinePath     = "/proc/cmdline"
@@ -31,15 +31,6 @@ var (
 	PinnedTrustPth  = "/usr/share/nex/update/trust.json"
 	PayloadStateDir = "/var/lib/nex/payload"
 )
-
-// Edition is "image" on a host running the immutable image (its static os-release says IMAGE_ID=nex-core)
-// and "classic" on a Debian host that updates through apt. The classic path stays until it is retired.
-var Edition = func() string {
-	if OSReleaseValue("IMAGE_ID") == "nex-core" {
-		return "image"
-	}
-	return "classic"
-}
 
 // OSReleaseValue reads one key of the image's static os-release.
 func OSReleaseValue(key string) string {

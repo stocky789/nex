@@ -316,10 +316,10 @@ func TestHostConsoleTicket(t *testing.T) {
 	if body := read(a.call("POST", "/api/v1/hosts/"+host.HostID+"/console", map[string]any{}, nil, 409)); !strings.Contains(body, "does not support browser consoles") {
 		t.Fatal(body)
 	}
-	// BUG-0056 regression: an old Core reporting console-v1 (VM consoles only, already
-	// deployed everywhere) must not pass the host console gate on its own — otherwise a
-	// new Controller issues a ticket the old agent can never fulfil and the browser hangs
-	// until the 504 timeout instead of getting an immediate upgrade refusal.
+	// BUG-0056 regression: a Core reporting console-v1 (VM consoles only) must not pass the
+	// host console gate on its own — otherwise the Controller issues a ticket the agent can
+	// never fulfil and the browser hangs until the 504 timeout instead of getting an
+	// immediate upgrade refusal.
 	report([]string{protocol.ManagedVMCapability, protocol.ConsoleCapability})
 	if body := read(a.call("POST", "/api/v1/hosts/"+host.HostID+"/console", map[string]any{}, nil, 409)); !strings.Contains(body, "does not support browser consoles") {
 		t.Fatal(body)

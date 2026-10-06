@@ -1,0 +1,41 @@
+{
+  "summary": "Records the owner decision that Nex Core is only the host image, booting under UEFI and BIOS, and the removal of the previous apt-managed install path from code and documentation. API impact: changed contract (removed Controller update and system-disk routes).",
+  "paths": [
+    "AGENTS.md",
+    "docs/plans/2026-10-01-immutable-nex-core.md",
+    "installer/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/changes/2026-10-06-image-only-bios-and-uefi.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The install guide no longer says the image is permanently UEFI-only; it says BIOS boot is decided but not built, so current behaviour stays accurate.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Contract decision: changed contract. Removed /api/v1/updates, /api/v1/updates/apply, /api/v1/hosts/{id}/system-disk and the host-system-disk-replace command; local update routes are image-only. Both sides changed together.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records an owner decision in the existing immutable plan (D2, open questions, Phase 4); no new milestone or acceptance gate is promoted.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Adds no durable product state."
+  },
+  "verification": {
+    "method": "go build ./... clean; go vet and focused go test for hostimage, nexupdate, protocol, vmhost, agent; installer/check.sh and test_api_contract passed on LF copies in WSL; check_docs passed. Not run: any ISO or image build, a real or QEMU BIOS boot, controller/localcore tests (no cgo in WSL), image/packages.lock regeneration.",
+    "evidence": [
+      "docs/plans/2026-10-01-immutable-nex-core.md"
+    ]
+  }
+}

@@ -384,11 +384,11 @@ def main():
             expect(setup.get_by_role("button", name="Cancel LUN inspection", exact=True)).to_have_count(0)
             assert len(inspections) == before
             expect(setup.get_by_label("LUN", exact=True)).to_have_value("")
-            # An older Core without the capability keeps manual entry and never receives an inspection request.
+            # A Core without the capability keeps manual entry and never receives an inspection request.
             for host in hosts: host["capabilities"].remove("storage-iscsi-inspect-v1")
             refresh()
             before = len(inspections)
-            setup.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:legacy-gfs2")
+            setup.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:manual-gfs2")
             expect(setup.get_by_text("This Core does not support read-only LUN inspection.", exact=False)).to_be_visible()
             assert len(inspections) == before
             for host in hosts: host["capabilities"].append("storage-iscsi-inspect-v1")

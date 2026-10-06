@@ -69,8 +69,21 @@ type ResourceRemovalReconcile struct {
 	Stage   string
 }
 
+// hostNetworkDir is the host's ifupdown directory every engine starts with.
+var hostNetworkDir = "/etc/network"
+
+// HostNetworkDirForTests points engines created afterwards at a scratch directory, so a test
+// that reaches the native network apply or removal as root cannot write the stanza of a
+// guest bridge into the developer's real /etc/network/interfaces.d. It returns the restore
+// function.
+func HostNetworkDirForTests(dir string) func() {
+	previous := hostNetworkDir
+	hostNetworkDir = dir
+	return func() { hostNetworkDir = previous }
+}
+
 func NewManaged(stateDir string) *ManagedEngine {
-	return &ManagedEngine{stateDir: stateDir, networkDir: "/etc/network"}
+	return &ManagedEngine{stateDir: stateDir, networkDir: hostNetworkDir}
 }
 
 // inFlight holds the operation IDs this process is executing, so a report can tell a pending
@@ -155,14 +168,14 @@ type managedJournal struct {
 	Domain         []byte                        `json:"domain,omitempty"`
 	// Start and StartOutcome record the automatic-start result. The enum preserves whether a
 	// failure happened before libvirt received the request; Start remains the operator-facing
-	// explanation and keeps older journal readers compatible.
+	// explanation.
 	Start        string `json:"start,omitempty"`
 	StartOutcome string `json:"start_outcome,omitempty"`
 	// Targets are the disks' libvirt target names, positional with Disks; they are assigned
 	// once and kept across edits so a guest never sees its disks renamed. MediaTarget and
 	// DriversTarget are the install and driver-disc CD drives every VM carries. An entry
-	// written before the second drive existed has no DriversTarget; managedCurrent places it
-	// beside the targets that entry already holds, so adding it renames nothing.
+	// with no DriversTarget has managedCurrent place it beside the targets that entry already
+	// holds, so adding it renames nothing.
 	Targets       []string `json:"targets,omitempty"`
 	MediaTarget   string   `json:"media_target,omitempty"`
 	DriversTarget string   `json:"drivers_target,omitempty"`
@@ -565,8 +578,8 @@ func managedCreateStartOutcome(j managedJournal) (protocol.ManagedOutcome, bool)
 	case startOutcomeUncertainRequest:
 		status = "needs_attention"
 	default:
-		// Older journals only stored operator-facing prose. Except for the exact
-		// success marker, that text cannot prove whether libvirt received the request.
+		// Without a recorded outcome the operator-facing prose is all there is. Except for
+		// the exact success marker, that text cannot prove whether libvirt received the request.
 		if j.StartOutcome == "" && j.Start == "started" {
 			status = "succeeded"
 		}
@@ -2767,7 +2780,7 @@ func mediaDependencies(js []managedJournal, id string) []string {
 }
 
 // snapshotResourceDependencies returns VM IDs whose retained or unresolved snapshot
-// command references id. A retained legacy snapshot with no dependency record is unknown,
+// command references id. A retained snapshot with no dependency record is unknown,
 // so it conservatively blocks destructive changes to every resource of that kind.
 func snapshotResourceDependencies(js []managedJournal, id string, selectIDs func(protocol.PoolVMSnapshotDependencies) []string) []string {
 	var out []string
@@ -2976,7 +2989,7 @@ func managedDiskPlan(js []managedJournal, v protocol.VMCreateSpec) ([]managedTar
 				return nil, nil, err
 			}
 			caps := s.Capabilities
-			if !caps.VMDisk { // v1 records have no explicit capabilities.
+			if !caps.VMDisk { // a record without explicit capabilities takes its kind's defaults.
 				caps = storageCapabilities(s)
 			}
 			if (d.Thin && !caps.Thin) || (!d.Thin && !caps.Thick) {
@@ -3734,8 +3747,8 @@ func managedRepositorySubdir(ctx context.Context, js []managedJournal, id, path 
 		return managedSubdir(path)
 	}
 	root := remoteMountPath(s)
-	// A Core-provisioned ZFS dataset mounts directly beneath storageMountRoot;
-	// it has no bind alias. Existing imported ZFS records keep their legacy path.
+	// A ZFS repository registered at its dataset's own mount path sits directly beneath
+	// storageMountRoot; it has no bind alias.
 	if s.StorageKind() == protocol.StorageKindZFS && s.Source.ZFS != nil && s.Path == s.Source.ZFS.MountPath {
 		root = s.Path
 	}
@@ -4420,8 +4433,8 @@ func managedTargets(v protocol.VMCreateSpec) (targets []string, media, drivers s
 	return targets, media, drivers
 }
 
-// driversTarget places the drivers CD drive on a VM whose disk and install-media targets were
-// assigned before that drive existed, so adding it never renames a device the guest already has.
+// driversTarget places the drivers CD drive on a VM whose disk and install-media targets are
+// already assigned, so adding it never renames a device the guest already has.
 func driversTarget(targets []string, media string) string {
 	used := map[string]bool{media: true}
 	for _, t := range targets {
@@ -5160,19 +5173,12 @@ func storageSameBacking(a, b protocol.StorageIdentity) bool {
 	if a.NFS != nil && b.NFS != nil && a.NFS.FilesystemID != "" && a.NFS.FilesystemID == b.NFS.FilesystemID {
 		return true
 	}
-	if a.SMB != nil && b.SMB != nil {
-		// CIFS filesystem IDs are reconnect diagnostics, not durable identity. Once
-		// both registrations carry Core's marker, only that marker may establish an
-		// alias; two distinct markers must never collide just because statfs reused
-		// an ID. Mixed marker/legacy records retain the older strict nonempty
-		// filesystem-ID comparison; exact source equality is checked independently
-		// by registrationConflict.
-		if a.SMB.MarkerID != "" && b.SMB.MarkerID != "" {
-			return a.SMB.MarkerID == b.SMB.MarkerID
-		}
-		if a.SMB.FilesystemID != "" && a.SMB.FilesystemID == b.SMB.FilesystemID {
-			return true
-		}
+	if a.SMB != nil && b.SMB != nil && a.SMB.MarkerID != "" && b.SMB.MarkerID != "" {
+		// CIFS filesystem IDs are reconnect diagnostics, not durable identity: only Core's
+		// marker may establish an alias, and two distinct markers must never collide just
+		// because statfs reused an ID. Exact source equality is checked independently by
+		// registrationConflict.
+		return a.SMB.MarkerID == b.SMB.MarkerID
 	}
 	if a.ISCSI != nil && b.ISCSI != nil && a.ISCSI.WWID != "" && canonicalWWID(a.ISCSI.WWID) == canonicalWWID(b.ISCSI.WWID) && a.ISCSI.FilesystemUUID != "" && strings.EqualFold(a.ISCSI.FilesystemUUID, b.ISCSI.FilesystemUUID) {
 		return true
@@ -5532,9 +5538,9 @@ func sameMTU(got, want *mtuXML) bool {
 	return want == nil || (got != nil && *got == *want)
 }
 
-// carryFirmwareVariables keeps existing UEFI and TPM state during an edit. Older Nex
-// definitions let libvirt choose a name-derived path; moving them to the new UUID path would
-// discard boot entries and Secure Boot variables. New definitions already carry the UUID path.
+// carryFirmwareVariables keeps existing UEFI and TPM state during an edit. The observed
+// definition's variable-store path is authoritative: moving to a regenerated UUID path would
+// discard boot entries and Secure Boot variables.
 func carryFirmwareVariables(expected, current []byte) ([]byte, error) {
 	var want, got managedDomain
 	if xml.Unmarshal(expected, &want) != nil || xml.Unmarshal(current, &got) != nil {
@@ -6886,10 +6892,9 @@ func cdromMedia(disk managedDisk) string {
 }
 
 // cdromDrives resolves a domain's CD drives by drive name. The user aliases Nex writes are
-// authoritative. A domain defined before the driver-disc drive existed carries neither alias,
-// so the first cdrom it holds is the install drive; the drivers drive of such a domain is
-// reported absent rather than guessed, because inserting a disc into the wrong tray of a
-// running guest is not a recoverable mistake.
+// authoritative. A domain whose cdrom carries neither alias treats the first cdrom it holds
+// as the install drive; its drivers drive is reported absent rather than guessed, because
+// inserting a disc into the wrong tray of a running guest is not a recoverable mistake.
 func cdromDrives(d managedDomain) map[string]*managedDisk {
 	out := map[string]*managedDisk{}
 	var unaliased *managedDisk
@@ -6930,8 +6935,7 @@ func cdromSource(ctx context.Context, id, drive string, running bool) (source, d
 	return cdromMedia(*tray), tray.Target.Dev, nil
 }
 
-// driveName resolves the drive a request names; "" is the install drive, which is what every
-// Controller sent before the second drive existed.
+// driveName resolves the drive a request names; "" is the install drive.
 func driveName(drive string) string {
 	if drive == "" {
 		return protocol.InstallDrive
@@ -7190,8 +7194,8 @@ func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string
 //
 // The name is only the default applied the first time this path is registered; RegisterDefaults
 // matches an existing registration on DefaultStoragePath, never on its name, so a host that
-// registered this directory under an earlier default keeps the name its pool master recorded
-// and is not renamed, duplicated or re-registered by an upgrade (BUG-0205).
+// registered this directory under another name keeps the name its pool master recorded
+// and is not renamed, duplicated or re-registered (BUG-0205).
 const DefaultStorageName = "Local storage"
 
 // DefaultStoragePath is the host directory RegisterDefaults publishes as local storage.
@@ -7259,7 +7263,7 @@ func hostID() string {
 // managed journal, through the same verification a Controller-issued registration gets, so a
 // Controller only mirrors them. A journal entry already holding the path or bridge, in any
 // state and whoever issued it, means nothing is added. pool is the host's own pool identity;
-// a legacy host that has none passes its host identity, since a Controller assigns the pool on
+// a host that has none passes its host identity, since a Controller assigns the pool on
 // adoption and matches by resource ID only. It is safe to call on every uplink change.
 // Networks are registered before storage so a storage failure cannot leave the management
 // bridge off the Networks screen.
@@ -7419,18 +7423,6 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		}
 		return errors.New("stop the VM first to change " + strings.Join(names, ", "))
 	}
-	if running && v.Memory.Mode == "dedicated" {
-		// Live device edits cannot retrofit memory backing. Refuse before allocating or
-		// attaching anything, so an older guest can be upgraded with a stopped save.
-		b, err := managedVirsh(ctx, "dumpxml", v.ID, "--inactive")
-		var domain managedDomain
-		if err != nil || xml.Unmarshal(b, &domain) != nil {
-			return errors.New("cannot verify dedicated memory reservation before editing")
-		}
-		if !reflect.DeepEqual(domain.MemoryBacking, dedicatedMemoryBacking()) {
-			return errors.New("stop the VM and save its settings to apply the dedicated memory reservation before live editing")
-		}
-	}
 	var persistent managedDomain
 	if running {
 		// A detach drops an interface from the persistent definition at once, but the live device
@@ -7547,9 +7539,9 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 	var current []byte
 	if cur.Command.VM.Boot.Firmware == "uefi" && v.Boot.Firmware == "uefi" ||
 		cur.Command.VM.Boot.TPMEnabled() && v.Boot.TPMEnabled() {
-		// A journal written before explicit NVRAM paths cannot tell us libvirt's generated
-		// path. Read the stopped definition before a rename and retain that path, so an
-		// upgrade does not replace an installed guest's firmware variables.
+		// The journaled definition does not record the paths libvirt resolved. Read the
+		// stopped definition before a rename and retain its variable-store path, so the
+		// edit does not replace an installed guest's firmware variables.
 		var readErr error
 		current, readErr = managedVirsh(ctx, "dumpxml", v.ID, "--inactive")
 		if readErr != nil {
@@ -7623,7 +7615,7 @@ func (e *ManagedEngine) applyStopped(ctx context.Context, j *managedJournal, pre
 		if v.Name != prev.Name {
 			// libvirt refuses to define an existing UUID under another name, so rename
 			// before touching the variable store, then re-observe the renamed predecessor
-			// (a legacy name-derived NVRAM path may move with it).
+			// (a name-derived NVRAM path may move with it).
 			if _, err = managedVirsh(ctx, "domrename", v.ID, "--", v.Name); err != nil {
 				return fmt.Errorf("libvirt refused the rename (%v); inspect the VM on its host", err)
 			}
@@ -7851,10 +7843,10 @@ func (e *ManagedEngine) applyLive(ctx context.Context, id string, expected []byt
 	if cdrom == nil {
 		return errors.New("the VM has no CD drive; stop it and edit again to add one")
 	}
-	// A VM defined before the driver-disc drive existed has only the install drive. SATA cannot
-	// hot-plug, so the second drive is added to the persistent definition alone and appears at
-	// the next start; without it the definition would never match the expected one and every
-	// live edit of such a VM would fail its observation.
+	// A VM that has only the install drive cannot hot-plug the second one: SATA cannot, so the
+	// drivers drive is added to the persistent definition alone and appears at the next start;
+	// without it the definition would never match the expected one and every live edit of such
+	// a VM would fail its observation.
 	if cdromDrives(got)[protocol.DriversDrive] == nil {
 		if extra := cdromDrives(want)[protocol.DriversDrive]; extra != nil {
 			path, err := device(*extra)

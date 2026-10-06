@@ -75,7 +75,7 @@ assert.equal(updatedAgo(10_000, 10_400), "Updated just now");
 assert.equal(updatedAgo(10_000, 13_000), "Updated 3s ago");
 assert.equal(REALTIME_LIMIT_MS, 600_000, "realtime turns off after 10 minutes");
 const failure = (message, status) => Object.assign(new Error(message), { status });
-assert.deepEqual(statsFailure(failure("the host agent does not keep usage history; upgrade Nex Core", 409)), { kind: "capability", message: "the host agent does not keep usage history; upgrade Nex Core" }, "an older Core gets the upgrade state, not a retry error");
+assert.deepEqual(statsFailure(failure("the host agent does not keep usage history; upgrade Nex Core", 409)), { kind: "capability", message: "the host agent does not keep usage history; upgrade Nex Core" }, "a Core without usage history gets the upgrade state, not a retry error");
 assert.deepEqual(statsFailure(failure("the host is not freshly connected; its usage history cannot be read now", 409)), { kind: "stale", message: "the host is not freshly connected; its usage history cannot be read now" }, "a stale host keeps its distinct state so existing charts can be labelled stale");
 assert.equal(statsFailure(failure("the host did not answer", 504)).kind, "error");
 
@@ -144,9 +144,9 @@ assert.equal(sectionNote(hw.system, 3), null, "a section with rows draws its tab
 assert.equal(sectionNote(hw.pci, 0), "lspci is not installed", "an unavailable section shows the host's reason");
 assert.equal(sectionNote({ unavailable: true }, 0), "This section is not available on this host.");
 assert.equal(sectionNote(hw.disks, 0), "None reported.", "available but empty is not an error");
-assert.equal(sectionNote(undefined, 0), "Not reported by this host.", "an older reply missing a section says so");
+assert.equal(sectionNote(undefined, 0), "Not reported by this host.", "a reply missing a section says so");
 
-// SR-086: arrays:null is an older Core; arrays:[] is a current Core with no mirror; unavailable
+// SR-086: arrays:null is a Core that sent no section; arrays:[] is a Core with no mirror; unavailable
 // must surface the host's reason rather than "Single system disk".
 assert.equal(mdArraysView(undefined), "unreported");
 assert.equal(mdArraysView({ arrays: null }), "unreported", "Controller remarsal of a missing section");
@@ -155,7 +155,7 @@ assert.equal(mdArraysView({ unavailable: true, reason: "the kernel exposes no bl
 assert.equal(mdArraysView({ arrays: [{ name: "md0" }] }), "arrays");
 assert.equal(mdArraysView({ unavailable: true, arrays: [{ name: "md0" }] }), "unavailable", "unavailable wins over a stale list");
 
-// SR-091: Replace needs discovery + provision, not only the system-disk capability.
+// Replace needs discovery + provision, not only the system-disk capability.
 assert.equal(systemDiskReplaceSupported(["host-system-disk-replace-v1"]), false);
 assert.equal(systemDiskReplaceSupported(["host-system-disk-replace-v1", "storage-discovery-v1"]), false);
 assert.equal(systemDiskReplaceSupported(["host-system-disk-replace-v1", "storage-discovery-v1", "storage-zfs-provision-v1"]), true);
@@ -169,7 +169,7 @@ assert.deepEqual(sensorThresholds(null), {}, "no hardware report means no invent
 assert.deepEqual(gauges(host, sensorThresholds(hw))[2].scale, 100, "the CPU sensor gauge ends at its crit");
 assert.equal(statsFailure(failure("the host agent does not report hardware; upgrade Nex Core", 409)).kind, "capability", "the hardware relay's 409 hides the panel rather than offering a retry");
 // Hardware Retry must keep a stable callback identity across Stats re-renders so the system-disk
-// mirror's rebuild/task intervals are not cleared every 5s by a fresh inline arrow.
+// mirror's rebuild interval is not cleared every 5s by a fresh inline arrow.
 {
   const statsSrc = readFileSync(new URL("./stats.tsx", import.meta.url), "utf8");
   assert.match(statsSrc, /const rereadHardware = useCallback\(\(\) => setHardwareAttempt\(a => a \+ 1\), \[\]\);/);

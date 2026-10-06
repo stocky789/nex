@@ -1,6 +1,6 @@
 # Nex API reference
 
-Status: development product 0.1.0, HTTP API v1, Core report protocol versions 1 and 2.
+Status: development product 0.1.0, HTTP API v1, Core report protocol version 1.
 Phase 1 implements administrator access, Sites → Pools (one master host + members) → Hosts,
 certificate enrollment,
 observations, and durable inventory refresh operations. The appliance bootstrap slice adds
@@ -1311,8 +1311,8 @@ client certificate; reporting and rotation require mutual TLS and current unrevo
 identity. Host credentials cannot perform administrator calls or submit another host's
 operation results. Revocation does not stop guests or remove local recovery access.
 
-This development Controller accepts report protocol versions `1` and `2`; unsupported versions
-are rejected. Version 2 adds the storage-repository acknowledgement before a Core advertises its
+This Controller accepts exactly one enroll, rotate and report protocol version, `1`; any other value
+is refused with **409** `unsupported protocol version`. The storage-repository acknowledgement is sent before a Core advertises its
 storage capability. Deploy matching development builds: report JSON is strict, so a new field can
 be refused by an older Controller before any capability is evaluated. **Shared upgrade rule:**
 upgrade Controller before Core, and deploy matching Controller/Core/web development builds;
@@ -1502,7 +1502,7 @@ local directory or bridge/active libvirt network without formatting or configuri
 
 ### VM storage repositories
 
-API impact: **changed contract** — protocol v2 adds `storage-repositories-v1`, typed
+API impact: **changed contract** — the storage protocol adds `storage-repositories-v1`, typed
 `StorageRegistration` sources, `storage-update`, `storage-recheck` and `storage-detach`, and
 the Core-only credential handoff. Core owns the durable repository journal, canonical identity,
 generation, access observation and credential receipt. Controller holds only a disposable
@@ -1597,11 +1597,9 @@ Strict older Controllers receive no ZFS-provision inventory until the upgraded C
 acknowledges `storage-zfs-provision-v1`, and no `zfs_pool` / `pool` observation fields until
 it acknowledges `storage-zfs-replace-v1`, through the existing `storage_repositories`
 support shape. This is an additive capability acknowledgement with wire protocol 2;
-upgrade Controller first. Debian packages retain the `storage-format-v2` compatibility
-marker and add `storage-format-v3` for ZFS records. The APT guard requires v3 only for
-retained ZFS state or a Controller with ZFS-capable enrolled hosts; v2-only state keeps
-its prior compatibility. This is a package guard, not a protocol version increment or
-permission to bypass it through manual binary replacement.
+upgrade Controller first. The update engine refuses a roll-back to a release whose `state_format`
+is older than the ZFS records the host holds (`state_format_downgrade`); this is a state gate, not a
+protocol version increment, and manual binary replacement does not bypass it.
 
 The existing-dataset registration contract below remains an advanced path. It does not
 create or import a pool. Provisioning is a separate operation that creates a Core-owned
@@ -1730,7 +1728,7 @@ input; the disposable-lab walkthrough is recorded in
 API impact: **new client operation and changed Core report contract** —
 `POST /api/v1/storage/discover` accepts an administrator/CSRF-protected
 `StorageDiscoveryRequest` scoped to one eligible pool host. The Controller passes it once in
-the authenticated protocol-v2 report response only after that Core advertises both
+the authenticated report response only after that Core advertises both
 `storage-repositories-v1` and `storage-discovery-v1` (backup-purpose requests also need `storage-discovery-purpose-v1`); the Core returns the matching
 `StorageDiscoveryResult` on its next report. This is a bounded request/response relay, not a
 repository command or durable operation: Controller deletes its in-memory entry on delivery,
@@ -1904,7 +1902,7 @@ listener that the host-local procedure already uses. Nothing about membership is
 persisted or reconciled by the Controller; delete it and re-adopt the pool master and every
 member, name, peer origin and interrupted join comes back from the hosts.
 
-**Protocol.** `pool_requests` are sent only to a host that reports protocol v2; the host-local
+**Protocol.** `pool_requests` are sent in the report response of the target host; the host-local
 procedure below remains the documented alternative.
 
 **Invitation broker (Controller → master, one report round trip).** `ReportResponse.pool_requests`
@@ -3381,8 +3379,8 @@ and Nex Core says so. The pool's durable record says *not armed* either way, whi
 whether a survivor may prove an exclusion. Disabling also runs on every host the pool has **not**
 asked to arm, because Debian's `sbd` package leaves the unit **enabled on install** (measured) and it
 is `RequiredBy=corosync.service`: an unmanaged sbd would otherwise be pulled into the next cluster
-start with the distribution's configuration instead of Nex Core's. `nex-core-local`'s postinst
-disables it unconditionally for the same reason, and never stops it.
+start with the distribution's configuration instead of Nex Core's. Nex Core's image presets
+disable it unconditionally for the same reason, and never stop it.
 Arming follows the Host fencing setting and the checklist and needs no command of its own: the
 setting is the only decision and it already replicates. A host is never armed because of, and never
 reset by, an agent restart, an upgrade, a join, an eject, a master change or a Controller outage —
@@ -3613,9 +3611,8 @@ belongs to the host: **Nex Core renders, applies, times and rolls back its own c
 Nex Controller submits one durable step at a time and shows what the host reports. The Controller
 keeps no copy of the change, computes no countdown and is not required for the rollback to happen.
 
-**Capability.** `management-network-v1`, advertised by the target host in the protocol v2
-capability list and absent from the legacy v1 list, which also strips `management_network` from the
-report. Without it, `supported` is false in the view and submitting anyway is
+**Capability.** `management-network-v1`, advertised by the target host in its report
+capability list. Without it, `supported` is false in the view and submitting anyway is
 `409 staged management network edits need management-network-v1 on this host; upgrade Nex Core`.
 
 **Observed DHCP values.** A fresh `GET /api/v1/hosts/{id}/network` returns the host's
@@ -4170,7 +4167,7 @@ identity, readable, writable, QEMU-writable and locking fields without an error.
 write/start Core rechecks source identity and access; ambiguous ownership, a failed lock/fence or
 replaced backing identity fails closed. The member pulls desired records on its own periodic Core
 lane and retries stored reconciliation after an outage; Controller does not drive a retry loop.
-There is no compatibility promise beyond matching development protocol v2 peers/capabilities.
+There is no compatibility promise beyond matching development peers/capabilities.
 
 Before a member executes a VM disk, ISO/media or related managed operation on reconciled NFS/SMB
 storage, it reserves the repository and its observed generation at the master over peer mTLS.
@@ -4234,7 +4231,7 @@ change; retry when it completes`. `GET /api/v1/storage/cluster` is a read and is
 guard is at the entry point, not at the resume, so work already in flight is never interrupted.
 
 Clustered-storage protocol v2 has an explicit Controller-first acknowledgement. A newly started,
-reconnected or replacement-enrolled Core sends a clean v2 preflight: it advertises neither the
+reconnected or replacement-enrolled Core sends a clean preflight: it advertises neither the
 base `storage-clustered-iscsi-v2` capability nor clustered result payloads. Only a matching Controller's
 `ReportResponse.storage_clusters_support:{capability:"storage-clustered-iscsi-v2"}` enables the
 Core to persist base readiness, advertise that capability and send its queued clustered results on
@@ -4242,7 +4239,7 @@ a later report. The response's `storage_clusters` JSON array remains the dispatc
 internal Go field name does not change the wire name).
 
 The same existing `ReportRequest.capabilities` list offers the additive
-`storage-cluster-session-monitor-v1` extension on every v2 preflight. A Controller returns that
+`storage-cluster-session-monitor-v1` extension on every preflight. A Controller returns that
 exact value in `storage_clusters_support.capability` only when the offer is present; otherwise it
 returns the base `storage-clustered-iscsi-v2` acknowledgement. A Core receiving the base value may
 use the base clustered contract, but projects `session_monitor_ready` and members with
@@ -4256,7 +4253,7 @@ Until that acknowledgement arrives, every clustered-storage route that requires 
 target Core (`GET /api/v1/storage/cluster`, setup, credential handoff and fence verification)
 returns **503** `clustered storage capability negotiation is pending`, creating no broker request,
 native work, credential offer or older-route fallback; retry the same request after the
-acknowledged follow-up report. A Core that never offers the v2 preflight is an unsupported **409**.
+acknowledged follow-up report. A Core that never offers the clustered preflight is an unsupported **409**.
 
 Clustered iSCSI uses `source.iscsi.mode:"clustered_gfs2"` rather than the ordinary exclusive
 profile. It requires a cluster ID, lock table and exactly three to five unique eligible Core IDs,
@@ -4513,8 +4510,8 @@ bounded delivery window. The addressed authenticated Core redeems an opaque repo
 persists its secret locally, then acknowledges a durable receipt; only then does the endpoint
 return `201`. `503` means delivery is uncertain: retry the same request ID. `409` with Core's reason means Core refused the credential (for example a request ID stored under a key the host no longer accepts: send it again with a new request ID). Ordinary commands,
 inventory, operations, diagnostics and Controller persistence contain only opaque receipts or
-the redacted `credential_present` state. Older Cores remain protocol v1; an upgraded Core first
-receives the `storage_repositories` v2 acknowledgement in its report response, persists that
+the redacted `credential_present` state. A Core first
+receives the `storage_repositories` acknowledgement in its report response, persists that
 fact, then advertises `storage-repositories-v1`.
 
 After an interrupted credential request, `GET /api/v1/storage/credentials/{request_id}` with
@@ -5682,7 +5679,7 @@ even for a stopped VM or stale host, and otherwise displays the configured OS fa
 unknown reported IDs use the generic monitor icon. Compatibility follows the shared upgrade
 rule: older Core versions omit history; the existing configured fallback remains available.
 Core advertises `detected-os-v1`; an updated Controller acknowledges it with optional
-`ReportResponse.detected_os: true` only on protocol v2 reports offering that capability.
+`ReportResponse.detected_os: true` only on reports offering that capability.
 Core withholds `Inventory.managed.detected_os` until acknowledged, so older Controllers
 continue accepting reports without this additive field. Startup and re-enrollment clear the
 acknowledgement; Core retains OS history independently of negotiation.
@@ -5901,6 +5898,12 @@ the Controller always remarsals it, so an older Core that never sent arrays yiel
 unreported and asks for a Core upgrade instead of claiming a single unmirrored disk. An empty
 `arrays` list means the host reported and has no md arrays.
 
+**Changed contract: `system_disk`.** The report gained the optional member `system_disk` (`HardwareSystemDisk`): `booted_disk`, the
+whole disk the running system started from, and `replacement`, the host's own record of its latest [system disk
+replacement](#replacing-a-failed-system-disk-post-apiv1hostsidsystem-disk) with the kernel's resync progress of the `nex-data`
+mirror onto the new disk. It is read from the host's record and its sysfs when asked for and omitted by a host with neither. A
+Controller of any version reads the report with a lenient decoder, so the member needs no acknowledgement.
+
 Serial numbers (system, board and disk) are returned to authenticated administrators only. They are
 never logged and no diagnostic-bundle path collects the report.
 
@@ -5934,90 +5937,103 @@ reach `GET /api/v1/hosts`.
 
 ## Replacing a failed system disk (POST /api/v1/hosts/{id}/system-disk)
 
-API impact: **new contract** — Controller `POST /api/v1/hosts/{id}/system-disk`, the durable
-managed command `host-system-disk-replace` carrying `SystemDiskReplaceRequest`, and the
-`host-system-disk-replace-v1` capability. The mirror's own state is read from the
-[host hardware report](#host-hardware); this operation adds no query of its own.
+API impact: **new contract** — Controller `POST /api/v1/hosts/{id}/system-disk`, the durable managed command
+`host-system-disk-replace` carrying `SystemDiskReplaceRequest`, and the `host-system-disk-replace-v1` capability; and a
+**changed contract**, additive: `HostHardware` gains the optional member `system_disk` (`HardwareSystemDisk`,
+`SystemDiskReplacement`, `SystemDiskResync`) in the [host hardware report](#host-hardware). Schemas
+`HostSystemDiskReplaceRequest`, `SystemDiskReplaceAccepted`, `SystemDiskReplaceRequest`, `HardwareSystemDisk`,
+`SystemDiskReplacement` and `SystemDiskResync` are in the generated Controller reference. Plan:
+[immutable Nex Core](plans/2026-10-01-immutable-nex-core.md), decisions D2 and D3.
 
-**State owner: Core**, host-local. The durable record is the md array superblocks on the disks and
-`/etc/mdadm/mdadm.conf` written by the installer. Adding a member does not change the array's UUID,
-so nothing rewrites `mdadm.conf`, and the kernel assembles the mirror at boot with no Nex code. The
-Controller keeps only the task it keeps for every host operation. A fresh Controller sees the
-mirror, its members and any rebuild in the hardware report.
+A Nex Core host keeps its own signed system on every disk (partition table, boot partition with its boot loader, slots A and B with
+their hash trees) and mirrors only the `nex-data` volume across disks. When one disk of a two-disk host fails and an operator
+fits a blank disk, Core rebuilds that disk from the one still working. **The Controller only submits the request and shows what the
+host reports.**
 
-**Request.** `{request_id, array, device:{by_id, serial, size_bytes, fingerprint,
-erase_confirmation?}}`. `array` names one array as the report does (`md0`). `device` is one
-candidate from the host's own `POST /api/v1/storage/discover` listing with `kind: zfs-device` — the
-same listing, eligibility rules, fingerprint and typed erase confirmation the ZFS wizard uses; a
-device reported `erase_required` must carry `erase_confirmation` equal to its own `by_id`.
-Administrator session and `X-CSRF-Token`. `202` returns `{host_id, array, operation}`; an exact
-repeat of a `request_id` replays that operation, and a different payload under the same
-`request_id` is `409`.
+**State owner: Core**, host-local. Durable records: the disks themselves (GPT, slots, boot partitions, the md superblocks) and the
+replacement record `/var/lib/nex-core-agent/system-disk/replace.json` on the host (request ID, the disk as selected, the GPT disk GUID
+the operation writes, whether the boot partition was formatted and written, phase, status, error, times). The Controller keeps
+only the task it keeps for every host operation. A fresh Controller recovers everything from the host's hardware report
+(`system_disk`, `md_arrays`); there is nothing to re-enter.
 
-**Refusals.** `400` for an array that is not an `mdN` name, a device that is not a
-`/dev/disk/by-id/` path, a missing serial, size or 64-hex fingerprint, an erase confirmation
-naming another device, or a host ID that is not an opaque ID (`system disk replacement requires
-a host`). `404` unknown host. `409` for a revoked host, a host that is not freshly
-connected, and an older Core: `replacing a system disk needs host-system-disk-replace-v1 on this
-host; upgrade Nex Core`. An image-edition Core does not advertise `host-system-disk-replace-v1` (classic edition only until the root and verity slots can be copied to the replacement disk), and a command that reaches one anyway fails with `replacing a system disk is not available on the image edition yet: ... nothing was changed`. Core revalidates everything itself when it executes and reports a failed
-task with its own sentence: the arrays cannot be read (`Nex Core cannot read this host's RAID
-arrays`), the named array is missing (`this host has no array <mdN>`), the array is not degraded
-(`/dev/md0 is not degraded, so there is no member to replace`), it is not a RAID1 mirror, it has
-no working member to copy from, the chosen disk already holds a working member
-(`<disk> already holds a working member of <array>`), discovery cannot re-list the disk (`the
-replacement disk cannot be safely observed`), the disk changed or is in use, its old data was not
-confirmed for erasure, or it is smaller than the remaining system disk.
+**Request.** `{request_id, device:{by_id, serial, size_bytes, fingerprint, erase_confirmation?}}`. `device` is one candidate from the
+host's own `POST /api/v1/storage/discover` listing with `kind: zfs-device`, with the identity, eligibility rules, fingerprint and
+typed erase confirmation every destructive disk operation uses: a disk the listing marks `requires_erase` must carry
+`erase_confirmation` equal to its own `by_id`, and Core never erases a disk that holds data without it. Administrator session
+and `X-CSRF-Token`. `202` returns `{host_id, operation}`; an exact repeat of a `request_id` is `200` with the original operation and
+no second command; a different payload under the same `request_id` is `409`.
 
-**What Core does.** It observes the array and the disk again, then `wipefs --all` on the
-replacement, `sgdisk --replicate=<new> <surviving disk>` and `sgdisk -G <new>` so the copied
-partition identifiers are unique, `udevadm settle`, and `mdadm --add <array> <new>-part<n>`.
-Making the disk bootable then follows the host's firmware (`/sys/firmware/efi`), not whether an
-ESP partition exists on the disk: the installer writes a 512 MiB ESP onto every mirror member on
-both firmwares, but on BIOS that partition is left unreplicated for boot and Core only runs
-`grub-install --target=i386-pc` on the disk itself. On UEFI firmware Core finds the surviving
-disk's EFI system partition, formats the replacement's copy of it with `mkfs.vfat`, and populates
-it the way the installer does — Debian's `grub-efi-amd64` writes only the one mounted ESP, so Core
-runs the host's own `/usr/local/sbin/nex-sync-esp` copier, the same helper an APT hook re-runs
-after every GRUB update, and copies what GRUB maintains in `/boot/efi` itself when that helper is
-absent or reports that it copied nothing, including the removable fallback path the installer
-seeds. The ESP is looked for only on the UEFI path. The kernel then rebuilds the mirror; the
-host and its VMs keep running throughout and nothing waits on the Controller.
+**Refusals at the Controller.** `400` for a host or `request_id` that is not an opaque ID (`system disk replacement requires a
+host`, `system disk replacement requires a stable request_id`), or a device that is not a `/dev/disk/by-id/` path, has no serial or
+size, has a fingerprint that is not 64 lowercase hex characters, or carries an erase confirmation that names another device
+(`system disk replacement device is invalid`). `404` unknown host. `409` for a revoked host (`this host is revoked`), a host that is
+not freshly connected (`the host must be freshly connected before its system disk is replaced`), and a Core that did not offer the
+capability (`replacing a system disk needs host-system-disk-replace-v1 on this host; upgrade Nex Core`).
 
-A host installed with a separate `/var` has two mirrors, one for `/` and one for `/var` over the
-same disks. Before it erases anything, Core finds every other degraded RAID1 array on the named
-array's disks and takes each one's partition number from that array's own working member, on
-whichever disk it is. It then adds the replacement's matching partition to each of them in the
-same operation: after the first array the replacement is no longer blank, so a second request for
-the same disk would have nothing to wipe. A healthy array is never changed. If such an array has
-no working member, or the replacement already holds a member of it, the operation is refused
-before the wipe (`<array> has no working member to copy from`, `the replacement disk already holds
-a member of <array>`). When an interrupted operation resumes, a replacement member that has failed
-or is gone is reported (`the replacement disk's member of <array> has failed`, `the replacement
-disk is no longer a member of <array>`) instead of being treated as repaired. On a host whose root
-file system is mounted read-only, the BIOS `grub-install` runs between `mount -o remount,rw /` and
-`mount -o remount,ro /`, which is also run when GRUB fails. The root's state is read, and both
-remounts run, in the system manager that runs the other commands, not in the agent's own sandbox,
-and one lock covers every such window on the host (a package install waits for it). This is an
-internal change: the request, result, capability and refusal list above are unchanged except for
-these added sentences (API impact: **existing contract**).
+**What Core does** (one implementation, shared with the installer and `repair`: `internal/hostimage`). Core revalidates everything
+against a fresh observation, then runs these steps in order; each step looks at what the replacement disk really holds before it
+writes, so a step that already happened is skipped and none is ever repeated destructively:
 
-**Retries and interruption.** The operation is journaled on the host under its state directory,
-keyed on the operation ID. A redelivered command replays its recorded outcome instead of acting
-again. An array that already has the replacement as a member is adopted: the disk is never wiped a
-second time and only the bootloader work is repeated. An agent interrupted after the wipe resumes
-from the journal's `wipe-started` stage, where the wiped disk can no longer match its fingerprint,
-and checks the identity that survives a wipe — the same `by_id`, serial and size — instead; nothing
-else about the selection is relaxed. A member whose disk the kernel no longer exposes is the failure
-being repaired, so it is passed over rather than turned into a refusal.
+1. **Checks, nothing written.** The selected disk still has its identity, fingerprint and eligibility (`the replacement disk changed
+   since it was selected, or is in use`, `this host no longer reports the selected replacement disk`, `the replacement disk holds old data
+   and was not confirmed for erasure`). The disk the running system started from is refused, also under another name
+   (`<by-id> is the disk the running system started from`); the surviving disk is only ever opened for reading. The nex-data volume
+   must be a degraded RAID1 mirror that is not already rebuilding (`<md> is not degraded: there is no disk to replace`, `<md> is still
+   recover; wait for it to finish …`, `this host has no mirrored nex-data volume …`). The surviving disk must carry the Nex Core layout,
+   the replacement must be as large as that layout needs (`the replacement disk … is too small for the layout …`), and the surviving disk's
+   running slot, and its other slot when it holds a release, are verified against the root hash their partition GUIDs name by reading the
+   whole dm-verity hash tree (`slot a holds the running system but does not verify`). The running boot entry must be blessed
+   (`the running boot entry is not blessed yet: wait until the host has proven its boot, then retry`). A refusal here ends with `this
+   attempt changed nothing`.
+2. **Lay.** The surviving disk's partition table (`nex-esp`, `nex-root-a`, `nex-verity-a`, `nex-root-b`, `nex-verity-b`, `nex-data`,
+   `nex-bios`, in the same places and sizes) is written to the replacement under a new disk GUID that the record also holds: that
+   GUID is how a continued attempt knows the disk is the one it laid and must not be erased again.
+3. **Slots.** Each verified slot is copied from the surviving disk in the same order the update engine writes one (the slot's two partitions
+   get fresh random GUIDs, root and hash tree are written and read back from the medium and the whole hash tree verified, and only
+   then are the GUIDs derived from the root hash set), so a replacement never selects a slot that is not complete. A previous slot that
+   does not verify is left empty rather than copied.
+4. **Boot.** The boot partition is formatted once, then written from the surviving disk's through the host's boot method with SHA-256
+   verification: UEFI copies the signed boot files and the boot entries and registers a firmware boot entry; BIOS copies the GRUB
+   files and entries and runs `grub-install --target=i386-pc` on the new disk (MBR boot code and the `nex-bios` partition). Either way
+   the new disk can start the host on its own.
+5. **Data.** `mdadm --add /dev/md/nex-data <replacement>6`. The kernel resyncs in the background; the host and its VMs keep running and
+   nothing waits on the Controller.
 
-Compatibility: shared upgrade rule — Controller before Core. The capability is checked before the
-command is stored, so an old Core is refused at the API rather than sent a command it would reject.
+**Result and observation.** The command's result is `succeeded` once the member is added, `failed` with Core's own sentence for a
+refusal or a failure, and `needs_attention` with a `still_running: …` text when the work outlived the host worker's five-minute
+wait; the work goes on regardless. The record is read back in `GET /api/v1/hosts/{id}/hardware` as `system_disk`:
+`booted_disk` (the disk the running system started from, never a target) and `replacement` with `phase`
+(`accepted`, `laying`, `slots`, `boot`, `data`, `complete`), `status` (`running`, `succeeded`, `failed`), `error`, times and, once the
+disk is a member, `resync` (the array, the member, the member's kernel state, the array's action, percent, speed and how many members
+it still misses). `md_arrays` carries the same array. A fresh Controller, or a browser opened after the Controller that submitted
+the request is gone, shows an unfinished operation from this section alone.
 
-Verification: Go unit tests for the sysfs reader against healthy, degraded and rebuilding fixture
-trees, and for the replacement's command sequence, every refusal above, the adoption path and the
-interrupted-wipe retry; Controller contract tests for the relay, the replay, the CSRF requirement,
-the old-Core refusal and invalid input; a UI check of the mirror states and the erase confirmation;
-and a [disposable-host run](qa/2026-09-22-system-disk-replace.md).
+**Retries, interruption and concurrency.** The request ID is the idempotency key. A redelivered command, or the same request
+repeated, replays the recorded outcome and touches nothing. A **new** request ID for the same disk continues a failed or interrupted
+replacement from its record and the disk's own state (a laid disk is recognised by its GUID; the boot partition is formatted and written once;
+a slot that already selects its root hash is not copied again; a member that is already added is not added again), which is the retry
+an operator uses after a failure. A request for a different disk while one runs is refused (`a replacement onto <by-id> is still
+running`), unless the running one's disk is no longer reported by the host's disk discovery at all: that
+replacement can never continue, so it is recorded as failed (`the replacement disk was removed before the replacement finished`)
+and the new request starts. A restart of Core, a lost Controller connection, a replaced Controller or a power cut leave the record `running`; Core continues
+it by itself (a record that never got past its checks is left to the Controller's redelivered command). A cancelled or interrupted
+attempt is never recorded as a failure. The disk operations are serialised by one lock (`/run/nex/disks.lock`) that update staging,
+arming, rollback and the boot-partition sync also take: an update step that meets a running replacement refuses after ten seconds
+(`a system disk operation (an update step or a disk replacement) is running`), and the boot-partition sync leaves the other boot
+partitions to the replacement.
+
+Compatibility: shared upgrade rule — Controller before Core. The capability is checked before the command is stored, so an old Core is
+refused at the API rather than sent a command it would reject; `system_disk` is a new optional member of a report the Controller
+decodes without a strict field check, so an older Controller ignores it.
+
+Verification: Go unit tests in `internal/hostimage` on file-backed disks with a fake block layer (both boot methods; interrupted at
+every named step and retried with the same and with a new request ID; the running disk and its alias refused; non-blank disks refused
+without the erase confirmation and replaced with it; undersized disks, healthy, rebuilding and missing mirrors, a corrupt running slot, an
+unblessed boot entry, a wrong root hash; a corrupt previous slot skipped; the failure record and its continuation; the disk lock against
+update steps and the boot-partition sync), in `internal/agent` (admission and addressing, every refusal as a definite result, the full run,
+replay, the still-running answer, resumption after a restart, the report) and in `internal/controller` (relay, replay, refusals,
+CSRF). **Not verified:** nothing here has run against real disks, a real md array, real firmware boot or a real `grub-install`; the
+file-backed disks, the recorded tool calls and the simulated sysfs stand in for them.
 
 ## Optional feature layers (nex-core-local layers)
 
@@ -6042,7 +6058,7 @@ host that never uses a feature never carries it.
 `/var/lib/nex/layers/releases/<BUILD_ID>/`. All of it lives on the host's persistent data volume. A
 replacement Controller never needs it, and a rolled-back or reinstalled host reads it again from its own
 disk. `nex-layers.service` is conditional on `enabled.json` existing, so a host that never enabled a
-layer, including every Classic-edition host, does not run it.
+layer does not run it.
 
 **Refusal: `layer-unavailable`.** Every operation that needs a layer reports the one stable code
 `layer-unavailable`, followed by the layer name and a reason (`layer-unavailable: NAME: REASON[: detail]`),
@@ -6062,7 +6078,7 @@ so existing ZFS and cluster operations do not grow a new error per cause. Reason
 What is not covered: nothing yet calls `ensure` from the ZFS or cluster operations and no HTTP or
 report surface exposes `list`. Layers are part of the signed update manifest: the manifest's `layer`
 components are verified with the release and staged before the slot write
-(see [Phase I-3d](#image-edition-layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)
+(see [Phase I-3d](#layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)
 and `scripts/update-publish.py --layer`). The remaining steps are in the
 [immutable Nex Core plan](plans/2026-10-01-immutable-nex-core.md). The lab evidence is in
 [the layers record](qa/image/phase2-layers.md): simulation only (QEMU/KVM, no Secure Boot, no physical
@@ -6070,73 +6086,20 @@ hardware).
 
 ## Software updates
 
-API impact: **new contract** — Controller `GET /api/v1/updates` and
-`POST /api/v1/updates/apply`; host-local `GET /api/local/v1/updates` and
-`POST /api/local/v1/updates/apply`. Schemas `UpdateStatus` and `UpdateApplyResult`
-are in the generated references.
+A Nex Core host updates by replacing its signed system image: Core fetches and verifies the release, writes the
+unused slot and only then, on request, arms it. The operations are specified in the sections below.
 
-Updates are apt operations against the signed Nex archive, never bare `.deb` installs; apt owns
-download, GPG verification and dependency resolution. Clients read the archive's signed
-`Release`/`Packages` index. The publisher still writes `{repo}/updates.json` only for older
-hosts that poll it; current clients do not depend on it.
+### Host-local update engine (Phase I-3a)
 
-Both sides read a package repo URL from `NEX_UPDATE_REPO`, else `/etc/nex/updates.conf`
-(`repo_url=`), else `https://nexvirtualization.com/apt`. Plain HTTP repo URLs that
-point at private or loopback addresses are treated as the public default. That URL is
-written to `/etc/apt/sources.list.d/nex.sources` with
-`Signed-By: /usr/share/keyrings/nex-archive-keyring.gpg`, which both packages ship, so
-a repo changed after install takes effect without reinstalling. Core refreshes its system
-APT index at most once every five minutes. Controller runs unprivileged, so it keeps the
-same signed source and a five-minute APT index cache under its own state directory; the
-root apply helper still uses the system source to install. A failed refresh is returned in
-the JSON `error` field instead of being presented as an unavailable package. A package no
-configured source offers is returned in
-the JSON `error` field with HTTP 200. While an apply runs, GET also returns `phase`,
-`progress` and `message` from `update-progress.json` in the service state directory.
-`progress` reports fixed steps rather than download percentage.
-On a Core host the apply does not end in `done` when the package is installed. It records
-`verifying` and restarts `nex-core-local`; the restarted service resolves the phase itself,
-with no Controller involved. `done` means the embedded agent has had a report accepted by
-the Controller since the restart (or the host has no Controller). `attention` means none was
-accepted within about six minutes: the package is installed, `error` explains, and the agent
-keeps retrying. The state is the service's `update-progress.json` plus a private
-`post-update-check.json` marker that survives a further restart until the check resolves.
-The Controller's GET also returns `core_available_version`, the newest `nex-core-local` the
-same archive offers, so the host page can compare each host's reported version with it; the
-field is omitted when the archive does not offer the package.
-
-Controller apply writes `pending-update.json` under the state directory and returns
-202; the root `nex-controller-update` path unit runs `/usr/local/lib/nex/apply-update`,
-which runs `apt-get update` then `apt-get install nex-controller` and restarts the service;
-plain install also gives an appliance still running its bundled binary its first Controller
-package. Running outside `nex-controller.service` keeps apt from being killed by
-that restart, and a failed upgrade restarts the service before reporting. If the helper or path unit is missing, apply
-returns **503** instead of scheduling. Core apply starts the same work in the
-background and returns 202; the UI polls GET until `phase` is `done` or `failed`.
-A phase left stuck by a service restart mid-install clears itself once the installed version
-matches available, but never while that service is the apply still running: apt reports the
-new version as soon as dpkg unpacks it, and `done` means the apply finished, not that the
-package landed. Stopping the service waits for an apply it started rather than abandoning it.
-Both sides re-read the installed version afterwards and fail the apply if it did not
-advance, because apt exits 0 when nothing needed upgrading.
-
-Packaged installs and current appliance images include the update helper so Controller VMs can
-upgrade in place. A published artifact that predates this helper correction is not changed by this
-source behavior; use the documented direct recovery until a rebuilt package is available.
-
-### Image edition: host-local update engine (Phase I-3a)
-
-API impact: **changed contract** — host-local `GET /api/local/v1/updates` and `POST /api/local/v1/updates/apply` answer
-differently on an image-edition host; **new contract** — host-local `POST /api/local/v1/updates/check`, `…/activate`,
+API impact: **new contract** — host-local `GET /api/local/v1/updates` and `POST /api/local/v1/updates/apply`
+(`ImageUpdateStatus`, `ImageUpdateOperation`), and `POST /api/local/v1/updates/check`, `…/activate`,
 `…/rollback`, `…/cancel`; additive `Inventory.image` (booted, staged and previous release with slot letters, phase,
 `rollback_floor`, `state_format`, `secure_boot`, latest operation and failure) and the `image-update-v1` capability in the host
-report protocol. Image-edition hosts produce `Inventory.image` from the agent's `image` probe, which only reads the engine's
+report protocol. A host produces `Inventory.image` from the agent's `image` probe, which only reads the engine's
 `state.json` record, the kernel command line and the firmware `SecureBoot` variable; the Controller-side `image-update-v1`
-acknowledgement that withholds it from an older decoder is described under [Phase I-3c](#image-edition-controller-relay-for-one-host-phase-i-3c).
-The settings, media, import and component-fetch routes are in [Phase I-3d](#image-edition-layers-settings-offline-media-and-on-demand-payloads-phase-i-3d); the pool rollout routes are
-[Phase I-4a](#image-edition-pool-rollout-coordinator-phase-i-4a). The classic edition
-(apt, described above) keeps today's behaviour until it is retired; a host chooses once, at start, by its static os-release
-(`IMAGE_ID=nex-core` is the image edition). The media, import and fetch routes answer `409 unsupported_edition` on a classic host; its `PUT /api/local/v1/updates/settings` takes a channel ([Update channels](#update-channels)).
+acknowledgement that withholds it from an older decoder is described under [Phase I-3c](#controller-relay-for-one-host-phase-i-3c).
+The settings, media, import and component-fetch routes are in [Phase I-3d](#layers-settings-offline-media-and-on-demand-payloads-phase-i-3d); the pool rollout routes are
+in [Phase I-4a](#pool-rollout-coordinator-phase-i-4a).
 Schemas `ImageUpdateStatus`, `ImageUpdateOperation`, `ImageUpdateApplyRequest`, `ImageUpdateActionRequest` and
 `UpdateRefusal` are in the generated host-local reference.
 
@@ -6175,7 +6138,7 @@ disks stay the truth and a lost file is rebuilt from them (the previous-version 
 | Route | Request → result |
 |---|---|
 | `POST /api/local/v1/updates/check` | refresh and verify metadata → `200` `ImageUpdateStatus`; `429 check_throttled` within 60 s of the last successful check (`Retry-After: 60`); `503 source_unreachable` / `source_unconfigured`; `502` for refused metadata |
-| `POST /api/local/v1/updates/apply` | `{request_id, sequence?, scope, activate, running_vms}` → `202` `ImageUpdateOperation`, background: check, download, write the inactive slot on every disk. `activate: stage_only` (default) never changes the next boot; `reboot` also arms and reboots. `scope: controller` swaps the Controller appliance's system image instead (see [Controller appliance swap](#image-edition-controller-appliance-swap-phase-i-4b)); it is `409 scope_unavailable` on a host with no appliance engine |
+| `POST /api/local/v1/updates/apply` | `{request_id, sequence?, scope, activate, running_vms}` → `202` `ImageUpdateOperation`, background: check, download, write the inactive slot on every disk. `activate: stage_only` (default) never changes the next boot; `reboot` also arms and reboots. `scope: controller` swaps the Controller appliance's system image instead (see [Controller appliance swap](#controller-appliance-swap-and-controller_first-phase-i-4b)); it is `409 scope_unavailable` on a host with no appliance engine |
 | `POST /api/local/v1/updates/activate` | `{request_id, running_vms?}` → `202`; arms the staged release (its UKI `nex-core_<label>_<sequence>+3.efi` is written to a `.new` file, flushed and renamed on each ESP, beside the running version's) and reboots. The only call that arms. A failed arm on a later disk is undone on every disk reached and leaves the release `staged`; if the undo fails too, the call is `500 arm_incomplete`, the record stays `armed` and no reboot is scheduled. On an `armed` release that has not booted, activate no longer answers `409 nothing_staged`: it re-issues the reboot (a new `request_id`, or a replay whose reboot failed; reconcile never reboots on its own, so the running-VMs policy always applies), except after `arm_incomplete`, where it first tries to take the boot entry back from every disk (`500 arm_incomplete` if a disk cannot be cleaned) and then arms again |
 | `POST /api/local/v1/updates/rollback` | `{request_id, running_vms?}` → `202`; arms the retained previous version and reboots. During the trial boot of an update (phase `booted`) it arms the release that update replaced (the running one is marked exhausted, and once the replaced release is blessed the abandoned update is the retained previous); while an update is armed but has not booted yet it is `409 already_armed`. After a partial failure (`500 rollback_incomplete`) the record is `armed` on the previous release with its layers; repeating the call finishes the remaining disks. A rollback that failed before any disk changed stays `409 previous_unavailable` |
 | `POST /api/local/v1/updates/cancel` | `{request_id}` → `200`; stops a running apply or discards a staged release; `409 already_armed`, `409 write_in_progress`, `409 nothing_to_cancel`; `409 update_in_progress` while an activate or rollback is the running operation; in the `arm_incomplete` state cancel first tries to disarm every disk and then discards the stage as usual (`500 arm_incomplete` if a disk cannot be cleaned, `409 already_armed` if the release booted) |
@@ -6204,40 +6167,39 @@ the md superblock gate — `md_generation_unsafe` (an image that raises the mani
 `md_*` manifest fields are additive to the plan's `compat` list; see the
 [phase 2 build record](qa/image/phase2-build.md) defect 4 for why.
 
-### Image edition: Controller relay for one host (Phase I-3c)
+### Controller relay for one host (Phase I-3c)
 
 API impact: **new contract** — Controller `GET /api/v1/hosts/{id}/updates` and `POST /api/v1/hosts/{id}/updates/{action}`
-(`action` is `check`, `apply`, `activate`, `rollback` or `cancel`; the host-scoped `settings`, `media`, `import` and `fetch` are [Phase I-3d](#image-edition-layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)), the managed command `host-image-update` carrying
+(`action` is `check`, `apply`, `activate`, `rollback` or `cancel`; the host-scoped `settings`, `media`, `import` and `fetch` are [Phase I-3d](#layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)), the managed command `host-image-update` carrying
 `ImageUpdateRequest`, `ReportResponse.image_update` (the `image-update-v1` acknowledgement) and host-local
 `GET /api/local/v1/updates/operations/{id}`. **Changed behaviour, no new field:** `Inventory.image` (defined in
-[I-3a](#image-edition-host-local-update-engine-phase-i-3a)) is now withheld until the Controller acknowledges `image-update-v1`.
+[I-3a](#host-local-update-engine-phase-i-3a)) is now withheld until the Controller acknowledges `image-update-v1`.
 Schemas `HostImageUpdateRequest`, `HostImageUpdateAccepted`, `HostImageUpdateView` and `ImageUpdateRequest` are in the generated
-Controller reference. `ReportResponse.controller` and `controller-epoch-v1` are **not** implemented. The Controller's own APT update
-routes (`GET /api/v1/updates`, `POST /api/v1/updates/apply`, above) are kept: they update the Controller package of a classic
-Controller, and the plan's appliance swap that retires them is a later slice.
+Controller reference. `ReportResponse.controller` and `controller-epoch-v1` are **not** implemented. The Controller has no update
+routes of its own: the Controller appliance is replaced by the Core that hosts it (see the swap below).
 
 Where the work happens. The host's update engine (`internal/nexupdate.Engine`, inside `nex-core-local`) fetches, verifies, writes the
 unused slot, arms and rolls back, and keeps the record (`/var/lib/nex/image/state.json`); there is one engine and one writer per host.
 The embedded agent, which runs in the same process, relays the Controller's command to that engine, and its result says only whether
 the engine accepted the request: `succeeded`, or `failed` with the error `<code>: <message>` carrying the engine's stable code
-(`update_in_progress`, `nothing_staged`, `already_armed`, `state_format_downgrade`, …) or `unsupported_edition: …` on a host without an
+(`update_in_progress`, `nothing_staged`, `already_armed`, `state_format_downgrade`, …) or `no_image_update_engine: …` on a host without an
 engine. Progress, the staged and previous releases, the rollback floor and the outcome come back in `Inventory.image`; a Controller that
 disappears mid-update changes nothing on the host, and a fresh Controller shows the same state from the next report. The Controller keeps
 only the task row it keeps for every host operation (`state.owner: core`).
 
 | Route | Request → result |
 |---|---|
-| `GET /api/v1/hosts/{id}/updates` | administrator session → `200` `{host_id, connection, supported, image?}`: the host's last reported `Inventory.image` unchanged; `supported:false` and no `image` for a classic host or a Core not yet acknowledged; `404` unknown host |
-| `POST /api/v1/hosts/{id}/updates/{action}` | `{request_id, sequence?, activate?, running_vms?}` (`sequence` and `activate` for `apply` and `import`; `running_vms` `refuse` (default) or `shutdown` for `apply`, `import`, `activate`, `rollback` and `cancel`; the I-3d actions take `channel`, `base_url`, `media` and `component`) → `202` `{host_id, action, operation}`; an exact replay of the same `request_id` is `200` with the original operation; a changed payload under the same `request_id` is `409`. Session, same-origin and `X-CSRF-Token` required. `409` for a revoked host, a host that is not freshly connected, or one that did not offer `image-update-v1` ("this host does not run the image edition or does not support image updates; upgrade Nex Core") |
-| `GET /api/local/v1/updates/operations/{id}` | host-local root session → `200` `ImageUpdateOperation` by the `request_id` that created it; `404 unknown_operation` after the last 20 age out; `409 unsupported_edition` on a classic host |
+| `GET /api/v1/hosts/{id}/updates` | administrator session → `200` `{host_id, connection, supported, image?}`: the host's last reported `Inventory.image` unchanged; `supported:false` and no `image` for a Core not yet acknowledged; `404` unknown host |
+| `POST /api/v1/hosts/{id}/updates/{action}` | `{request_id, sequence?, activate?, running_vms?}` (`sequence` and `activate` for `apply` and `import`; `running_vms` `refuse` (default) or `shutdown` for `apply`, `import`, `activate`, `rollback` and `cancel`; the I-3d actions take `channel`, `base_url`, `media` and `component`) → `202` `{host_id, action, operation}`; an exact replay of the same `request_id` is `200` with the original operation; a changed payload under the same `request_id` is `409`. Session, same-origin and `X-CSRF-Token` required. `409` for a revoked host, a host that is not freshly connected, or one that did not offer `image-update-v1` ("this host does not support image updates; upgrade Nex Core") |
+| `GET /api/local/v1/updates/operations/{id}` | host-local root session → `200` `ImageUpdateOperation` by the `request_id` that created it; `404 unknown_operation` after the last 20 age out |
 
-Compatibility. An image-edition Core offers `image-update-v1` in every v2 report capability list only while its engine is running; a
+Compatibility. A Core offers `image-update-v1` in every report capability list only while its engine is running; a
 Controller answers `image_update: true` only to a Core that offered it, and the Core clears the acknowledgement on restart, disconnect
-or Controller replacement and then withholds `Inventory.image` again. The legacy v1 report never carries it. A strict older Controller
+or Controller replacement and then withholds `Inventory.image` again. A strict older Controller
 therefore never sees `inventory.image` or a `host-image-update` command, and the Controller sends no update command to a host that
 did not offer the capability.
 
-### Image edition: layers, settings, offline media and on-demand payloads (Phase I-3d)
+### Layers, settings, offline media and on-demand payloads (Phase I-3d)
 
 API impact: **new contract** — host-local `PUT /api/local/v1/updates/settings`, `GET …/updates/media`, `POST …/updates/import`,
 `POST …/updates/components/{id}/fetch`; Controller relay of the same four through the existing
@@ -6253,7 +6215,7 @@ reference. **State owner: Core.** Records, all host-local: `/etc/nex/updates.con
 A fresh Controller recovers what it displays from `Inventory.image` (`channel`, `base_url`, `media`, `phase`); the Controller stores
 nothing, so replacing it loses nothing. Compatibility: the new fields are inside `Inventory.image`, which is already withheld until
 the Controller acknowledges `image-update-v1`; a Core that predates these actions answers the relayed command with a failed result
-(`unsupported_edition: …`), and a Controller that predates them never sends them.
+(`no_image_update_engine: …`), and a Controller that predates them never sends them.
 
 **Layers travel with their base.** A release's `layer` components (`id` `nex-<name>`, `requires_base`, optional `verity_root_hash`,
 `required`, `on_demand`) are verified with the manifest: a layer whose `requires_base` is not the release's `<label>-<sequence>`
@@ -6323,8 +6285,7 @@ section plus any non-empty `[Unreleased]` body when a numbered heading is ahead 
 `name`, for example the Controller image or the Windows driver ISO) is downloaded with the same checks to
 `/var/lib/nex/payload/<sha256>/<name>`, extending the installer's payload layout; a file already in place that hashes right is not
 downloaded again. `not_on_demand` (the slot image and layers come with a stage), `unknown_component`, `blob_mismatch`; the staged
-release's phase is not touched. The media, import and fetch routes answer `409 unsupported_edition` on a classic host (settings takes a
-channel there, see [Update channels](#update-channels)); all four need the root session and (for `PUT`
+release's phase is not touched. All four routes need the root session and (for `PUT`
 and `POST`) the CSRF token, and refuse unknown JSON fields.
 
 ### Update channels
@@ -6333,28 +6294,18 @@ Nex ships on two channels: **stable**, built from `main`, and **development**, b
 ([release channels plan](plans/2026-10-02-release-channels.md)). A host's channel is Core state in `/etc/nex/updates.conf`; the Controller
 reads it and keeps nothing.
 
-- **Image edition** (unchanged contract): `channel` is set by `PUT /api/local/v1/updates/settings` `{channel, base_url}` and relayed by
+- `channel` is set by `PUT /api/local/v1/updates/settings` `{channel, base_url}` and relayed by
   `POST /api/v1/hosts/{id}/updates/settings`; it is reported in `Inventory.image.channel`. The update tree holds one directory per channel
   (`<base>/<channel>/channel.json`). Core rewrites `channel` and `base_url` together, so a caller changing only the channel sends the host's
   current `base_url` back (the Controller UI does).
-- **Package edition** (changed contract): the same route takes `{channel}` with `stable` or `dev` and answers `200` `{channel, base_url: ""}`.
-  The channel is the archive the host reads: `repo_url` in `/etc/nex/updates.conf` becomes the archive root for `stable` and `<root>/dev` for
-  `dev` (other lines are kept; the next check refreshes the package index from the new archive). `GET /api/local/v1/updates` reports the
-  active `channel` (`UpdateStatus.channel`, host-local only). Refusals: `400 invalid_channel` (anything but `stable` or `dev`),
-  `400 invalid_base_url` (a package host has no `base_url`), `409 settings_overridden` while `NEX_UPDATE_REPO` fixes the archive. The
-  Controller does not relay it: `POST /api/v1/hosts/{id}/updates/settings` still answers `409` for a package host, and the Controller's
-  own package source stays `repo_url`.
 - A pool rollout still refuses hosts on different channels (`channel_mismatch`). Switching a host from development back to stable offers
-  nothing until stable publishes a newer release than the host runs: apt does not downgrade by itself, and the image engine refuses a
+  nothing until stable publishes a newer release than the host runs: the image engine refuses a
   `sequence` below the host's rollback floor.
 
-API impact: **changed contract** — host-local `PUT /api/local/v1/updates/settings` is now also answered by the package edition, and
-`GET /api/local/v1/updates` of a package host adds `channel` (`UpdateStatus`); no new route, no Controller route change, no managed command.
-Older Cores answer the package-edition `PUT` with `409 unsupported_edition`, and a client treats that as "channel not selectable". State
-owner: `core` — `repo_url` (package) or `channel` (image) in `/etc/nex/updates.conf` on each host; a fresh Controller reads the image
-edition's from `Inventory.image` and never needs the package edition's.
+API impact: **existing contract** — the channel is already part of the host-local settings route and `Inventory.image`. State
+owner: `core` — `channel` in `/etc/nex/updates.conf` on each host; a fresh Controller reads it from `Inventory.image`.
 
-### Image edition: pool rollout coordinator (Phase I-4a)
+### Pool rollout coordinator (Phase I-4a)
 
 API impact: **new contract** — host-local `GET /api/local/v1/pool/updates`, `POST …/pool/updates/rollouts`,
 `GET …/rollouts/{id}`, `POST …/rollouts/{id}/control` (pool master only); Controller `GET /api/v1/pools/{id}/updates`,
@@ -6461,7 +6412,7 @@ import of a later slice for it. Core advertises `pool-update-rollout-v1` with `i
 member whose replica verifier does not know the `update_rollout` section refuses a replica that carries one; a rollout is refused
 before it starts unless every member advertises the capability.
 
-### Image edition: Controller appliance swap and controller_first (Phase I-4b)
+### Controller appliance swap and controller_first (Phase I-4b)
 
 API impact: **changed contract** — `POST /api/local/v1/updates/apply` with `scope:"controller"` (was `409 scope_unavailable`); additive
 operation kind `controller` and phase `swapping` in `ImageUpdateOperation`; peer `PoolUpdateStep.action` `controller`, additive

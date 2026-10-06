@@ -114,7 +114,7 @@ func poolUpdateOpID(stepID, vmID string) string {
 func poolUpdateEngineStatus(ctx context.Context) (nexupdate.ImageStatus, *protocol.PoolUpdateStepResult) {
 	engine := currentImageUpdater()
 	if engine == nil {
-		return nexupdate.ImageStatus{}, &protocol.PoolUpdateStepResult{Code: "unsupported_edition", Message: "this host does not run the image edition"}
+		return nexupdate.ImageStatus{}, &protocol.PoolUpdateStepResult{Code: "no_image_update_engine", Message: "this host has no image update engine"}
 	}
 	st, err := engine.Status(ctx)
 	if err != nil {
@@ -197,7 +197,7 @@ func PoolUpdateHostStep(ctx context.Context, s *Store, step protocol.PoolUpdateS
 	}
 	engine := currentImageUpdater()
 	if engine == nil {
-		return protocol.PoolUpdateStepResult{Code: "unsupported_edition", Message: "this host does not run the image edition"}
+		return protocol.PoolUpdateStepResult{Code: "no_image_update_engine", Message: "this host has no image update engine"}
 	}
 	st, refusal := poolUpdateEngineStatus(ctx)
 	if refusal != nil {

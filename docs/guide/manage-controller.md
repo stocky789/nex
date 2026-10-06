@@ -148,13 +148,14 @@ development build 0.4.8 console layout; see
    open the host panel. Its **Overview** tab shows the hardware model, network ports, disks,
    memory, the VMs on the host, the properties (IP address, CPU, **Nex Core**, **Uptime**,
    **Fencing**, **Maintenance**, host identity, last connection and inventory observation times)
-   and **Health checks** with each check's last observed result. A light beside the **Nex Core**
-   version compares the host with the newest Nex Core in the update archive: pulsing green is up
-   to date, orange means a newer release exists, and red means a newer major release exists (for
-   example the host runs 1.x and 2.0 is available); the host list shows an **Update** badge for
-   the last two. Hover over the light for the versions behind it. No light appears when the
-   archive could not be read, the account is not an administrator, or the host's version string
-   is not a Nex Core release. The **Networking** tab shows observed interfaces and the **Storage**
+   and **Health checks** with each check's last observed result. When the host reports a newer
+   release than it runs, an **Image update** row shows a subtle **Update available** badge (or
+   **Update staged** / **Update pending reboot** once the host has staged or armed one); the Hosts
+   list, the pool **Members** list and the Overview placement cards show the same badge. It
+   comes only from the host's own report: the Controller does not look for releases, so a host
+   that has not reported its image update state shows nothing, and a host that is not connected
+   shows its last report marked **(last report)**. Updating is done under
+   [software updates](software-updates.md). The **Networking** tab shows observed interfaces and the **Storage**
    tab observed disks; these are read-only observations. The **Activity** tab shows recorded
    changes for the host. Press Escape or select the close button to return to the list.
    A stale host's **Overview** tab keeps a warning above the last reported values.

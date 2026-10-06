@@ -6,7 +6,6 @@ import { vmStateLabel, type VM } from "./managed";
 import { hostHealth } from "./host-model";
 import type { StatsHistory } from "./stats";
 import { storageAccess } from "./storage";
-import { versionLight } from "./updates";
 import { operationLabel, relativeTime, statusLabel } from "./labels";
 import { badgeTone, type Attention } from "./ui";
 
@@ -112,7 +111,7 @@ export function trend(values: Point[]) {
 // Current conditions that need an operator, each naming what it is about and linking to it: the
 // Overview's Needs attention list and the top of the Events screen. Computed from the hosts'
 // current reports on every render; nothing is stored.
-export function attentionItems(data: Data, hosts: Host[], vms: VM[], storage: Data["storage"], coreAvailable?: string): Attention[] {
+export function attentionItems(data: Data, hosts: Host[], vms: VM[], storage: Data["storage"]): Attention[] {
   const hostName = (id: string) => data.hosts.find(h => h.id === id)?.hostname || id;
   const hostFresh = (id: string) => hosts.some(h => h.id === id && h.connection === "fresh");
   const known = (vm: VM) => vm.freshness === "fresh" && hostFresh(vm.host_id);
@@ -136,10 +135,6 @@ export function attentionItems(data: Data, hosts: Host[], vms: VM[], storage: Da
   }
   for (const v of vms) if (known(v) && v.state === "running" && (v.usage?.cpu_percent ?? 0) > 80)
     attention.push({ tone: "warn", title: `${v.name} at ${Math.round(v.usage!.cpu_percent!)}% CPU`, detail: `On ${hostName(v.host_id)}${v.usage?.observed_at ? ` · reported ${relativeTime(v.usage.observed_at)}` : ""}`, href: `#/vms/${v.id}` });
-  for (const h of hosts) {
-    const light = h.inventory && versionLight(h.inventory.os_version, coreAvailable);
-    if (light && light.level !== "current") attention.push({ tone: light.level === "major" ? "warn" : "info", title: `${h.hostname} on ${h.inventory!.os_version.replace(/\s*\(.*\)$/, "")}`, detail: `Nex Core ${coreAvailable} available`, href: "#/settings/updates" });
-  }
 
   return attention;
 }

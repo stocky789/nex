@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Compile the real image-edition handoff in nex-config.c (write_image_env and image_seed) with in-memory file
+"""Compile the real handoff in nex-config.c (write_image_env and image_seed) with in-memory file
 boundaries and check what nex-image-install.sh would read: layout from the disk count, the disk list, the mode,
 and the /etc seed files. SIMULATION of the file system only; no disk, no /run, no installer is touched."""
 from pathlib import Path

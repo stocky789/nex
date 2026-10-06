@@ -275,14 +275,19 @@ func (w *Writer) withESP(ctx context.Context, node string, fn func(root string) 
 // unmounts one. Closing the file releases it, including when the holder dies. The wait ends with ctx or
 // after espLockWait, so a stuck holder fails this caller instead of hanging it.
 func lockESP(ctx context.Context) (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(espMountBase), 0o700); err != nil {
+	return flockFile(ctx, espMountBase+".lock", espLockWait, "the ESP mount is in use by another Core process")
+}
+
+// flockFile takes an exclusive flock on path, waiting for it until ctx ends or wait has passed.
+func flockFile(ctx context.Context, path string, wait time.Duration, busy string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(espMountBase+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(espLockWait)
+	deadline := time.Now().Add(wait)
 	for {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -294,10 +299,20 @@ func lockESP(ctx context.Context) (func(), error) {
 		}
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
 			f.Close()
-			return nil, fmt.Errorf("the ESP mount is in use by another Core process: %w", err)
+			return nil, fmt.Errorf("%s: %w", busy, err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// diskLockWait is how long an update step waits for a system disk replacement before it gives up; a
+// replacement holds the disk lock for its whole run, which is far longer than any other holder.
+var diskLockWait = 10 * time.Second
+
+// lockDisks serializes the operations that write the system disks' partitions and boot partitions: slot
+// staging, arming, rollback and the system disk replacement. wait bounds how long the caller queues.
+func lockDisks(ctx context.Context, wait time.Duration) (func(), error) {
+	return flockFile(ctx, filepath.Join(mountBase, "disks.lock"), wait, "a system disk operation (an update step or a disk replacement) is running")
 }
 
 // ESPNodes returns the partition nodes of every ESP, found by GPT partition name (never by md
@@ -355,60 +370,4 @@ func parseEFIString(b []byte) (string, error) {
 		u = append(u, c)
 	}
 	return string(utf16.Decode(u)), nil
-}
-
-// ESPSync copies the booted ESP's files to every other ESP, once the running UKI has been blessed
-// (its name carries no boot counter). It is what heals a replaced disk and carries the blessed
-// name to the sibling disks; it never runs before the system proved itself.
-func (w *Writer) ESPSync(ctx context.Context) error {
-	booted, err := BootedESP()
-	if err != nil {
-		return err
-	}
-	if booted == "" {
-		w.logf("not booted through systemd-boot; no ESP to propagate")
-		return nil
-	}
-	nodes, err := ESPNodes()
-	if err != nil {
-		return err
-	}
-	// One hold for the whole sync: copyOut mounts the other ESPs while the booted one is still mounted.
-	unlock, err := lockESP(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	var desired []ESPFile
-	if err = w.withESP(ctx, booted, func(root string) error {
-		desired, err = ScanESP(root)
-		if err != nil {
-			return err
-		}
-		for _, f := range desired {
-			if isUKI(f.Rel) && counterRE.MatchString(f.Rel) && !isBadUKI(f.Rel) {
-				return errNotBlessed
-			}
-		}
-		return w.copyOut(ctx, booted, nodes, desired)
-	}); errors.Is(err, errNotBlessed) {
-		w.logf("the running boot entry is not blessed yet; leaving the other ESPs unchanged")
-		return nil
-	}
-	return err
-}
-
-var errNotBlessed = errors.New("boot entry not blessed")
-
-func (w *Writer) copyOut(ctx context.Context, booted string, nodes []string, desired []ESPFile) error {
-	for _, n := range nodes {
-		if n == booted {
-			continue
-		}
-		w.logf("converging %s", n)
-		if err := w.withESP(ctx, n, func(root string) error { return ConvergeESP(root, desired) }); err != nil {
-			return fmt.Errorf("%s: %w", n, err)
-		}
-	}
-	return nil
 }

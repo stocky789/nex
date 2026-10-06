@@ -180,7 +180,7 @@ func TestPlainISCSIListingStillWorksOnACoreWithoutSelectedTargetInspection(t *te
 	a.report(certificate(t, host.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: caps})
 	listing := protocol.StorageDiscoveryRequest{RequestID: "listing-1", PoolID: pool, HostID: host.HostID, Kind: protocol.StorageKindISCSI, Server: "iscsi.example.test"}
 	if dispatched, code := startDiscovery(t, a, host.HostID, listing); len(dispatched) != 1 || code != 0 {
-		t.Fatalf("plain iSCSI listing was refused on an older Core: dispatched=%d code=%d", len(dispatched), code)
+		t.Fatalf("plain iSCSI listing was refused on a Core without selected-target inspection: dispatched=%d code=%d", len(dispatched), code)
 	}
 }
 
@@ -199,7 +199,7 @@ func TestBackupPurposeDiscoveryNeedsACoreThatHonoursIt(t *testing.T) {
 	plain := body
 	plain.Purpose, plain.RequestID = "", "purpose-plain"
 	if dispatched, _ := startDiscovery(t, a, host.HostID, plain); len(dispatched) != 1 {
-		t.Fatal("purpose-less discovery was refused on an older Core")
+		t.Fatal("purpose-less discovery was refused on a Core without the purpose capability")
 	}
 	if dispatched := a.c.takeStorageDiscoveries(host.HostID); len(dispatched) != 0 {
 		t.Fatal("refused purpose request was queued")

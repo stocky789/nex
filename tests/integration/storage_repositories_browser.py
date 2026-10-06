@@ -501,23 +501,23 @@ def main():
             page.get_by_role("button", name="Register storage", exact=True).click()
             form.get_by_label("Repository type").select_option("iscsi")
             expect(form.get_by_label("LUN", exact=True)).to_have_value("")
-            # Removing the inspection capability models an older Core without manufacturing an empty success.
+            # Removing the inspection capability models a Core without it, without manufacturing an empty success.
             host["capabilities"].remove("storage-iscsi-inspect-v1")
             refresh()
             form.get_by_label("Host", exact=True).select_option("core-qa")
             form.get_by_label("Target portal", exact=True).fill("storage.example.test:3260")
             before = len(submissions)
-            form.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:legacy")
+            form.get_by_label("Target IQN", exact=True).fill("iqn.2026-01.example.test:manual")
             expect(form.get_by_text("This Core does not support read-only LUN inspection.", exact=False)).to_be_visible()
             assert not any(path == "storage/discover" and body.get("target_iqn") for path, body in submissions[before:])
             form.get_by_label("LUN", exact=True).fill("9")
             expect(form.get_by_label("LUN", exact=True)).to_have_value("9")
             # The submit-only CHAP scrub must not behave like an operator credential edit.
-            form.get_by_label("Name", exact=True).fill("Legacy manual iSCSI")
-            form.get_by_label("CHAP account", exact=True).fill("legacy-chap")
-            form.get_by_label("CHAP secret", exact=True).fill("fixture-legacy-chap-secret")
+            form.get_by_label("Name", exact=True).fill("Manual iSCSI")
+            form.get_by_label("CHAP account", exact=True).fill("manual-chap")
+            form.get_by_label("CHAP secret", exact=True).fill("fixture-manual-chap-secret")
             form.get_by_label("LUN", exact=True).fill("9")
-            form.get_by_label("LUN WWID", exact=True).fill("manual-legacy-wwid")
+            form.get_by_label("LUN WWID", exact=True).fill("manual-fixture-wwid")
             form.get_by_label("Existing filesystem UUID", exact=True).fill(manual_uuid)
             form.get_by_label("This LUN is restricted to this Core initiator only", exact=True).check()
             mode["fail_credentials"] = True
@@ -526,7 +526,7 @@ def main():
             expect(page.get_by_role("alert")).to_contain_text("Simulated credential handoff failure")
             expect(form.get_by_label("CHAP secret", exact=True)).to_have_value("")
             expect(form.get_by_label("LUN", exact=True)).to_have_value("9")
-            expect(form.get_by_label("LUN WWID", exact=True)).to_have_value("manual-legacy-wwid")
+            expect(form.get_by_label("LUN WWID", exact=True)).to_have_value("manual-fixture-wwid")
             expect(form.get_by_label("Existing filesystem UUID", exact=True)).to_have_value(manual_uuid)
             expect(form.get_by_label("This LUN is restricted to this Core initiator only", exact=True)).to_be_checked()
             mode["fail_credentials"] = False
@@ -557,7 +557,7 @@ def main():
             checks.append("Failed CHAP handoff scrubs only the secret, retaining old-Core manual identity and exclusivity; existing iSCSI name-only updates preserve source fields without inspection")
             host["capabilities"].append("storage-iscsi-inspect-v1")
             mode["inspection"] = "single"
-            checks.append("CHAP travels only in transient inspection POST bodies; target/portal/host/CHAP changes, manual edits, cancel and close reject late field writes; older Core keeps a manual workflow without selected-target requests")
+            checks.append("CHAP travels only in transient inspection POST bodies; target/portal/host/CHAP changes, manual edits, cancel and close reject late field writes; a Core without inspection keeps a manual workflow without selected-target requests")
             form.get_by_label("Repository type").select_option("smb")
             form.get_by_label("Name", exact=True).fill("VM share")
             form.get_by_label("SMB server").fill("files.example.test")

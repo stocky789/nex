@@ -82,7 +82,7 @@ class ClusterHALabTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 lab.require_start_budget()
 
-    def test_pristine_marker_uses_shipped_helper_and_lab_state(self):
+    def test_pristine_marker_uses_lab_helper_and_lab_state(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             target = self.fixture(root)

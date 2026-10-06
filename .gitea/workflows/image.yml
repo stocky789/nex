@@ -1,5 +1,5 @@
 name: Image build and boot
-# The immutable Nex Core image and the Controller guest image (docs/plans/2026-10-01-immutable-nex-core.md, D4).
+# The Nex Core image and the Controller guest image (docs/plans/2026-10-01-immutable-nex-core.md, D4).
 # Each job builds an image and boots it once under QEMU. Forge-only: it needs Docker and takes tens of minutes, and none of
 # it runs on github.com.
 on:
@@ -135,7 +135,7 @@ jobs:
           # Builder containers can only mount paths under the workspace, so the build inputs must live there too.
           export TMPDIR=$PWD/.cache/tmp
           mkdir -p "$TMPDIR"
-          python3 appliance/build.py --profile controller --version 0.1.0-ci --sequence 1 --output .cache/controller-image \
+          python3 appliance/build.py --version 0.1.0-ci --sequence 1 --output .cache/controller-image \
             --docker "$NEX_DOCKER"
       # UEFI boot as vmhost defines the VM (system disk read-only, blank data disk, NoCloud seed): ready marker over the
       # deployment's own certificate, read-only root, overlay /etc, /var on the data disk, and a reboot on the same data disk.

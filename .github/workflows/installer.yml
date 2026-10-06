@@ -51,7 +51,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends gcc pkg-config libcrypt-dev libglib2.0-dev libgtk2.0-dev xvfb xdotool python3 gzip dpkg-dev busybox
+          sudo apt-get install --yes --no-install-recommends gcc pkg-config libcrypt-dev libglib2.0-dev libgtk2.0-dev xvfb xdotool python3 gzip busybox
 
       - name: Check installer source contract
         run: bash installer/check.sh

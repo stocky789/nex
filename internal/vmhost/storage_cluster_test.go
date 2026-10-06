@@ -3,8 +3,6 @@ package vmhost
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"html"
@@ -59,15 +57,14 @@ func startClusterFixture(t *testing.T) protocol.StorageClusterConfig {
 	return provenClusterConfig()
 }
 
-func writeCorosyncMarker(t *testing.T, state string, config []byte) {
-	marker := corosyncUnconfiguredMarkerPath(state)
-	if err := os.MkdirAll(filepath.Dir(marker), 0700); err != nil {
+// useFactoryCorosync makes config the layer's factory copy of Debian's Corosync file.
+func useFactoryCorosync(t *testing.T, config []byte) {
+	t.Helper()
+	factory := filepath.Join(t.TempDir(), "factory-corosync.conf")
+	if err := os.WriteFile(factory, config, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(config)
-	if err := os.WriteFile(marker, []byte(hex.EncodeToString(digest[:])+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	setForTest(t, &corosyncFactoryConfigPath, factory)
 }
 
 // fakeClusterServices permits only systemd service observation and start.
@@ -190,7 +187,7 @@ func TestStartStorageClusterDoesNotWriteSharedCIB(t *testing.T) {
 	if err := os.WriteFile(corosyncConfigPath, stock, 0600); err != nil {
 		t.Fatal(err)
 	}
-	writeCorosyncMarker(t, state, stock)
+	useFactoryCorosync(t, stock)
 	if err := StartStorageClusterAt(context.Background(), state, c); err != nil || *starts != 1 {
 		t.Fatalf("marked vendor start = starts %d, %v", *starts, err)
 	}
@@ -234,9 +231,9 @@ func TestStartStorageClusterIsConfigNoopAndRecoversInactiveOrNonpersistentServic
 
 func TestStartStorageClusterRefusesForeignOrEditedVendorConfig(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		marked bool
-	}{{"unmarked foreign", false}, {"edited after marker", true}} {
+		name    string
+		factory bool
+	}{{"foreign", false}, {"edited after factory copy", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := startClusterFixture(t)
 			setForTest(t, &clusterRun, func(context.Context, string, ...string) ([]byte, error) {
@@ -244,8 +241,8 @@ func TestStartStorageClusterRefusesForeignOrEditedVendorConfig(t *testing.T) {
 				return nil, nil
 			})
 			state := t.TempDir()
-			if tc.marked {
-				writeCorosyncMarker(t, state, []byte("totem { cluster_name: debian }\n"))
+			if tc.factory {
+				useFactoryCorosync(t, []byte("totem { cluster_name: debian }\n"))
 			}
 			edited := []byte("totem { cluster_name: locally-edited }\n")
 			if err := os.WriteFile(corosyncConfigPath, edited, 0600); err != nil {
@@ -1295,42 +1292,20 @@ func TestFenceCIBUsesProofCredentialAndPinnedHostKeyPaths(t *testing.T) {
 	}
 }
 
-func TestCorosyncUnconfiguredMarkerIsExplicitAndEmpty(t *testing.T) {
-	state := t.TempDir()
+// Debian's file arrives from the layer's read-only factory copy, which is the only thing that vouches for
+// it. An edited file is still an administrator's.
+func TestCorosyncFactoryConfigAcceptsOnlyTheLayersFactoryCopy(t *testing.T) {
 	stock := []byte("totem { cluster_name: debian }\n")
-	if corosyncUnconfiguredMarker(state, stock) {
-		t.Fatal("missing marker accepted")
-	}
-	writeCorosyncMarker(t, state, stock)
-	if !corosyncUnconfiguredMarker(state, stock) {
-		t.Fatal("matching pristine marker rejected")
-	}
-	if corosyncUnconfiguredMarker(state, []byte("totem { cluster_name: edited }\n")) {
-		t.Fatal("marker accepted after config edit")
-	}
-}
-
-// The image edition has no packaging script to write the marker: Debian's file arrives from the layer's read-only
-// factory copy, which is the only thing that vouches for it. An edited file is still an administrator's.
-func TestCorosyncUnconfiguredMarkerAcceptsOnlyTheLayersFactoryCopy(t *testing.T) {
-	state := t.TempDir()
-	factory := filepath.Join(t.TempDir(), "corosync.conf")
-	stock := []byte("totem { cluster_name: debian }\n")
-	if err := os.WriteFile(factory, stock, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	previous := corosyncFactoryConfigPath
-	corosyncFactoryConfigPath = factory
-	t.Cleanup(func() { corosyncFactoryConfigPath = previous })
-	if !corosyncUnconfiguredMarker(state, stock) {
+	useFactoryCorosync(t, stock)
+	if !corosyncFactoryConfig(stock) {
 		t.Fatal("a file identical to the layer's factory copy was refused as administrator configuration")
 	}
-	if corosyncUnconfiguredMarker(state, []byte("totem { cluster_name: edited }\n")) {
+	if corosyncFactoryConfig([]byte("totem { cluster_name: edited }\n")) {
 		t.Fatal("an edited file was accepted against the factory copy")
 	}
 	corosyncFactoryConfigPath = filepath.Join(t.TempDir(), "absent")
-	if corosyncUnconfiguredMarker(state, stock) {
-		t.Fatal("a host without a factory copy and without a marker accepted the file")
+	if corosyncFactoryConfig(stock) {
+		t.Fatal("a host without a factory copy accepted the file")
 	}
 }
 

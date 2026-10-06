@@ -11,7 +11,7 @@ Resource limits: Go builds and tests ran under `systemd-run --user --scope -p CP
 `nice -n 19 ionice -c3`, `GOMAXPROCS=4`, `go test -p 2`; no subagent was started. Peak use was not sampled.
 
 - API impact: **new contract** (see the change record `docs/changes/2026-10-02-pool-rollout-coordinator.json` and
-  [API.md](../../API.md#image-edition-pool-rollout-coordinator-phase-i-4a)).
+  [API.md](../../API.md#pool-rollout-coordinator-phase-i-4a)).
 - State owner: **core**: `pool-update.json` on the master, replicated as authority section `update_rollout`; the Controller keeps nothing.
 - Guide impact: **none yet**, deliberately: no operator workflow has been walked through, so `update-a-pool.md` is **open** and is
   due with the Controller UI and a lab walkthrough.

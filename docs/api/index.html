@@ -65,8 +65,6 @@
 <li><a href="#openConsole">POST /api/v1/vms/{id}/console</a></li>
 <li><a href="#consoleStream">GET /api/v1/vms/{id}/console/{ticket}</a></li>
 <li><a href="#agentConsole">POST /api/v1/agent/console/{token}</a></li>
-<li><a href="#getUpdates">GET /api/v1/updates</a></li>
-<li><a href="#applyUpdates">POST /api/v1/updates/apply</a></li>
 <li><a href="#powerVM">POST /api/v1/vms/{id}/power</a></li>
 <li><a href="#openHostConsole">POST /api/v1/hosts/{id}/console</a></li>
 <li><a href="#hostConsoleStream">GET /api/v1/hosts/{id}/console/{ticket}</a></li>
@@ -86,9 +84,9 @@
 <li><a href="#setPoolFenceProfile">POST /api/v1/pools/{id}/members/{host_id}/fence-profile</a></li>
 <li><a href="#probePoolBMC">POST /api/v1/pools/{id}/members/{host_id}/bmc-probe</a></li>
 <li><a href="#hostHardware">GET /api/v1/hosts/{id}/hardware</a></li>
+<li><a href="#replaceHostSystemDisk">POST /api/v1/hosts/{id}/system-disk</a></li>
 <li><a href="#setPoolBMCProvisioning">POST /api/v1/pools/{id}/members/{host_id}/bmc-provisioning</a></li>
 <li><a href="#setPoolHostFencing">POST /api/v1/pools/{id}/host-fencing</a></li>
-<li><a href="#replaceSystemDisk">POST /api/v1/hosts/{id}/system-disk</a></li>
 <li><a href="#listVMSnapshots">GET /api/v1/vms/{id}/snapshots</a></li>
 <li><a href="#createVMSnapshot">POST /api/v1/vms/{id}/snapshots</a></li>
 <li><a href="#revertVMSnapshot">POST /api/v1/vms/{id}/snapshots/{snapshot_id}/revert</a></li>
@@ -428,17 +426,6 @@
   },
   &quot;semantics&quot;: &quot;Payload: PoolCommand{request_id, action: host-fencing, membership.master_host_id, enabled}. It names no member, because the setting is the pool&#x27;s. The master records PoolMembership.host_fencing_disabled as the negative of enabled and replicates it with the pool&#x27;s records; every host reads it from the copy it already holds. It is a desired state and not a transition, so re-sending the state already recorded answers succeeded. Turning it on arms nothing by itself: Nex Core arms a host&#x27;s watchdog only where every prerequisite in PoolFenceSummary.prerequisites holds, and the quorum line is unknown until this pool runs a quorum service. Refusals: \&quot;this command carries no host fencing request\&quot;, \&quot;only the pool master records whether host fencing is on\&quot;, \&quot;pool membership is unavailable\&quot;, and the authority-write refusals a fence profile takes while a master change is in flight.&quot;
 }</pre></section>
-<section><h2>host-system-disk-replace</h2><pre>{
-  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
-  &quot;payload&quot;: {
-    &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceRequest&quot;
-  },
-  &quot;result&quot;: {
-    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
-  },
-  &quot;semantics&quot;: &quot;Addressed to the host whose mirror is rebuilt and performed entirely by it; nothing is pool-scoped and nothing is kept by the Controller. The durable record is the md superblocks and the installer&#x27;s /etc/mdadm/mdadm.conf, whose array UUID does not change when a member is added. Core journals the operation under its state directory, keyed on operation_id: a redelivered command replays its recorded outcome, an array that already has the replacement as a member is adopted without wiping it again, and an agent interrupted after the wipe resumes from the wipe-started stage, where the wiped disk can no longer match its fingerprint and the identity that survives a wipe (the same by_id, serial and size) is checked instead. A member whose disk the kernel no longer exposes is the failure being repaired and is passed over. Refusals are definite failed results carrying Core&#x27;s own sentence: \&quot;/dev/mdN is not degraded, so there is no member to replace\&quot;, \&quot;&lt;device&gt; is a &lt;level&gt; array; only a RAID1 mirror is rebuilt this way\&quot;, \&quot;&lt;device&gt; has no working member to copy from; restore this host instead\&quot;, \&quot;the replacement disk changed since it was selected, or is in use\&quot;, \&quot;the replacement disk holds old data and was not confirmed for erasure\&quot;, \&quot;Nex Core cannot read this host&#x27;s RAID arrays\&quot;, \&quot;this host has no array &lt;mdN&gt;\&quot;, \&quot;&lt;disk&gt; already holds a working member of &lt;array&gt;\&quot;, \&quot;the replacement disk cannot be safely observed\&quot;, \&quot;the replacement disk is smaller than the remaining system disk\&quot;.&quot;,
-  &quot;capability&quot;: &quot;host-system-disk-replace-v1, advertised by the classic edition only. An image-edition Core does not advertise it, and a command that reaches one fails with a refusal before anything is changed, because the replacement disk would not receive the root and verity slots.&quot;
-}</pre></section>
 <section><h2>snapshot-create</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/local/v1/pool/vms/{id}/snapshots&quot;,
   &quot;payload&quot;: {
@@ -647,7 +634,18 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Addressed to one image-edition host and performed entirely by its own update engine, which keeps the record (/var/lib/nex/image/state.json). The result says only whether the engine accepted the request (apply, activate, rollback and cancel start or settle work in the background); a refusal is a failed result whose error is \&quot;&lt;code&gt;: &lt;message&gt;\&quot; with the engine&#x27;s stable code (for example update_in_progress, nothing_staged, already_armed, state_format_downgrade). request_id is the engine&#x27;s idempotency key, so a redelivered command replays the original operation. Nothing is pool-scoped and no pool rollout gate is evaluated. Sent only to a host that offered image-update-v1.&quot;
+  &quot;semantics&quot;: &quot;Addressed to one host and performed entirely by its own update engine, which keeps the record (/var/lib/nex/image/state.json). The result says only whether the engine accepted the request (apply, activate, rollback and cancel start or settle work in the background); a refusal is a failed result whose error is \&quot;&lt;code&gt;: &lt;message&gt;\&quot; with the engine&#x27;s stable code (for example update_in_progress, nothing_staged, already_armed, state_format_downgrade). request_id is the engine&#x27;s idempotency key, so a redelivered command replays the original operation. Nothing is pool-scoped and no pool rollout gate is evaluated. Sent only to a host that offered image-update-v1.&quot;
+}</pre></section>
+<section><h2>host-system-disk-replace</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;host-system-disk-replace-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Addressed to one host and performed entirely by its own Core, which keeps the record (&lt;agent state dir&gt;/system-disk/replace.json) and runs the replacement on a goroutine of its own, so it outlives the command, the Controller connection and a restart of Core. Core revalidates the selected disk against a fresh disk observation (identity, fingerprint, eligibility, the typed erase confirmation), refuses the disk the running system started from and any disk that holds data without that confirmation, then lays the surviving disk&#x27;s partition table on the replacement, copies the surviving disk&#x27;s verified slots (verity-checked before and after the copy), formats and fills the boot partition through the host&#x27;s boot method (systemd-boot on UEFI, GRUB with grub-install on BIOS) and adds the replacement&#x27;s nex-data partition to the md mirror with mdadm --add. The result is succeeded when the member was added (the kernel resyncs in the background and reports it), failed with Core&#x27;s own sentence when it refused or failed, or needs_attention with a still_running text when the replacement outlived the 5 minute wait of the host&#x27;s worker; the host&#x27;s record (system_disk in the hardware report) is the truth. request_id is the idempotency key: the same request replays its recorded outcome, another request for the same disk continues an interrupted or failed replacement, and a request for another disk while one runs is refused unless the running one&#x27;s disk is no longer reported at all, in which case that replacement is recorded as failed and the new one starts. Sent only to a host that offered host-system-disk-replace-v1.&quot;
 }</pre></section>
 <section><h2>pool-update</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -2822,12 +2820,12 @@
   &quot;x-audience&quot;: &quot;agent&quot;
 }</pre></details></section>
 <section id="reportHost"><h2>POST <code>/api/v1/agent/report</code></h2>
-<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 64 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false. A later authenticated terminal backup Result from the same host and operation ID can settle an earlier needs_attention Controller operation; backup inventory alone cannot, and cross-host Results remain rejected. After a Result is acknowledged, Core continues reporting the Controller-owned backup Journal outcome; a same-ID native vm-create cannot replace it, and peer-dispatched member work is excluded. Controller updates only its own matching nonterminal host/kind/operation row from this explicit outcome. Recurring backup metadata outcomes use the same rule; Controller adoption binds own operation and resource rows to the reporting host and kind before updating a nonterminal task, so colliding IDs from other hosts or kinds are mirrored separately.</p>
+<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Only report protocol version 1 is accepted and any other version is refused with 409; the first report starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 64 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false. A later authenticated terminal backup Result from the same host and operation ID can settle an earlier needs_attention Controller operation; backup inventory alone cannot, and cross-host Results remain rejected. After a Result is acknowledged, Core continues reporting the Controller-owned backup Journal outcome; a same-ID native vm-create cannot replace it, and peer-dispatched member work is excluded. Controller updates only its own matching nonterminal host/kind/operation row from this explicit outcome. Recurring backup metadata outcomes use the same rule; Controller adoption binds own operation and resource rows to the reporting host and kind before updating a nonterminal task, so colliding IDs from other hosts or kinds are mirrored separately.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;reportHost&quot;,
   &quot;summary&quot;: &quot;Report observations and reconcile commands&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 64 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false. A later authenticated terminal backup Result from the same host and operation ID can settle an earlier needs_attention Controller operation; backup inventory alone cannot, and cross-host Results remain rejected. After a Result is acknowledged, Core continues reporting the Controller-owned backup Journal outcome; a same-ID native vm-create cannot replace it, and peer-dispatched member work is excluded. Controller updates only its own matching nonterminal host/kind/operation row from this explicit outcome. Recurring backup metadata outcomes use the same rule; Controller adoption binds own operation and resource rows to the reporting host and kind before updating a nonterminal task, so colliding IDs from other hosts or kinds are mirrored separately.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Only report protocol version 1 is accepted and any other version is refused with 409; the first report starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 64 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false. A later authenticated terminal backup Result from the same host and operation ID can settle an earlier needs_attention Controller operation; backup inventory alone cannot, and cross-host Results remain rejected. After a Result is acknowledged, Core continues reporting the Controller-owned backup Journal outcome; a same-ID native vm-create cannot replace it, and peer-dispatched member work is excluded. Controller updates only its own matching nonterminal host/kind/operation row from this explicit outcome. Recurring backup metadata outcomes use the same rule; Controller adoption binds own operation and resource rows to the reporting host and kind before updating a nonterminal task, so colliding IDs from other hosts or kinds are mirrored separately.&quot;,
   &quot;tags&quot;: [
     &quot;Core agent \u2192 Controller&quot;
   ],
@@ -4010,12 +4008,12 @@
   }
 }</pre></details></section>
 <section id="getStorageCluster"><h2>GET <code>/api/v1/storage/cluster</code></h2>
-<p>Read Core-owned clustered iSCSI status</p><p>Administrator session required. pool_id selects its current active master, which must have acknowledged and advertise storage-clustered-iscsi-v2. During a new Core&#x27;s bounded v2 preflight, 503 means negotiation is pending: no status relay was sent, so retry after the acknowledged follow-up report. A Core that never offers clustered support remains 409. The Controller forwards one transient status request only after acknowledgement and retains no cluster configuration, job or secret. A 200 is the Core&#x27;s current durable operation projection; a 504 means the Core did not answer within 30 seconds and is ambiguous, so retry this GET rather than assuming setup stopped. The Controller HTTPS write deadline is 45 seconds only to leave delivery margin for this existing 30-second relay contract; it does not extend Core work.</p>
+<p>Read Core-owned clustered iSCSI status</p><p>Administrator session required. pool_id selects its current active master, which must have acknowledged and advertise storage-clustered-iscsi-v2. During a new Core&#x27;s bounded preflight, 503 means negotiation is pending: no status relay was sent, so retry after the acknowledged follow-up report. A Core that never offers clustered support remains 409. The Controller forwards one transient status request only after acknowledgement and retains no cluster configuration, job or secret. A 200 is the Core&#x27;s current durable operation projection; a 504 means the Core did not answer within 30 seconds and is ambiguous, so retry this GET rather than assuming setup stopped. The Controller HTTPS write deadline is 45 seconds only to leave delivery margin for this existing 30-second relay contract; it does not extend Core work.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;getStorageCluster&quot;,
   &quot;summary&quot;: &quot;Read Core-owned clustered iSCSI status&quot;,
-  &quot;description&quot;: &quot;Administrator session required. pool_id selects its current active master, which must have acknowledged and advertise storage-clustered-iscsi-v2. During a new Core&#x27;s bounded v2 preflight, 503 means negotiation is pending: no status relay was sent, so retry after the acknowledged follow-up report. A Core that never offers clustered support remains 409. The Controller forwards one transient status request only after acknowledgement and retains no cluster configuration, job or secret. A 200 is the Core&#x27;s current durable operation projection; a 504 means the Core did not answer within 30 seconds and is ambiguous, so retry this GET rather than assuming setup stopped. The Controller HTTPS write deadline is 45 seconds only to leave delivery margin for this existing 30-second relay contract; it does not extend Core work.&quot;,
+  &quot;description&quot;: &quot;Administrator session required. pool_id selects its current active master, which must have acknowledged and advertise storage-clustered-iscsi-v2. During a new Core&#x27;s bounded preflight, 503 means negotiation is pending: no status relay was sent, so retry after the acknowledged follow-up report. A Core that never offers clustered support remains 409. The Controller forwards one transient status request only after acknowledgement and retains no cluster configuration, job or secret. A 200 is the Core&#x27;s current durable operation projection; a 504 means the Core did not answer within 30 seconds and is ambiguous, so retry this GET rather than assuming setup stopped. The Controller HTTPS write deadline is 45 seconds only to leave delivery margin for this existing 30-second relay contract; it does not extend Core work.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -5979,155 +5977,6 @@
       }
     }
   }
-}</pre></details></section>
-<section id="getUpdates"><h2>GET <code>/api/v1/updates</code></h2>
-<p>Check Controller software updates</p><p>Implemented in development product 0.1.0. Refreshes a signed Controller-owned APT index cache at most every 5 minutes and reports apt&#x27;s candidate version for nex-controller against the installed version. The configured repo URL (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) is written to that cache and verified with the packaged archive keyring; this keeps the unprivileged Controller service out of the system APT state. A refresh failure or package no configured source offers is returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.</p>
-<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
-<pre>{
-  &quot;operationId&quot;: &quot;getUpdates&quot;,
-  &quot;summary&quot;: &quot;Check Controller software updates&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Refreshes a signed Controller-owned APT index cache at most every 5 minutes and reports apt&#x27;s candidate version for nex-controller against the installed version. The configured repo URL (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) is written to that cache and verified with the packaged archive keyring; this keeps the unprivileged Controller service out of the system APT state. A refresh failure or package no configured source offers is returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.&quot;,
-  &quot;tags&quot;: [
-    &quot;Client \u2192 Controller&quot;
-  ],
-  &quot;security&quot;: [
-    {
-      &quot;AdminSession&quot;: []
-    }
-  ],
-  &quot;responses&quot;: {
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Success&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/UpdateStatus&quot;
-          }
-        }
-      }
-    },
-    &quot;401&quot;: {
-      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;request rejected&quot;
-          }
-        }
-      }
-    },
-    &quot;500&quot;: {
-      &quot;description&quot;: &quot;Controller persistence or internal failure.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;request rejected&quot;
-          }
-        }
-      }
-    }
-  },
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
-  &quot;x-audience&quot;: &quot;client&quot;
-}</pre></details></section>
-<section id="applyUpdates"><h2>POST <code>/api/v1/updates/apply</code></h2>
-<p>Request Controller package update</p><p>Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper runs apt-get update then apt-get install --only-upgrade nex-controller, so dependencies resolve and the package signature is verified, and restarts nex-controller. A failed upgrade restarts the service before reporting. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.</p>
-<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
-<pre>{
-  &quot;operationId&quot;: &quot;applyUpdates&quot;,
-  &quot;summary&quot;: &quot;Request Controller package update&quot;,
-  &quot;description&quot;: &quot;Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper runs apt-get update then apt-get install --only-upgrade nex-controller, so dependencies resolve and the package signature is verified, and restarts nex-controller. A failed upgrade restarts the service before reporting. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.&quot;,
-  &quot;tags&quot;: [
-    &quot;Client \u2192 Controller&quot;
-  ],
-  &quot;security&quot;: [
-    {
-      &quot;AdminSession&quot;: []
-    }
-  ],
-  &quot;requestBody&quot;: {
-    &quot;required&quot;: false,
-    &quot;content&quot;: {
-      &quot;application/json&quot;: {
-        &quot;schema&quot;: {
-          &quot;type&quot;: &quot;object&quot;,
-          &quot;additionalProperties&quot;: false
-        }
-      }
-    }
-  },
-  &quot;responses&quot;: {
-    &quot;202&quot;: {
-      &quot;description&quot;: &quot;Update scheduled&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/UpdateApplyResult&quot;
-          }
-        }
-      }
-    },
-    &quot;401&quot;: {
-      &quot;description&quot;: &quot;Missing, expired, invalid, or revoked credentials.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;request rejected&quot;
-          }
-        }
-      }
-    },
-    &quot;403&quot;: {
-      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;request rejected&quot;
-          }
-        }
-      }
-    },
-    &quot;503&quot;: {
-      &quot;description&quot;: &quot;Update helper or path unit is missing on this Controller.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;update helper is missing; redeploy the Controller appliance or install the nex-controller package&quot;
-          }
-        }
-      }
-    },
-    &quot;500&quot;: {
-      &quot;description&quot;: &quot;Could not schedule update.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          },
-          &quot;example&quot;: {
-            &quot;error&quot;: &quot;request rejected&quot;
-          }
-        }
-      }
-    }
-  },
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
-  &quot;x-audience&quot;: &quot;client&quot;
 }</pre></details></section>
 <section id="powerVM"><h2>POST <code>/api/v1/vms/{id}/power</code></h2>
 <p>Request a VM power action on its assigned host</p><p>Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different action under the same id is 409. The VM must be an adopted appliance or a successfully created guest; its assigned host must be freshly connected, unrevoked and report managed-vm-v1 and vm-power-v1, and queued power requires vm-power-queue-v1. With this capability, a pending power/edit/media request becomes a same-VM prerequisite instead of a busy refusal. Core persists FIFO admission order and executes after the prerequisite succeeds; failed, uncertain or missing prerequisites fail before effects. Without queue capability another pending task is 409. The request is audited as vm-power and delivered to the host in its next report; poll operations for the result. A succeeded shutdown or reboot means the ACPI request was issued, not that the guest honored it: the VM&#x27;s observed state is the truth. Controller outage never stops a guest. Core-received commands survive agent restart and Controller replacement. Inventory.managed.outcomes exposes queued and terminal tasks for passive adoption without redispatch. Queue order concerns task completion, not guest ACPI completion; actual failures are not automatically retried.</p>
@@ -8446,12 +8295,12 @@
   }
 }</pre></details></section>
 <section id="hostHardware"><h2>GET <code>/api/v1/hosts/{id}/hardware</code></h2>
-<p>Read a host&#x27;s hardware</p><p>Administrator session; read-only and safe to retry. Relays one live observation to the host over the same stats channel the host dials out, as GET /hardware. The host reads its system, CPU, memory modules, disks, PCI devices and temperature sensors on request and stores none of it; the Controller stores none of it either, so a replacement Controller sees the same report. A section whose source is missing or fails is returned unavailable with a reason and the rest of the report still returns. Serial numbers are returned to authenticated administrators only and are never logged. Requires the host to be fresh, not revoked and to report host-hardware-v1.</p>
+<p>Read a host&#x27;s hardware</p><p>Administrator session; read-only and safe to retry. Relays one live observation to the host over the same stats channel the host dials out, as GET /hardware. The host reads its system, CPU, memory modules, disks, PCI devices and temperature sensors on request and stores none of it; the Controller stores none of it either, so a replacement Controller sees the same report. A section whose source is missing or fails is returned unavailable with a reason and the rest of the report still returns. Serial numbers are returned to authenticated administrators only and are never logged. The report also carries system_disk: the disk the running system started from and the host&#x27;s own record of its latest system disk replacement (see POST /api/v1/hosts/{id}/system-disk), with the kernel&#x27;s resync progress. Requires the host to be fresh, not revoked and to report host-hardware-v1.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;hostHardware&quot;,
   &quot;summary&quot;: &quot;Read a host&#x27;s hardware&quot;,
-  &quot;description&quot;: &quot;Administrator session; read-only and safe to retry. Relays one live observation to the host over the same stats channel the host dials out, as GET /hardware. The host reads its system, CPU, memory modules, disks, PCI devices and temperature sensors on request and stores none of it; the Controller stores none of it either, so a replacement Controller sees the same report. A section whose source is missing or fails is returned unavailable with a reason and the rest of the report still returns. Serial numbers are returned to authenticated administrators only and are never logged. Requires the host to be fresh, not revoked and to report host-hardware-v1.&quot;,
+  &quot;description&quot;: &quot;Administrator session; read-only and safe to retry. Relays one live observation to the host over the same stats channel the host dials out, as GET /hardware. The host reads its system, CPU, memory modules, disks, PCI devices and temperature sensors on request and stores none of it; the Controller stores none of it either, so a replacement Controller sees the same report. A section whose source is missing or fails is returned unavailable with a reason and the rest of the report still returns. Serial numbers are returned to authenticated administrators only and are never logged. The report also carries system_disk: the disk the running system started from and the host&#x27;s own record of its latest system disk replacement (see POST /api/v1/hosts/{id}/system-disk), with the kernel&#x27;s resync progress. Requires the host to be fresh, not revoked and to report host-hardware-v1.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -8532,6 +8381,135 @@
     },
     &quot;504&quot;: {
       &quot;description&quot;: &quot;Host did not answer within 10 seconds; the channel is closed. Retry is safe.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="replaceHostSystemDisk"><h2>POST <code>/api/v1/hosts/{id}/system-disk</code></h2>
+<p>Rebuild a host&#x27;s system disk onto a blank replacement disk</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-system-disk-replace command to the single host, whose own Core does the work and keeps the record: it revalidates the selected disk (the same identity, fingerprint and typed erase confirmation rules as the ZFS wizard, from the host&#x27;s own storage discovery listing), refuses the disk the running system started from and a disk that holds data without the confirmation, lays the surviving disk&#x27;s partition table on the replacement, copies the surviving disk&#x27;s verified root slots, writes the boot partition and boot loader for the host&#x27;s firmware (UEFI or BIOS) and adds the replacement to the nex-data mirror, which the kernel then resyncs. The host and its VMs keep running and nothing waits on the Controller. The Controller stores only the task it keeps for every host operation; the replacement&#x27;s record and the resync progress come back in GET /api/v1/hosts/{id}/hardware (system_disk, md_arrays). request_id is the idempotency key: repeat it after a lost reply and the same operation is returned; after a failure, submit a new request_id and the host continues on the same disk without repeating a destructive step. Requires the host to be fresh, not revoked and to offer host-system-disk-replace-v1.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;replaceHostSystemDisk&quot;,
+  &quot;summary&quot;: &quot;Rebuild a host&#x27;s system disk onto a blank replacement disk&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-system-disk-replace command to the single host, whose own Core does the work and keeps the record: it revalidates the selected disk (the same identity, fingerprint and typed erase confirmation rules as the ZFS wizard, from the host&#x27;s own storage discovery listing), refuses the disk the running system started from and a disk that holds data without the confirmation, lays the surviving disk&#x27;s partition table on the replacement, copies the surviving disk&#x27;s verified root slots, writes the boot partition and boot loader for the host&#x27;s firmware (UEFI or BIOS) and adds the replacement to the nex-data mirror, which the kernel then resyncs. The host and its VMs keep running and nothing waits on the Controller. The Controller stores only the task it keeps for every host operation; the replacement&#x27;s record and the resync progress come back in GET /api/v1/hosts/{id}/hardware (system_disk, md_arrays). request_id is the idempotency key: repeat it after a lost reply and the same operation is returned; after a failure, submit a new request_id and the host continues on the same disk without repeating a destructive step. Requires the host to be fresh, not revoked and to offer host-system-disk-replace-v1.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.30&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Host ID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/HostSystemDiskReplaceRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;The durable command was journaled for the host. Acceptance is not the replacement: read the result from the task and the record from the hardware report.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceAccepted&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation with its current status, and no second command.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceAccepted&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON or unknown field, \&quot;system disk replacement requires a host\&quot;, \&quot;system disk replacement requires a stable request_id\&quot; or \&quot;system disk replacement device is invalid\&quot; (a device that is not a /dev/disk/by-id/ path, no serial or size, a fingerprint that is not 64 lowercase hex characters, or an erase confirmation naming another device).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Missing or wrong X-CSRF-Token, or a cross-origin request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown host.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;The host is revoked (\&quot;this host is revoked\&quot;), it is not freshly connected (\&quot;the host must be freshly connected before its system disk is replaced\&quot;), it did not offer host-system-disk-replace-v1 (\&quot;replacing a system disk needs host-system-disk-replace-v1 on this host; upgrade Nex Core\&quot;), or the request_id was already used with another payload.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Storage failure (\&quot;system disk replacement storage failed\&quot;).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -8799,135 +8777,6 @@
     },
     &quot;500&quot;: {
       &quot;description&quot;: &quot;Controller storage failure (\&quot;storage unavailable\&quot;, \&quot;host fencing request storage failed\&quot;). Nothing was queued; the same request_id is safe to retry.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    }
-  }
-}</pre></details></section>
-<section id="replaceSystemDisk"><h2>POST <code>/api/v1/hosts/{id}/system-disk</code></h2>
-<p>Replace a failed disk of a host&#x27;s system mirror</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-system-disk-replace command to the host, which revalidates the array and the disk against its own observation and then clears the replacement, copies the partition table from the surviving member&#x27;s disk with sgdisk --replicate and randomises its identifiers, adds the new member with mdadm --add, and makes the disk bootable the way the installer does for that firmware: on BIOS grub-install --target=i386-pc on the disk itself (firmware branch on /sys/firmware/efi; the installer still places an ESP on every mirror member, but that path does not format it), and on UEFI mkfs.vfat on the replacement&#x27;s copy of the surviving disk&#x27;s ESP followed by the host&#x27;s own nex-sync-esp copier, or the same copy of /boot/efi/EFI including the removable fallback path when that helper is absent or copied nothing. The kernel rebuilds the mirror afterwards; the host and its VMs keep running and nothing waits on the Controller. The Controller computes nothing and stores nothing but the task: the mirror&#x27;s state comes from the host hardware report. The refusals below are only what the Controller can already see from this host&#x27;s reports; Core checks the array, the disk, its size and the erase confirmation again, and its own refusals arrive as a failed operation rather than as an HTTP status here. Implemented in development product 0.4.4.</p>
-<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
-<pre>{
-  &quot;operationId&quot;: &quot;replaceSystemDisk&quot;,
-  &quot;summary&quot;: &quot;Replace a failed disk of a host&#x27;s system mirror&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-system-disk-replace command to the host, which revalidates the array and the disk against its own observation and then clears the replacement, copies the partition table from the surviving member&#x27;s disk with sgdisk --replicate and randomises its identifiers, adds the new member with mdadm --add, and makes the disk bootable the way the installer does for that firmware: on BIOS grub-install --target=i386-pc on the disk itself (firmware branch on /sys/firmware/efi; the installer still places an ESP on every mirror member, but that path does not format it), and on UEFI mkfs.vfat on the replacement&#x27;s copy of the surviving disk&#x27;s ESP followed by the host&#x27;s own nex-sync-esp copier, or the same copy of /boot/efi/EFI including the removable fallback path when that helper is absent or copied nothing. The kernel rebuilds the mirror afterwards; the host and its VMs keep running and nothing waits on the Controller. The Controller computes nothing and stores nothing but the task: the mirror&#x27;s state comes from the host hardware report. The refusals below are only what the Controller can already see from this host&#x27;s reports; Core checks the array, the disk, its size and the erase confirmation again, and its own refusals arrive as a failed operation rather than as an HTTP status here. Implemented in development product 0.4.4.&quot;,
-  &quot;tags&quot;: [
-    &quot;Client \u2192 Controller&quot;
-  ],
-  &quot;security&quot;: [
-    {
-      &quot;AdminSession&quot;: []
-    }
-  ],
-  &quot;x-introduced-version&quot;: &quot;0.4.4&quot;,
-  &quot;x-audience&quot;: &quot;client&quot;,
-  &quot;parameters&quot;: [
-    {
-      &quot;name&quot;: &quot;id&quot;,
-      &quot;in&quot;: &quot;path&quot;,
-      &quot;required&quot;: true,
-      &quot;schema&quot;: {
-        &quot;type&quot;: &quot;string&quot;
-      },
-      &quot;description&quot;: &quot;Host ID.&quot;
-    },
-    {
-      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
-      &quot;in&quot;: &quot;header&quot;,
-      &quot;required&quot;: true,
-      &quot;schema&quot;: {
-        &quot;type&quot;: &quot;string&quot;
-      }
-    }
-  ],
-  &quot;requestBody&quot;: {
-    &quot;required&quot;: true,
-    &quot;content&quot;: {
-      &quot;application/json&quot;: {
-        &quot;schema&quot;: {
-          &quot;$ref&quot;: &quot;#/components/schemas/HostSystemDiskRequest&quot;
-        }
-      }
-    }
-  },
-  &quot;responses&quot;: {
-    &quot;202&quot;: {
-      &quot;description&quot;: &quot;The durable command was journaled for the host.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceAccepted&quot;
-          }
-        }
-      }
-    },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation with its current status, and no second command.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceAccepted&quot;
-          }
-        }
-      }
-    },
-    &quot;400&quot;: {
-      &quot;description&quot;: &quot;Malformed JSON, unknown field, \&quot;host and a stable request_id are required\&quot;, or the request bounds: \&quot;system disk replacement names one md array, such as md0\&quot;, \&quot;system disk replacement device is invalid\&quot; (a by_id that is not under /dev/disk/by-id/, a missing serial or size, or a fingerprint that is not 64 hex characters), \&quot;the erase confirmation must name the selected device\&quot;, \&quot;system disk replacement requires a host\&quot;.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;401&quot;: {
-      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;403&quot;: {
-      &quot;description&quot;: &quot;Missing or wrong X-CSRF-Token, or a cross-origin request.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;404&quot;: {
-      &quot;description&quot;: &quot;Unknown host.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;409&quot;: {
-      &quot;description&quot;: &quot;The host is revoked, it is not freshly connected (\&quot;the host must be freshly connected before its system disk is replaced\&quot;), its Nex Core is too old (\&quot;replacing a system disk needs host-system-disk-replace-v1 on this host; upgrade Nex Core\&quot;), or the request_id was already used with another payload. An image-edition Core does not advertise host-system-disk-replace-v1, so it answers the same refusal; upgrading does not help there (replacement is classic edition only until the root and verity slots can be copied).&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;500&quot;: {
-      &quot;description&quot;: &quot;Controller storage failure.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12474,12 +12323,12 @@
   }
 }</pre></details></section>
 <section id="getHostImageUpdates"><h2>GET <code>/api/v1/hosts/{id}/updates</code></h2>
-<p>Read an image-edition host&#x27;s update state</p><p>Administrator session; read-only and safe to retry. Projects the host&#x27;s own last report: inventory.image (booted, staged, previous and available release with slot letters, phase, rollback floor, state format, latest operation and failure), exactly as the host reported it, and whether the host offered image-update-v1. The Controller stores no update state: the record is the host&#x27;s /var/lib/nex/image/state.json, so a replacement Controller shows the same state from the next host report. A classic host, or a Core that has not been acknowledged for image-update-v1, answers supported:false with no image.</p>
+<p>Read a host&#x27;s update state</p><p>Administrator session; read-only and safe to retry. Projects the host&#x27;s own last report: inventory.image (booted, staged, previous and available release with slot letters, phase, rollback floor, state format, latest operation and failure), exactly as the host reported it, and whether the host offered image-update-v1. The Controller stores no update state: the record is the host&#x27;s /var/lib/nex/image/state.json, so a replacement Controller shows the same state from the next host report. A Core that has not been acknowledged for image-update-v1 answers supported:false with no image.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;getHostImageUpdates&quot;,
-  &quot;summary&quot;: &quot;Read an image-edition host&#x27;s update state&quot;,
-  &quot;description&quot;: &quot;Administrator session; read-only and safe to retry. Projects the host&#x27;s own last report: inventory.image (booted, staged, previous and available release with slot letters, phase, rollback floor, state format, latest operation and failure), exactly as the host reported it, and whether the host offered image-update-v1. The Controller stores no update state: the record is the host&#x27;s /var/lib/nex/image/state.json, so a replacement Controller shows the same state from the next host report. A classic host, or a Core that has not been acknowledged for image-update-v1, answers supported:false with no image.&quot;,
+  &quot;summary&quot;: &quot;Read a host&#x27;s update state&quot;,
+  &quot;description&quot;: &quot;Administrator session; read-only and safe to retry. Projects the host&#x27;s own last report: inventory.image (booted, staged, previous and available release with slot letters, phase, rollback floor, state format, latest operation and failure), exactly as the host reported it, and whether the host offered image-update-v1. The Controller stores no update state: the record is the host&#x27;s /var/lib/nex/image/state.json, so a replacement Controller shows the same state from the next host report. A Core that has not been acknowledged for image-update-v1 answers supported:false with no image.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -12555,11 +12404,11 @@
   }
 }</pre></details></section>
 <section id="relayHostImageUpdate"><h2>POST <code>/api/v1/hosts/{id}/updates/{action}</code></h2>
-<p>Ask an image-edition host to check, apply, activate, roll back, cancel, change its update source, scan media, import a bundle or fetch a payload</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-image-update command to the single host, whose own update engine does the work (fetch and verify signed metadata, download with resume, write the unused slot, arm the next boot only on activate, return to the previous release when a boot fails) and keeps the record. The Controller holds no operation open and stores only the task it keeps for every host operation; progress, the staged and previous releases and the outcome come back in the host&#x27;s inventory.image, and a refusal arrives as the failed task&#x27;s error in the form &quot;&lt;code&gt;: &lt;message&gt;&quot; with the engine&#x27;s stable code. request_id is also the host engine&#x27;s idempotency key. The host-scoped settings, media, import and fetch actions are relayed the same way and are only asks: settings sets the host&#x27;s channel and base URL (the host stores them in /etc/nex/updates.conf and reports them as inventory.image.base_url), media makes the host rescan its offline bundles (reported as inventory.image.media), import stages a release from a bundle on that host through the host&#x27;s one verification pipeline, and fetch places an on_demand payload under /var/lib/nex/payload on that host. The Controller stores none of it. Pool rollout is not part of this route.</p>
+<p>Ask a host to check, apply, activate, roll back, cancel, change its update source, scan media, import a bundle or fetch a payload</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-image-update command to the single host, whose own update engine does the work (fetch and verify signed metadata, download with resume, write the unused slot, arm the next boot only on activate, return to the previous release when a boot fails) and keeps the record. The Controller holds no operation open and stores only the task it keeps for every host operation; progress, the staged and previous releases and the outcome come back in the host&#x27;s inventory.image, and a refusal arrives as the failed task&#x27;s error in the form &quot;&lt;code&gt;: &lt;message&gt;&quot; with the engine&#x27;s stable code. request_id is also the host engine&#x27;s idempotency key. The host-scoped settings, media, import and fetch actions are relayed the same way and are only asks: settings sets the host&#x27;s channel and base URL (the host stores them in /etc/nex/updates.conf and reports them as inventory.image.base_url), media makes the host rescan its offline bundles (reported as inventory.image.media), import stages a release from a bundle on that host through the host&#x27;s one verification pipeline, and fetch places an on_demand payload under /var/lib/nex/payload on that host. The Controller stores none of it. Pool rollout is not part of this route.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;relayHostImageUpdate&quot;,
-  &quot;summary&quot;: &quot;Ask an image-edition host to check, apply, activate, roll back, cancel, change its update source, scan media, import a bundle or fetch a payload&quot;,
+  &quot;summary&quot;: &quot;Ask a host to check, apply, activate, roll back, cancel, change its update source, scan media, import a bundle or fetch a payload&quot;,
   &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-image-update command to the single host, whose own update engine does the work (fetch and verify signed metadata, download with resume, write the unused slot, arm the next boot only on activate, return to the previous release when a boot fails) and keeps the record. The Controller holds no operation open and stores only the task it keeps for every host operation; progress, the staged and previous releases and the outcome come back in the host&#x27;s inventory.image, and a refusal arrives as the failed task&#x27;s error in the form \&quot;&lt;code&gt;: &lt;message&gt;\&quot; with the engine&#x27;s stable code. request_id is also the host engine&#x27;s idempotency key. The host-scoped settings, media, import and fetch actions are relayed the same way and are only asks: settings sets the host&#x27;s channel and base URL (the host stores them in /etc/nex/updates.conf and reports them as inventory.image.base_url), media makes the host rescan its offline bundles (reported as inventory.image.media), import stages a release from a bundle on that host through the host&#x27;s one verification pipeline, and fetch places an on_demand payload under /var/lib/nex/payload on that host. The Controller stores none of it. Pool rollout is not part of this route.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
@@ -12681,7 +12530,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The host is revoked, it is not freshly connected (\&quot;the host must be freshly connected before an update action is sent\&quot;), it does not run the image edition or did not offer image-update-v1 (\&quot;this host does not run the image edition or does not support image updates; upgrade Nex Core\&quot;), or the request_id was already used with another payload.&quot;,
+      &quot;description&quot;: &quot;The host is revoked, it is not freshly connected (\&quot;the host must be freshly connected before an update action is sent\&quot;), it did not offer image-update-v1 (\&quot;this host does not support image updates; upgrade Nex Core\&quot;), or the request_id was already used with another payload.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -14215,7 +14064,7 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ],
-      &quot;description&quot;: &quot;This host&#x27;s own staged, applied or finished management network change, read from its durable &lt;state-dir&gt;/management-network.json. Omitted when the host has never staged one, and stripped from a legacy protocol v1 report. It is the adoption path: a fresh Controller reads the current configuration, the stage and any running rollback deadline from here, with nothing for an operator to re-enter.&quot;
+      &quot;description&quot;: &quot;This host&#x27;s own staged, applied or finished management network change, read from its durable &lt;state-dir&gt;/management-network.json. Omitted when the host has never staged one. It is the adoption path: a fresh Controller reads the current configuration, the stage and any running rollback deadline from here, with nothing for an operator to re-enter.&quot;
     },
     &quot;image&quot;: {
       &quot;anyOf&quot;: [
@@ -14226,7 +14075,7 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ],
-      &quot;description&quot;: &quot;Immutable-image update state of this host, withheld until the Controller acknowledges image-update-v1 in ReportResponse.image_update. Omitted on classic hosts and until the host agent reports it. The Controller shows it unchanged and keeps nothing of its own.&quot;
+      &quot;description&quot;: &quot;Immutable-image update state of this host, withheld until the Controller acknowledges image-update-v1 in ReportResponse.image_update. Omitted until the host agent reports it. The Controller shows it unchanged and keeps nothing of its own.&quot;
     }
   },
   &quot;required&quot;: [
@@ -14469,7 +14318,6 @@
         &quot;pool-fence-profile&quot;,
         &quot;pool-bmc-provisioning&quot;,
         &quot;pool-host-fencing&quot;,
-        &quot;host-system-disk-replace&quot;,
         &quot;snapshot-create&quot;,
         &quot;snapshot-revert&quot;,
         &quot;snapshot-delete&quot;,
@@ -14492,6 +14340,7 @@
         &quot;backup-policy-delete&quot;,
         &quot;backup-policy-run-now&quot;,
         &quot;host-image-update&quot;,
+        &quot;host-system-disk-replace&quot;,
         &quot;pool-update&quot;
       ]
     },
@@ -14638,17 +14487,6 @@
         }
       ]
     },
-    &quot;system_disk_replace&quot;: {
-      &quot;anyOf&quot;: [
-        {
-          &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceRequest&quot;
-        },
-        {
-          &quot;type&quot;: &quot;null&quot;
-        }
-      ],
-      &quot;description&quot;: &quot;Set on a host-system-disk-replace command: the array to rebuild and the replacement disk.&quot;
-    },
     &quot;snapshot&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -14769,6 +14607,17 @@
         }
       ],
       &quot;description&quot;: &quot;Set on a host-image-update command: the action for this host&#x27;s own update engine.&quot;
+    },
+    &quot;system_disk_replace&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Set on a host-system-disk-replace command: the replacement disk for this host&#x27;s system disk.&quot;
     },
     &quot;delete_backup_policy&quot;: {
       &quot;anyOf&quot;: [
@@ -15660,11 +15509,8 @@
   &quot;properties&quot;: {
     &quot;version&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
-      &quot;enum&quot;: [
-        1,
-        2
-      ],
-      &quot;description&quot;: &quot;Version 1 is the legacy managed-VM report. A Core starts storage negotiation with version 2 but without storage-repositories-v1, waits for storage_repositories acknowledgement, persists it, then advertises the capability.&quot;
+      &quot;const&quot;: 1,
+      &quot;description&quot;: &quot;The single report protocol version; any other value is refused with 409. A Core starts storage negotiation without storage-repositories-v1, waits for storage_repositories acknowledgement, persists it, then advertises the capability.&quot;
     },
     &quot;sequence&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -15951,7 +15797,6 @@
         &quot;pool-fence-profile&quot;,
         &quot;pool-bmc-provisioning&quot;,
         &quot;pool-host-fencing&quot;,
-        &quot;host-system-disk-replace&quot;,
         &quot;snapshot-create&quot;,
         &quot;snapshot-revert&quot;,
         &quot;snapshot-delete&quot;,
@@ -15974,6 +15819,7 @@
         &quot;backup-policy-delete&quot;,
         &quot;backup-policy-run-now&quot;,
         &quot;host-image-update&quot;,
+        &quot;host-system-disk-replace&quot;,
         &quot;pool-update&quot;
       ]
     },
@@ -21388,77 +21234,6 @@
     &quot;websocket&quot;: &quot;/api/v1/vms/&lt;vm-uuid&gt;/console/&lt;console-ticket&gt;&quot;
   }
 }</pre></details>
-<details id="UpdateStatus"><summary>UpdateStatus</summary><pre>{
-  &quot;type&quot;: &quot;object&quot;,
-  &quot;properties&quot;: {
-    &quot;package&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;installed_version&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;available_version&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;update_available&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;
-    },
-    &quot;repo_url&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;phase&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;idle, downloading, installing, restarting, verifying, attention, done, or failed when an apply is tracked. On a Core host, verifying means the service has restarted and Core is waiting for the host to report to its Controller; attention means no report was accepted in time (the package is installed and the host keeps retrying).&quot;
-    },
-    &quot;progress&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0,
-      &quot;maximum&quot;: 100,
-      &quot;description&quot;: &quot;Percent complete for the current apply when known.&quot;
-    },
-    &quot;message&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;error&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Non-fatal repo or apply problem; installed_version remains valid for check.&quot;
-    },
-    &quot;core_available_version&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Newest nex-core-local version the archive offers, for comparing against each host&#x27;s reported version; absent when the archive does not offer it.&quot;
-    }
-  },
-  &quot;required&quot;: [
-    &quot;package&quot;,
-    &quot;installed_version&quot;,
-    &quot;update_available&quot;,
-    &quot;repo_url&quot;
-  ],
-  &quot;additionalProperties&quot;: false
-}</pre></details>
-<details id="UpdateApplyResult"><summary>UpdateApplyResult</summary><pre>{
-  &quot;type&quot;: &quot;object&quot;,
-  &quot;properties&quot;: {
-    &quot;status&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;enum&quot;: [
-        &quot;scheduled&quot;,
-        &quot;completed&quot;,
-        &quot;failed&quot;
-      ]
-    },
-    &quot;message&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;operation&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    }
-  },
-  &quot;required&quot;: [
-    &quot;status&quot;
-  ],
-  &quot;additionalProperties&quot;: false
-}</pre></details>
 <details id="VMPowerRequest"><summary>VMPowerRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -24709,6 +24484,17 @@
     },
     &quot;md_arrays&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/HardwareMDArrays&quot;
+    },
+    &quot;system_disk&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/HardwareSystemDisk&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The host&#x27;s record of its system disk: where the running system started from and the latest replacement. Absent from a host that keeps none.&quot;
     }
   },
   &quot;required&quot;: [
@@ -25726,12 +25512,9 @@
 }</pre></details>
 <details id="SystemDiskReplaceAccepted"><summary>SystemDiskReplaceAccepted</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Acceptance of the durable command. Acceptance is not the rebuild: the host performs it when it collects the command, and the mirror&#x27;s state is read back from GET /api/v1/hosts/{id}/hardware.&quot;,
+  &quot;description&quot;: &quot;Acceptance of the durable command. Acceptance is not the replacement: the host performs it when it collects the command and keeps its own record, which comes back as system_disk in GET /api/v1/hosts/{id}/hardware (the kernel&#x27;s resync of the data mirror is in md_arrays).&quot;,
   &quot;properties&quot;: {
     &quot;host_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;array&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
     &quot;operation&quot;: {
@@ -25740,60 +25523,204 @@
   },
   &quot;required&quot;: [
     &quot;host_id&quot;,
-    &quot;array&quot;,
     &quot;operation&quot;
-  ]
-}</pre></details>
-<details id="HostSystemDiskRequest"><summary>HostSystemDiskRequest</summary><pre>{
-  &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Rebuild one degraded system-disk mirror onto one replacement disk. The device is one candidate from POST /api/v1/storage/discover with kind zfs-device, carrying the same identity, fingerprint and typed erase confirmation rules the ZFS wizard uses; Core revalidates all of it against a fresh observation before it touches the disk.&quot;,
-  &quot;properties&quot;: {
-    &quot;request_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Stable client request identity. An exact repeat replays the same operation.&quot;
-    },
-    &quot;array&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;pattern&quot;: &quot;^md[0-9]+$&quot;,
-      &quot;description&quot;: &quot;The array to rebuild, named as the hardware report names it.&quot;
-    },
-    &quot;device&quot;: {
-      &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
-    }
-  },
-  &quot;required&quot;: [
-    &quot;request_id&quot;,
-    &quot;array&quot;,
-    &quot;device&quot;
   ]
 }</pre></details>
 <details id="SystemDiskReplaceRequest"><summary>SystemDiskReplaceRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;The durable host-system-disk-replace command payload.&quot;,
+  &quot;description&quot;: &quot;The durable host-system-disk-replace command payload: one replacement disk for the system disk of the addressed host.&quot;,
   &quot;properties&quot;: {
-    &quot;operation_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;The managed journal&#x27;s replay key, identical to the command envelope&#x27;s operation_id.&quot;
-    },
     &quot;host_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;The host whose mirror is rebuilt; the agent refuses a command addressed to another host.&quot;
+      &quot;description&quot;: &quot;The host whose disks are replaced; the agent refuses a command addressed to another host.&quot;
     },
-    &quot;array&quot;: {
+    &quot;request_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;pattern&quot;: &quot;^md[0-9]+$&quot;
+      &quot;description&quot;: &quot;The idempotency key: the host keeps its own record of the replacement under it, so a redelivered command replays the recorded outcome and never repeats a destructive step.&quot;
     },
     &quot;device&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
     }
   },
   &quot;required&quot;: [
-    &quot;operation_id&quot;,
     &quot;host_id&quot;,
-    &quot;array&quot;,
+    &quot;request_id&quot;,
     &quot;device&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.SystemDiskReplaceRequest&quot;
+}</pre></details>
+<details id="HostSystemDiskReplaceRequest"><summary>HostSystemDiskReplaceRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Body of POST /api/v1/hosts/{id}/system-disk.&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Stable per intent (8-64 letters, digits, - or _). Repeating it replays the same operation; a retry after a failed replacement uses a new one, which the host continues on the same disk.&quot;
+    },
+    &quot;device&quot;: {
+      &quot;allOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;One candidate of the host&#x27;s own POST /api/v1/storage/discover listing with kind zfs-device: by_id, serial, size_bytes and fingerprint exactly as listed, and erase_confirmation equal to by_id when the listing marks the disk as holding old data.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;device&quot;
+  ]
+}</pre></details>
+<details id="HardwareSystemDisk"><summary>HardwareSystemDisk</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The host&#x27;s own report on its system disk. State owner: Nex Core; the record is the host&#x27;s, so a replacement Controller sees an operation another one started.&quot;,
+  &quot;properties&quot;: {
+    &quot;booted_disk&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The whole disk the running system started from, such as /dev/sda. It is never a replacement target.&quot;
+    },
+    &quot;replacement&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplacement&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The latest system disk replacement this host recorded; absent when it never replaced one.&quot;
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;x-go-type&quot;: &quot;protocol.HardwareSystemDisk&quot;
+}</pre></details>
+<details id="SystemDiskReplacement"><summary>SystemDiskReplacement</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Core&#x27;s durable record of one system disk replacement, read from the host when asked for. The same record lets an interrupted replacement continue after Core restarts or the Controller is replaced.&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;by_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The replacement disk&#x27;s stable /dev/disk/by-id path as selected.&quot;
+    },
+    &quot;serial&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;size_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;phase&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;accepted&quot;,
+        &quot;laying&quot;,
+        &quot;slots&quot;,
+        &quot;boot&quot;,
+        &quot;data&quot;,
+        &quot;complete&quot;
+      ],
+      &quot;description&quot;: &quot;accepted: checked, nothing written; laying: the partition table is written to the replacement; slots: the verified root slots are copied; boot: boot partition and boot loader; data: the replacement is added to the nex-data mirror; complete.&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;running&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;
+      ],
+      &quot;description&quot;: &quot;running also covers a replacement that Core&#x27;s restart interrupted: it continues by itself.&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s own sentence for a failed replacement; a refusal before anything was written ends with \&quot;this attempt changed nothing\&quot;.&quot;
+    },
+    &quot;started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;finished_at&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;string&quot;,
+          &quot;format&quot;: &quot;date-time&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;resync&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskResync&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The kernel&#x27;s own progress of the nex-data mirror onto the replacement, present once the disk is a member of the array.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;by_id&quot;,
+    &quot;serial&quot;,
+    &quot;size_bytes&quot;,
+    &quot;phase&quot;,
+    &quot;status&quot;,
+    &quot;started_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.SystemDiskReplacement&quot;
+}</pre></details>
+<details id="SystemDiskResync"><summary>SystemDiskResync</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;What the kernel reports for the nex-data array and the replacement&#x27;s member of it. percent is set only while an action runs, so an idle array has no invented progress.&quot;,
+  &quot;properties&quot;: {
+    &quot;array&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Kernel name of the array, such as md127.&quot;
+    },
+    &quot;member&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The replacement&#x27;s partition in the array, such as sdb6.&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The member&#x27;s kernel state: spare while it waits, in_sync once the copy is complete, faulty if it failed.&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The array&#x27;s sync action, such as recover or idle.&quot;
+    },
+    &quot;percent&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;number&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The kernel&#x27;s position in the running action, in percent; null while none runs.&quot;
+    },
+    &quot;speed_kbs&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;degraded&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;How many members the array is missing; 0 once the mirror is whole again.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;array&quot;,
+    &quot;member&quot;,
+    &quot;state&quot;,
+    &quot;degraded&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.SystemDiskResync&quot;
 }</pre></details>
 <details id="PoolWitnessCandidate"><summary>PoolWitnessCandidate</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -27815,7 +27742,7 @@
     &quot;state_format&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.ImageStatus&quot;,
-  &quot;description&quot;: &quot;Inventory.image: this host&#x27;s immutable-image update state. Core owns every fact (the disks and /var/lib/nex/image/state.json hold them); the Controller only displays what the host reports and stores nothing. Core withholds it until the Controller acknowledges the image-update-v1 capability, so a strict older decoder never sees it; absent on classic hosts. Image-edition hosts report it from the agent&#x27;s image probe.&quot;
+  &quot;description&quot;: &quot;Inventory.image: this host&#x27;s immutable-image update state. Core owns every fact (the disks and /var/lib/nex/image/state.json hold them); the Controller only displays what the host reports and stores nothing. Core withholds it until the Controller acknowledges the image-update-v1 capability, so a strict older decoder never sees it; the host reports it from the agent&#x27;s image probe.&quot;
 }</pre></details>
 <details id="HostImageUpdateRequest"><summary>HostImageUpdateRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -27917,7 +27844,7 @@
     },
     &quot;image&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/ImageStatus&quot;,
-      &quot;description&quot;: &quot;Absent on a classic host or before the first acknowledged report.&quot;
+      &quot;description&quot;: &quot;Absent before the first acknowledged report.&quot;
     }
   },
   &quot;required&quot;: [

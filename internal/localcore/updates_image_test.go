@@ -31,16 +31,21 @@ func (idlePlatform) Rollback(context.Context, nexupdate.ReleaseRecord, nexupdate
 }
 func (idlePlatform) Entries(context.Context) ([]hostimage.UKIEntry, error) { return nil, nil }
 
-func imageService(t *testing.T) (*Service, string, string) {
-	t.Helper()
-	dir := t.TempDir()
-	eng := nexupdate.NewEngine(nexupdate.Config{
+// idleUpdateEngine is an update engine over a host that is up and has nothing staged, with no update
+// source configured, rooted in dir.
+func idleUpdateEngine(dir string) *nexupdate.Engine {
+	return nexupdate.NewEngine(nexupdate.Config{
 		Dir: filepath.Join(dir, "image"), TrustDir: filepath.Join(dir, "update"), Root: dir,
 		Platform: idlePlatform{},
 		Settings: func() (string, string) { return "", "stable" }, // no base URL configured
 	})
+}
+
+func imageService(t *testing.T) (*Service, string, string) {
+	t.Helper()
+	dir := t.TempDir()
 	cfg := Config{DataDir: filepath.Join(dir, "state"), AgentStateDir: filepath.Join(dir, "agent"), Authenticate: testRootAuth,
-		Engine: vmhost.Config{StateDir: filepath.Join(dir, "vmstate"), StorageDir: filepath.Join(dir, "storage"), Bridge: "br0"}, ImageUpdate: eng}
+		Engine: vmhost.Config{StateDir: filepath.Join(dir, "vmstate"), StorageDir: filepath.Join(dir, "storage"), Bridge: "br0"}, ImageUpdate: idleUpdateEngine(dir)}
 	s, err := Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -129,13 +134,3 @@ func TestImageUpdateRoutes(t *testing.T) {
 	}
 }
 
-func TestClassicHostRefusesImageOnlyRoutes(t *testing.T) {
-	s, _ := testService(t)
-	cookie, csrf := loginLocal(t, s)
-	for _, p := range []string{"check", "activate", "rollback", "cancel"} {
-		code, body := post(s, "/api/local/v1/updates/"+p, map[string]any{"request_id": "req-classic-001"}, cookie, csrf)
-		if code != 409 || body["code"] != "unsupported_edition" {
-			t.Errorf("%s: %d %v", p, code, body)
-		}
-	}
-}

@@ -18,7 +18,7 @@ const ManagedVMCapability = "managed-vm-v1"
 const CPUBaselineCapability = "vm-cpu-baseline-v1"
 
 // ResourceLifecycleRequest removes an existing pool VLAN network or imported ISO, or renames
-// a network. Registration deliberately remains the legacy Command.Network/Command.Media shape,
+// a network. Registration deliberately remains the Command.Network/Command.Media shape,
 // whose resource ID is reserved permanently; a lifecycle change gets its own operation slot.
 type ResourceLifecycleRequest struct {
 	Resource           string `json:"resource"`
@@ -343,7 +343,7 @@ type VMCreateSpec struct {
 // UpdateCapability is reported by agents that apply vm-update commands.
 const UpdateCapability = "vm-update-v1"
 
-// VMTagsCapability is reported by agents that journal VMCreateSpec.Tags. An older agent would
+// VMTagsCapability is reported by agents that journal VMCreateSpec.Tags. An agent without it would
 // drop them, so Controller refuses tags unless the VM's host and its pool master report it.
 const VMTagsCapability = "vm-tags-v1"
 
@@ -603,7 +603,7 @@ func ValidateVMSpec(v VMCreateSpec) error {
 		return errors.New("at least one disk or the install media must have a boot order")
 	}
 	// Boot order values must be unique and positive, not contiguous: libvirt orders devices by
-	// bootindex and tolerates gaps, and a host can hold one: an older Core cleared the CD
+	// bootindex and tolerates gaps, and a host can hold one: a Core cleared the CD
 	// drive's order on eject, so its records carry a gap. Rejecting that gap would
 	// make a re-adopting Controller discard the VM over a boot order the host still holds.
 	macs := map[string]bool{}

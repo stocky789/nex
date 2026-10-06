@@ -13,7 +13,7 @@ const operations: Record<string, string> = {
   "storage-detach": "Detach storage", "storage-zfs-provision": "Provision ZFS storage", "storage-zfs-replace": "Replace ZFS disk",
   "storage-credential-retire": "Retire storage credential",
   "network-register": "Register network", "network-update": "Update network", "network-remove": "Remove network",
-  "management-network": "Change management network", "host-system-disk-replace": "Replace system disk",
+  "management-network": "Change management network",
   "pool-join": "Join pool", "pool-maintenance": "Maintenance mode", "pool-transfer": "Change pool master",
   "pool-promote": "Promote pool master", "pool-fence-profile": "Fence profile", "pool-host-fencing": "Host fencing",
   "pool-bmc-provisioning": "BMC provisioning", enroll: "Enroll host",
@@ -38,7 +38,7 @@ export function checkLabel(name: string): string { return checks[name] ?? humani
 
 const audits: Record<string, string> = {
   "site.create": "Site created", "host.add": "Host added", "host.revoke": "Host access revoked", "console.open": "VM console opened",
-  "host.console.open": "Host console opened", "update.apply": "Update applied", "enrollment-token.create": "Enrollment token created",
+  "host.console.open": "Host console opened", "enrollment-token.create": "Enrollment token created",
   "appliance.adopt": "Appliance adopted", "appliance.bootstrap": "Appliance bootstrapped", "media.discard": "ISO discarded",
   "operation.create": "Task requested", "pool.promote": "Pool master promoted", "pool.host-fencing": "Host fencing changed",
   "pool.fence-profile": "Fence profile changed", "pool.bmc-provisioning": "BMC provisioning changed",

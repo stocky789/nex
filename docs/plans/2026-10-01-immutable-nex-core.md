@@ -1,16 +1,20 @@
-# Immutable Nex Core
+# Nex Core host image
 
-Status: **options approved by the project owner on 2026-10-02 (UEFI-only image edition; Debian stays the package source; one root
-signature; no remote publishing); partly implemented, simulation-tested only.** Date: 2026-10-01. Scope: turn Nex Core from a mutable
-Debian host managed by `apt` into an image-based host with a verified read-only root, atomic A/B updates with
+Status: **options approved by the project owner on 2026-10-02 (Debian stays the package source; one root signature; no
+remote publishing); the image boots under UEFI and BIOS (D2); partly implemented, simulation-tested only.** Date: 2026-10-01.
+Scope: how a Nex Core host is built, installed, updated and recovered: a verified read-only root, atomic A/B updates with
 automatic rollback, persistent state kept apart from software, optional features as signed layers, and a
-reproducible, auditable image build. Debian 13 stays the package source; the immutable layer is built on it.
+reproducible, auditable image build. Debian 13 stays the package source; the image is built on it.
 What exists and what does not is in [Implementation status (2026-10-02)](#implementation-status-2026-10-02); the sections below keep
 their original proposal wording, and every `[INFERENCE]` marker there is an unverified claim unless that section says it was run.
 
+> **Decision, project owner, 2026-10-06:** the host is a signed read-only image plus persistent state, on UEFI and BIOS firmware
+> alike. The same image, A/B slots, verity root and update engine serve both; only the boot entry mechanism differs (see D2).
+> The product and its guide do not market this: they say "Nex Core".
+
 - **API impact:** changed contract (existing update/status operations, host observed state) and new
   contract (image stage/activate/rollback, pool rollout job, layer inventory/ensure, on-demand payload fetch).
-  Exact operations are in each section. The Phase I-1 package trim alone is `none`.
+  Exact operations are in each section.
 - **Guide impact:** updated. Install, update, recovery, verification, disk-replacement and storage pages change.
   The full list is in [Documentation checklist](#documentation-checklist).
 - **State owner:** `core`. Slot/rollback state, layer enablement, rollout job, and payload inventory live on
@@ -32,8 +36,7 @@ means the gate's items were observed in that environment, not that the phase is 
 
 | Phase | State | Evidence and what is missing |
 |---|---|---|
-| **I-0** | **Partly done** | Spikes S1-S6 and S9 ([phase0.md](../qa/image/phase0.md)) and S7 ([phase2-installer.md](../qa/image/phase2-installer.md)). **S8** (full size budget) not run. Owner decisions recorded: UEFI-only image edition, Debian stays the package source (policy wording now in `AGENTS.md`, `PRODUCT.md`, `README.md`), one root signature, no remote publishing, private hosts never in tracked files. **Still open:** CDDL module redistribution (layers are internal-lab only), Secure Boot posture beyond "supported, not required", release-key custody, reinstall versus conversion of existing dev hosts. |
-| **I-1** Read-only classic | **Partly done** | Separate `/var`, read-only root with `/etc` and `/root` kept on `/var` by an initramfs script, package installs in a remount window, the host package trim and the system-disk replacement changes: change record `docs/changes/2026-10-01-readonly-classic-root.json`. Verified by Go unit tests, `installer/check.sh` and a simulated QEMU host (`readonly_root.py`) only; **not run:** a real Debian Installer run, the installed `nex-core-local` package, GRUB and UEFI boot of it, a real mirror rebuild. The classic edition keeps its `apt` update path, the Controller `.deb` and the single-disk appliance until the plan retires them. |
+| **I-0** | **Partly done** | Spikes S1-S6 and S9 ([phase0.md](../qa/image/phase0.md)) and S7 ([phase2-installer.md](../qa/image/phase2-installer.md)). **S8** (full size budget) not run. Owner decisions recorded: UEFI and BIOS both supported, Debian stays the package source (policy wording now in `AGENTS.md`, `PRODUCT.md`, `README.md`), one root signature, no remote publishing, private hosts never in tracked files. **Still open:** CDDL module redistribution (layers are internal-lab only), Secure Boot posture beyond "supported, not required", release-key custody. |
 | **I-2** Image, layers, trim | **Partly done** | `image/` build, `internal/hostimage`, installer payload, layers and the double build: [phase2-build.md](../qa/image/phase2-build.md), [phase2-installer.md](../qa/image/phase2-installer.md), [phase2-layers.md](../qa/image/phase2-layers.md), [phase2-repro.md](../qa/image/phase2-repro.md) (base image byte-identical across two builds; layers and the Nex-built debs were not double-built). Not run: licence gate D5 inspection, physical install. |
 | **I-3** A/B, verity, update API | **Partly done** | Engine, boot wiring, rollback, Controller relay, layers and offline media: [phase3-engine.md](../qa/image/phase3-engine.md), [phase3-boot.md](../qa/image/phase3-boot.md), [phase3-reproof.md](../qa/image/phase3-reproof.md) (its own "Not run" lists apply), [phase3-controller.md](../qa/image/phase3-controller.md), [phase3-layers-update.md](../qa/image/phase3-layers-update.md). VM proof on a single disk only; md mirror, Secure Boot and hardware not run. |
 | **I-4** Appliance and pool rollout | **Partly done** | Coordinator ([phase4-rollout.md](../qa/image/phase4-rollout.md), fake peers) and the journaled appliance swap ([phase4-appliance.md](../qa/image/phase4-appliance.md), fake libvirt). **New:** the Controller guest image profile (`image/controller/`, `appliance/build.py --profile controller`), the deploy wiring (`core-local-setup configure --controller-image-sha256`, `nex-core-local --controller-system-image`) and a QEMU boot of the guest: [phase4-controller-image.md](../qa/image/phase4-controller-image.md). Three booted image hosts then ran a pool rollout, first without ([phase4-lab.md](../qa/image/phase4-lab.md)) and then with a real Corosync cluster, a master power cut and guest shutdown ([phase6-lab3.md](../qa/image/phase6-lab3.md), [phase6-lab4.md](../qa/image/phase6-lab4.md)), all virtual: no real watchdog or BMC (a lab Redfish endpoint stood in), and some scenarios are listed as not run in those records. **Not run:** a Core deployment of the Controller image, a swap or a restore on a real guest, fencing on physical hardware, the Controller UI in a browser against any of it. |
@@ -71,10 +74,10 @@ Cross-cutting items:
   **Guide impact: none** — installed operator workflows are unchanged. **State owner: none** — no durable product state.
   `.github/workflows/github.yml` also triggers on pushes to `dev` ([release channels plan](2026-10-02-release-channels.md)).
 - **Controller update helpers:** removed only where the swap replaces them: the profile's cloud-init seed no longer carries
-  `apply-update` or the update units, and the guest image has no `apt` or helper. **Still present, for the classic edition and the
-  single-disk appliance:** `packaging/controller/{apply-update,nex-controller-update.path,nex-controller-update.service,postinst,prerm}`,
+  `apply-update` or the update units, and the guest image has no `apt` or helper. **Still present, for the single-disk
+  appliance:** `packaging/controller/{apply-update,nex-controller-update.path,nex-controller-update.service,postinst,prerm}`,
   `appendUpdateBootstrap` (single-disk seeds), the appliance build's copies, the Controller `.deb`, and the Controller's own APT routes
-  (`GET/POST /api/v1/updates`, `internal/controller/updates.go`) and Settings panel. They go with the classic edition.
+  (`GET/POST /api/v1/updates`, `internal/controller/updates.go`) and Settings panel. They go when the swap covers that profile.
 - **Deviations from the plan text:** the guest's `/etc` is the same persistent overlay as the host's (upper layer on the data disk), not a
   bind mount of `/etc/nex-controller`; `/etc/nex-controller` therefore lives on `controller-data.qcow2` through the overlay and recovery
   sees the same two guest paths. The release carries the Controller image as an on-demand `vm-image` component, `controller-system.img`,
@@ -83,15 +86,15 @@ Cross-cutting items:
   restore); host-recovery export of a swapped Controller; the Controller UI for choosing the profile; the guide pages stay marked
   unverified; reproducibility of the Controller guest image (a double build was not run; the release step alone repeated byte-identical
   over one tree); source delivery for `image/` (the source archive does not contain it); layers' double build; the standalone Controller
-  `.deb` decision (open question 7) and retirement of the classic edition.
+  `.deb` decision (open question 7).
 
 ## Feasibility verdict and how imaging works (revision 2026-10-01)
 
 **Doable, as a staged programme, not one change.** Each mechanism ships today on Debian-based systems
 (Garden Linux, ParticleOS; see the image section's evidence). What no one has shown is Nex's *combination*:
 Debian Installer as installer, per-disk A/B slots, md RAID1 only for data, `/etc` overlay, sysext layers, and
-Secure Boot through MOK. Nothing here has been run. Phase I-1 (read-only classic) is low risk and pays off
-regardless, because the image needs the same `/var` split, persistent `/etc` and runtime-write fixes. Do not
+Secure Boot through MOK. Nothing here has been run. The `/var` split, persistent `/etc` and runtime-write fixes
+the image needs are part of the image work. Do not
 start I-2 until the I-0 spikes below pass. The Controller-appliance immutability in I-4 is separable and may
 slip without blocking an immutable Core.
 
@@ -145,7 +148,7 @@ service, not a silent change. State this plainly in the guide; do not claim atte
 | S5 | Secure Boot | Debian-signed sd-boot loads a Nex-signed UKI through MOK under OVMF; Secure Boot off also boots |
 | S6 | sysext layers | `modprobe zfs` after a live merge. Module files in a layer need a `modules.dep` that covers base plus layer, or the layer's file hides the base's; if that is brittle, ship the modules in the base and gate only userland. `nex-cluster` merges with no reboot and no `/etc` defaults |
 | S7 | Installer host | Either d-i runs the Go tool with the udebs it needs (GPT, `mdadm`, FAT/ext4 mkfs) and its menu is prunable, or the installer is a live image built by the same mkosi tooling. Choose by result; the sections below assume d-i |
-| S8 | Sizes | Measured root, verity, layers and full-update size. Slot size has ≥1.5× headroom over the largest release (slots cannot grow without moving `nex-data`). The 16 GiB disk floor probably rises: `nex-data` must hold a staged update, the 1.6 GB of payloads and the default VM store |
+| S8 | Sizes | Measured root, verity, layers and full-update size. Slot size has ≥1.5× headroom over the largest release (slots cannot grow without moving `nex-data`). The disk floor is 24 GiB: `nex-data` must hold a staged update, the 1.6 GB of payloads and the default VM store |
 | S9 | Reproducibility | Two independent builds compared with `diffoscope`; every difference explained |
 
 ### Environment to set up
@@ -159,9 +162,9 @@ service, not a silent change. State this plainly in the guide; do not claim atte
 
 **Plan-only change: API impact none, guide impact none.** This revision edits the plan and changes no contract.
 
-## Decisions needed before Phase I-1 starts
+## Decisions needed before the image work starts
 
-**Superseded.** The approvals are recorded in `AGENTS.md` and the owner decisions in the QA records; phases I-1 to I-4 are built (see the
+**Superseded.** The approvals are recorded in `AGENTS.md` and the owner decisions in the QA records; phases I-2 to I-4 are built (see the
 status table). Kept as the history of what was asked, not as open questions.
 
 The plan recommends the options below. These change documented project policy or legal posture, so the
@@ -171,10 +174,9 @@ project owner decides; the plan does not assume them.
    `PRODUCT.md` and `README.md`: Debian remains the source of packages, but hosts are images, not `apt` systems.
 2. Redistributing prebuilt, Nex-signed OpenZFS modules (CDDL) reverses `docs/LICENSING.md` ("no prebuilt module
    ships today"). Needs a legal review. Fallback: build the module on the host at stage time.
-3. Image edition is UEFI-only. BIOS-only hosts keep the classic (Phase I-1) edition until retired.
+3. ~~Image is UEFI-only.~~ Decided 2026-10-06: UEFI and BIOS are both supported.
 4. Secure Boot: supported but not required for this release?
-5. Reinstall existing dev hosts, or build an in-place conversion?
-6. Release-key custody and whether the release key may live in CI.
+5. Release-key custody and whether the release key may live in CI.
 
 The per-section "Open questions" lists below carry the rest; the consolidated table is at the end.
 
@@ -194,8 +196,8 @@ The four sections were written in parallel against agreed interfaces. Where they
 
 | Topic | Decision |
 |---|---|
-| Disk layout, boot chain, `/etc` strategy | **Image architecture** section is authoritative: UEFI-only, per-disk GPT with A/B slots and verity partitions, only `nex-data` mirrored. The installer section's md-over-slots wording follows it. |
-| Phase numbering | The master phases are **I-0 to I-5** (see [Delivery phases](#delivery-phases)). The image section's phases 0-4 map: 0 = I-0, 1 = I-1, 2 = I-2 and I-3, 3 and 4 = I-5 and retirement of the classic edition. |
+| Disk layout, boot chain, `/etc` strategy | **Image architecture** section is authoritative: UEFI and BIOS, per-disk GPT with A/B slots and verity partitions, only `nex-data` mirrored. The installer section's md-over-slots wording follows it. |
+| Phase numbering | The master phases are **I-0 to I-5** (there is no I-1; the labels keep their original numbers; see [Delivery phases](#delivery-phases)). The image section's phases 0-3 map: 0 = I-0, 2 = I-2 and I-3, 3 = I-5. |
 | Trust anchor for the appliance and layers | The **Updates** section's `/usr/share/nex/update/trust.json` replaces `release.pub`. Composition work item that keeps `release.pub` is superseded. |
 | `nftables` | Kept. libvirt's network driver depends on `iptables \| nftables`, so dropping it just makes apt pick `iptables`. This corrects the earlier read-only audit. |
 | `virtinst`, `sudo`, host `corosync-qnetd` | Dropped from the host image (no host callers; qnetd is Controller-hosted). |
@@ -214,8 +216,7 @@ Controller UI, guide walkthrough. Virtual labs never establish physical Secure B
 | Phase | Scope | Gate |
 |---|---|---|
 | **I-0** Measure and decide | Spikes S1-S9 above, installed-size baseline, d-i udeb pruning, owner decisions | Written go/no-go and measured sizes in `docs/qa/`; no product change |
-| **I-1** Read-only classic | `/` mounted `ro`, persistent `/etc`, separate `/var`; apt only in a transitional remount window; safe package drops; netinst appliance split; fix every runtime write outside `/etc`,`/var`,`/run` | `findmnt` shows `ro`; existing suites pass; Controller replacement and reboot keep config |
-| **I-2** Image, layers, trim | `image/` build, `internal/hostimage`, image installer, optional layers, prebuilt modules (owner-gated), reproducible build, manifest and source bundle | Offline and netinst UEFI install (single disk, RAID1); BIOS firmware refused before any write; `diffoscope` report on a double build; licence gate inspected |
+| **I-2** Image, layers, trim | `image/` build, `internal/hostimage`, image installer, optional layers, prebuilt modules (owner-gated), reproducible build, manifest and source bundle | Offline and netinst install under UEFI and BIOS (single disk, RAID1); `diffoscope` report on a double build; licence gate inspected |
 | **I-3** A/B, verity, update API | Slot B, boot counting, rollback, tamper refusal, Core update/rollback API and UI | Interrupted-update, power-loss, rollback-preserves-config, state-version gate |
 | **I-4** Appliance and pool rollout | Immutable Controller appliance, pool-master rolling update | Quorum kept, VMs not duplicated, rollout resumes after master change |
 | **I-5** Secure Boot / TPM | Signed chain, measured boot, sealed secrets | Enforcing lab refuses unsigned slot; hardware result recorded separately |
@@ -232,9 +233,14 @@ Controller UI, guide walkthrough. Virtual labs never establish physical Secure B
 | ostree / bootc | Rejected. trixie's `ostree` 2025.2-1 "does not affect the boot process" ([page](https://packages.debian.org/trixie/ostree)); no Debian `bootc` package, Debian bootc images are [community experiments](https://github.com/bootcrew/debian-bootc), and bootc's composefs backend is [experimental](https://bootc.dev/bootc/experimental-composefs.html). Needs an OCI pipeline and Nex-owned GRUB/initramfs glue. |
 | RAUC | Rejected. [`rauc` 1.13](https://packages.debian.org/trixie/rauc) only installs slots: no builder, no booted-root integrity, efibootmgr/GRUB state instead of BLS counters, a second update agent beside Core. |
 | Kairos / Elemental | Rejected. Kairos has a [Debian 13 flavour](https://kairos.io/docs/v3.7.2/architecture/meta) but is an edge-Kubernetes meta-distribution with its own agent; [Elemental](https://elemental.docs.rancher.com/) is a Kubernetes-managed stack on SLE Micro. Both duplicate Core's ownership. |
-| Read-only root + overlay only | Not an end state: no atomic update or rollback, dpkg still mutates. It is Phase 1. |
+| Read-only root + overlay only | Not an end state: no atomic update or rollback, dpkg still mutates. |
 
-**D2 — Bootloader: systemd-boot, UEFI only (not GRUB).** GRUB under shim verifies the kernel but not initrd or command line [INFERENCE], so a root hash on its command line is unauthenticated; a signed UKI covers kernel, initrd, cmdline and, via `roothash=`, the whole root. Cost: no legacy BIOS boot, which the installer supports today (`installer/gui/nex-config.c:206-210`). The classic edition stays the BIOS path (open question 2).
+**D2 — Bootloader: systemd-boot on UEFI, GRUB on BIOS (decision 2026-10-06).** The firmware detected at install (`/sys/firmware/efi`) selects the boot method; the image, slot layout, `roothash=` slot selection, A/B staging and rollback logic are shared.
+- **UEFI:** shim and signed systemd-boot load a signed UKI whose `roothash=` covers kernel, initrd, command line and the whole root. This is the verified-boot path and supports Secure Boot.
+- **BIOS:** GRUB (`grub-pc`, i386-pc) is installed into the MBR of every selected disk and reads a per-slot entry from the boot FAT partition. The entry carries the kernel, initrd and the same `roothash=`; dm-verity still verifies the root on every read. BIOS has no Secure Boot, and GRUB cannot authenticate the kernel command line [INFERENCE], so the root hash is not signature-protected before the kernel runs. The release signature still covers the image and every update Core stages. State this limit in the install guide.
+- **Boot counting on BIOS** uses a GRUB environment block (`grubenv`) on the boot partition in place of systemd-boot's filename counters: Core writes `boot_count` when it arms a slot, the entry decrements it, and the existing bless service clears it once the host is healthy. The commit point stays "the new slot's entry is written last".
+- **Update engine:** one `internal/hostimage` boot-method interface (stage, arm, bless, converge across disks) with a UEFI and a BIOS implementation; Core picks by firmware. Nothing outside `internal/hostimage` and the installer knows which is in use.
+- **Verification.** The BIOS path counts as verified only after QEMU BIOS-mode tests (single disk, RAID1 data, A/B update, forced rollback, replaced disk) have run; see the QA records for what has.
 
 **D3 — Slots live on each disk, not under md.** Only `nex-data` is mirrored. Each disk carries its own ESP and both slots, so any one disk boots alone; repair is "re-lay GPT, copy verity-verified slots, `mdadm --add` data". Rejected: md under the slots (mdadm needed in early boot for root, and hash-based slot discovery below needs a plain GPT).
 
@@ -244,14 +250,14 @@ Controller UI, guide walkthrough. Virtual labs never establish physical Secure B
 
 ### Disk layout
 
-Identical GPT on every selected disk (replaces the recipe at `nex-config.c:241-245`; no BIOS-boot partition):
+Identical GPT on every selected disk (replaces the recipe at `nex-config.c:241-245`). Every disk also carries a 1 MiB BIOS boot partition (type `ef02`, label `nex-bios`) in front of the ESP so the same layout boots under either firmware; it is only written to when GRUB is installed:
 
 | # | Label | Type | Size | Content |
 |---|---|---|---|---|
 | 1 | `nex-esp` | EFI System | 1 GiB | FAT32: shim and signed sd-boot on the removable path (as `nex-config.c:251-253`), `/EFI/Linux/nex-core_<label>_<seq>[+N].efi`, `loader/loader.conf` |
 | 2 / 4 | `nex-root-a` / `-b` | root-x86-64 | ≤4 GiB each [INFERENCE: measure in Phase 0] | erofs; partition UUID = roothash bits 0–127 |
 | 3 / 5 | `nex-verity-a` / `-b` | root-x86-64-verity | 64 MiB | hash tree; UUID = roothash bits 128–255 |
-| 6 | `nex-data` | Linux data (1 disk) / Linux RAID (mirror) | rest; ≥6 GiB at the 16 GiB floor | ext4, label `nex-data`, mounted `/var` from the initrd. Mirror: md RAID1 1.2, array `nex-data`, assembled by udev in the initrd |
+| 6 | `nex-data` | Linux data (1 disk) / Linux RAID (mirror) | rest; ≥6 GiB at the 24 GiB floor | ext4, label `nex-data`, mounted `/var` from the initrd. Mirror: md RAID1 1.2, array `nex-data`, assembled by udev in the initrd |
 
 Slot selection is stateless: the signed UKI's `roothash=` names the slot because the [Discoverable Partitions Spec](https://uapi-group.org/specifications/specs/discoverable_partitions_specification/) derives both partition UUIDs from the root hash. The UKI on the ESP is the update's commit point; Core invalidates a slot's label before rewriting it. No ESP in fstab and no `nofail` hacks: Core mounts each ESP transiently under `/run/nex/esp/<partuuid>`.
 
@@ -291,22 +297,19 @@ TPM2 (Phase 3, optional): the stub measures UKI parts, and a signed PCR 11 polic
 | Phase | Ships | Gate |
 |---|---|---|
 | **0 Spike** (lab VMs only) | mkosi image boots under OVMF with Secure Boot, verity, UKI via MOK, `/etc` overlay (confext vs unit), md data in the initrd, libvirt VM start, hash-selected slot among two same-type slots, duplicate partition UUIDs across mirror disks; slot and update size measured | written go/no-go |
-| **1 Read-only classic** (first slice; Debian packages, GRUB, d-i, BIOS+UEFI kept) | new installs get a separate `/var` (md pair when mirrored) and root mounted `ro`; `/etc` and `/root` persist as binds of `/var/lib/nex/etc` and `/var/roothome` from an initramfs-tools `local-bottom` script; dpkg runs only inside a `remount,rw` window that `nex-root-ro.service` re-asserts | existing Phase suites pass on a read-only root; no runtime writer outside `/etc`, `/var`, `/run` |
-| **2 Image edition** | `image/` build, `internal/hostimage`, image installer, A/B stage/arm/bless, `nex-zfs` layer (owner-gated), UEFI only | acceptance 1–9 |
-| **3 Hardening** | Secure Boot ceremony, PCR policy/TPM options, reproducible-build gate, operator-owned keys | two builds, one roothash |
-| **4 Retire classic** | delete the package-manager update path | owner approval |
+| **1 Image** | `image/` build, `internal/hostimage`, image installer, A/B stage/arm/bless, `nex-zfs` layer (owner-gated), UEFI and BIOS boot | acceptance 1–9 |
+| **2 Hardening** | Secure Boot ceremony, PCR policy/TPM options, reproducible-build gate, operator-owned keys | two builds, one roothash |
 
 ### Work items
 
 1. **Phase 0:** create `image/` (`mkosi.conf`, `mkosi.conf.d/`, `mkosi.repart/{10-esp,20-root-a,21-verity-a,30-root-b,31-verity-b,40-data}.conf`, `mkosi.extra/`, `mkosi.finalize`). Package list = `installer/packages.txt` minus `linux-headers-amd64`, `zfs-dkms`, plus `shim-signed`, `systemd-boot`, `systemd-boot-efi-amd64-signed`, `gdisk`, `dosfstools`, `systemd-repart`; local `PackageDirectories=` carry the Nex libvirt `+nex4`, rebuilt `dlm-controld` and `nex-core-local` debs. Record `docs/qa/image/phase0.md`.
-2. **Phase 1:** `installer/gui/nex-config.c:206-257` (add `/var`, `ro` root; `installer/check.sh:123-139` and `tests/integration/installer-hostname.py` follow); `packaging/core-local/` new initramfs script and `nex-root-ro.service`; `internal/nexupdate/nexupdate.go:283-291,479-559` wrapped in the rw window (with the updates section); `tests/integration/readonly_root.py`.
-3. **Phase 2:** `internal/hostimage/{layout,slot,esp,etc}.go` + tests; `image/mkosi.extra/usr/lib/systemd/system/{nex-boot-check,nex-esp-sync,nex-firstboot,nex-state-guard}.service` (`nex-state-guard` belongs to the updates section); rewrite `internal/vmhost/md_replace.go:187-196,241-305` and `md_replace_test.go` to re-lay GPT from the repart definitions, copy and verify slots, converge ESPs; image-edition branches and **Repair image** mode in `installer/late-install.sh`, `installer/build.sh`, `installer/netinst-manifest.py` (installer section); move payload paths (`bundled_media.go:24`, `core-local-setup:14`); move `postinst` behaviour into the build: static `os-release` instead of `dpkg-divert` (`:79-92`), `debian.sources` (`:34-49`), grub.d (`:97-111`), AppArmor via `libvirtd-apparmor-policy install <root>` (already root-prefixed, `libvirtd-apparmor-policy.py:16-17`).
-4. **CI:** `.github/workflows/image.yml` and `.gitea/workflows/image.yml` (build, QEMU/OVMF boot, tamper, build-twice compare), heavy jobs skipped on github.com per AGENTS.md; `tests/integration/image_boot.py`, `tests/test_image_layout.py`.
-5. **Source delivery:** extend `scripts/build-source-bundle.py` and the component manifest to the image closure.
+2. **Phase 1:** `internal/hostimage/{layout,slot,esp,etc}.go` + tests; `image/mkosi.extra/usr/lib/systemd/system/{nex-boot-check,nex-esp-sync,nex-firstboot,nex-state-guard}.service` (`nex-state-guard` belongs to the updates section); the image installer and **Repair image** mode in `installer/build.sh` and `installer/netinst-manifest.py` (installer section); move payload paths (`bundled_media.go:24`, `core-local-setup:14`); build behaviour into the image: static `os-release`, no `debian.sources` edit, no grub.d, AppArmor via `libvirtd-apparmor-policy install <root>` (already root-prefixed, `libvirtd-apparmor-policy.py:16-17`).
+3. **CI:** `.github/workflows/image.yml` and `.gitea/workflows/image.yml` (build, QEMU/OVMF boot, tamper, build-twice compare), heavy jobs skipped on github.com per AGENTS.md; `tests/integration/image_boot.py`, `tests/test_image_layout.py`.
+4. **Source delivery:** extend `scripts/build-source-bundle.py` and the component manifest to the image closure.
 
 ### Risks
 
-ZFS redistribution vs `docs/LICENSING.md:222-223` (blocks a Phase 2 release). Secure Boot enrolment friction on headless servers. UEFI-only excludes BIOS hosts. Overlay drift: a copied-up `passwd`/`shadow` hides new image accounts, so system accounts ship via `sysusers.d` and `nex-etc-audit` (in `internal/hostimage/etc.go`) reports shadowed image files. Full-image updates are large [INFERENCE: measure]. Debian security respins need an image rebuild cadence. Duplicate partition UUIDs across mirror disks may confuse `by-partuuid` consumers [INFERENCE]. mkosi is 25.3 in trixie (27 in testing): pin any newer build by hash after Phase 0.
+ZFS redistribution vs `docs/LICENSING.md:222-223` (blocks a Phase 2 release). Secure Boot enrolment friction on headless servers. BIOS boot cannot authenticate the kernel command line (D2). Overlay drift: a copied-up `passwd`/`shadow` hides new image accounts, so system accounts ship via `sysusers.d` and `nex-etc-audit` (in `internal/hostimage/etc.go`) reports shadowed image files. Full-image updates are large [INFERENCE: measure]. Debian security respins need an image rebuild cadence. Duplicate partition UUIDs across mirror disks may confuse `by-partuuid` consumers [INFERENCE]. mkosi is 25.3 in trixie (27 in testing): pin any newer build by hash after Phase 0.
 
 ### Acceptance checks
 
@@ -314,31 +317,30 @@ ZFS redistribution vs `docs/LICENSING.md:222-223` (blocks a Phase 2 release). Se
 2. QEMU+OVMF, Secure Boot on: `findmnt -no FSTYPE,OPTIONS /` is erofs `ro`; `dmsetup status` shows verity `V`; `touch /usr/x` fails; an `/etc` edit and `/var` data survive reboot.
 3. Flip one byte in the active root slot: after three tries boot falls to the other slot; `bootctl list` shows `+0-3`; the host reports rolled back.
 4. Power-cut at each update step (slot write, before UKI, half-written `.new`, after arm, before bless): the previous version boots every time.
-5. Two-disk mirror, UEFI: detach each disk in turn and boot; run `host-system-disk-replace-v1`; both ESPs hold identical SHA-256 sets and both slots verify. Closes `docs/qa/iso/2026-09-22-installer-mirror.md:72-76`.
+5. Two-disk mirror, UEFI and BIOS: detach each disk in turn and boot; both boot partitions hold identical SHA-256 sets and both slots verify. Closes `docs/qa/iso/2026-09-22-installer-mirror.md:72-76`.
 6. Controller deleted and quorum lost during a trial boot: `nex-boot-check` still passes and blesses; a failing libvirtd blocks the bless and the host reverts.
 7. ZFS: module loads under Secure Boot lockdown after a kernel-changing update and an existing pool imports; an unsigned module is refused.
 8. SSH fingerprints, machine-id, root login and hostname are unchanged across update and rollback.
-9. Offline ISO installs the image edition with no network; the VirtIO ISO is under `/var/lib/nex/payload/`.
+9. Offline ISO installs with no network; the VirtIO ISO is under `/var/lib/nex/payload/`.
 
 ### Documentation, API, state
 
-Guide: `install-nex-core.md`, `software-updates.md`, `replace-a-failed-system-disk.md`, `verify-nex-core.md`, `recover-without-controller.md`. Also `docs/API.md` (`replaceSystemDisk` behaviour note), `docs/LICENSING.md` (image artifacts, ZFS, firmware), `installer/README.md`, `docs/development.md` (mkosi build), CHANGELOG, `docs/DOCUMENTATION.md` assessment `updated`, and `docs/changes/<date>-immutable-image-*.json` with `state.owner: core`: record = GPT labels and ESP UKI names (the disk is the truth and self-describing), `/var/lib/nex/image/state.json` is a cache; a fresh Controller recovers it through host image status. Mark `2026-09-19-zfs-repository-provisioning.md:130-138` (DKMS abort, no module signing) and `2026-09-22-software-raid.md:200-205` (GRUB, `nex-sync-esp`) superseded for the image edition. BUG_LEDGER only if a bug is fixed.
+Guide: `install-nex-core.md`, `software-updates.md`, `verify-nex-core.md`, `recover-without-controller.md`. Also `docs/LICENSING.md` (image artifacts, ZFS, firmware), `installer/README.md`, `docs/development.md` (mkosi build), CHANGELOG, `docs/DOCUMENTATION.md` assessment `updated`, and `docs/changes/<date>-immutable-image-*.json` with `state.owner: core`: record = GPT labels and ESP UKI names (the disk is the truth and self-describing), `/var/lib/nex/image/state.json` is a cache; a fresh Controller recovers it through host image status. Mark `2026-09-19-zfs-repository-provisioning.md:130-138` (DKMS abort, no module signing) superseded. BUG_LEDGER only if a bug is fixed.
 
-**API impact: existing contract** for this section: `host-system-disk-replace-v1` keeps its request and result shape and changes internals; image status, stage, arm and rollback are the updates section's **new contract**. The Controller stores nothing; the replacement test holds because every fact is on the host's disks.
+**API impact: new contract** for this section: image status, stage, arm and rollback are the updates section's contract. The Controller stores nothing; the replacement test holds because every fact is on the host's disks.
 
 ### Open questions for the project owner
 
 1. Supersede `docs/LICENSING.md:222-223` and redistribute a prebuilt, signed `nex-zfs` layer, or require stage-time on-host builds?
-2. Is the image edition UEFI-only, and until when does the classic edition stay for BIOS hosts?
+2. ~~Is the image UEFI-only?~~ Decided 2026-10-06: no; BIOS and UEFI are both supported.
 3. Secure Boot trust root: Nex vendor cert via MOK, operator-owned keys, or both? Is Secure Boot required for support?
 4. Is TPM-sealed `nex-data` encryption wanted, and is remote attestation ever a pool-admission rule?
 5. Security respin cadence, and how many previous versions are retained.
-6. Classic → image migration: reinstall keeping unselected data pools, or in-place conversion?
+6. Existing development hosts: reinstall; **Repair image** keeps the data pools.
 
 ## Update pipeline, API and pool-safe rollout
 
-Status: planned. Replaces the APT update model ([package-updates plan](2026-09-09-package-updates.md), now
-historical) with Core-run atomic image updates on the slots, UKIs and boot counting defined in
+Status: planned. Core-run atomic image updates on the slots, UKIs and boot counting defined in
 [Image architecture and filesystem layout](#image-architecture-and-filesystem-layout), shipping the components defined in
 [Image composition, optional layers, package trim and build reproducibility](#image-composition-optional-layers-package-trim-and-build-reproducibility).
 Debian remains the package source of the *image build*; installed hosts never run `apt`. This also meets the platform
@@ -486,7 +488,7 @@ refused. Non-slot items (Controller image, Windows driver ISO) are `on_demand` c
 **Implementation status, 2026-10-02 (Phase I-3d; unit-tested in simulation only).** The settings, media, import and fetch routes exist
 on the host and are relayed by the Controller through the existing `POST /api/v1/hosts/{id}/updates/{action}` (`settings`, `media`,
 `import`, `fetch`; host-scoped, relay only, nothing stored by the Controller). API impact: **new contract**
-([docs/API.md](../API.md#image-edition-layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)); state owner `core`
+([docs/API.md](../API.md#layers-settings-offline-media-and-on-demand-payloads-phase-i-3d)); state owner `core`
 (`/etc/nex/updates.conf`, `/var/lib/nex/image/state.json`, `/var/lib/nex/layers/`, `/var/lib/nex/payload/`; a fresh Controller
 recovers it from `Inventory.image`). Decisions applied: layers are staged with the base before the slot is written and recorded in
 `enabled.json` only at activate (rollback switches them back); a layer's `requires_base` must equal the release's
@@ -520,7 +522,7 @@ Compatibility: Controller answers rollout routes `409` ("upgrade Nex Core") unle
 `pool-update-rollout-v1` (the existing older-Core pattern, [API](../API.md#pool-cpu-baseline-and-explicit-vm-features)). Core withholds
 `Inventory.image` and `Inventory.managed.update_rollout` until the Controller acknowledges `image-update-v1`, and the Controller sends
 `ReportResponse.controller{api_epoch,sequence}` only after Core advertises `controller-epoch-v1` (the `detected-os-v1` pattern), so strict
-older decoders never see new fields. Existing APT hosts have no in-place path (question 1).
+older decoders never see new fields.
 
 ### Work items
 
@@ -555,7 +557,7 @@ Lost or leaked root/release key (two root keys, `not_after`, rotation through si
 
 ### Open questions for the project owner
 
-1. **Existing APT dev hosts:** reinstall and re-adopt (recommended; Nex is unreleased) or build an in-place conversion?
+1. **Existing development hosts:** reinstall and re-adopt (recommended; Nex is unreleased); **Repair image** keeps the data pools.
 2. **v1 guest policy:** ship `shutdown` (downtime) beside `refuse`, or `refuse` only until migration lands?
 3. **Key custody:** root threshold (1-of-2 vs 2-of-3), offline storage, and whether the release key may live in CI.
 4. **Channels:** names, promotion approval, and whether hosts may auto-check and auto-stage (never auto-activate).
@@ -786,22 +788,22 @@ live in the updates/API section. Phase 1 trim: API impact none (no contract touc
 
 ## Installer, persistent host state, operations, verification, licensing, documentation and delivery phases
 
-This section depends on two sibling sections and states what it needs from them: **Image architecture** fixes the per-disk GPT and the verity/boot-counting mechanism; **Updates** fixes the Core update/rollback API. Disk contract used here (from Image architecture, UEFI-only image edition): the same GPT on every selected disk — `nex-esp` (1 GiB FAT32), `nex-root-a` (≤4 GiB), `nex-verity-a` (64 MiB), `nex-root-b`, `nex-verity-b`, `nex-data` (rest; ext4 label `nex-data`, md RAID1 1.2 named `nex-data` when more than one disk) — no BIOS-boot partition, no swap, no partman or GRUB. Where this section names an operation, it is the interface this section requires, not a competing design. Phases are numbered **I-0…I-5** to avoid colliding with the product's Phases 0–10.
+This section depends on two sibling sections and states what it needs from them: **Image architecture** fixes the per-disk GPT and the verity/boot-counting mechanism; **Updates** fixes the Core update/rollback API. Disk contract used here (from Image architecture): the same GPT on every selected disk — `nex-bios` (1 MiB, ef02), `nex-esp` (1 GiB FAT32), `nex-root-a` (≤4 GiB), `nex-verity-a` (64 MiB), `nex-root-b`, `nex-verity-b`, `nex-data` (rest; ext4 label `nex-data`, md RAID1 1.2 named `nex-data` when more than one disk) — no swap and no partman. Where this section names an operation, it is the interface this section requires, not a competing design. Phases are numbered **I-0…I-5** to avoid colliding with the product's Phases 0–10.
 
 ### D1 — Installer: keep Debian Installer as the host, replace its payload half
 
 **Decision.** Keep Debian Installer (boot, hardware detection, firmware, `netcfg`, rescue) and the Nex GTK/text wizard unchanged. Replace everything from partitioning onward (partman recipes, `base-installer`, `apt-setup`, `grub-installer`, `late-install.sh`) with one Nex step, `nex-image-install`, that lays out the disks, writes the signed slot image and seeds persistent state.
 
-*Rejected:* (a) let partman create the slots and keep d-i's debootstrap — writes a throw-away Debian base, and partman/RAID recipe quirks already caused BUG-0413 (`installer/gui/recheck.sh:23-25`); (b) replace d-i with a bespoke initramfs installer — re-implements NIC/firmware/disk detection and the pinned cdebconf frontend (`installer/README.md:59-60`) for no safety gain; (c) keep `apt install` in the installer and only mount root read-only — leaves the "installed system differs per host" problem unsolved (it is only a Phase I-1 stepping stone).
+*Rejected:* (a) let partman create the slots and keep d-i's debootstrap — writes a throw-away Debian base, and partman/RAID recipe quirks already caused BUG-0413 (`installer/gui/recheck.sh:23-25`); (b) replace d-i with a bespoke initramfs installer — re-implements NIC/firmware/disk detection and the pinned cdebconf frontend (`installer/README.md:59-60`) for no safety gain; (c) keep `apt install` in the installer and only mount root read-only — leaves the "installed system differs per host" problem unsolved.
 
 **Design.**
-- Wizard → `/run/nex-installer/config.ini` → `nex-config --apply` is unchanged (`installer/gui/start.sh:32`, `installer/gui/nex-config.c:190-204` already stages hostname, hosts, network, keymap, timezone, root hash under `/run/nex-installer/target/etc`). `nex-config` stops emitting partman answers (`nex-config.c:206-267`) and emits `layout=single|raid1` plus the validated disk list; the ≥16 GiB, 10 % and explicit-erase-confirmation rules stay in `nex-config` as the authority.
+- Wizard → `/run/nex-installer/config.ini` → `nex-config --apply` is unchanged (`installer/gui/start.sh:32`, `installer/gui/nex-config.c:190-204` already stages hostname, hosts, network, keymap, timezone, root hash under `/run/nex-installer/target/etc`). `nex-config` stops emitting partman answers (`nex-config.c:206-267`) and emits `layout=single|raid1` plus the validated disk list; the ≥24 GiB, 10 % and explicit-erase-confirmation rules stay in `nex-config` as the authority.
 - `installer/nex-image-install.sh` (POSIX sh, runs inside d-i) is a thin wrapper around the Go `internal/hostimage` tool, which is the same code Core's slot writer uses (one implementation, so install and update cannot diverge). It wipes only the selected disks (reusing `recheck.sh` RAID/LVM clearing), lays the GPT from repart definitions on every disk, builds the `nex-data` md RAID1 when two or more disks are selected, writes slot A plus its verity partition (slot B is laid out empty so Phase I-3 never re-partitions a live host), the ESP files on **every** ESP (replacing `grub-installer/bootdev` and the `nex-sync-esp` Post-Invoke hook, `late-install.sh:114-169`), and the installer-collected `/etc` (root hash, hostname, timezone, keymap, network) into `nex-data:/lib/nex/etc/upper` (D2).
 - Payloads: `netinst-manifest.py` (`:51` already pins VirtIO) is generalised to `payloads.tsv`: `{signed image, Controller appliance qcow2, VirtIO ISO}` each with SHA-256 and signature. **Offline ISO** carries all three (VirtIO still gzip transport, appliance included); **netinst** downloads all three by hash through `netinst-fetch.sh` (pre-partition preflight kept). Appliance and VirtIO ISO land in `/var/lib/nex/payload/<sha256>/` on `nex-data`, not in the verity slot; a later Core operation (Updates section) refreshes them on demand. [INFERENCE: assumes Composition keeps the ~750 MB appliance out of the slot; otherwise each slot grows by that amount.]
-- Rescue/serial entries (`installer/build.sh:647-650,691-692`) stay. The wizard gains **Repair image** next to **Erase and install**: it re-lays the GPT and slots and keeps `nex-data`, and is offered only when a complete `nex-data` partition or mirror is found. No factory-reset or secure-erase function exists for hosts today (only VM-disk wipe, `docs/guide/delete-virtual-machine.md:45`); "factory reset" = Erase and install. Local recovery: boot entries *current slot*, *previous slot*, *recovery (root login, verity still enforced)*, plus serial `ttyS0`. Because the image edition is UEFI-only, a host that boots in legacy BIOS mode is refused before any disk write.
+- Rescue/serial entries (`installer/build.sh:647-650,691-692`) stay. The wizard gains **Repair image** next to **Erase and install**: it re-lays the GPT and slots and keeps `nex-data`, and is offered only when a complete `nex-data` partition or mirror is found. No factory-reset or secure-erase function exists for hosts today (only VM-disk wipe, `docs/guide/delete-virtual-machine.md:45`); "factory reset" = Erase and install. Local recovery: boot entries *current slot*, *previous slot*, *recovery (root login, verity still enforced)*, plus serial `ttyS0`. The firmware (UEFI or BIOS) selects the boot method at install (D2).
 - Installed-host identity: `/etc/nex/core-release` stamp (`late-install.sh:73`, enforced by `packaging/core-local/preinst`) moves into the image; `.deb` remains the build unit but is never run on the host.
 
-**Work items.** I1 create `installer/nex-image-install.sh` (wrapper) and consume `internal/hostimage` (Image architecture lane); I2 change `installer/gui/nex-config.c` (emit `layout=single|raid1` and the repair mode instead of partman answers, `:206-267`) and `installer/gui/wizard-text.sh`/`.templates`, `nex-wizard.c` (mode choice); I3 reduce `installer/preseed.cfg` to root/locale answers and the `nex-image-install` hook; I4 delete `installer/late-install.sh` and `installer/packages.txt` consumption; I5 rewrite `installer/netinst-manifest.py`, `netinst-fetch.sh`, `installer/build.sh` (media assembly consumes the image artifact; prunes unused udebs — [INFERENCE] d-i menu items cannot be skipped by preseed, so Phase I-0 must prove udeb pruning), `installer/check.sh`; I6 update `installer/README.md`. Phase I-1 (read-only root and separate `/var` on the current d-i/GRUB path) changes only the `nex-config.c:206-257` recipe.
+**Work items.** I1 create `installer/nex-image-install.sh` (wrapper) and consume `internal/hostimage` (Image architecture lane); I2 change `installer/gui/nex-config.c` (emit `layout=single|raid1` and the repair mode instead of partman answers, `:206-267`) and `installer/gui/wizard-text.sh`/`.templates`, `nex-wizard.c` (mode choice); I3 reduce `installer/preseed.cfg` to root/locale answers and the `nex-image-install` hook; I4 delete `installer/late-install.sh` and `installer/packages.txt` consumption; I5 rewrite `installer/netinst-manifest.py`, `netinst-fetch.sh`, `installer/build.sh` (media assembly consumes the image artifact; prunes unused udebs — [INFERENCE] d-i menu items cannot be skipped by preseed, so Phase I-0 must prove udeb pruning), `installer/check.sh`; I6 update `installer/README.md`.
 
 ### D2 — Persistent host configuration
 
@@ -835,7 +837,7 @@ The ESP is not in fstab and `nex-sync-esp` is deleted: Core's ESP converger (ima
 
 **Existing checks that must change** (grep of `tests/`): `tests/integration/iso-smoke.py:88-101,151-152` and `fresh_install_host.py:254-255` (dpkg-query/ovmf version pin on the installed system → image manifest query), `tests/test_distribution_packaging.py:70,87,95` (installer stamp; updater "uses apt"), `test_iso_payload_efficiency.py`, `test_netinst.py`, `test_netinst_network.py`, `test_netinst_release.py`, `test_source_bundle.py`, `test_storage_packaging.py`, `installer/check.sh:291-293` (late-install assertions), `installer-disk.py`/`installer-handoff.py` (partman answers), `internal/nexupdate/nexupdate_test.go`, `internal/localcore/updates_test.go`. **Stay valid** (Debian guest + `.deb` as component unit): `core-local-package.sh`, `libvirt_recovery_ci.py`, `recovery_s0*`, `cluster_ha_lab.py`, `controller_replacement*`.
 
-**New.** `tests/integration/immutable_lab.py` (pattern of `fresh_install_lab.py`: disposable lab directly under `.cache`, QMP, user-mode networking, TCG): (1) `/` mounted ro and every Core operation (network change, pool create, witness, storage, backup, md replace) passes; (2) A/B boot, forced bad slot → automatic fallback; (3) interrupted update killed at each stage (download, slot write, boot-entry flip, trial boot); (4) power loss via QMP reset under write-through disk cache — labelled *simulated*; (5) verity tamper: flip a slot byte offline, host refuses that slot and boots the other; (6) RAID1 member replacement with ESP/slot re-sync (supersedes `docs/qa/2026-09-22-system-disk-replace.md` layout); (7) three-VM pool rolling update with VMs running throughout, no dual writable VM; (8) Controller deleted before/during update, fresh Controller adopts. Unit tests (dependency-light, must pass the `github.yml` `tests/test_*.py` job): `tests/test_image_manifest.py` (binding, no throwaway key for release builds), `tests/test_boot_counting.py`, `tests/test_state_version_gate.py`, `tests/test_image_content.py` (no host keys, no machine-id, no apt lists in the built file listing). Reproducibility: build the image twice in the release job and compare SHA-256.
+**New.** `tests/integration/immutable_lab.py` (pattern of `fresh_install_lab.py`: disposable lab directly under `.cache`, QMP, user-mode networking, TCG): (1) `/` mounted ro and every Core operation (network change, pool create, witness, storage, backup) passes; (2) A/B boot, forced bad slot → automatic fallback; (3) interrupted update killed at each stage (download, slot write, boot-entry flip, trial boot); (4) power loss via QMP reset under write-through disk cache — labelled *simulated*; (5) verity tamper: flip a slot byte offline, host refuses that slot and boots the other; (6) reinstall with **Repair image** after a disk is replaced, with ESP/slot re-sync; (7) three-VM pool rolling update with VMs running throughout, no dual writable VM; (8) Controller deleted before/during update, fresh Controller adopts. Unit tests (dependency-light, must pass the `github.yml` `tests/test_*.py` job): `tests/test_image_manifest.py` (binding, no throwaway key for release builds), `tests/test_boot_counting.py`, `tests/test_state_version_gate.py`, `tests/test_image_content.py` (no host keys, no machine-id, no apt lists in the built file listing). Reproducibility: build the image twice in the release job and compare SHA-256.
 
 **Workflows.** Forge executes `.github/workflows/`; `.gitea/workflows/` copies stay in step, and every job in `.github` except `github.yml` carries `if: github.server_url != 'https://github.com'` (`AGENTS.md` CI rule). `installer.yml` cannot run ISO-level or privileged steps (its header, BUG-0043) — add only source-level checks there. Add `immutable.yml` modelled on `recovery-libvirt.yml:16-29` (forge-only, TCG, shared-runner concurrency group), mirror it in `.gitea`, and update `tests/test_ci_security.py`. If no runner qualifies, regression coverage is recorded **outstanding**, not skipped.
 
@@ -847,7 +849,7 @@ The ESP is not in fstab and `nex-sync-esp` is deleted: Core's ESP converger (ima
 
 ### D6 — Documentation work list
 
-Guide: rewrite `docs/guide/install-nex-core.md`, `software-updates.md`, `verify-nex-core.md`; update `replace-a-failed-system-disk.md`, `host-maintenance-mode.md`, `pool-authority-and-recovery.md`, `deploy-controller-appliance.md`, `guest-tools.md` (VirtIO path), `storage-repositories.md` (ZFS availability), `publish-a-release.md`, `change-management-network.md`; new pages `roll-back-a-host-update.md`, `reinstall-keeping-state.md`, `use-developer-mode.md`, `collect-host-diagnostics.md`; add all to `docs/guide/README.md`. `docs/API.md` + `docs/api/*.json` + `python3 scripts/generate_api.py` for changed update/status contracts; `docs/DOCUMENTATION.md` assessment; `installer/README.md`; `docs/LICENSING.md`; `CHANGELOG.md` per phase; `docs/qa/` walkthrough reports; `docs/changes/<date>-immutable-*.json` per phase with `state.owner: "core"` and `record` = "host image/slot state `/var/lib/nex/image-state.json` and persistent `/etc` overlay on each host; pool data stays in the pool master's existing records; a fresh Controller recovers it through existing host inventory"; `roadmap.impact: updated` when milestones change (`website/src/routes/roadmap/+page.svelte`). `docs/BUG_LEDGER.md` only for bugs found. **Wording that says "Debian packages/apt" needs a project-owner-approved edit** (not made by this plan): `AGENTS.md:130-131`, `PRODUCT.md:4,18`, `README.md:3`, `installer/README.md:241-246`, `docs/plans/2026-09-24-net-installer.md`, `docs/plans/2026-09-09-package-updates.md`, `website/src/routes/+page.svelte`.
+Guide: rewrite `docs/guide/install-nex-core.md`, `software-updates.md`, `verify-nex-core.md`; update `host-maintenance-mode.md`, `pool-authority-and-recovery.md`, `deploy-controller-appliance.md`, `guest-tools.md` (VirtIO path), `storage-repositories.md` (ZFS availability), `publish-a-release.md`, `change-management-network.md`; new pages `roll-back-a-host-update.md`, `reinstall-keeping-state.md`, `use-developer-mode.md`, `collect-host-diagnostics.md`; add all to `docs/guide/README.md`. `docs/API.md` + `docs/api/*.json` + `python3 scripts/generate_api.py` for changed update/status contracts; `docs/DOCUMENTATION.md` assessment; `installer/README.md`; `docs/LICENSING.md`; `CHANGELOG.md` per phase; `docs/qa/` walkthrough reports; `docs/changes/<date>-immutable-*.json` per phase with `state.owner: "core"` and `record` = "host image/slot state `/var/lib/nex/image-state.json` and persistent `/etc` overlay on each host; pool data stays in the pool master's existing records; a fresh Controller recovers it through existing host inventory"; `roadmap.impact: updated` when milestones change (`website/src/routes/roadmap/+page.svelte`). `docs/BUG_LEDGER.md` only for bugs found. **Wording that says "Debian packages/apt" needs a project-owner-approved edit** (not made by this plan): `AGENTS.md:130-131`, `PRODUCT.md:4,18`, `README.md:3`, `installer/README.md:241-246`, `docs/plans/2026-09-24-net-installer.md`, `website/src/routes/+page.svelte`.
 
 ### D7 — Phased delivery and gates
 
@@ -856,8 +858,7 @@ Every phase gate follows AGENTS.md order: Core behavior → durable host state �
 | Phase | Scope | Gate (all observable, in a disposable lab) |
 |---|---|---|
 | **I-0** Measure and decide | Baseline installed size (`docs/qa/2026-09-18-iso-packaging-efficiency.md`), slot-size budget, d-i udeb-pruning spike, boot/verity spike, owner decisions O1–O9 | Plan, QA report with measured sizes, decisions recorded; no product change |
-| **I-1** Read-only root on current packages | `/` mounted ro, `/etc` overlay, `/var` state partition, apt only in a transitional remount window; fix every runtime write outside `/etc`,`/var` | `findmnt -no OPTIONS /` contains `ro`; fresh install and all item (1) operations pass; Controller deleted → pool re-adopted; reboot keeps config; interrupted `.deb` update leaves a bootable host |
-| **I-2** Prebuilt image, layers, trim | `internal/hostimage` writes slot A (slot B laid out empty); prebuilt modules, optional layers, trimmed set, reproducible build, manifest + source bundle | Offline and netinst UEFI install (single disk and RAID1), BIOS firmware refused before any write; double-build hash equal; image-content tests; licence gate D5 inspected; `apt install` no longer needed on host |
+| **I-2** Prebuilt image, layers, trim | `internal/hostimage` writes slot A (slot B laid out empty); prebuilt modules, optional layers, trimmed set, reproducible build, manifest + source bundle | Offline and netinst install under UEFI and BIOS (single disk and RAID1); double-build hash equal; image-content tests; licence gate D5 inspected; `apt install` no longer needed on host |
 | **I-3** A/B, verity, Core update API | Slot B writes, boot counting, automatic fallback, tamper refusal, update/rollback API and UI | Items (2)(3)(4)(5)(6); rollback preserves config; kill Controller mid-update — Core finishes or reverts alone; state-version gate proven |
 | **I-4** Appliance immutability and rolling updates | Appliance as signed payload with separate Controller state disk; pool master runs a one-host-at-a-time update job through maintenance/fencing rules | Item (7)–(8): quorum kept, VMs running throughout, no duplicate writable VM, update resumes after master change |
 | **I-5** Secure Boot / TPM | Signed boot chain, measured boot, sealed secrets, attestation reporting | Enforcing Secure Boot lab refuses unsigned slot; physical hardware result recorded separately (virtual labs do not establish it) |
@@ -869,9 +870,9 @@ Every phase gate follows AGENTS.md order: Core behavior → durable host state �
 | O1 | Immutable layer built on Debian replaces the "packages/apt" delivery wording in `AGENTS.md:130-131` | Approve the wording after Phase I-0 |
 | O2 | Prebuilt CDDL ZFS module redistribution | Separate optional layer, legal review before any external release |
 | O3 | Nex now rebuilds and hosts an image for every Debian security fix (hosts no longer self-update from Debian); source retention follows image lifetime | Decide rebuild cadence and critical out-of-band SLA |
-| O4 | Persistent operator-signed extension layers and their trust key | Not in I-1…I-4; revisit with I-5 |
-| O5 | Legacy BIOS boot (`installer/README.md:160-167` supports it today) is dropped by the UEFI-only image edition | Confirm UEFI-only for the image edition; keep the BIOS d-i path only for Phase I-1 hosts |
-| O6 | Minimum disk (16 GiB rule) with two slots + state, appliance and VirtIO payloads | Re-measure in I-0; raise minimum if needed |
+| O4 | Persistent operator-signed extension layers and their trust key | Not in I-2…I-4; revisit with I-5 |
+| O5 | BIOS boot | Resolved 2026-10-06: supported, through GRUB on BIOS (D2). |
+| O6 | Minimum disk (24 GiB rule) with two slots + state, appliance and VirtIO payloads | Re-measure in I-0; raise minimum if needed |
 | O7 | Diagnostics download from Controller UI needs an API | CLI-only until requested |
 | O8 | Bit-for-bit reproducibility may not be achievable for the whole image (`installer/README.md:64-67`) | Require hash equality; document and bound any residual diff |
 | O9 | Rolling-update job placement on the pool master | Core-owned, resumable; Controller only requests |
@@ -882,7 +883,7 @@ Every phase gate follows AGENTS.md order: Core behavior → durable host state �
 
 Per `AGENTS.md` and `docs/DOCUMENTATION.md`, documentation lands in the same change as each phase, never at the end.
 
-- [ ] `docs/guide/`: `install-nex-core.md`, `software-updates.md`, `replace-a-failed-system-disk.md`, `verify-nex-core.md`, `recover-without-controller.md`, `deploy-controller-appliance.md`, storage pages for ZFS/cluster layers, plus new pages for rollback, developer mode and diagnostics. Walk each against a disposable lab.
+- [ ] `docs/guide/`: `install-nex-core.md`, `software-updates.md`, `verify-nex-core.md`, `recover-without-controller.md`, `deploy-controller-appliance.md`, storage pages for ZFS/cluster layers, plus new pages for rollback, developer mode and diagnostics. Walk each against a disposable lab.
 - [ ] `docs/API.md` and the machine-readable contracts under `docs/api/` (`python3 scripts/generate_api.py`), `tests/test_api_contract.py`.
 - [ ] `docs/LICENSING.md` (image manifest, source bundle, ZFS posture), `installer/README.md`, `appliance/README.md`.
 - [ ] `AGENTS.md`, `PRODUCT.md`, `README.md` wording after the owner decision.

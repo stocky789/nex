@@ -41,7 +41,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev gnupg
+          sudo apt-get install --yes --no-install-recommends nginx-core dpkg-dev
       # No -race here: the instrumented suite is the forge's job.
       - name: Test Go services
         run: go test ./...

@@ -285,24 +285,24 @@ func TestRetainedSnapshotKeepsHistoricalResourceDependencies(t *testing.T) {
 	}
 }
 
-func TestUnknownLegacySnapshotDependenciesFailClosed(t *testing.T) {
+func TestSnapshotWithoutDependencyRecordFailsClosed(t *testing.T) {
 	vm := managedTestVM()
-	legacy := managedJournal{
-		Command:       protocol.Command{OperationID: "snap-legacy", Kind: "snapshot-create", VM: &vm},
-		Result:        protocol.Result{OperationID: "snap-legacy", Status: "succeeded"},
+	undeclared := managedJournal{
+		Command:       protocol.Command{OperationID: "snap-undeclared", Kind: "snapshot-create", VM: &vm},
+		Result:        protocol.Result{OperationID: "snap-undeclared", Status: "succeeded"},
 		RecoveryStage: "completed", RecoveryOutcome: "completed", RecoverySettled: true,
-		Snapshot: &managedSnapshotRecord{SnapshotID: "snap-legacy"},
+		Snapshot: &managedSnapshotRecord{SnapshotID: "snap-undeclared"},
 	}
 	for _, check := range []struct {
 		name string
 		deps []string
 	}{
-		{"storage", storageDependencies([]managedJournal{legacy}, "unrelated")},
-		{"network", networkDependencies([]managedJournal{legacy}, "unrelated")},
-		{"media", mediaDependencies([]managedJournal{legacy}, "unrelated")},
+		{"storage", storageDependencies([]managedJournal{undeclared}, "unrelated")},
+		{"network", networkDependencies([]managedJournal{undeclared}, "unrelated")},
+		{"media", mediaDependencies([]managedJournal{undeclared}, "unrelated")},
 	} {
 		if len(check.deps) == 0 {
-			t.Errorf("unknown legacy %s dependency set did not fail closed", check.name)
+			t.Errorf("unknown %s dependency set did not fail closed", check.name)
 		}
 	}
 }
@@ -319,13 +319,13 @@ func TestUnresolvedSnapshotIntentBlocksItsCapturedResources(t *testing.T) {
 	}
 }
 
-func TestSnapshotIntentDependenciesAreBoundAndLegacyDigestStaysStable(t *testing.T) {
+func TestSnapshotIntentDependenciesAreBound(t *testing.T) {
 	vm := managedTestVM()
 	command := protocol.Command{Kind: "snapshot-create", OperationID: "snap-deps", VM: &vm, Snapshot: &protocol.VMSnapshotRequest{Name: "before-upgrade"}}
 	record := managedSnapshotRecord{SnapshotID: command.OperationID, Name: command.Snapshot.Name, CreatedAt: time.Now().UTC(),
 		BeforeDomain: snapshotBeforeDomainFixture(), Before: snapshotObservationFixture(), ExpectedAfter: snapshotExpectedObservationFixture(),
 		StorageDependencies: []managedSnapshotStorageDependency{{StorageID: "s", Generation: 2, IdentitySHA256: strings.Repeat("b", 64), SnapshotArtifactPath: "/srv/vm/recovery/snap-deps"}}}
-	legacy, err := managedSnapshotIntentDigest(command, record)
+	undeclared, err := managedSnapshotIntentDigest(command, record)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,8 +335,8 @@ func TestSnapshotIntentDependenciesAreBoundAndLegacyDigestStaysStable(t *testing
 	}
 	record.Dependencies = &dependencies
 	withDependencies, err := managedSnapshotIntentDigest(command, record)
-	if err != nil || legacy == withDependencies {
-		t.Fatalf("new intent dependencies were not bound: legacy=%q new=%q err=%v", legacy, withDependencies, err)
+	if err != nil || undeclared == withDependencies {
+		t.Fatalf("intent dependencies were not bound: undeclared=%q declared=%q err=%v", undeclared, withDependencies, err)
 	}
 	dependencies.NetworkIDs[0] = "different-network"
 	record.Dependencies = &dependencies
@@ -368,34 +368,34 @@ func TestCompletedSnapshotDescriptorCarriesExactDependencies(t *testing.T) {
 	if _, err := managedSnapshotDescriptor(command, reservation, wrong); err == nil {
 		t.Fatal("snapshot descriptor accepted dependencies different from the reserved intent")
 	}
-	legacy := record
-	legacy.Dependencies = nil
-	legacyReservation := reservation
-	legacyReservation.IntentSHA256, err = managedSnapshotIntentDigest(command, legacy)
+	undeclared := record
+	undeclared.Dependencies = nil
+	undeclaredReservation := reservation
+	undeclaredReservation.IntentSHA256, err = managedSnapshotIntentDigest(command, undeclared)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if descriptor, err := managedSnapshotDescriptor(command, legacyReservation, legacy); err != nil || descriptor.Dependencies != nil {
-		t.Fatalf("legacy snapshot descriptor must retain its nil dependencies: %+v, %v", descriptor, err)
+	if descriptor, err := managedSnapshotDescriptor(command, undeclaredReservation, undeclared); err != nil || descriptor.Dependencies != nil {
+		t.Fatalf("snapshot descriptor without dependencies must keep them nil: %+v, %v", descriptor, err)
 	}
 	if _, err := managedSnapshotDescriptor(command, reservation, func() managedSnapshotRecord {
-		legacy := record
-		legacy.Dependencies = nil
-		return legacy
+		undeclared := record
+		undeclared.Dependencies = nil
+		return undeclared
 	}()); err == nil {
-		t.Fatal("completed snapshot descriptor accepted a legacy unknown dependency set")
+		t.Fatal("completed snapshot descriptor accepted an unknown dependency set")
 	}
 }
 
-func TestLegacyCompletedSnapshotJournalAndReplayRemainCompatible(t *testing.T) {
+func TestCompletedSnapshotJournalWithoutDependenciesReplays(t *testing.T) {
 	e := NewManaged(filepath.Join(t.TempDir(), "managed-vms"))
 	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	vm := managedTestVM()
-	command, record, reservation := managedRecoveryEntryForTest(vm, "legacy-snapshot")
+	command, record, reservation := managedRecoveryEntryForTest(vm, "plain-snapshot")
 	if record.Dependencies != nil {
-		t.Fatal("legacy fixture unexpectedly has new dependency metadata")
+		t.Fatal("fixture unexpectedly has dependency metadata")
 	}
 	result := protocol.Result{OperationID: command.OperationID, Status: "succeeded", ObservedAt: time.Unix(123, 0).UTC()}
 	if err := e.save(managedJournal{Command: command, Snapshot: &record, Result: result, Stage: "defined",
@@ -404,15 +404,15 @@ func TestLegacyCompletedSnapshotJournalAndReplayRemainCompatible(t *testing.T) {
 	}
 	loaded, err := e.readJournal(command.OperationID + ".json")
 	if err != nil || loaded.Snapshot.Dependencies != nil {
-		t.Fatalf("legacy completed journal did not load unchanged: %+v, %v", loaded.Snapshot, err)
+		t.Fatalf("completed journal did not load unchanged: %+v, %v", loaded.Snapshot, err)
 	}
 	descriptor, err := managedSnapshotDescriptor(command, reservation, *loaded.Snapshot)
 	if err != nil || descriptor.Dependencies != nil {
-		t.Fatalf("legacy completed descriptor did not preserve nil dependencies: %+v, %v", descriptor, err)
+		t.Fatalf("completed descriptor did not preserve nil dependencies: %+v, %v", descriptor, err)
 	}
 	replayed, err := e.Execute(context.Background(), command, nil)
 	if err != nil || !reflect.DeepEqual(replayed, result) {
-		t.Fatalf("legacy terminal replay changed: got %+v err=%v want %+v", replayed, err, result)
+		t.Fatalf("terminal replay changed: got %+v err=%v want %+v", replayed, err, result)
 	}
 }
 

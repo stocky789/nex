@@ -273,7 +273,7 @@ assert.equal(transferResumePrompt(handedOff), resumePrompt, "Core's sentence is 
 assert.equal(transferResumePrompt({ ...handedOff, last_transfer: null, transfer: transfer({ ...handedOffTransfer, error: "" }) }),
   "This pool's authority was handed to core-b, and that host is not reporting. The authority stays with it until it is powered off.");
 assert.equal(transferResumePrompt({ ...handedOff, last_transfer: null }), "pool peer host-b did not answer this transfer step", "the transfer's own error is Core's too");
-// An older Core that cannot say whether it handed the authority over offers nothing at all.
+// A Core that cannot say whether it handed the authority over offers nothing at all.
 assert.equal(transferResumePrompt({ ...handedOff, transfer: transfer({ ...handedOffTransfer, handed_off: undefined }) }), "", "an unsaid flag is unknown, not false");
 assert.equal(transferResumePrompt({ ...handedOff, transfer: transfer({ ...handedOffTransfer, handed_off: false }) }), "", "nothing irreversible has happened yet");
 // Core keeps a handed-off master change cancellable — the plain cancel still wins if the

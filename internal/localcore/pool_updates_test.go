@@ -28,7 +28,7 @@ func enrolledPoolMaster(t *testing.T, s *Service) {
 }
 
 // The master-only rollout routes need a root session and CSRF, validate their input and answer a
-// refusal with its stable code; the host here has no image engine, so a dry run is refused by it.
+// refusal with its stable code; the host here has no update source, so a dry run is refused by its engine.
 func TestPoolRolloutRoutes(t *testing.T) {
 	s, _ := testService(t)
 	const base = "/api/local/v1/pool/updates"
@@ -59,8 +59,8 @@ func TestPoolRolloutRoutes(t *testing.T) {
 	if code, body := post(s, base+"/rollouts", map[string]any{"request_id": "r", "sequence": 2, "running_vms": "evacuate", "dry_run": true}, cookie, csrf); code != http.StatusConflict || body["code"] != "evacuation_unavailable" {
 		t.Fatalf("evacuate = %d %v", code, body)
 	}
-	if code, body := post(s, base+"/rollouts", map[string]any{"request_id": "r", "sequence": 2, "dry_run": true}, cookie, csrf); code != http.StatusConflict || body["code"] != "unsupported_edition" {
-		t.Fatalf("dry run on a host without the image engine = %d %v", code, body)
+	if code, body := post(s, base+"/rollouts", map[string]any{"request_id": "r", "sequence": 2, "dry_run": true}, cookie, csrf); code != http.StatusConflict || body["code"] != "source_unconfigured" {
+		t.Fatalf("dry run on a host with no update source = %d %v", code, body)
 	}
 	if w = callLocal(s, http.MethodGet, base+"/rollouts/r", nil, cookie, csrf, "https://core.test"); w.Code != http.StatusNotFound {
 		t.Fatalf("an unknown rollout = %d", w.Code)

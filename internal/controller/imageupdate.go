@@ -8,7 +8,7 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-// Image-edition hosts update themselves: the host's engine fetches and verifies the release,
+// Hosts update themselves: the host's engine fetches and verifies the release,
 // writes the inactive slot, arms the boot entry and rolls back on a failed boot, all from its own
 // durable record (/var/lib/nex/image/state.json). The Controller asks for one action at a time and
 // shows what the host reports in Inventory.image; it stores no update state of its own and holds no
@@ -40,8 +40,8 @@ type imageUpdateView struct {
 	Image      *protocol.ImageStatus `json:"image,omitempty"`
 }
 
-// hostImageUpdates implements GET /api/v1/hosts/{id}/updates. A classic host, or a Core that has
-// not yet been acknowledged for image-update-v1, reports no image: that is "unsupported", not an error.
+// hostImageUpdates implements GET /api/v1/hosts/{id}/updates. A Core that has not yet been
+// acknowledged for image-update-v1 reports no image: that is "unsupported", not an error.
 func (c *Controller) hostImageUpdates(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	id := r.PathValue("id")
 	if !nameValid(id) {
@@ -108,7 +108,7 @@ func (c *Controller) relayImageUpdate(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 	if !slices.Contains(row.capabilities, protocol.ImageUpdateCapability) {
-		fail(w, http.StatusConflict, "this host does not run the image edition or does not support image updates; upgrade Nex Core")
+		fail(w, http.StatusConflict, "this host does not support image updates; upgrade Nex Core")
 		return
 	}
 	if row.connection != "fresh" {

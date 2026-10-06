@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import React, { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const { ImageUpdates, imageActions, imageHosts, submitImageAction, submitImageSettings, imagePhaseLabel, imageSnapshot, reportStamp, stillFollowing } =
+const { ImageUpdates, ImageUpdateBadge, imageUpdateNotice, imageActions, imageHosts, submitImageAction, submitImageSettings, imagePhaseLabel, imageSnapshot, reportStamp, stillFollowing } =
   await import(bundleTestModule(new URL("./image-updates.tsx", import.meta.url), "image-updates"));
 
 const booted = { label: "2026.10.2", sequence: 2, slot: "a" };
@@ -59,20 +59,37 @@ assert.match(calls[0].body.request_id, /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/, "the 
 // The panel lists image hosts only and shows what the host reported.
 const host = (id, over = {}) => ({ id, pool_id: "pool-1", hostname: id, revoked: false, connection: "fresh", last_seen: null, capabilities: [], inventory: null, ...over });
 const hosts = [
-  host("classic-host"),
+  host("plain-host"),
   host("image-host", { capabilities: ["image-update-v1"], inventory: { image: image({ available: { label: "2026.10.3", sequence: 3 }, failure: { code: "boot_failed", message: "the new release failed its boot check" } }) } }),
   host("revoked-image", { revoked: true, capabilities: ["image-update-v1"] }),
 ];
 assert.deepEqual(imageHosts(hosts).map(h => h.id), ["image-host"]);
+
+// Update notices come only from the host's own report: newer available, staged, armed; nothing otherwise.
+const withImage = (over, h = {}) => host("n", { inventory: { image: image(over) }, ...h });
+const v3 = { label: "2026.10.3", sequence: 3 };
+assert.equal(imageUpdateNotice(withImage({ available: v3 }))?.label, "Update available");
+assert.equal(imageUpdateNotice(withImage({ available: booted })), null, "not newer than the booted release");
+assert.equal(imageUpdateNotice(withImage({})), null, "nothing reported as available");
+assert.equal(imageUpdateNotice(host("none")), null, "no inventory");
+assert.equal(imageUpdateNotice(withImage({ available: v3 }, { revoked: true })), null);
+assert.equal(imageUpdateNotice(withImage({ phase: "staged", staged: { ...v3, slot: "b" }, available: v3 }))?.kind, "staged");
+assert.equal(imageUpdateNotice(withImage({ phase: "committed", staged: v3, available: v3 })), null, "a staged release is not offered again");
+assert.equal(imageUpdateNotice(withImage({ phase: "armed", staged: v3, available: v3 }))?.label, "Update pending reboot");
+const staleNotice = imageUpdateNotice(withImage({ available: v3 }, { connection: "stale" }));
+assert.equal(staleNotice.current, false);
+assert.match(staleNotice.label, /last report/, "a stale report says so");
+assert.match(renderToStaticMarkup(createElement(ImageUpdateBadge, { host: withImage({ available: v3 }) })), /badge info">Update available</);
+assert.equal(renderToStaticMarkup(createElement(ImageUpdateBadge, { host: withImage({}) })), "");
 const html = renderToStaticMarkup(createElement(ImageUpdates, { hosts, api, busy: false }));
 assert.match(html, /Image updates for image-host/);
-assert.doesNotMatch(html, /classic-host|revoked-image/);
+assert.doesNotMatch(html, /plain-host|revoked-image/);
 assert.match(html, /2026\.10\.2 \(sequence 2, slot a\)/, "running release and slot");
 assert.match(html, /2026\.10\.1 \(sequence 1, slot b\)/, "previous release is shown for roll-back");
 assert.match(html, /2026\.10\.3 \(sequence 3\)/, "available release");
 assert.match(html, /Sequence 1/, "rollback floor");
 assert.match(html, /returned to the previous release[\s\S]*boot_failed: the new release failed its boot check/);
-assert.equal(renderToStaticMarkup(createElement(ImageUpdates, { hosts: [hosts[0]], api, busy: false })), "", "a pool of classic hosts shows no image panel");
+assert.equal(renderToStaticMarkup(createElement(ImageUpdates, { hosts: [hosts[0]], api, busy: false })), "", "a pool of hosts that offer no image-update capability shows no image panel");
 assert.equal(imagePhaseLabel("staged"), "Staged; the next boot is unchanged");
 
 // A new host report replaces a view fetched earlier; a fetched view is used only while the report it

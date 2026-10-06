@@ -39,10 +39,6 @@ func (s *Server) readAPI(w http.ResponseWriter, r *http.Request) {
 			reply(w, 200, filtered)
 			return
 		}
-		if resource == "updates" {
-			reply(w, 200, row{"package": "nex-demo", "installed_version": "simulated", "update_available": false, "repo_url": "", "phase": "idle", "message": "Read-only simulated demo; updates are disabled."})
-			return
-		}
 		if resource == "version" {
 			reply(w, 200, row{"version": "simulated", "product": "Nex demo", "simulated": true})
 			return

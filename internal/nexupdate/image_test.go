@@ -1333,24 +1333,17 @@ func TestExtractReleaseRefusesUnsafeArchives(t *testing.T) {
 	}
 }
 
-func TestEditionAndSettings(t *testing.T) {
+func TestImageSettings(t *testing.T) {
 	dir := t.TempDir()
 	prevOS, prevConf := OSReleasePath, UpdatesConfig
 	t.Cleanup(func() { OSReleasePath, UpdatesConfig = prevOS, prevConf })
 	OSReleasePath, UpdatesConfig = filepath.Join(dir, "os-release"), filepath.Join(dir, "updates.conf")
-	if Edition() != "classic" {
-		t.Fatal("a host without the image os-release is classic")
-	}
-	os.WriteFile(OSReleasePath, []byte("NAME=\"Nex Core\"\nIMAGE_ID=nex-core\nBUILD_ID=\"dev-7\"\n"), 0o644)
-	if Edition() != "image" {
-		t.Fatal("IMAGE_ID=nex-core is the image edition")
-	}
 	t.Setenv("NEX_UPDATE_BASE_URL", "")
 	t.Setenv("NEX_UPDATE_CHANNEL", "")
 	if base, ch := ImageSettings(); base != "" || ch != "stable" {
 		t.Fatalf("there is no built-in base URL: %q %q", base, ch)
 	}
-	os.WriteFile(UpdatesConfig, []byte("repo_url=https://old.example.test/apt\nbase_url=http://mirror.example.test/nex\nchannel=testing\n"), 0o644)
+	os.WriteFile(UpdatesConfig, []byte("base_url=http://mirror.example.test/nex\nchannel=testing\n"), 0o644)
 	if base, ch := ImageSettings(); base != "http://mirror.example.test/nex" || ch != "testing" {
 		t.Fatalf("%q %q", base, ch)
 	}

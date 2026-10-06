@@ -1,35 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Disposable QEMU ISO smoke. Requires QEMU; install mode also needs extracted d-i kernel/initrd.
+"""Disposable QEMU boot-menu smoke: the media reaches its boot menu on BIOS and on UEFI firmware.
 
 python3 tests/integration/iso-smoke.py ISO --output /tmp/nex-boot-UNIQUE
-python3 tests/integration/iso-smoke.py ISO --output /tmp/nex-install-UNIQUE \
-    --kernel VMLINUZ --initrd INITRD.GZ
-Output must not already exist. Disks are newly created regular files, never devices.
-Test automation and test-only root credentials are never written into the shipping ISO.
+Output must not already exist. Needs QEMU. Installing from the media is exercised by
+tests/integration/image_iso_lab.py and image_install_lab.py. Disks are never created or attached.
 """
 import argparse
-import gzip
 import json
 from pathlib import Path
 import shutil
 import socket
 import subprocess
 import time
-
-
-def archive(files, modes=None):
-    """Minimal newc archive for appending test files to Debian's initramfs."""
-    data = bytearray()
-    for ino, (name, body) in enumerate([*files.items(), ('TRAILER!!!', b'')], 1):
-        mode = (modes or {}).get(name, 0o100644)
-        name = name.encode() + b'\0'
-        values = [ino, mode, 0, 0, 1, 0, len(body), 0, 0, 0, 0, len(name), 0]
-        data.extend(b'070701' + ''.join(f'{n:08x}' for n in values).encode() + name)
-        data.extend(b'\0' * (-len(data) % 4))
-        data.extend(body)
-        data.extend(b'\0' * (-len(data) % 4))
-    return gzip.compress(data)
 
 
 def drawn(ppm):
@@ -57,14 +40,14 @@ def qmp(path, command, arguments=None):
         return reply['return']
 
 
-def run_vm(args, label, extra, seconds=15, completion=False):
+def run_vm(args, label, extra, seconds=15):
     accel = args.accel
     qmp_path = args.output / f'{label}.sock'
     serial = args.output / f'{label}.serial.log'
     command = ['qemu-system-x86_64', '-accel', accel, '-cpu', 'host' if accel == 'kvm' else 'max', '-m', '3072', '-smp', '2',
                '-display', 'none', '-monitor', 'none', '-serial', f'file:{serial}',
                '-qmp', f'unix:{qmp_path},server=on,wait=off',
-               '-nic', 'user,model=virtio-net-pci' if args.netinst else 'none', '-no-reboot', *extra]
+               '-nic', 'none', '-no-reboot', *extra]
     (args.output / f'{label}.command.json').write_text(json.dumps(command, indent=2))
     with (args.output / f'{label}.qemu.log').open('w') as log:
         process = subprocess.Popen(command, stdout=log, stderr=log)
@@ -76,17 +59,12 @@ def run_vm(args, label, extra, seconds=15, completion=False):
                 if time.monotonic() >= next_capture and qmp_path.exists():
                     qmp(qmp_path, 'screendump', {'filename': str(args.output / f'{label}.ppm')})
                     next_capture = time.monotonic() + 30
-            if completion and process.poll() is None:
-                raise RuntimeError(f'{label} timed out; inspect {serial}')
-            if completion and process.returncode != 0:
-                raise RuntimeError(f'{label} QEMU failed: {process.returncode}')
-            if not completion and process.poll() is not None:
+            if process.poll() is not None:
                 raise RuntimeError(f'{label} exited before capture; inspect QEMU log')
-            if not completion:
-                shot = args.output / f'{label}.ppm'
-                qmp(qmp_path, 'screendump', {'filename': str(shot)})
-                if not drawn(shot):
-                    raise RuntimeError(f'{label}: the screen is blank, so the ISO never reached a boot menu; inspect {shot}')
+            shot = args.output / f'{label}.ppm'
+            qmp(qmp_path, 'screendump', {'filename': str(shot)})
+            if not drawn(shot):
+                raise RuntimeError(f'{label}: the screen is blank, so the ISO never reached a boot menu; inspect {shot}')
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -94,174 +72,16 @@ def run_vm(args, label, extra, seconds=15, completion=False):
             qmp_path.unlink(missing_ok=True)
 
 
-CHECK = r'''#!/bin/sh
-exec >/dev/ttyS0 2>&1
-set -eu
-trap 'echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
-for p in qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients ovmf python3-virt-firmware openssh-server nftables chrony; do
-    test "$(dpkg-query -W -f='${Status}' "$p")" = 'install ok installed'
-done
-if dpkg-query -W -f='${Status}' zfs-dkms 2>/dev/null | grep -qx 'install ok installed'; then
-    dkms status | grep -q '^zfs/'
-    modprobe zfs
-    zpool version
-    zfs version
-    systemctl is-enabled zfs-import-cache.service
-    if systemctl is-enabled --quiet zfs-import-scan.service; then exit 1; fi
-    systemctl is-active zfs-mount.service
-    echo NEX_SMOKE_ZFS_PASS
-fi
-test "$(dpkg-query -W -f='${Version}' ovmf)" = 2025.02-8+deb13u1
-test -f /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
-grep -Fq /usr/share/OVMF/OVMF_CODE_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
-grep -Fq /usr/share/OVMF/OVMF_VARS_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
-test -f /usr/share/OVMF/OVMF_CODE_4M.ms.fd
-test -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd
-# Transport compression must preserve the entire signed Windows driver media.
-echo '303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d  /usr/share/nex/media/virtio-win.iso' | sha256sum -c -
-if ! test -f /usr/share/nex-core/netinst-available.tsv; then
-    echo '25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d  /usr/share/doc/nex-core/third-party/virtio-win/source/virtio-win-0.1.302-1.src.rpm' | sha256sum -c -
-fi
-test -s /usr/share/nex/core-local/nex-source.tar.gz
-cmp /usr/share/nex/core-local/nex-source.tar.gz /usr/share/nex/appliance/nex-source.tar.gz
-echo NEX_SMOKE_PACKAGING_PAYLOADS_PASS
-cert_dir=$(mktemp -d)
-trap 'rm -rf "$cert_dir"; echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
-(
-    cd "$cert_dir"
-    virt-fw-vars -i /usr/share/OVMF/OVMF_VARS_4M.ms.fd --extract-certs
-)
-check_ovmf_certificate() {
-    expected_cn=$1
-    expected_fingerprint=$2
-    certificate=
-    for candidate in "$cert_dir"/db-*.pem; do
-        test -f "$candidate" || continue
-        if openssl x509 -in "$candidate" -noout -subject | grep -Fq "CN=$expected_cn"; then
-            test -z "$certificate"
-            certificate=$candidate
-        fi
-    done
-    test -n "$certificate"
-    test "$(openssl x509 -in "$certificate" -noout -fingerprint -sha256 | cut -d= -f2)" = "$expected_fingerprint"
-}
-check_ovmf_certificate 'Microsoft Corporation UEFI CA 2011' '48:E9:9B:99:1F:57:FC:52:F7:61:49:59:9B:FF:0A:58:C4:71:54:22:9B:9F:8D:60:3A:C4:0D:35:00:24:85:07'
-check_ovmf_certificate 'Microsoft Windows Production PCA 2011' 'E8:E9:5F:07:33:A5:5E:8B:AD:7B:E0:A1:41:3E:E2:3C:51:FC:EA:64:B3:C8:FA:6A:78:69:35:FD:DC:C7:19:61'
-rm -rf "$cert_dir"
-trap 'echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
-echo NEX_SMOKE_OVMF_ENROLLED_KEYS_PASS
-systemctl is-active libvirtd ssh chrony
-test "$(passwd -S root | awk '{print $2}')" = P
-# Debian reserves higher UIDs for service accounts such as libvirt-qemu (64055).
-test -z "$(awk -F: '$3 >= 1000 && $3 <= 60000 {print $1}' /etc/passwd)"
-echo NEX_SMOKE_ROOT_ONLY_PASS
-virsh -c qemu:///system list --all
-test -c /dev/kvm
-check_identity() {
-    . /etc/os-release
-    test "$ID" = nex-core
-    test "$ID_LIKE" = debian
-    test "$NAME" = 'Nex Core'
-    test "$VERSION_ID" = "$(dpkg-query -W -f='${Version}' nex-core-local)"
-    test "$PRETTY_NAME" = "Nex Core $VERSION_ID"
-    grep -qF "$PRETTY_NAME" /etc/motd /etc/issue
-    test -s /etc/debian_version
-    ( . /usr/lib/os-release; test "$ID" = debian )
-    grep -q Nex /etc/default/grub.d/nex-core.cfg
-    grep -Fq systemd.ssh_auto=no /etc/default/grub.d/nex-core.cfg
-    grep -Fq systemd.ssh_auto=no /proc/cmdline
-    grep -q "Nex Core" /boot/grub/grub.cfg
-    cat /etc/os-release
-    echo NEX_SMOKE_IDENTITY_PASS
-}
-check_identity
-if test -f /var/lib/nex-smoke-marker; then
-    test "$(cat /var/lib/nex-smoke-marker)" = persistent
-    virsh -c qemu:///system dominfo nex-smoke
-    echo NEX_SMOKE_REBOOT_PASS
-else
-    DEBIAN_FRONTEND=noninteractive dpkg -i /root/base-files_*.deb
-    check_identity
-    work=/var/lib/libvirt/images/nex-smoke
-    mkdir -p "$work/root/bin"
-    cp /bin/busybox "$work/root/bin/"
-    ldd /bin/busybox | awk '/=> \// {print $3} $1 ~ /^\// {print $1}' | while read -r lib; do
-        cp --parents "$lib" "$work/root/"
-    done
-    cat >"$work/root/init" <<'INIT'
-#!/bin/busybox sh
-echo NEX_NESTED_KVM_BOOT_PASS
-/bin/busybox poweroff -f
-INIT
-    chmod +x "$work/root/init"
-    (cd "$work/root" && find . -print0 | cpio --null -o -H newc | gzip) >"$work/initrd.gz"
-    cp "/boot/vmlinuz-$(uname -r)" "$work/vmlinuz"
-    cat >"$work/guest.xml" <<XML
-<domain type='kvm'>
-  <name>nex-smoke</name><memory unit='MiB'>256</memory><vcpu>1</vcpu>
-  <os><type arch='x86_64'>hvm</type><kernel>$work/vmlinuz</kernel><initrd>$work/initrd.gz</initrd><cmdline>console=ttyS0 rdinit=/init panic=-1</cmdline></os>
-  <devices><serial type='file'><source path='$work/guest.log'/><target port='0'/></serial></devices>
-</domain>
-XML
-    virsh -c qemu:///system define "$work/guest.xml"
-    virsh -c qemu:///system start nex-smoke
-    tries=0
-    until grep -q NEX_NESTED_KVM_BOOT_PASS "$work/guest.log"; do
-        tries=$((tries + 1))
-        test "$tries" -lt 60
-        sleep 1
-    done
-    cat "$work/guest.log"
-    virsh -c qemu:///system destroy nex-smoke || test "$(virsh -c qemu:///system domstate nex-smoke)" = "shut off"
-    echo persistent >/var/lib/nex-smoke-marker
-    echo NEX_SMOKE_FIRST_BOOT_PASS
-fi
-sync
-trap - EXIT
-systemctl poweroff
-'''
-
-PRESEED = '''d-i debian-installer/locale string en_US.UTF-8
-d-i keyboard-configuration/xkb-keymap select us
-d-i netcfg/enable boolean false
-d-i netcfg/get_hostname string nex-smoke
-d-i netcfg/get_domain string test.invalid
-d-i hw-detect/load_firmware boolean false
-d-i passwd/root-password password nex-disposable-test-only
-d-i passwd/root-password-again password nex-disposable-test-only
-d-i clock-setup/utc boolean true
-d-i clock-setup/ntp boolean false
-d-i time/zone string UTC
-d-i partman-auto/disk string /dev/vda
-d-i partman-auto/method string regular
-d-i partman-auto/choose_recipe select atomic
-d-i partman/confirm_write_new_label boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
-d-i grub-installer/only_debian boolean true
-d-i grub-installer/bootdev string /dev/vda
-d-i finish-install/reboot_in_progress note
-d-i debian-installer/exit/poweroff boolean true
-d-i preseed/late_command string /bin/sh /cdrom/nex/late-install.sh && cp /cdrom/nex/repo/base-files_*.deb /target/root/ && cp /nex-smoke.sh /target/root/nex-smoke.sh && cp /nex-smoke.service /target/etc/systemd/system/nex-smoke.service && in-target systemctl enable nex-smoke.service && echo NEX_SMOKE_INSTALL_PASS > /dev/ttyS0
-'''
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('iso', type=Path)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--kernel', type=Path)
-    parser.add_argument('--initrd', type=Path)
-    parser.add_argument('--netinst', action='store_true', help='Enable disposable VM networking for a network installer ISO')
     parser.add_argument('--uefi-code', type=Path, help='OVMF CODE file; matching VARS file must be beside it')
     parser.add_argument('--accel', choices=['kvm', 'tcg'], default='kvm', help='QEMU accelerator for every guest (tcg when the host has no /dev/kvm)')
     args = parser.parse_args()
     args.iso = args.iso.resolve(strict=True)
     if not args.iso.is_file():
         parser.error('ISO must be a regular file')
-    if bool(args.kernel) != bool(args.initrd):
-        parser.error('--kernel and --initrd must be used together')
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     iso = ['-cdrom', str(args.iso), '-boot', 'd']
@@ -275,34 +95,6 @@ def main():
     code = code.resolve(strict=True)
     uefi = ['-machine', 'q35,smm=on', '-drive', f'if=pflash,format=raw,readonly=on,file={code}', '-drive', f'if=pflash,format=raw,file={nvram}']
     run_vm(args, 'uefi-menu', [*uefi, *iso], seconds=60)
-    if args.kernel:
-        disk = args.output / 'disposable.raw'
-        with disk.open('xb') as handle:
-            handle.truncate(24 * 1024**3)
-        drives = ['-drive', f'file={disk},format=raw,if=virtio']
-        initrd = args.output / 'test-only-initrd.gz'
-        service = '[Unit]\nAfter=libvirtd.service ssh.service chrony.service\nWants=libvirtd.service ssh.service chrony.service\n[Service]\nType=oneshot\nExecStart=/bin/sh /root/nex-smoke.sh\n[Install]\nWantedBy=multi-user.target\n'
-        # Load shipping policy from the actual ISO after CD detection: its early
-        # hook needs the media and anna, which are unavailable at initrd startup.
-        preseed = PRESEED
-        if args.netinst:
-            preseed = preseed.replace('netcfg/enable boolean false', 'netcfg/enable boolean true')
-            preseed = preseed.replace('cp /cdrom/nex/repo/base-files_*.deb /target/root/',
-                                      'cp /cdrom/pool/main/b/base-files/base-files_*.deb /target/root/')
-            preseed += 'd-i netcfg/choose_interface select auto\nd-i netcfg/disable_autoconfig boolean false\n'
-        initrd.write_bytes(args.initrd.read_bytes() + archive({
-            'preseed.cfg': (preseed + 'd-i preseed/file string /nex-smoke-media.cfg\n').encode(),
-            'nex-smoke-media.cfg': b'd-i preseed/include string /cdrom/preseed.cfg /nex-smoke.cfg\n',
-            'nex-smoke.cfg': preseed.encode(),
-            'nex-smoke.sh': CHECK.encode(), 'nex-smoke.service': service.encode()}))
-        install_label = 'network-install' if args.netinst else 'offline-install'
-        run_vm(args, install_label, [*drives, *iso, '-kernel', str(args.kernel.resolve()), '-initrd', str(initrd), '-append', 'auto=true priority=critical console=ttyS0,115200n8'], seconds=1800, completion=True)
-        if 'NEX_SMOKE_INSTALL_PASS' not in (args.output / f'{install_label}.serial.log').read_text(errors='replace'):
-            raise RuntimeError('Installer did not report success')
-        for label, marker in [('installed-first-boot', 'NEX_SMOKE_FIRST_BOOT_PASS'), ('installed-reboot', 'NEX_SMOKE_REBOOT_PASS')]:
-            run_vm(args, label, drives, seconds=180, completion=True)
-            if marker not in (args.output / f'{label}.serial.log').read_text(errors='replace'):
-                raise RuntimeError(f'Missing {marker}; inspect serial log')
     print(f'QEMU checks completed; inspect captures and logs at {args.output}. Secure Boot and physical hardware are not covered.')
 
 

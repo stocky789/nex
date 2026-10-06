@@ -631,18 +631,18 @@ func TestRestoreAsNewNativeCapacityRefusalReleasesExactOwner(t *testing.T) {
 		t.Fatalf("pin remained after proven native refusal: %+v %v", pins, err)
 	}
 	markOwner = false
-	legacy := protocol.Command{OperationID: "restore-capacity-legacy", Kind: protocol.BackupKindRestoreNew,
+	unproven := protocol.Command{OperationID: "restore-capacity-unproven", Kind: protocol.BackupKindRestoreNew,
 		Restore: &protocol.RestoreAsNewRequest{RepositoryID: "repo-1", RecoveryPointID: "point-1",
-			NewVMID: "33333333-3333-4333-8333-333333333333", NewVMName: "legacy-owner", StorageID: "storage-1", HostID: s.State.HostID}}
-	result, err = executeRestoreAsNew(context.Background(), s, legacy, time.Now().UTC())
+			NewVMID: "33333333-3333-4333-8333-333333333333", NewVMName: "unproven-owner", StorageID: "storage-1", HostID: s.State.HostID}}
+	result, err = executeRestoreAsNew(context.Background(), s, unproven, time.Now().UTC())
 	if err != nil || result.Status != "needs_attention" || !strings.Contains(result.Error, "dedicated memory") {
-		t.Fatalf("unproven legacy owner must retain uncertainty and cause: %+v %v", result, err)
+		t.Fatalf("unproven owner must retain uncertainty and cause: %+v %v", result, err)
 	}
 	pins, err = ActiveBackupRestorePins(s)
 	if err != nil || !pins["point-1"] {
-		t.Fatalf("unproven legacy owner lost pin: %+v %v", pins, err)
+		t.Fatalf("unproven owner lost pin: %+v %v", pins, err)
 	}
-	reconciled, err := reconcileRestoreAsNewAttention(context.Background(), s.dir, s.State, legacy)
+	reconciled, err := reconcileRestoreAsNewAttention(context.Background(), s.dir, s.State, unproven)
 	if err != nil || reconciled.Status != "needs_attention" || !strings.Contains(reconciled.Error, "dedicated memory") {
 		t.Fatalf("observation erased original capacity refusal: %+v %v", reconciled, err)
 	}
@@ -936,7 +936,7 @@ func seedPublishedPointWithoutSpec(t *testing.T, mount, repoID, poolID, pointID 
 		_ = err
 	}
 	diskPath := filepath.Join(t.TempDir(), "vda.qcow2")
-	payload := []byte("legacy-point")
+	payload := []byte("point-data")
 	if err := os.WriteFile(diskPath, payload, 0600); err != nil {
 		t.Fatal(err)
 	}

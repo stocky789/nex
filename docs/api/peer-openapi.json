@@ -2732,7 +2732,7 @@
             "description": "Not an authorized pool peer."
           },
           "409": {
-            "description": "Refused: this host cannot report (it does not run the image edition)."
+            "description": "Refused: this host cannot report."
           }
         }
       }
@@ -10206,7 +10206,10 @@
             "format": "date-time"
           },
           "controls": {
-            "type": ["array", "null"],
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "$ref": "#/components/schemas/PoolUpdateControlResult"
             }
@@ -10231,21 +10234,49 @@
         "description": "Core-owned replicated control receipt retained across later rollouts. Exact request_id/normalized intent replay returns the original snapshot or error; snapshots omit controls. No rollout and no code means an unresolved outcome, continued by Core without Controller. replication_pending also blocks competing transitions until the terminal result is acknowledged. At most one unresolved/ACK-pending receipt exists; it names the current rollout. Terminal records have no reservation; rollback_started is valid only for an unresolved rollback_host.",
         "x-go-type": "protocol.PoolUpdateControlResult",
         "properties": {
-          "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
-          "request": {"$ref": "#/components/schemas/PoolUpdateRequest"},
-          "replication_pending": {"type": "boolean", "description": "The immutable terminal result awaits the existing required authority ACK; Core retries acknowledgement before admitting another transition."},
-          "reserved_result_bytes": {"type": "integer", "minimum": 0, "maximum": 1048576, "description": "Reserved addressed-authority capacity for an unresolved result; included in all admission checks and released when its terminal snapshot/error is recorded."},
-          "rollback_started": {"type": "boolean", "description": "Durable rollback intent retaining the original host attempt/step identity; it does not prove a replica ACK or host dispatch. Transport loss is reconciled under that unchanged identity."},
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "request": {
+            "$ref": "#/components/schemas/PoolUpdateRequest"
+          },
+          "replication_pending": {
+            "type": "boolean",
+            "description": "The immutable terminal result awaits the existing required authority ACK; Core retries acknowledgement before admitting another transition."
+          },
+          "reserved_result_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1048576,
+            "description": "Reserved addressed-authority capacity for an unresolved result; included in all admission checks and released when its terminal snapshot/error is recorded."
+          },
+          "rollback_started": {
+            "type": "boolean",
+            "description": "Durable rollback intent retaining the original host attempt/step identity; it does not prove a replica ACK or host dispatch. Transport loss is reconciled under that unchanged identity."
+          },
           "rollout": {
             "anyOf": [
-              {"$ref": "#/components/schemas/PoolUpdateRollout"},
-              {"type": "null"}
+              {
+                "$ref": "#/components/schemas/PoolUpdateRollout"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "code": {"type": "string"},
-          "message": {"type": "string"}
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
         },
-        "required": ["request_id", "request"]
+        "required": [
+          "request_id",
+          "request"
+        ]
       },
       "PoolUpdateHost": {
         "type": "object",

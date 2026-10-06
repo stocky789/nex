@@ -2,9 +2,6 @@
 package controller
 
 import (
-	"crypto/pbkdf2"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -51,7 +48,7 @@ func TestIncompleteLoginDoesNotReserveHashCapacity(t *testing.T) {
 		t.Fatalf("incomplete requests starved complete login: %d %s", w.Code, w.Body)
 	}
 }
-func TestSessionIdleAbsoluteAndLegacyCookie(t *testing.T) {
+func TestSessionIdleAbsoluteAndUnprefixedCookie(t *testing.T) {
 	a := newClient(t)
 	if a.cookie.Name != "__Host-nex_session" || a.cookie.Domain != "" || a.cookie.Path != "/" {
 		t.Fatal("unsafe cookie scope")
@@ -119,29 +116,6 @@ func TestControllerSessionCapPrunesExpired(t *testing.T) {
 		t.Fatal(count)
 	}
 }
-func TestExistingDatabaseGetsIdleDeadlineAndKeepsPassword(t *testing.T) {
-	a := newClient(t)
-	cfg := a.c.cfg
-	// Simulate the original four-column session schema and existing shorter hash.
-	salt := "legacy"
-	hash, _ := pbkdf2.Key(sha256.New, "old-password", []byte(salt), 600000, 32)
-	if _, err := a.c.db.Exec("UPDATE admins SET salt=?,password=?", salt, hex.EncodeToString(hash)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.c.db.Exec("ALTER TABLE sessions DROP COLUMN idle_expires"); err != nil {
-		t.Fatal(err)
-	}
-	a.c.Close()
-	cfg.Password = ""
-	c, err := Open(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.c = c
-	a.call("GET", "/api/v1/session", nil, nil, 401)
-	a.call("POST", "/api/v1/session", map[string]string{"username": "root", "password": "old-password"}, nil, 200)
-}
-
 // Short passwords must bootstrap and authenticate unchanged, including Unicode and spaces.
 func TestControllerShortPasswordBootstrapAndLogin(t *testing.T) {
 	for _, password := range []string{"a", "é", " 🔑 "} {

@@ -30,6 +30,9 @@ type HostHardware struct {
 	PCI        HardwarePCI      `json:"pci"`
 	Sensors    HardwareSensors  `json:"sensors"`
 	MDArrays   HardwareMDArrays `json:"md_arrays"`
+	// SystemDisk is the host's record of its system disk: where the running system started from
+	// and the latest replacement. Absent from a host that does not keep one.
+	SystemDisk *HardwareSystemDisk `json:"system_disk,omitempty"`
 }
 
 // HardwareSystem describes the machine, its board, chassis and firmware. Serial numbers are

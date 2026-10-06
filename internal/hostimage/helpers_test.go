@@ -46,14 +46,13 @@ func (r *recorder) index(prefix string) int {
 	return -1
 }
 
-// sandbox points the package's mount directories at a temp dir and returns it.
+// sandbox points the package's mount directories at a temp dir and returns it. The simulated machine started through
+// UEFI (tests of the BIOS method set Writer.Boot).
 func sandbox(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	oldBase, oldESP, oldMD := mountBase, espMountBase, mdDevDir
-	mountBase, espMountBase, mdDevDir = filepath.Join(dir, "run"), filepath.Join(dir, "run", "esp"), filepath.Join(dir, "md")
-	t.Cleanup(func() { mountBase, espMountBase, mdDevDir = oldBase, oldESP, oldMD })
-	return dir
+	restore := SandboxMounts(t.TempDir())
+	t.Cleanup(restore)
+	return filepath.Dir(mountBase)
 }
 
 // makeVerityImage returns a hash-tree image (superblock + tree) for data and the root hash.

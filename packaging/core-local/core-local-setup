@@ -11,8 +11,7 @@ import subprocess
 
 CONFIG = Path('/etc/nex/core-local.env')
 STATE = Path('/var/lib/nex/core-local')
-BUNDLE = Path('/usr/share/nex/appliance')
-# Image edition: the Controller system image is an on-demand payload outside the verified slot, one directory per digest.
+# The Controller system image is an on-demand payload outside the verified slot, one directory per digest.
 PAYLOAD = Path('/var/lib/nex/payload')
 ISSUE = Path('/run/issue.d/50-nex-local.issue')
 
@@ -33,7 +32,7 @@ def console_notice(text):
 
 
 def controller_system_image(config):
-    """(path, sha256) of the Controller system image for Core's two-disk profile, or None for the single-disk appliance.
+    """(path, sha256) of the Controller system image for Core's two-disk profile, or None while none is configured.
 
     `configure --controller-image-sha256` names the vm-image release component by the digest in the signed release
     manifest; the image itself is the on-demand payload Core fetched, under /var/lib/nex/payload/<sha256>/.
@@ -103,9 +102,7 @@ def initialize(config):
                         '-addext', 'subjectAltName=IP:' + config['address'],
                         '-keyout', str(key), '-out', str(cert)], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # The host root account is now the sole credential authority; never modify it.
-    for legacy in ('initial-password', 'credentials.json'):
-        (STATE / legacy).unlink(missing_ok=True)
+    # The host root account is the sole credential authority; never modify it.
     address = config['address']
     host = '[' + address + ']' if ':' in address else address
     # Pre-login agetty shows /etc/issue then /run/issue.d; keep this short and factual.
@@ -123,7 +120,7 @@ def main():
     parser.add_argument('--address')
     parser.add_argument('--storage')
     parser.add_argument('--bridge', default='')
-    parser.add_argument('--controller-image-sha256', help='configure: deploy the two-disk read-only Controller profile from this vm-image release component (image edition); pass "" to return to the single-disk appliance')
+    parser.add_argument('--controller-image-sha256', help='configure: deploy the two-disk read-only Controller profile from this vm-image release component; pass "" to clear it')
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error('root is required')
@@ -163,9 +160,6 @@ def main():
     if profile:
         # The digest in the signed release manifest is the only integrity check of the system image.
         argv += ['--controller-system-image', str(profile[0]), '--controller-system-image-sha256', profile[1]]
-    else:
-        argv += ['--image', str(BUNDLE / 'controller.qcow2'), '--manifest', str(BUNDLE / 'manifest.json'),
-                 '--signature', str(BUNDLE / 'manifest.sig'), '--trusted-key', str(BUNDLE / 'release.pub')]
     if args.action == 'prepare-recovery':
         if not args.request_file:
             parser.error('prepare-recovery requires --request-file')

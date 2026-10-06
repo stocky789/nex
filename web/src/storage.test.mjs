@@ -49,7 +49,7 @@ assert.match(src, /Inspection interrupted, select the target again\./);
 assert.match(src, /const changedContext = changed\(\["kind", "host_id", "portal", "target_iqn"\]\);/);
 
 assert.equal(defaultLocalStorage({ kind: "local", path: "/var/lib/libvirt/images", name: "Renamed by operator" }), true);
-assert.equal(defaultLocalStorage({ path: "/var/lib/libvirt/images", name: "ISO" }), true, "legacy default registration");
+assert.equal(defaultLocalStorage({ path: "/var/lib/libvirt/images", name: "ISO" }), true, "path-only default registration");
 assert.equal(defaultLocalStorage({ kind: "local", path: "/srv/images", name: "Local storage" }), false);
 assert.equal(defaultLocalStorage({ kind: "nfs", path: "/var/lib/libvirt/images" }), false);
 assert.match(src, /disabled=\{[^}]*defaultLocalStorage\(s\)\}/);

@@ -215,7 +215,7 @@ func TestResumeWithNativeReceiptRetriesFencingPolicyWithoutNativeReapply(t *test
 	}
 }
 
-func TestLegacyTransportUpgradeRefreshesStaleMasterHealthBeforeReadinessGate(t *testing.T) {
+func TestTransportUpgradeRefreshesStaleMasterHealthBeforeReadinessGate(t *testing.T) {
 	s, op := bootProjection(t, "healthy")
 	if err := vmhost.CommitClusteredStorageRegistration(context.Background(), s.dir+"/managed-vms", op.Registration); err != nil {
 		t.Fatal(err)
@@ -232,18 +232,18 @@ func TestLegacyTransportUpgradeRefreshesStaleMasterHealthBeforeReadinessGate(t *
 		op.Members = append(op.Members, clusterMemberStatus{HostID: node.HostID, Status: health(), Generation: op.Config.Generation, MembershipGeneration: op.MembershipGeneration, ClusterID: op.Config.ClusterID, ConfigDigest: op.Config.Digest(), Stage: "health", UpdatedAt: observed})
 	}
 	if missing, err := clusterMissingNativeReceipt(s, op); err != nil || missing {
-		t.Fatalf("legacy fixture did not retain matching native receipt: missing=%v err=%v", missing, err)
+		t.Fatalf("fixture did not retain matching native receipt: missing=%v err=%v", missing, err)
 	}
 	if err := saveStorageClusters(s, storageClusterState{Operations: map[string]storageClusterOperation{op.RequestID: op}}); err != nil {
 		t.Fatal(err)
 	}
 	if state, err := loadStorageClusters(s); err != nil || len(state.Operations[op.RequestID].Members) != 3 {
-		t.Fatalf("legacy fixture members were not durable: state=%#v err=%v", state.Operations[op.RequestID], err)
+		t.Fatalf("fixture members were not durable: state=%#v err=%v", state.Operations[op.RequestID], err)
 	}
 	if state, err := loadStorageClusters(s); err != nil {
 		t.Fatal(err)
 	} else if missing, err := clusterMissingNativeReceipt(s, state.Operations[op.RequestID]); err != nil || missing {
-		t.Fatalf("durable legacy receipt was not recognized: missing=%v err=%v", missing, err)
+		t.Fatalf("durable receipt was not recognized: missing=%v err=%v", missing, err)
 	}
 	oldGate, oldHealth, oldMonitor, oldTransport, oldFencing := installClusterStorageBootGate, observeStorageClusterHealth, validateStorageClusterSessionMonitor, reconcileNativeStorageClusterTransport, reconcileNativeStorageClusterFencing
 	t.Cleanup(func() {
@@ -269,9 +269,9 @@ func TestLegacyTransportUpgradeRefreshesStaleMasterHealthBeforeReadinessGate(t *
 	}
 	got := state.Operations[op.RequestID]
 	if transportCalls != 1 || got.Status != "healthy" || got.Activation == nil || !got.Activation.CommittedAt.Equal(op.Activation.CommittedAt) || time.Since(got.Members[0].UpdatedAt) > time.Minute || !got.Members[0].Status.SessionMonitorReady {
-		t.Fatalf("legacy transport retry did not refresh and settle safely: calls=%d operation=%#v", transportCalls, got)
+		t.Fatalf("transport retry did not refresh and settle safely: calls=%d operation=%#v", transportCalls, got)
 	}
-	// A failed legacy upgrade follows its dedicated retry branch. It must refresh
+	// A failed transport upgrade follows its dedicated retry branch. It must refresh
 	// the stale live master observation before testing readiness again, then
 	// restore the observed healthy state rather than remain needs_attention.
 	got.Status, got.Error = "needs_attention", clusterTransportMonitorReconcileFailure
@@ -287,7 +287,7 @@ func TestLegacyTransportUpgradeRefreshesStaleMasterHealthBeforeReadinessGate(t *
 	}
 	got = state.Operations[op.RequestID]
 	if transportCalls != 2 || got.Status != "healthy" || got.Error != "" || time.Since(got.Members[0].UpdatedAt) > time.Minute {
-		t.Fatalf("legacy transport needs_attention retry did not settle: calls=%d operation=%#v", transportCalls, got)
+		t.Fatalf("transport needs_attention retry did not settle: calls=%d operation=%#v", transportCalls, got)
 	}
 }
 

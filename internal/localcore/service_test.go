@@ -26,7 +26,7 @@ func testRootAuth(_ context.Context, password string) error {
 func testService(t *testing.T) (*Service, Config) {
 	t.Helper()
 	dir := t.TempDir()
-	cfg := Config{DataDir: filepath.Join(dir, "state"), AgentStateDir: filepath.Join(dir, "agent"), Authenticate: testRootAuth, Engine: vmhost.Config{StateDir: filepath.Join(dir, "vmstate"), StorageDir: filepath.Join(dir, "storage"), Bridge: "br0"}}
+	cfg := Config{DataDir: filepath.Join(dir, "state"), AgentStateDir: filepath.Join(dir, "agent"), Authenticate: testRootAuth, Engine: vmhost.Config{StateDir: filepath.Join(dir, "vmstate"), StorageDir: filepath.Join(dir, "storage"), Bridge: "br0"}, ImageUpdate: idleUpdateEngine(dir)}
 	s, err := Open(cfg)
 	if err != nil {
 		t.Fatal(err)

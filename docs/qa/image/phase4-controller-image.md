@@ -2,7 +2,7 @@
 
 Date: 2026-10-02. Plan: [Immutable Nex Core](../../plans/2026-10-01-immutable-nex-core.md), "Controller appliance" and "Delivery phases"
 I-4. Closes the first open item of [phase4-appliance.md](phase4-appliance.md): the guest image that fits Core's two-disk profile.
-Owner decisions applied: UEFI-only image edition, Debian stays the package source, one root signature (no separate appliance signature
+Owner decisions applied: UEFI-only at that point, Debian stays the package source, one root signature (no separate appliance signature
 for this profile), no remote publishing, private hosts never in tracked files.
 
 **Environment: one workstation, Docker builds and one QEMU/KVM guest at a time** (`-smp 2 -m 2048`, user-mode networking, OVMF with no
@@ -92,8 +92,8 @@ Found by the 2026-10-02 review of the branch; the image was **not rebuilt and no
 - **Reproducibility of the guest image:** no double build. Only `release.py controller` was repeated over one mkosi tree: identical `system.img`
   digest across three runs. One earlier pass over the first tree printed a different root hash than later passes over what should have been the
   same tree; the cause was not found (the tree was rebuilt after fixes, so the two were not proven to be the same tree).
-- **Controller `.deb` and classic single-disk appliance, the Controller's APT routes and panel, `appendUpdateBootstrap` for single-disk seeds:**
-  deliberately **kept**: the classic edition and the single-disk appliance still depend on them and the swap does not exist there.
+- **Controller `.deb` and single-disk appliance, the Controller's APT routes and panel, `appendUpdateBootstrap` for single-disk seeds:**
+  deliberately **kept**: the single-disk appliance still depends on them and the swap does not exist there.
 - **Source delivery:** `scripts/build-source.py` does not put `image/` into `nex-source.tar.gz`; the guest ships the Nex source and the Debian
   package inventory (`components.tsv`) but not the image tooling.
 - **CI:** the workflows were never run on a forge; only their structure is tested. Secure Boot, TPM, physical hardware, the Controller UI against this guest and

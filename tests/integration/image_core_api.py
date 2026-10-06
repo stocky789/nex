@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Boot proof of a Nex Core image that contains nex-core-local: one VM, the host-local API answering.
 
-Needs a release built by image/build.sh with NEX_PACKAGE_DIRS pointing at the image-edition nex-core-local deb
-(packaging/core-local/build.py --edition image). The script installs it on a fresh single disk (same container and
+Needs a release built by image/build.sh with NEX_PACKAGE_DIRS pointing at the nex-core-local deb
+(packaging/core-local/build.py). The script installs it on a fresh single disk (same container and
 `nex-hostimage install` as image_boot.py), boots it under QEMU/KVM + OVMF, and drives a root shell on the VM's second
 serial port. In the guest it checks, and prints PASS/FAIL for:
 

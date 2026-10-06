@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"database/sql"
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
@@ -396,65 +395,3 @@ func TestEnrollmentCreatesPoolWithMaster(t *testing.T) {
 	}
 }
 
-// Databases from the manual-pool era gain a master per pool and lose pools that never had a host.
-func TestOpenMigratesManualPools(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	path := dir + "/controller.db"
-	if err := os.WriteFile(path, nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(1);
- CREATE TABLE sites(id TEXT PRIMARY KEY,name TEXT NOT NULL);
- CREATE TABLE pools(id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),name TEXT NOT NULL);
- CREATE TABLE hosts(id TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pools(id),hostname TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen TEXT,inventory TEXT,sequence INTEGER NOT NULL DEFAULT 0);
- CREATE TABLE tokens(hash TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pools(id),host_id TEXT,expires INTEGER NOT NULL,csr TEXT,response TEXT);
- CREATE TABLE appliance_bootstraps(request_id TEXT PRIMARY KEY,site_name TEXT NOT NULL,pool_name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,site_id TEXT NOT NULL REFERENCES sites(id),pool_id TEXT NOT NULL REFERENCES pools(id));
- INSERT INTO sites VALUES('s','Lab');
- INSERT INTO pools VALUES('shared','s','Shared'); INSERT INTO pools VALUES('empty','s','Empty'); INSERT INTO pools VALUES('gone','s','Gone');
- INSERT INTO hosts(id,pool_id,hostname,revoked) VALUES('old','shared','old',1); INSERT INTO hosts(id,pool_id,hostname) VALUES('second','shared','second'); INSERT INTO hosts(id,pool_id,hostname) VALUES('third','shared','third');
- INSERT INTO hosts(id,pool_id,hostname,revoked) VALUES('retired','gone','retired',1);
- INSERT INTO tokens(hash,pool_id,host_id,expires) VALUES('t','empty','',0);
- INSERT INTO appliance_bootstraps VALUES('r','Lab','Shared','h','s','shared')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-	c, err := Open(Config{DataDir: dir, Username: "root", Password: "a-long-test-password"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	rows, err := c.db.Query("SELECT id,master_host_id FROM pools ORDER BY id")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	got := map[string]string{}
-	for rows.Next() {
-		var id, master string
-		if err := rows.Scan(&id, &master); err != nil {
-			t.Fatal(err)
-		}
-		got[id] = master
-	}
-	if len(got) != 2 || got["shared"] != "second" || got["gone"] != "retired" {
-		t.Fatalf("migration masters/orphans wrong: %v", got)
-	}
-	for table, column := range map[string]string{"tokens": "site_id", "appliance_bootstraps": "site_id"} {
-		cols, err := columns(c.db, table)
-		if err != nil || !cols[column] || cols["pool_id"] {
-			t.Fatalf("%s not recreated: %v %v", table, cols, err)
-		}
-	}
-	var n int
-	if c.db.QueryRow("SELECT count(*) FROM tokens").Scan(&n) != nil || n != 0 {
-		t.Fatal("old pool-bound tokens survived")
-	}
-}

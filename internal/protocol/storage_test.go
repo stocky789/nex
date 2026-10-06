@@ -32,11 +32,11 @@ func TestValidateStorageRegistration(t *testing.T) {
 			}
 		})
 	}
-	legacy := StorageRegistration{ID: "old-local", Path: "/var/lib/libvirt/images", OperationID: "old-operation"}
-	if legacy.StorageKind() != StorageKindLocal || ValidateStorageRegistration(legacy, false) != nil {
-		t.Fatal("v1 path-only local journal was not accepted")
+	pathOnly := StorageRegistration{ID: "old-local", Path: "/var/lib/libvirt/images", OperationID: "old-operation"}
+	if pathOnly.StorageKind() != StorageKindLocal || ValidateStorageRegistration(pathOnly, false) != nil {
+		t.Fatal("path-only local registration was not accepted")
 	}
-	localWithSpace := legacy
+	localWithSpace := pathOnly
 	localWithSpace.Path = "/var/lib/libvirt/vm images"
 	if err := ValidateStorageRegistration(localWithSpace, false); err != nil {
 		t.Fatalf("ZFS mount validation changed local path behavior: %v", err)
@@ -165,7 +165,7 @@ func TestValidateStorageLifecycle(t *testing.T) {
 		{"detach", StorageLifecycleRequest{Action: "detach", RepositoryID: base.RepositoryID, PoolID: base.PoolID, HostID: base.HostID, ExpectedGeneration: 1}, true},
 		{"recheck changes config", StorageLifecycleRequest{Action: "recheck", RepositoryID: base.RepositoryID, PoolID: base.PoolID, HostID: base.HostID, Registration: ptr(storageRegistration(StorageKindNFS))}, false},
 		{"detach no generation", StorageLifecycleRequest{Action: "detach", RepositoryID: base.RepositoryID, PoolID: base.PoolID, HostID: base.HostID}, false},
-		{"register is legacy command", StorageLifecycleRequest{Action: "register", RepositoryID: base.RepositoryID, PoolID: base.PoolID, HostID: base.HostID}, false},
+		{"register uses the Command.Storage shape", StorageLifecycleRequest{Action: "register", RepositoryID: base.RepositoryID, PoolID: base.PoolID, HostID: base.HostID}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := ValidateStorageLifecycle(c.v)
@@ -233,7 +233,7 @@ func TestSMBMarkerIdentityIsCoreObserved(t *testing.T) {
 	stored := storageRegistration(StorageKindSMB)
 	stored.Identity.SMB = &SMBStorageIdentity{Server: "files.example.test", Share: "vms"}
 	if err := ValidateStoredStorageRegistration(stored, false); err != nil {
-		t.Fatalf("legacy SMB identity without marker rejected: %v", err)
+		t.Fatalf("SMB identity without marker rejected: %v", err)
 	}
 	stored.Identity.SMB.MarkerID = "0123456789abcdef0123456789abcdef"
 	if err := ValidateStoredStorageRegistration(stored, false); err != nil {

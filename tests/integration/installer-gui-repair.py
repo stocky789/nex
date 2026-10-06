@@ -3,7 +3,7 @@
 """Draw the graphical wizard's Repair image choice under Xvfb in a throwaway container and save screenshots.
 
 The wizard reads /sys, /cdrom and /run/nex-installer by absolute path, so the container gets a synthetic /sys
-(two 25 GiB virtio disks, one NIC), a synthetic image-edition medium whose `nex-image-install.sh probe` reports
+(two 25 GiB virtio disks, one NIC), a synthetic medium whose `nex-image-install.sh probe` reports
 a complete two-disk nex-data volume, and the wizard compiled from installer/gui. Nothing of the workstation's real
 hardware is visible. SIMULATION of the display and the hardware only; the installer behind the wizard is not run.
 
@@ -23,7 +23,6 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 INNER = r'''
 set -eu
 mkdir -p /cdrom/nex /run/nex-installer /usr/lib/nex-installer /usr/share/nex-installer /out
-echo image > /cdrom/nex/edition
 cat > /cdrom/nex/nex-image-install.sh <<'EOT'
 #!/bin/sh
 [ "$1" = probe ] && [ ! -e /tmp/norepair ] && printf 'layout=raid1\ndisks=/dev/vda,/dev/vdb\n'

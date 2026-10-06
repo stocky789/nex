@@ -10,14 +10,10 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-func TestReportKeepsV1ShapeAndPreflightsV2Storage(t *testing.T) {
+func TestReportPreflightsStorage(t *testing.T) {
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))
 	cert := certificate(t, host.CertificatePEM)
-	legacy := a.report(cert, protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: 1})
-	if legacy.StorageRepositories != nil {
-		t.Fatal("v1 report received v2 storage fields")
-	}
 	v2 := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 2})
 	if v2.StorageRepositories == nil || v2.StorageRepositories.ProtocolVersion != protocol.Version || v2.StorageRepositories.Capability != protocol.StorageRepositoryCapability {
 		t.Fatalf("missing v2 storage preflight: %+v", v2.StorageRepositories)
@@ -25,7 +21,7 @@ func TestReportKeepsV1ShapeAndPreflightsV2Storage(t *testing.T) {
 	if v2.StorageClusters == nil || v2.StorageClusters.Capability != protocol.StorageClusterCapability {
 		t.Fatalf("missing clustered-storage v2 preflight: %+v", v2.StorageClusters)
 	}
-	// A strict older Core still receives the unchanged support object: the
+	// A strict decoder still receives the unchanged support object: the
 	// extension is negotiated by capability value, never by an added response
 	// field that its decoder could reject.
 	type oldSupport struct {
@@ -49,7 +45,7 @@ func TestReportKeepsV1ShapeAndPreflightsV2Storage(t *testing.T) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&old); err != nil || old.StorageClusters == nil || old.StorageClusters.Capability != protocol.StorageClusterCapability {
-		t.Fatalf("strict older Core could not decode base acknowledgement: %#v %v", old, err)
+		t.Fatalf("strict decoder could not decode base acknowledgement: %#v %v", old, err)
 	}
 	monitor := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 3, Capabilities: []string{protocol.StorageClusterSessionMonitorCapability}})
 	if monitor.StorageClusters == nil || monitor.StorageClusters.Capability != protocol.StorageClusterSessionMonitorCapability {
@@ -151,16 +147,12 @@ func TestClusteredStorageSessionMonitorReportsRequireAcknowledgementCapability(t
 	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.StorageClusterSessionMonitorCapability}, StorageClusters: []protocol.StorageClusterResult{result}})
 }
 
-func TestReportOffersCredentialsOnlyToActivatedV2Host(t *testing.T) {
+func TestReportOffersCredentialsOnlyToActivatedHost(t *testing.T) {
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))
 	cert := certificate(t, host.CertificatePEM)
 	if _, err := a.c.credentials.offer(storageCredentialRequest{RequestID: "credential-1", RegistrationRequestID: "register-1", PoolID: host.PoolID, HostID: host.HostID, Credentials: protocol.StorageCredentials{Secret: "test-secret"}}); err != nil {
 		t.Fatal(err)
-	}
-	legacy := a.report(cert, protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: 1})
-	if len(legacy.CredentialOffers) != 0 {
-		t.Fatal("v1 report received credential offer")
 	}
 	preflight := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 2})
 	if len(preflight.CredentialOffers) != 0 {

@@ -91,7 +91,6 @@
     {"id": 35, "actor": "root", "action": "host.add", "resource_id": "host-1", "created_at": "@-7d", "detail": "lab-node-01 became master of its pool"},
     {"id": 34, "actor": "root", "action": "site.create", "resource_id": "site-ams", "created_at": "@-7d", "detail": "Amsterdam lab"}
   ],
-  "updates": {"package": "nex-controller", "installed_version": "0.4.4", "available_version": "0.4.5", "update_available": true, "core_available_version": "0.4.5", "repo_url": "https://apt.example.net/nex"},
   "hardware": {"observed_at": "@-4s",
     "system": {"vendor": "Example Systems", "model": "ES-1U-EPYC", "version": "2.1", "serial": "ES1U-000123", "board_vendor": "Example Systems", "board_name": "ES-MB-7313", "board_version": "1.0", "chassis_vendor": "Example Systems", "chassis_type": "Rack Mount Chassis", "bios_vendor": "Example Firmware", "bios_version": "3.4.1", "bios_date": "2026-03-11"},
     "cpu": {"model": "AMD EPYC 7313P 16-Core Processor", "sockets": 1, "cores": 16, "threads": 32},

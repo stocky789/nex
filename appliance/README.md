@@ -1,55 +1,29 @@
 # Controller virtual appliance builder
 
-Development tooling: a prepared Debian 13 amd64 genericcloud qcow2, customized with
-cloud-init, qemu-guest-agent, Nex Controller, its UI/API reference and matching source.
-No Controller ISO or interactive Debian installer is used. This is a local build,
-not a redistribution certification. Complete Debian corresponding sources, base-image
-component checksums/origins, firmware and artwork review remain release gates.
-Package copyright files remain inside the guest; `components.tsv` inventories installed
-package and source versions but is not a complete source-delivery bundle.
+Development tooling for the Controller guest image: a read-only erofs system image on a dm-verity tree
+with its own data disk, built from Debian trixie snapshot packages plus the Nex Controller, its UI/API
+reference and the matching source. No Controller ISO or interactive Debian installer is used. This is a
+local build, not a redistribution certification. Complete Debian corresponding sources, component
+checksums/origins, firmware and artwork review remain release gates.
 
 ## Build
 
-Download a versioned Debian 13 **genericcloud** amd64 qcow2 and its `SHA512SUMS`
-from [Debian's HTTPS cloud image server](https://cloud.debian.org/images/cloud/).
-Current cloud checksums use TLS origin authentication; detached signatures are only
-published for legacy OpenStack images. Verify the exact file against published SHA512
-then compute its SHA256 and pass that pinned digest to the builder. Retain the
-versioned URL and upstream checksum as build evidence. Never use an unchecked download.
-Do not use Debian's `nocloud` image: it lacks the desired cloud-init configuration.
-
-Generate a release signing key outside this repository and keep it private:
-
 ```sh
-umask 077
-openssl genpkey -algorithm ED25519 -out /secure/nex-appliance-signing.pem
-python3 appliance/build.py --base-image /cache/debian-13-genericcloud-amd64.qcow2 \
-  --base-sha256 VERIFIED_IMAGE_SHA256 --version DEVELOPMENT_VERSION \
-  --signing-key /secure/nex-appliance-signing.pem --output dist/appliance
+python3 appliance/build.py --version DEVELOPMENT_VERSION --sequence N --output dist/controller-image
 ```
 
-Docker needs permission to run a Debian builder. `--docker` can name a wrapper that
-executes `sudo -n docker "$@"`. The private key is used only by host OpenSSL and is
-never mounted in the container. Output must be empty. Build inside Debian to avoid
-incompatible host glibc linkage; no workstation binary is copied into the image.
-
-Outputs of the default `--profile single-disk`: `controller.qcow2`, `manifest.json`, detached `manifest.sig`, `public-key.raw`,
-`nex-source.tar.gz`, `components.tsv`, `LICENSE`, `NOTICE`, `ARTWORK-LICENSE.md`, and
-`build-inputs.json`.
-Install the public key through a trusted release channel; the key accompanying an
-untrusted download does not authenticate that download. Signature is Ed25519 over the
-exact manifest bytes, raw 64-byte signature and raw 32-byte public key. Manifest keys
-are `format_version`, `version`, `architecture`, `image_sha256`, `protocol_version`,
-`format`, `minimum_vcpus`, `minimum_memory_mib`, `minimum_disk_gib`.
+Docker needs permission to run a Debian builder. `--docker` can name a wrapper that executes
+`sudo -n docker "$@"`. Output must be empty. Build inside Debian to avoid incompatible host glibc
+linkage; no workstation binary is copied into the image.
 
 ## Guest bootstrap contract
 
-Host deployment prepares a unique disk copy and NoCloud seed, static IPv4 network-config,
+Host deployment prepares a unique data disk and NoCloud seed, static IPv4 network-config,
 and cloud-config `write_files` for root-only `/etc/nex-controller/bootstrap.json`:
 `admin_password`, `tls_certificate`, `tls_private_key`, `hostname`, `address_cidr`,
 `gateway`, `dns`. The TLS identity is unique and pinned by the deploying host. Default
 minimum resources are 2 vCPU, 4096 MiB RAM and a 32 GiB virtual disk. Cloud-init handles
-filesystem growth and networking; no package download occurs at guest bootstrap.
+networking; no package download occurs at guest bootstrap.
 
 The firstboot service waits for cloud-final, installs private identity files, starts
 Controller on HTTPS 8443, verifies its UI using the provisioned certificate, then removes
@@ -108,46 +82,41 @@ contains `/usr/local/lib/nex/controller-recovery` for direct quiesced recovery c
 A usable replacement provisioning walkthrough and real restore evidence are acceptance
 gates; the commands and unit tests alone do not prove successful recovery.
 
-## Controller profile: read-only system image and data disk (Phase I-4b)
+## System image and data disk
 
-Status: the guest image is built from `image/controller/` (below) and the host side is unit-tested against a fake libvirt.
+The guest image is built from `image/controller/` and the host side is unit-tested against a fake libvirt.
 `docs/qa/image/phase4-controller-image.md` records what was built and booted and what was not.
 
 ### Build the system image
 
-```sh
-python3 appliance/build.py --profile controller --version DEVELOPMENT_VERSION --sequence N --output dist/controller-image
-```
-
-No Debian cloud image and no signing key are used. `build.py` compiles the Controller and its UI in the pinned builder container
+`build.py` compiles the Controller and its UI in the pinned builder container
 (`build-controller-payload.sh`), then runs `image/build.sh controller`: the Debian trixie snapshot packages of
-`image/controller/controller.packages` (the same packages `build-inside.sh` installs into the single-disk appliance, minus the
-package manager state, plus systemd-boot) plus the payload tree become an erofs image on a dm-verity tree, a UKI whose command line
+`image/controller/controller.packages` plus the payload tree become an erofs image on a dm-verity tree, a UKI whose command line
 carries the root hash, and a raw GPT disk (ESP with systemd-boot and the UKI, root partition, verity partition; UEFI only, unsigned,
 no Secure Boot). Outputs: `controller-system.img`, `vm-image.json` (digest, root hash, size, the exact `--payload` argument) and
 the source and licence files. The image's digest goes into the release through
 `scripts/update-publish.py publish --payload vm-image:controller=dist/controller-image/controller-system.img`; the release
-manifest's root signature is the only signature (the single-disk `manifest.sig` is not produced for this profile).
+manifest's root signature is the only signature.
 
 Inside the guest: the root is read-only; `/etc` is the same persistent overlay the host image uses (upper layer on the data disk
 under `/var/lib/nex/etc`, so `/etc/nex-controller` lives on the data disk and `controller-recovery` and `host-recovery` see the same
 two paths); `/var` is `/dev/vdb`, made as ext4 by the initrd on first boot (`x-systemd.makefs`, never on an existing file system);
-cloud-init reads the same NoCloud seed as before; `appliance-ready.json` is written through a link into `/var/lib/nex-controller`.
-There is no `apt`, no `apply-update`, no `nex-controller-update.path`; Core replaces the whole image.
+cloud-init reads the NoCloud seed; `appliance-ready.json` is written through a link into `/var/lib/nex-controller`.
+There is no `apt`; Core replaces the whole image.
 
 ### Deploy
 
-On an image-edition host, stage the `vm-image` component (it is an on-demand payload under
+On a Nex Core host, stage the `vm-image` component (it is an on-demand payload under
 `/var/lib/nex/payload/<sha256>/controller-system.img`), then `core-local-setup configure --address A --storage D --controller-image-sha256 SHA256`
-and restart `nex-core-local`: it starts with `--controller-system-image` and `--controller-system-image-sha256` instead of the
-single-disk `--image/--manifest/--signature/--trusted-key`, and the local deploy page creates the two-disk profile. The domain pins UEFI
+and restart `nex-core-local`: it starts with `--controller-system-image` and `--controller-system-image-sha256` and the local deploy
+page creates the two-disk profile. The domain pins UEFI
 with Secure Boot off (the image is unsigned until phase I-5).
 
 With `vmhost.Config.SystemImage` and `SystemImageSHA256` set, Nex Core deploys the Controller as two disks under the VM's directory,
 keeping the VM UUID and management MAC for life:
 
 - `system-<sha256>.img`, raw, attached **read-only** as `vda` with guest UEFI. The digest is the `vm-image` component's digest in the
-  signed release manifest; the separate appliance signature of the single-disk image is not used for this profile.
+  signed release manifest.
 - `controller-data.qcow2`, attached as `vdb`, mounted at `/var`, holding only what the recovery commands above already enumerate
   (`var/lib/nex-controller` and `etc/nex-controller`; the latter is a bind mount from the data disk). No new Controller-owned data.
 
@@ -174,16 +143,10 @@ restored again; after the old image has been redefined, its subsequent writes ar
 a matching durable running/needs-attention swap journal. They require the owned data disk and approved read-only system image, and a
 reachable guest agent; they never start a stopped VM. `controller-recovery` works on the same two guest paths.
 
-What the profile no longer receives: the cloud-init bootstrap of `apply-update`, `nex-controller-update.path`/`.service` and
-`/etc/nex/updates.conf` (`appendUpdateBootstrap` is skipped when the deployment has a system image; `TestProfileSeedCarriesNoUpdateHelper`).
-What stays, for the classic edition: the single-disk appliance (`build-inside.sh`, `controller.qcow2`, its signed manifest), the
-helper files in `packaging/controller`, the Controller `.deb` and its `postinst`/`prerm`, `appendUpdateBootstrap` for the single-disk
-seed and the Controller's own APT routes and Settings panel. They are removed together with the classic edition, not before.
-
 ## Checks
 
 `python3 -m unittest discover -s tests -p test_appliance_build.py` validates bootstrap
 input and rejects unsafe archive paths/links. A successful build additionally runs the
-Debian Go compiler, UI typecheck/build, libguestfs customization and `qemu-img check`.
+Debian Go compiler, UI typecheck/build and the image build.
 Actual boot/restart/recovery evidence belongs in `docs/qa/`; unit tests do not establish
 that appliance deployment or recovery worked on a real hypervisor.

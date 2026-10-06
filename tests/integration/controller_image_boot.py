@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Boot test of the Nex Controller guest image (the two-disk Controller profile) under QEMU/KVM + OVMF.
 
-Boots `system.img` (image/build.sh controller output, or appliance/build.py --profile controller) the way Core's
+Boots `system.img` (image/build.sh controller output, or appliance/build.py) the way Core's
 vmhost engine defines the VM: the system disk raw and read-only, a blank controller-data.qcow2 as the second virtio
 disk, a NoCloud seed (label cidata) on SATA, UEFI without Secure Boot. It checks that the guest comes up, that the
 read-only erofs root, the /etc overlay and /var on the data disk are what they should be, and that the Controller
@@ -184,7 +184,7 @@ def main():
         if not shutil.which(tool):
             sys.exit(f"missing {tool}")
     lab.need_accelerator()
-    # image/build.sh controller writes system.img; appliance/build.py --profile controller copies it as controller-system.img.
+    # image/build.sh controller writes system.img; appliance/build.py copies it as controller-system.img.
     system = next((p for p in (os.path.join(args.release, n) for n in ("system.img", "controller-system.img")) if os.path.isfile(p)), None)
     if system is None:
         sys.exit(f"no system.img or controller-system.img in {args.release}")

@@ -196,11 +196,7 @@ func TestPoolProbeModeAndConflictValidationFailClosed(t *testing.T) {
 	if err != nil || mode != poolProbeModeChallengeByte || offset == 0 {
 		t.Fatalf("challenge mode = %q, %d, %v", mode, offset, err)
 	}
-	mode, offset, err = poolProbeModeOffset(challenge, "")
-	if err != nil || mode != poolProbeLegacyMode || offset != 0 {
-		t.Fatalf("legacy mode = %q, %d, %v", mode, offset, err)
-	}
-	for _, bad := range []struct{ challenge, mode string }{{"", ""}, {"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", ""}, {challenge, "unknown"}} {
+	for _, bad := range []struct{ challenge, mode string }{{challenge, ""}, {"", poolProbeModeChallengeByte}, {"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", poolProbeModeChallengeByte}, {challenge, "unknown"}} {
 		if _, _, err := poolProbeModeOffset(bad.challenge, bad.mode); err == nil {
 			t.Fatalf("invalid probe input accepted: %#v", bad)
 		}
@@ -428,49 +424,6 @@ func TestCrossCoreLockProbeSeparatesConcurrentAuthenticatedChallenges(t *testing
 	secondStorage.HostID = second.State.HostID
 	if err = crossCoreLockProbe(context.Background(), second, secondURL, secondStorage); err != nil {
 		t.Fatalf("full client probe did not recover after concurrent lease release: %v", err)
-	}
-}
-
-func TestCrossCoreLockProbeUsesLegacyByteZeroWhenMasterOmitsModeEcho(t *testing.T) {
-	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-1")
-	joinPeerMember(t, master, member)
-	path := t.TempDir()
-	storage := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: member.State.HostID, Generation: 1, Path: path, Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/repo"}}}
-	legacyKey := "legacy-probe"
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			if err := holdPoolProbeLock(legacyKey, path, 0); err != nil {
-				http.Error(w, "lock unavailable", http.StatusConflict)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent) // Legacy masters do not echo a probe mode.
-		case http.MethodDelete:
-			releasePoolProbeLock(legacyKey)
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	config, err := PoolPeerTLSConfig(master)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.TLS = config
-	server.StartTLS()
-	t.Cleanup(server.Close)
-	poolPeerMu.Lock()
-	peer, err := loadPoolPeer(member)
-	if err == nil {
-		peer.MasterURL = server.URL
-		err = savePoolPeer(member, peer)
-	}
-	poolPeerMu.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = crossCoreLockProbe(context.Background(), member, server.URL, storage); err != nil {
-		t.Fatalf("new member did not safely use old master byte-zero lease: %v", err)
 	}
 }
 
@@ -870,17 +823,17 @@ func TestMemberReconcilePostsLaterAccessAfterEarlierDeadline(t *testing.T) {
 	}
 }
 
-func TestPoolStorageAccessNeverRehydratesLegacyHealthyRecord(t *testing.T) {
+func TestPoolStorageAccessNeverRehydratesStaleHealthyRecord(t *testing.T) {
 	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
 	joinPeerMember(t, master, member)
-	legacy := poolStorageState{
+	stale := poolStorageState{
 		Storage:      map[string]protocol.StorageRegistration{},
 		Access:       map[string]map[string]protocol.PoolStorageAccess{"repo-1": {member.State.HostID: {RepositoryID: "repo-1", HostID: member.State.HostID, Generation: 1, Identity: "old", Readable: true, Writable: true, QEMUWritable: true, Locking: true, ObservedAt: time.Now().UTC()}}},
 		Reservations: map[string]map[string]string{"repo-1": {member.State.HostID: "live-operation"}},
 		Mutations:    map[string]string{"repo-2": "pending-mutation"},
 	}
-	// Write a historical file directly: savePoolStorage intentionally strips access.
-	b, err := json.Marshal(legacy)
+	// Write a file with access directly: savePoolStorage intentionally strips access.
+	b, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -903,12 +856,12 @@ func TestPoolStorageAccessNeverRehydratesLegacyHealthyRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(state.Access) != 0 || state.Reservations["repo-1"][member.State.HostID] != "live-operation" || state.Mutations["repo-2"] != "pending-mutation" {
-		t.Fatalf("fresh state did not discard only legacy access: %#v", state)
+		t.Fatalf("fresh state did not discard only stale access: %#v", state)
 	}
 	storage := []protocol.StorageRegistration{{ID: "repo-1", PoolID: "pool-1", HostID: master.State.HostID, Kind: protocol.StorageKindNFS, Generation: 1, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/repo"}}, MemberAccess: []protocol.PoolStorageAccess{{RepositoryID: "repo-1", HostID: member.State.HostID, Generation: 1, Identity: "historical-healthy", Readable: true, Writable: true, QEMUWritable: true, Locking: true, ObservedAt: time.Now().UTC()}}}}
 	reported := PoolStorageMemberAccess(fresh, storage)
 	if len(reported[0].MemberAccess) != 1 || reported[0].MemberAccess[0].HostID != member.State.HostID || reported[0].MemberAccess[0].Error != "awaiting member reconciliation" {
-		t.Fatalf("fresh Core reported legacy healthy access: %#v", reported[0].MemberAccess)
+		t.Fatalf("fresh Core reported stale healthy access: %#v", reported[0].MemberAccess)
 	}
 	if storage[0].MemberAccess[0].Identity != "historical-healthy" {
 		t.Fatalf("report projection mutated caller-owned storage: %#v", storage[0].MemberAccess)

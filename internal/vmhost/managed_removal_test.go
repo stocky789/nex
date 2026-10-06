@@ -166,9 +166,9 @@ func TestNetworkRemoveRefusedWhileVMUsesIt(t *testing.T) {
 	succeed(t, e, removeNetwork("op-remove-2", n, 1))
 }
 
-func TestLegacyFailedRemovalReplayReconcilesBeforeItCanSettle(t *testing.T) {
+func TestFailedRemovalReplayReconcilesBeforeItCanSettle(t *testing.T) {
 	e, n := removalEngine(t)
-	cmd := removeNetwork("legacy-remove", n, 1)
+	cmd := removeNetwork("failed-remove", n, 1)
 	if err := e.save(managedJournal{
 		Command: cmd,
 		Result:  protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "old result", ObservedAt: time.Now().Add(-2 * time.Minute)},
@@ -178,11 +178,11 @@ func TestLegacyFailedRemovalReplayReconcilesBeforeItCanSettle(t *testing.T) {
 	}
 	result, err := e.Execute(context.Background(), cmd, nil)
 	if err != nil || result.Status != "succeeded" {
-		t.Fatalf("legacy failed removal replay = %+v, %v", result, err)
+		t.Fatalf("failed removal replay = %+v, %v", result, err)
 	}
 	outcome, err := e.ResourceRemovalOutcome(context.Background(), cmd.OperationID)
 	if err != nil || outcome == nil || outcome.Result.Status != "succeeded" {
-		t.Fatalf("replayed legacy failure did not reconcile to a definitive result: %+v, %v", outcome, err)
+		t.Fatalf("replayed failure did not reconcile to a definitive result: %+v, %v", outcome, err)
 	}
 	journal, err := e.readJournal(cmd.OperationID + ".json")
 	if err != nil || journal.Stage != "removing" {
@@ -417,20 +417,20 @@ func TestMediaRemoveRefusedWhileAttached(t *testing.T) {
 	}
 }
 
-// Journals written before removal existed carry no tombstone and no media generation; they
-// must still project as live resources at generation 1.
-func TestOldFormatJournalStillProjects(t *testing.T) {
+// Registrations recorded without a tombstone or generation must still project as live
+// resources at generation 1.
+func TestUngeneratedJournalProjectsAtGenerationOne(t *testing.T) {
 	e, n := removalEngine(t)
 	if _, m, _ := mediaEngine(t); m.Generation != 0 {
-		t.Fatal("fixture must be a pre-generation import")
+		t.Fatal("fixture must be an import without a generation")
 	}
 	js, _ := e.readable()
 	live := networkProjection(js)
 	if got, ok := live[n.ID]; !ok || got.Generation != 0 || protocol.NetworkGeneration(got) != 1 || got.Name != n.Name {
-		t.Fatalf("legacy network projection: %+v %v", got, ok)
+		t.Fatalf("network projection: %+v %v", got, ok)
 	}
 	if len(networkTombstones(js)) != 0 || len(mediaTombstones(js)) != 0 {
-		t.Fatal("legacy journal must hold no tombstones")
+		t.Fatal("journal without removals must hold no tombstones")
 	}
 	// Generation 1 is what a removal must present for such a record.
 	succeed(t, e, removeNetwork("op-remove", n, 1))

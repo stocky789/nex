@@ -8,7 +8,6 @@ package vmhost
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -501,12 +500,12 @@ func renderCorosyncConfig(marker, clusterName string, nodes []corosyncNode, wait
 // vendor file. It reports whether the bytes on disk changed.
 func writeCorosyncConfig(stateDir, rendered, marker string) (bool, error) {
 	old, readErr := os.ReadFile(corosyncConfigPath)
-	if err := checkCorosyncConfigOwner(stateDir, old, readErr, marker); err != nil {
+	if err := checkCorosyncConfigOwner(old, readErr, marker); err != nil {
 		return false, err
 	}
 	if readErr == nil && !strings.HasPrefix(string(old), "# Managed by Nex Core;") {
-		// Packaging creates the marker only for a recognized untouched vendor
-		// file. Preserve that file before its one permitted replacement.
+		// Only a recognized untouched vendor file is replaced. Preserve it
+		// before its one permitted replacement.
 		if err := os.MkdirAll(filepath.Join(stateDir, "storage-cluster"), 0700); err != nil {
 			return false, err
 		}
@@ -523,13 +522,10 @@ func writeCorosyncConfig(stateDir, rendered, marker string) (bool, error) {
 			return false, err
 		}
 	}
-	if err := os.Remove(corosyncUnconfiguredMarkerPath(stateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, err
-	}
 	return changed, nil
 }
 
-func checkCorosyncConfigOwner(stateDir string, old []byte, readErr error, marker string) error {
+func checkCorosyncConfigOwner(old []byte, readErr error, marker string) error {
 	switch {
 	case readErr != nil && !errors.Is(readErr, os.ErrNotExist):
 		return readErr
@@ -538,7 +534,7 @@ func checkCorosyncConfigOwner(stateDir string, old []byte, readErr error, marker
 			return errors.New("this host's Corosync configuration belongs to another Nex Core cluster on this pool; one host has one cluster")
 		}
 	case readErr == nil:
-		if !corosyncUnconfiguredMarker(stateDir, old) {
+		if !corosyncFactoryConfig(old) {
 			return errors.New("refusing to replace administrator Corosync configuration")
 		}
 	}
@@ -1446,32 +1442,15 @@ func cibHasNamedPrimitive(raw []byte, id string) bool {
 	return found
 }
 
-func corosyncUnconfiguredMarkerPath(stateDir string) string {
-	return filepath.Join(stateDir, "storage-cluster", "corosync-unconfigured")
-}
-
-// corosyncFactoryConfigPath is the image edition's copy of Debian's conffile: the nex-cluster layer ships it read-only
-// under /usr/share/factory and the merge copies it into /etc. No packaging script runs on an image host, so nothing
-// writes the marker below; the verified copy is what attests the file.
+// corosyncFactoryConfigPath is the nex-cluster layer's copy of Debian's conffile: the layer ships it read-only
+// under /usr/share/factory and the merge copies it into /etc.
 var corosyncFactoryConfigPath = "/usr/share/factory/etc/corosync/corosync.conf"
 
-// corosyncUnconfiguredMarker authorizes one vendor-file replacement only when the file is Debian's unmodified one:
-// packaging's root-owned marker exactly binds to the bytes currently on disk (the apt edition), or the bytes equal the
-// layer's read-only factory copy (the image edition). An administrator edit therefore fails closed in both.
-func corosyncUnconfiguredMarker(stateDir string, config []byte) bool {
-	if factory, err := os.ReadFile(corosyncFactoryConfigPath); err == nil && bytes.Equal(factory, config) {
-		return true
-	}
-	info, err := os.Lstat(corosyncUnconfiguredMarkerPath(stateDir))
-	if err != nil || !info.Mode().IsRegular() || info.Size() != sha256.Size*2+1 {
-		return false
-	}
-	marker, err := os.ReadFile(corosyncUnconfiguredMarkerPath(stateDir))
-	if err != nil {
-		return false
-	}
-	digest := sha256.Sum256(config)
-	return string(marker) == fmt.Sprintf("%x\n", digest)
+// corosyncFactoryConfig authorizes one vendor-file replacement only when the file is Debian's unmodified one: the
+// bytes equal the layer's read-only factory copy. An administrator edit therefore fails closed.
+func corosyncFactoryConfig(config []byte) bool {
+	factory, err := os.ReadFile(corosyncFactoryConfigPath)
+	return err == nil && bytes.Equal(factory, config)
 }
 
 func applyClusterOrder(ctx context.Context, id, first, then string) error {

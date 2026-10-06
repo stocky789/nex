@@ -115,7 +115,7 @@ func ReconcilePoolCluster(ctx context.Context, s *Store) error {
 		}
 		witnessAddress = membership.Witness.Address
 	}
-	if err := vmhost.PoolClusterCanOwnCorosync(s.dir); err != nil {
+	if err := vmhost.PoolClusterCanOwnCorosync(); err != nil {
 		return err
 	}
 	key, err := poolClusterAuthKey(s, membership)

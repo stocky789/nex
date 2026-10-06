@@ -26,7 +26,6 @@ assert.equal(checkLabel("management-network"), "Management network");
 assert.equal(auditLabel("site.create"), "Site created");
 assert.equal(auditLabel("host.revoke"), "Host access revoked");
 assert.equal(auditLabel("host.connection.stale"), "Host connection stale");
-assert.equal(auditLabel("update.apply"), "Update applied");
 
 const now = Date.parse("2026-09-23T12:00:00Z");
 assert.equal(relativeTime("2026-09-23T11:59:50Z", now), "just now");

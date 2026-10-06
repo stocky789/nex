@@ -10,7 +10,6 @@ import (
 	"math"
 	"net/http/httptrace"
 	"net/netip"
-	"nex.local/nex/internal/nexupdate"
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/version"
 	"nex.local/nex/internal/vmhost"
@@ -417,7 +416,7 @@ func applyResponseWithPeer(s *Store, r protocol.ReportResponse, peer bool) error
 					return errors.New("controller reused command ID with different input")
 				}
 			} else if cmd.Kind != "refresh-inventory" {
-				return errors.New("controller reused legacy command ID")
+				return errors.New("controller reused a refresh command ID")
 			}
 			if peer {
 				old.PeerDispatched = true
@@ -585,15 +584,12 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	managed.Storage = PoolZFSStorageProjection(zfsAccessCtx, s, managed.Storage)
 	cancelZFSAccess()
 	managed.Media = PoolMediaMemberAccess(s, managed.Media, managed.Storage)
-	credentialsReadable := true
 	if _, err := vmhost.StorageCredentialReceipts(s.dir); err != nil {
-		credentialsReadable = false
 		checks = append(checks, protocol.Check{Name: "storage-credentials", Status: "failed", Error: "storage credential state is unavailable", ObservedAt: time.Now().UTC()})
 	}
 	receipts, err := BackupCredentialReceipts(s)
 	managed.CredentialReceipts = append(managed.CredentialReceipts, receipts...)
 	if err != nil {
-		credentialsReadable = false
 		detail := "backup credential state is unavailable"
 		if errors.Is(err, errBackupCredentialDamaged) {
 			detail = err.Error()
@@ -634,23 +630,9 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		return errors.New("report sequence exhausted")
 	}
 	s.State.Sequence++
-	// A v2 report without the repository capability is the Controller-first
-	// preflight. It carries no v2 storage data and cannot receive storage work.
-	version := protocol.Version
-	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
-	// defines the second CD drive either way, but the capability is the Controller's signal
-	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
+	// A report without the repository capability is the Controller-first preflight.
+	// It carries no storage data and cannot receive storage work.
 	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.VMTagsCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.ManagementNetworkCapability, protocol.HostHardwareCapability}
-	if s.State.StorageProtocolLegacy {
-		version = protocol.LegacyVersion
-		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
-		// A strict v1 decoder must not see v2 managed storage/receipt fields.
-		legacy := *inv
-		legacy.Managed = nil
-		legacy.CPUBaseline = nil
-		legacy.ManagementNetwork = nil
-		inv = &legacy
-	}
 	if inv.Image != nil && !s.State.ImageUpdateReady {
 		// A strict older Controller must never see inventory.image: the field is withheld until
 		// this Controller acknowledges image-update-v1.
@@ -672,15 +654,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		inv = &copy
 	}
 	if s.State.StorageProtocolReady {
-		// System-disk replace opens storage/discover for the spare list, so it shares the
-		// storage handshake gate with discovery and ZFS provision/replace. The image edition's
-		// slot layout is not rebuilt by it yet, so an image host never offers it.
-		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.StorageDiscoveryPurposeCapability, protocol.ZFSProvisionCapability, protocol.ZFSReplaceCapability)
+		// Discovery and ZFS provision/replace share the storage handshake gate.
+		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.StorageDiscoveryPurposeCapability, protocol.ZFSProvisionCapability, protocol.ZFSReplaceCapability, protocol.SystemDiskReplaceCapability)
 		if storageISCSIInspectionAvailable(ctx) {
 			capabilities = append(capabilities, protocol.ISCSIInspectCapability)
-		}
-		if !imageUpdateAvailable() {
-			capabilities = append(capabilities, protocol.SystemDiskReplaceCapability)
 		}
 		if inv.Managed != nil {
 			managed := inv.Managed
@@ -688,8 +665,8 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 				// Strict older Controllers reject unknown managed and registration
 				// fields. Advertise the optional extension, but omit every pool-local
 				// ZFS record until this Controller explicitly acknowledges it; presenting
-				// it as a legacy host-local registration would lose its pool semantics.
-				managed = zfsLegacyManagedProjection(managed)
+				// it as a host-local registration would lose its pool semantics.
+				managed = zfsV1ManagedProjection(managed)
 			}
 			if !s.State.ZFSReplaceProtocolReady {
 				managed = zfsPoolObservationForController(managed, false)
@@ -704,13 +681,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	if s.State.StorageClusterProtocolReady {
 		capabilities = append(capabilities, protocol.StorageClusterCapability)
 	}
-	if version == protocol.Version {
-		// Offer the additive extension during every v2 preflight. An older
-		// Controller ignores it and acknowledges the base capability instead.
-		capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability, protocol.ISODownloadProgressCapability, protocol.DetectedOSCapability)
-		if imageUpdateAvailable() {
-			capabilities = append(capabilities, protocol.ImageUpdateCapability, protocol.PoolUpdateRolloutCapability)
-		}
+	// Offer the additive extensions during every preflight. A Controller that does not
+	// know one ignores it and acknowledges the base capability instead.
+	capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability, protocol.ISODownloadProgressCapability, protocol.DetectedOSCapability)
+	if imageUpdateAvailable() {
+		capabilities = append(capabilities, protocol.ImageUpdateCapability, protocol.PoolUpdateRolloutCapability)
 	}
 	discoveries := transientStorageDiscoveries.drain(s)
 	var clusters []protocol.StorageClusterResult
@@ -718,7 +693,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		clusters = transientStorageClusters.drain(s)
 		clusters = storageClusterResultsForController(clusters, s.State.StorageClusterSessionMonitorProtocolReady)
 	}
-	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries, StorageClusters: clusters, PoolResults: transientPoolResults.drain(s)}
+	req := protocol.ReportRequest{Capabilities: capabilities, Version: protocol.Version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries, StorageClusters: clusters, PoolResults: transientPoolResults.drain(s)}
 	for id, e := range s.State.Journal {
 		if e.Status != "pending" && !e.Acknowledged && !e.PeerDispatched {
 			req.Results = append(req.Results, protocol.Result{OperationID: id, Status: e.Status, Error: resultError(e.Error), ObservedAt: e.ObservedAt})
@@ -747,14 +722,6 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		reportPeer = vmhost.ConnectionAddr(info.Conn.RemoteAddr().String())
 	}})
 	if err = post(traced, c, s.State.Controller, "/api/v1/agent/report", req, &response); err != nil {
-		var status httpStatusError
-		if version == protocol.Version && !s.State.StorageProtocolReady && errors.As(err, &status) && status.Status == 409 && legacyStorageSafe(s.State, managed, credentialsReadable) {
-			s.State.StorageProtocolLegacy = true
-			if saveErr := s.Save(); saveErr != nil {
-				return persistenceError{fmt.Errorf("persist storage protocol fallback: %w", saveErr)}
-			}
-			return report(ctx, s, m, cfg)
-		}
 		return err
 	}
 	s.lastReport.Store(time.Now().UnixNano())
@@ -929,7 +896,7 @@ func markDemotedMasterBackupJournal(s *Store) error {
 	return nil
 }
 
-func zfsLegacyManagedProjection(managed *protocol.ManagedState) *protocol.ManagedState {
+func zfsV1ManagedProjection(managed *protocol.ManagedState) *protocol.ManagedState {
 	copy := *managed
 	copy.Storage = slices.DeleteFunc(append([]protocol.StorageRegistration(nil), copy.Storage...), func(entry protocol.StorageRegistration) bool {
 		return entry.ZFSProvisioned
@@ -1071,30 +1038,6 @@ func storageClusterScopeMatches(state State, request protocol.StorageClusterRequ
 	return request.HostID == state.HostID && request.PoolID == state.PoolID && (request.Action == "apply" || request.Action == "status" || request.Action == "verify_fence")
 }
 
-func legacyStorageSafe(state State, managed *protocol.ManagedState, credentialsReadable bool) bool {
-	if !credentialsReadable || state.StorageProtocolReady || len(managed.CredentialReceipts) != 0 {
-		return false
-	}
-	for _, storage := range managed.Storage {
-		if storage.StorageKind() != protocol.StorageKindLocal {
-			return false
-		}
-	}
-	for _, outcome := range managed.Outcomes {
-		// A pool network/ISO removal or rename is v2-only history: a host that performed
-		// one must not fall back to reporting as a legacy v1 host, which drops its whole
-		// managed state and with it the tombstones the Controller mirror needs.
-		if outcome.Kind == "storage-register" || outcome.Kind == "storage-update" || outcome.Kind == "storage-recheck" || outcome.Kind == "storage-detach" || outcome.Kind == "storage-credential-retire" || outcome.Kind == "network-remove" || outcome.Kind == "network-update" || outcome.Kind == "media-remove" {
-			return false
-		}
-	}
-	for _, entry := range state.Journal {
-		if entry.Command != nil && storageRepositoryCommand(*entry.Command) {
-			return false
-		}
-	}
-	return true
-}
 func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 	if cfg.Heartbeat < 100*time.Millisecond || cfg.ProbeInterval < 100*time.Millisecond || cfg.ProbeTimeout < 10*time.Millisecond {
 		return errors.New("heartbeat/probe interval must be >=100ms and timeout >=10ms")
@@ -1175,9 +1118,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 	probes := NativeProbes(version.Version, sampler)
 	probes["cpu-baseline"] = PoolCPUProbe(s)
 	probes["guest"] = recordingGuestProbe(func(ctx context.Context, detected map[string]protocol.DetectedOS) { recordGuestOS(ctx, s, detected) })
-	if nexupdate.Edition() == "image" {
-		probes["image"] = imageProbe
-	}
+	probes["image"] = imageProbe
 	m := NewMonitor(cfg.ProbeTimeout, probes)
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
 	s.storageMonitor.Store(storage)

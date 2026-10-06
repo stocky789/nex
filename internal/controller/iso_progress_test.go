@@ -10,14 +10,9 @@ import (
 func TestISODownloadProgressIsHostObservedAndClears(t *testing.T) {
 	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.ISODownloadCapability)
 	l.seq++
-	legacy := l.a.report(l.cert, protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: l.seq, Capabilities: []string{protocol.ISODownloadProgressCapability}})
-	if legacy.ISODownloadProgress != nil {
-		t.Fatal("legacy report received progress acknowledgement")
-	}
-	l.seq++
 	supported := l.a.report(l.cert, protocol.ReportRequest{Version: protocol.Version, Sequence: l.seq, Capabilities: []string{protocol.ISODownloadProgressCapability}})
 	if supported.ISODownloadProgress == nil || !*supported.ISODownloadProgress {
-		t.Fatal("v2 report did not acknowledge ISO progress support")
+		t.Fatal("report did not acknowledge ISO progress support")
 	}
 	l.report()
 	var queued protocol.Media

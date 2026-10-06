@@ -179,7 +179,7 @@ func TestMediaDownloadAdmissionReplayAndHostMetadata(t *testing.T) {
 	v = original
 	l.caps = []string{protocol.ManagedVMCapability}
 	if cmds := l.report().Commands; len(cmds) != 0 {
-		t.Fatal("URL dispatched to old Core")
+		t.Fatal("URL dispatched to a Core without the capability")
 	}
 	call(200)
 	l.caps = append(l.caps, protocol.ISODownloadCapability)

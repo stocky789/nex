@@ -10,17 +10,10 @@ import (
 	"nex.local/nex/internal/nexupdate"
 )
 
-// The image edition updates through nexupdate.Engine (signed metadata, slots, boot counting); the
-// classic edition keeps its apt path until it is retired. Edition decides once, at Open: a host never
-// switches between them while running.
-
-// newImageUpdateEngine builds the engine of an image-edition host, or returns nil on a classic host.
+// newImageUpdateEngine builds the update engine of this host: signed metadata, slots, boot counting.
 func (s *Service) newImageUpdateEngine() *nexupdate.Engine {
 	if s.cfg.ImageUpdate != nil {
 		return s.cfg.ImageUpdate
-	}
-	if nexupdate.Edition() != "image" {
-		return nil
 	}
 	cfg := nexupdate.HostConfig()
 	cfg.Platform = nexupdate.HostPlatform()
@@ -67,34 +60,16 @@ func updateRefused(w http.ResponseWriter, err error) {
 	reply(w, status, map[string]string{"code": re.Code, "error": re.Message})
 }
 
-func notImageEdition(w http.ResponseWriter) {
-	updateRefused(w, &nexupdate.Error{Status: http.StatusConflict, Code: "unsupported_edition", Message: "this host does not run the image edition"})
-}
-
 func (s *Service) updates(w http.ResponseWriter, r *http.Request) {
-	if s.imageUpdate != nil {
-		st, err := s.imageUpdate.Status(r.Context())
-		if err != nil {
-			updateRefused(w, err)
-			return
-		}
-		reply(w, 200, st)
-		return
-	}
-	st, err := nexupdate.Check(r.Context(), nexupdate.DefaultRepoURL(), "nex-core-local")
+	st, err := s.imageUpdate.Status(r.Context())
 	if err != nil {
-		fail(w, 500, "update check failed")
+		updateRefused(w, err)
 		return
 	}
-	nexupdate.MergeProgress(&st, s.cfg.DataDir)
 	reply(w, 200, st)
 }
 
 func (s *Service) checkUpdates(w http.ResponseWriter, r *http.Request) {
-	if s.imageUpdate == nil {
-		notImageEdition(w)
-		return
-	}
 	st, err := s.imageUpdate.Check(r.Context())
 	if err != nil {
 		updateRefused(w, err)
@@ -104,24 +79,12 @@ func (s *Service) checkUpdates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) applyUpdate(w http.ResponseWriter, r *http.Request) {
-	if s.imageUpdate != nil {
-		var req nexupdate.ApplyRequest
-		if !decode(w, r, &req) {
-			return
-		}
-		op, replayed, err := s.imageUpdate.Apply(r.Context(), req)
-		replyOperation(w, op, replayed, err)
+	var req nexupdate.ApplyRequest
+	if !decode(w, r, &req) {
 		return
 	}
-	result, err := nexupdate.StartApplyLocal(nexupdate.DefaultRepoURL(), "nex-core-local", s.cfg.DataDir)
-	status := 202
-	if result.Status == "failed" || err != nil {
-		status = 409
-		if result.Message == "" && err != nil {
-			result = nexupdate.ApplyResult{Status: "failed", Message: err.Error()}
-		}
-	}
-	reply(w, status, result)
+	op, replayed, err := s.imageUpdate.Apply(r.Context(), req)
+	replyOperation(w, op, replayed, err)
 }
 
 // replyOperation answers a mutation: 202 for work started or armed, 200 for the exact replay of an
@@ -144,10 +107,6 @@ func replyOperationAs(w http.ResponseWriter, op nexupdate.Operation, replayed bo
 
 func (s *Service) updateAction(started int, call func(*nexupdate.Engine, context.Context, nexupdate.ActionRequest) (nexupdate.Operation, bool, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.imageUpdate == nil {
-			notImageEdition(w)
-			return
-		}
 		var req nexupdate.ActionRequest
 		if !decode(w, r, &req) {
 			return
@@ -169,10 +128,6 @@ func (s *Service) cancelUpdate() http.HandlerFunc {
 
 // updateOperation is GET /updates/operations/{id}: one recorded operation of the engine (the last 20).
 func (s *Service) updateOperation(w http.ResponseWriter, r *http.Request) {
-	if s.imageUpdate == nil {
-		notImageEdition(w)
-		return
-	}
 	op, found, err := s.imageUpdate.Operation(r.PathValue("id"))
 	if err != nil {
 		updateRefused(w, err)
@@ -185,24 +140,10 @@ func (s *Service) updateOperation(w http.ResponseWriter, r *http.Request) {
 	reply(w, http.StatusOK, op)
 }
 
-// updateSettings is PUT /updates/settings: the channel and base URL this host updates from. A package-edition
-// host has no update server of its own: its channel is the stable archive or the dev subtree of it, so it takes
-// a channel only.
+// updateSettings is PUT /updates/settings: the release channel and base URL this host updates from.
 func (s *Service) updateSettings(w http.ResponseWriter, r *http.Request) {
 	var req nexupdate.Settings
 	if !decode(w, r, &req) {
-		return
-	}
-	if s.imageUpdate == nil {
-		if req.BaseURL != "" {
-			updateRefused(w, &nexupdate.Error{Status: http.StatusBadRequest, Code: "invalid_base_url", Message: "this host updates from its package archive (repo_url) and has no base_url"})
-			return
-		}
-		if err := nexupdate.SaveClassicChannel(req.Channel); err != nil {
-			updateRefused(w, err)
-			return
-		}
-		reply(w, http.StatusOK, nexupdate.Settings{Channel: req.Channel})
 		return
 	}
 	got, err := s.imageUpdate.UpdateSettings(r.Context(), req)
@@ -215,10 +156,6 @@ func (s *Service) updateSettings(w http.ResponseWriter, r *http.Request) {
 
 // updateMedia is GET /updates/media: offline bundles this host can import, read-only.
 func (s *Service) updateMedia(w http.ResponseWriter, r *http.Request) {
-	if s.imageUpdate == nil {
-		notImageEdition(w)
-		return
-	}
 	media, err := s.imageUpdate.Media(r.Context())
 	if err != nil {
 		updateRefused(w, err)
@@ -229,10 +166,6 @@ func (s *Service) updateMedia(w http.ResponseWriter, r *http.Request) {
 
 // importUpdate is POST /updates/import: stage a release from media through the same pipeline as apply.
 func (s *Service) importUpdate(w http.ResponseWriter, r *http.Request) {
-	if s.imageUpdate == nil {
-		notImageEdition(w)
-		return
-	}
 	var req nexupdate.ImportRequest
 	if !decode(w, r, &req) {
 		return
@@ -243,10 +176,6 @@ func (s *Service) importUpdate(w http.ResponseWriter, r *http.Request) {
 
 // fetchComponent is POST /updates/components/{id}/fetch: place an on_demand payload under the payload directory.
 func (s *Service) fetchComponent(w http.ResponseWriter, r *http.Request) {
-	if s.imageUpdate == nil {
-		notImageEdition(w)
-		return
-	}
 	var req nexupdate.FetchRequest
 	if !decode(w, r, &req) {
 		return

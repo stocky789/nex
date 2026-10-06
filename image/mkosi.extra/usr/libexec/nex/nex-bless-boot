@@ -1,9 +1,14 @@
 #!/bin/sh
-# systemd-bless-boot good|bad against the ESP the loader booted from. The image mounts no ESP at /boot or
+# systemd-bless-boot good|bad (UEFI) against the ESP the loader booted from. The image mounts no ESP at /boot or
 # /efi (Core mounts ESPs transiently under /run/nex/esp), so systemd-bless-boot cannot find it by itself:
 # this mounts that ESP for the call and unmounts it again. An ESP Core already has mounted is reused.
 set -eu
 cmd=${1:?usage: nex-bless-boot good|bad}
+# BIOS firmware has no loader variables or systemd-boot entries: nex-hostimage keeps the boot counter in the
+# GRUB environment block on the boot partition.
+if [ ! -d /sys/firmware/efi ]; then
+    exec /usr/bin/nex-hostimage bless "$cmd"
+fi
 efi=/sys/firmware/efi/efivars
 uuid=$(cat "$efi"/LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f 2> /dev/null | tail -c +5 | tr -d '\000' | tr 'A-F' 'a-f' || true)
 node=

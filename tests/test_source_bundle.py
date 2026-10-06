@@ -52,7 +52,6 @@ class SourceBundleTests(unittest.TestCase):
     def test_matched_libvirt_source_input_covers_its_custom_binary_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            repo = root / 'repo'; repo.mkdir()
             source = root / 'third-party/libvirt/source'; source.mkdir(parents=True)
             notices = root / 'third-party/libvirt/notices'; notices.mkdir()
             tarball = source / 'libvirt_1+nex1.orig.tar.xz'; tarball.write_bytes(b'upstream source')
@@ -65,14 +64,14 @@ class SourceBundleTests(unittest.TestCase):
             (control / 'DEBIAN' / 'control').write_text(
                 'Package: libvirt0\nVersion: 1+nex1\nArchitecture: amd64\n'
                 'Source: libvirt (1+nex1)\nMaintainer: test\nDescription: test\n')
-            subprocess.run(['dpkg-deb', '--build', str(control), str(repo / 'libvirt0_1+nex1_amd64.deb')],
-                           check=True, stdout=subprocess.DEVNULL)
             iso, tree, output = root / 'base.iso', root / 'tree', root / 'source.tar.gz'
             iso.write_bytes(b'iso'); (tree / 'nex/repo').mkdir(parents=True)
+            subprocess.run(['dpkg-deb', '--build', str(control), str(tree / 'nex/repo/libvirt0_1+nex1_amd64.deb')],
+                           check=True, stdout=subprocess.DEVNULL)
             with mock.patch.object(source_bundle, 'update_sources'), \
                     mock.patch.object(source_bundle, 'fetch_sources') as fetch:
                 source_bundle.main([
-                    '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree), '--repository', str(repo),
+                    '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree),
                     '--source-input', str(root / 'third-party/libvirt'), '--output', str(output),
                 ])
             fetch.assert_not_called()
@@ -98,21 +97,6 @@ class SourceBundleTests(unittest.TestCase):
             self.assertEqual(source_bundle.deb_member(
                 deb, '/usr/share/nex/appliance/components.tsv'), b'header\n')
 
-    def test_core_package_adds_appliance_package_records(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            repo, tree, package = root / 'repo', root / 'tree', root / 'package'
-            repo.mkdir(); tree.mkdir(); (package / 'DEBIAN').mkdir(parents=True)
-            (package / 'usr/share/nex/appliance').mkdir(parents=True)
-            (package / 'DEBIAN/control').write_text(
-                'Package: nex-core-local\nVersion: 1\nArchitecture: all\nMaintainer: test\nDescription: test\n')
-            (package / 'usr/share/nex/appliance/components.tsv').write_text(
-                'libsample\t2\tamd64\tsample\t2\n')
-            subprocess.run(['dpkg-deb', '--build', str(package), str(repo / 'nex-core-local.deb')],
-                           check=True, stdout=subprocess.DEVNULL)
-            _, components = source_bundle.components_for_tree(repo, tree)
-            self.assertEqual(components[-1]['source_package'], 'sample')
-
     def test_source_field_keeps_the_exact_source_version(self):
         self.assertEqual(source_bundle.source_name_version('edk2 (2025.02-8+deb13u1)', 'ignored'), ('edk2', '2025.02-8+deb13u1'))
         self.assertEqual(source_bundle.source_name_version('libnfs', '5.0.2-1+b2'), ('libnfs', '5.0.2-1+b2'))
@@ -134,12 +118,12 @@ class SourceBundleTests(unittest.TestCase):
     def test_staged_virtio_win_requires_retained_fedora_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            repo, tree = root / 'repo', root / 'tree'
-            repo.mkdir()
+            tree = root / 'tree'
+            repo = tree / 'nex' / 'repo'
             media = tree / 'nex' / 'media'
             media.mkdir(parents=True)
             (media / 'virtio-win.iso').write_bytes(b'iso')
-            (tree / 'nex' / 'repo').mkdir(parents=True)
+            repo.mkdir(parents=True)
             control = root / 'control'
             (control / 'DEBIAN').mkdir(parents=True)
             (control / 'DEBIAN' / 'control').write_text(
@@ -155,14 +139,14 @@ class SourceBundleTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'without retained Fedora corresponding source'):
                     source_bundle.main([
                         '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree),
-                        '--repository', str(repo), '--output', str(out),
+                        '--output', str(out),
                     ])
 
     def test_compressed_virtio_win_uses_external_complete_source_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            repo, tree, retained = root / 'repo', root / 'tree', root / 'virtio-win-retained-source'
-            repo.mkdir(); (tree / 'nex' / 'repo').mkdir(parents=True)
+            tree, retained = root / 'tree', root / 'virtio-win-retained-source'
+            repo = tree / 'nex' / 'repo'; repo.mkdir(parents=True)
             media = tree / 'nex' / 'media'; media.mkdir(parents=True)
             (media / 'virtio-win.iso.gz').write_bytes(b'compressed')
             third_party = tree / 'nex' / 'third-party' / 'virtio-win' / 'source'
@@ -189,7 +173,7 @@ class SourceBundleTests(unittest.TestCase):
                     mock.patch.object(source_bundle, 'retained_dsc', return_value=root / 'fake.dsc'):
                 source_bundle.main([
                     '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree),
-                    '--repository', str(repo), '--source-input', str(retained),
+                    '--source-input', str(retained),
                     '--source-input', str(tree / 'nex' / 'third-party'), '--output', str(out),
                 ])
             with source_bundle.tarfile.open(out) as archive:
@@ -199,8 +183,8 @@ class SourceBundleTests(unittest.TestCase):
     def test_source_cache_is_fetched_into_and_copied_from(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            repo, tree, cache = root / 'repo', root / 'tree', root / 'cache'
-            repo.mkdir(); (tree / 'nex' / 'repo').mkdir(parents=True)
+            tree, cache = root / 'tree', root / 'cache'
+            repo = tree / 'nex' / 'repo'; repo.mkdir(parents=True)
             control = root / 'control'; (control / 'DEBIAN').mkdir(parents=True)
             (control / 'DEBIAN' / 'control').write_text(
                 'Package: sample\nVersion: 1\nArchitecture: all\nMaintainer: test\nDescription: test\n')
@@ -221,7 +205,7 @@ class SourceBundleTests(unittest.TestCase):
                     mock.patch.object(source_bundle, 'fetch_sources', side_effect=fake_fetch):
                 source_bundle.main([
                     '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree),
-                    '--repository', str(repo), '--source-cache', str(cache), '--output', str(out),
+                    '--source-cache', str(cache), '--output', str(out),
                 ])
             with source_bundle.tarfile.open(out) as archive:
                 names = archive.getnames()
@@ -235,10 +219,7 @@ class SourceBundleTests(unittest.TestCase):
         self.assertIn('scripts/build-source-bundle.py', build)
         self.assertIn('nex-core-${file_version}-source.tar.gz', build)
         self.assertIn('nex-core-${file_version}-compliance-manifest.json', build)
-        self.assertIn('replace_matched_libvirt', build)
-        self.assertIn("source_name(control) == 'libvirt'", build)
         self.assertIn('--source-input "$stage/nex/third-party"', build)
-        self.assertIn("for name in ('source', 'notices', 'recipe'):", build)
         self.assertIn('ARTWORK-LICENSE.md', build)
         self.assertIn('stage_virtio_win', build)
         self.assertIn('virtio-win-0.1.302-1.src.rpm', build)
@@ -250,7 +231,6 @@ class SourceBundleTests(unittest.TestCase):
         # without a matching source (release run 4223).
         self.assertIn('snapshot-sources.list', build)
         self.assertIn('20260920T000000Z', build)
-        self.assertLess(build.index('snapshot-sources.list'), build.index('apt-get "${apt_snapshot[@]}" update'))
         self.assertIn('export NEX_SNAPSHOT_SOURCES=', build)
         gui = (ROOT / 'installer/build-gui.sh').read_text()
         self.assertIn('NEX_SNAPSHOT_SOURCES', gui)
@@ -263,8 +243,8 @@ class SourceBundleTests(unittest.TestCase):
     def test_compliance_manifest_binds_final_iso_and_source_bundle(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            repo, tree, control = root / 'repo', root / 'tree', root / 'control'
-            repo.mkdir(); tree.mkdir(); (control / 'DEBIAN').mkdir(parents=True)
+            tree, control = root / 'tree', root / 'control'
+            repo = tree / 'nex' / 'repo'; repo.mkdir(parents=True); (control / 'DEBIAN').mkdir(parents=True)
             (control / 'DEBIAN' / 'control').write_text('Package: sample\nVersion: 1\nArchitecture: all\nMaintainer: test\nDescription: test\n')
             deb = repo / 'sample_1_all.deb'
             subprocess.run(['dpkg-deb', '--build', str(control), str(deb)], check=True, stdout=subprocess.DEVNULL)
@@ -272,7 +252,7 @@ class SourceBundleTests(unittest.TestCase):
             iso.write_bytes(b'final'); base.write_bytes(b'base')
             bundle = root / 'bundle'; bundle.mkdir(); source_bundle.archive_directory(bundle, source)
             manifest = root / 'manifest.json'
-            source_bundle.main(['--version', '0.2.9', '--iso', str(iso), '--tree', str(tree), '--repository', str(repo),
+            source_bundle.main(['--version', '0.2.9', '--iso', str(iso), '--tree', str(tree),
                                 '--source-bundle', str(source),
                                 '--compliance-manifest', str(manifest)])
             result = json.loads(manifest.read_text())

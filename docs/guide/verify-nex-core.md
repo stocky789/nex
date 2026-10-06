@@ -24,9 +24,8 @@ console checks inspect the standalone host, not a Nex Controller service. [Retur
 
    The first file should identify Nex Core, with `ID=nex-core`, `ID_LIKE=debian`, and
    `PRETTY_NAME="Nex Core <version>"`. Nex Core has one version: `VERSION_ID` equals the
-   installed `nex-core-local` package version (`dpkg-query -W nex-core-local`) and follows
-   [software updates](software-updates.md); there is no separate agent version. The latter
-   files retain Debian ancestry.
+   installed release's version and follows [software updates](software-updates.md); there is no separate agent
+   version. The latter files retain Debian ancestry.
 2. Inspect the installed services and root SSH policy:
 
    ```sh
@@ -94,7 +93,7 @@ They do not certify Secure Boot, physical hardware, a published update, or exter
   `journalctl -b -u libvirtd --no-pager`, and retain the relevant error. Do not reinstall
   or reset storage as a generic repair step.
 - **Identity is Debian only:** confirm the intended image was installed and retain the
-  installer logs. Do not hand-edit identity to mask an incomplete late-install step.
+  installer logs. Do not hand-edit identity to mask an incomplete installation.
 - **No network/remote access:** return to the local console and inspect the networking
   selected during installation; this offline readiness check does not validate SSH login.
 

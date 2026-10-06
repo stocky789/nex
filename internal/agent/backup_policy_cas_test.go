@@ -30,7 +30,7 @@ func TestBackupPolicyUpdateRequiresCurrentRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := UpsertPoolBackupPolicy(s, create); !errors.Is(err, ErrBackupConflict) {
-		t.Fatalf("legacy update without revision: %v", err)
+		t.Fatalf("update without revision: %v", err)
 	}
 	zero := uint64(0)
 	create.ID, create.ScheduleID, create.ExpectedRevision = "pol-2", "sch-2", &zero

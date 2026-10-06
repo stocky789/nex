@@ -118,7 +118,7 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &v) {
 		return
 	}
-	if v.Version != protocol.LegacyVersion && v.Version != protocol.Version {
+	if v.Version != protocol.Version {
 		fail(w, 409, "unsupported protocol version")
 		return
 	}
@@ -362,7 +362,7 @@ func (c *Controller) cleanupJoinedAutoPool(tx *sql.Tx, host, former string, inve
 	if former != "" {
 		candidates = []string{former}
 	} else {
-		// A host already moved by an older Controller has no remembered source pool.
+		// A host moved without a remembered source pool has none to name.
 		// Only its one empty, same-site, hostname-named auto-pool is safe to prune;
 		// ambiguity leaves projections visible rather than deleting an unrelated pool.
 		var hostname string
@@ -439,7 +439,7 @@ func (c *Controller) rotate(w http.ResponseWriter, r *http.Request, host string)
 	if !decode(w, r, &v) {
 		return
 	}
-	if v.Version != protocol.LegacyVersion && v.Version != protocol.Version {
+	if v.Version != protocol.Version {
 		fail(w, 409, "unsupported protocol version")
 		return
 	}
@@ -479,7 +479,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	if !decodeLimit(w, r, &v, 16<<20) {
 		return
 	}
-	if v.Version != protocol.LegacyVersion && v.Version != protocol.Version {
+	if v.Version != protocol.Version {
 		fail(w, 409, "unsupported protocol version")
 		return
 	}
@@ -556,55 +556,50 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	c.completeStorageDiscoveries(host, v.StorageDiscoveries)
 	c.completeStorageClusters(host, v.StorageClusters)
 	c.completePoolResults(host, v.PoolResults)
-	// A v2 Core asks for this acknowledgement before it advertises the repository
-	// capability. v1 peers receive their original response shape unchanged.
-	if v.Version == protocol.Version {
-		if slices.Contains(v.Capabilities, protocol.DetectedOSCapability) {
-			supported := true
-			out.DetectedOS = &supported
-		}
-		// The Controller decodes Inventory.image and relays update actions; it answers only a Core that
-		// offered the capability, so a strict older Core never sees the field.
-		if slices.Contains(v.Capabilities, protocol.ImageUpdateCapability) {
-			supported := true
-			out.ImageUpdate = &supported
-		}
-		if slices.Contains(v.Capabilities, protocol.ISODownloadProgressCapability) {
-			supported := true
-			out.ISODownloadProgress = &supported
-		}
-		repositoryCapability := protocol.StorageRepositoryCapability
-		// Reuse the established support capability handshake: a Core must not send
-		// ZFS-only inventory to a strict older Controller until this acknowledgement.
-		// storage-zfs-replace-v1 is the narrowest ack for hot spares, widened layouts
-		// and the additive zfs_pool / pool observation fields.
-		if slices.Contains(v.Capabilities, protocol.ZFSProvisionCapability) {
-			repositoryCapability = protocol.ZFSProvisionCapability
-		}
-		if slices.Contains(v.Capabilities, protocol.ZFSReplaceCapability) {
-			repositoryCapability = protocol.ZFSReplaceCapability
-		}
-		out.StorageRepositories = &protocol.StorageRepositorySupport{ProtocolVersion: protocol.Version, Capability: repositoryCapability}
-		clusterCapability := protocol.StorageClusterCapability
-		if slices.Contains(v.Capabilities, protocol.StorageClusterSessionMonitorCapability) {
-			clusterCapability = protocol.StorageClusterSessionMonitorCapability
-		}
-		out.StorageClusters = &protocol.StorageClusterSupport{Capability: clusterCapability}
-		if slices.Contains(v.Capabilities, protocol.StorageRepositoryCapability) {
-			out.CredentialOffers = c.credentials.offers(host)
-		}
+	// A Core asks for this acknowledgement before it advertises the repository capability.
+	if slices.Contains(v.Capabilities, protocol.DetectedOSCapability) {
+		supported := true
+		out.DetectedOS = &supported
 	}
-	if v.Version == protocol.Version && slices.Contains(v.Capabilities, protocol.StorageDiscoveryCapability) {
+	// The Controller decodes Inventory.image and relays update actions; it answers only a Core that
+	// offered the capability.
+	if slices.Contains(v.Capabilities, protocol.ImageUpdateCapability) {
+		supported := true
+		out.ImageUpdate = &supported
+	}
+	if slices.Contains(v.Capabilities, protocol.ISODownloadProgressCapability) {
+		supported := true
+		out.ISODownloadProgress = &supported
+	}
+	repositoryCapability := protocol.StorageRepositoryCapability
+	// Reuse the established support capability handshake: a Core must not send
+	// ZFS-only inventory to the Controller until this acknowledgement.
+	// storage-zfs-replace-v1 is the narrowest ack for hot spares, widened layouts
+	// and the additive zfs_pool / pool observation fields.
+	if slices.Contains(v.Capabilities, protocol.ZFSProvisionCapability) {
+		repositoryCapability = protocol.ZFSProvisionCapability
+	}
+	if slices.Contains(v.Capabilities, protocol.ZFSReplaceCapability) {
+		repositoryCapability = protocol.ZFSReplaceCapability
+	}
+	out.StorageRepositories = &protocol.StorageRepositorySupport{ProtocolVersion: protocol.Version, Capability: repositoryCapability}
+	clusterCapability := protocol.StorageClusterCapability
+	if slices.Contains(v.Capabilities, protocol.StorageClusterSessionMonitorCapability) {
+		clusterCapability = protocol.StorageClusterSessionMonitorCapability
+	}
+	out.StorageClusters = &protocol.StorageClusterSupport{Capability: clusterCapability}
+	if slices.Contains(v.Capabilities, protocol.StorageRepositoryCapability) {
+		out.CredentialOffers = c.credentials.offers(host)
+	}
+	if slices.Contains(v.Capabilities, protocol.StorageDiscoveryCapability) {
 		out.StorageDiscoveries = c.takeStorageDiscoveries(host)
 	}
-	if v.Version == protocol.Version && slices.Contains(v.Capabilities, protocol.StorageClusterCapability) {
+	if slices.Contains(v.Capabilities, protocol.StorageClusterCapability) {
 		out.StorageClusterRequests = c.takeStorageClusters(host)
 	}
 	// The one brokered round trip serves two actions: an invitation and a promotion
 	// preflight. The broker only ever holds a request addressed to this host.
-	if v.Version == protocol.Version {
-		out.PoolRequests = c.takePoolRequests(host)
-	}
+	out.PoolRequests = c.takePoolRequests(host)
 	if v.Sequence > seq && v.Inventory != nil && v.Inventory.Managed != nil {
 		known, filterErr := filterISODownloadProgress(tx, host, v.Inventory.Managed.ISODownloads, v.Results)
 		if filterErr != nil {
@@ -881,7 +876,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		if cmd.Media != nil && cmd.Media.URL != "" && !slices.Contains(v.Capabilities, protocol.ISODownloadCapability) {
 			continue
 		}
-		if storageRepositoryCommand(cmd) && (v.Version != protocol.Version || !slices.Contains(v.Capabilities, protocol.StorageRepositoryCapability)) {
+		if storageRepositoryCommand(cmd) && !slices.Contains(v.Capabilities, protocol.StorageRepositoryCapability) {
 			continue
 		}
 		filtered = append(filtered, cmd)

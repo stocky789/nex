@@ -57,7 +57,6 @@ class InstallerConsoleTests(unittest.TestCase):
         for failure in (
             'nex-installer: Could not stop md0, which holds a selected disk',
             'nex-installer: The media is damaged. No disk has been changed.',
-            'nex-installer: The image edition installs on UEFI firmware only.',
             'LAB-VALIDATE-REFUSED',
         ):
             with self.subTest(failure=failure):

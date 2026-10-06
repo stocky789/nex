@@ -248,7 +248,7 @@ assert.match(renderToStaticMarkup(createElement(ApplyDialog, { ...applyProps, sp
 assert.match(renderToStaticMarkup(createElement(ApplyDialog, { ...applyProps, spec: { interfaces: [{ ...one, gateway: "" }] } })), /DNS servers: none configured/);
 assert.match(renderToStaticMarkup(createElement(ApplyDialog, { ...applyProps, submitError: 'the confirmation must be the host name "core-b"' })), /role="alert"[^>]*>the confirmation must be the host name &quot;core-b&quot;/);
 assert.match(applyDialog, /aria-labelledby="apply-network-title"/);
-// A host too old to report the window it recorded says so, instead of naming the default as
+// A host that does not report the window it recorded says so, instead of naming the default as
 // though it were the window the operator chose.
 assert.match(renderToStaticMarkup(createElement(ApplyDialog, { ...applyProps, minutes: null })), /after the rollback window recorded when this change was staged \(2–30 minutes\) unless you confirm/);
 

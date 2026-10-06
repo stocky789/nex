@@ -73,7 +73,11 @@ func statsChannelHandler(history http.Handler, store *Store) http.Handler {
 	mux.HandleFunc("GET /backup-catalog", func(w http.ResponseWriter, r *http.Request) { serveBackupCatalogPage(w, r, store) })
 	mux.HandleFunc("GET /hardware", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(readHardware(r.Context(), "/"))
+		hw := readHardware(r.Context(), "/")
+		if store != nil {
+			hw.SystemDisk = systemDiskReport(store.dir, hw.MDArrays)
+		}
+		_ = json.NewEncoder(w).Encode(hw)
 	})
 	return mux
 }

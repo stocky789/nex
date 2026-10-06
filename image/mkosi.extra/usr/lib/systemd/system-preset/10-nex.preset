@@ -1,6 +1,7 @@
 enable nex-firstboot.service
 enable nex-boot-check.service
 enable nex-esp-sync.service
+enable nex-bless-boot-bios.service
 # Network configuration is ifupdown's (written by Core); networkd would only add a wait-online stall.
 disable systemd-networkd.service
 disable systemd-networkd.socket

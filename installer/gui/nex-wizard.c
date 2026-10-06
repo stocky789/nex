@@ -18,7 +18,7 @@ static GtkWidget *host, *network_hostname, *password, *repeat, *zone_entry, *key
 static gchar **timezones;
 static GtkWidget *network_intro, *nic_list, *nic_details, *mode, *address, *gateway, *vlan, *management, *dns;
 static GtkWidget *disk_list, *disk_summary, *review, *confirmation, *dhcp_retry;
-/* Repair image (image edition only): offered when nex-image-install.sh probe finds a complete data volume. */
+/* Repair image: offered when nex-image-install.sh probe finds a complete data volume. */
 static GtkWidget *repair_box, *repair_combo, *repair_note;
 static gchar *repair_found;       /* comma list of the disks that hold the data volume, e.g. /dev/sda,/dev/sdb */
 static gboolean repair_chosen;
@@ -65,18 +65,11 @@ static gchar *read_sys(const gchar *path)
     if (!g_file_get_contents(path, &s, NULL, NULL)) return g_strdup("");
     return g_strstrip(s);
 }
-/* The image edition needs room for two slots and a nex-data that holds a staged update,
- * the payloads and the VM store; nex-config enforces the same floor. */
-static gboolean image_edition(void)
-{
-    gchar *edition = read_sys("/cdrom/nex/edition"), *cmdline = read_sys("/proc/cmdline");
-    gboolean image = !strcmp(edition, "image") && !strstr(cmdline, "nex.edition=classic");
-    g_free(edition); g_free(cmdline);
-    return image;
-}
+/* Two slots and a nex-data that holds a staged update, the payloads and the VM store; nex-config
+ * enforces the same floor. */
 static guint64 disk_floor(void)
 {
-    return (image_edition() ? 24ULL : 16ULL) * 1024 * 1024 * 1024;
+    return 24ULL * 1024 * 1024 * 1024;
 }
 static gchar *property(const gchar *base, const gchar *name, const gchar *prop)
 {
@@ -551,13 +544,12 @@ static void discover(void)
     gtk_widget_set_sensitive(mode, nics->len > 0);
     gtk_widget_set_sensitive(vlan, FALSE);
 }
-/* Offer Repair image only on image-edition media and only when a complete Nex Core data volume (a single
- * nex-data or every member of a nex-data mirror) is on the disks, exactly as the text wizard does. */
+/* Offer Repair image only when a complete Nex Core data volume (a single nex-data or every member of a
+ * nex-data mirror) is on the disks, exactly as the text wizard does. */
 static void offer_repair(void)
 {
     gchar *argv[] = { "sh", "/cdrom/nex/nex-image-install.sh", "probe", NULL }, *out = NULL, **lines;
     gint status = 0; guint i;
-    if (!image_edition()) return;
     if (!g_spawn_sync(NULL, argv, NULL, G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, &out, NULL, &status, NULL)
         || !WIFEXITED(status) || WEXITSTATUS(status)) { g_free(out); return; }
     lines = g_strsplit(out ? out : "", "\n", -1);
@@ -590,7 +582,7 @@ static gboolean repair_select_disks(void)
         g_free(name);
     }
     if (!wanted || matched != wanted) {
-        gchar *text = g_strdup_printf("%s holds the Nex Core data but a disk is below the image edition's %u GiB minimum or is not eligible. Use Erase and install, or attach the original disks.", repair_found ? repair_found : "A disk", (guint)(disk_floor() >> 30));
+        gchar *text = g_strdup_printf("%s holds the Nex Core data but a disk is below the %u GiB minimum or is not eligible. Use Erase and install, or attach the original disks.", repair_found ? repair_found : "A disk", (guint)(disk_floor() >> 30));
         message(text); g_free(text); g_strfreev(found);
         for (valid = gtk_tree_model_get_iter_first(model, &iter); valid; valid = gtk_tree_model_iter_next(model, &iter))
             gtk_list_store_set(GTK_LIST_STORE(model), &iter, DISK_SELECTED, FALSE, -1);
@@ -947,7 +939,7 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 4);
     gtk_box_pack_start(GTK_BOX(box), label("Don't forget to deploy at least one Nex Controller for your\nenvironment, for central management of your hosts and VMs."), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), label("This installer sets up Nex Core and its local web UI.\nDeploy Nex Controller from that UI or separately."), FALSE, FALSE, 8);
-    /* Hidden until offer_repair() finds an existing Nex Core data volume on image-edition media. */
+    /* Hidden until offer_repair() finds an existing Nex Core data volume. */
     repair_box = gtk_vbox_new(FALSE, 4); gtk_widget_set_no_show_all(repair_box, TRUE);
     repair_note = label(""); g_signal_connect(repair_note, "size-allocate", G_CALLBACK(wrap_label_allocate), NULL); repair_combo = gtk_combo_box_new_text();
     gtk_combo_box_append_text(GTK_COMBO_BOX(repair_combo), "Erase and install"); gtk_combo_box_append_text(GTK_COMBO_BOX(repair_combo), "Repair image"); gtk_combo_box_set_active(GTK_COMBO_BOX(repair_combo), 0);

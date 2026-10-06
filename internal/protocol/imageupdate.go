@@ -3,7 +3,7 @@ package protocol
 
 import "errors"
 
-// ImageUpdateCommandKind is the Command.Kind a Controller relays to one image-edition host. The host's own
+// ImageUpdateCommandKind is the Command.Kind a Controller relays to one host. The host's own
 // update engine runs the operation and keeps its record; the command only asks and the result only says
 // whether the host accepted the request.
 const ImageUpdateCommandKind = "host-image-update"

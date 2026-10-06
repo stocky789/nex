@@ -141,7 +141,7 @@ func TestHostStatusReportsTheEngineAndGuests(t *testing.T) {
 	}
 	SetImageUpdater(nil)
 	if _, err = PoolUpdateHostStatusFor(context.Background(), s); err == nil {
-		t.Fatal("a classic host answered with an image status")
+		t.Fatal("a host without an engine answered with an image status")
 	}
 }
 

@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # The ISO pins every byte; URLs alone never authorize an installation payload.
 # Rows: SHA-256, destination below the target directory, HTTPS URL. NEX_NETINST_ROWS
-# selects the destination prefixes this call handles: repo/ and media/ for the classic
-# edition (the default), image/ and payload/ for the image edition.
+# selects the destination prefixes this call handles: image/ and payload/ (the default).
 set -eu
 manifest=${NEX_NETINST_MANIFEST:-/cdrom/nex/payloads.tsv}
 mode=${1:?expected --check or a destination directory}
-rows=${NEX_NETINST_ROWS:-repo/ media/}
+rows=${NEX_NETINST_ROWS:-image/ payload/}
 checked=
 while IFS="$(printf '\t')" read -r digest relative url; do
-    case "$relative" in repo/*.deb|media/virtio-win.iso|image/*|payload/*/*) ;; *) echo 'Invalid netinst destination' >&2; exit 1;; esac
+    case "$relative" in image/*|payload/*/*) ;; *) echo 'Invalid netinst destination' >&2; exit 1;; esac
     case "$relative" in *..*|*[!a-zA-Z0-9_./+%:~-]*) echo 'Invalid netinst path' >&2; exit 1;; esac
     case "$url" in https://*) ;; *) echo 'Netinst requires HTTPS sources' >&2; exit 1;; esac
     selected=
@@ -19,11 +18,8 @@ while IFS="$(printf '\t')" read -r digest relative url; do
     done
     [ -n "$selected" ] || continue
     if [ "$mode" = --check ]; then
-        # Check both Nex blobs, plus one file per upstream archive. Checking every
-        # package adds hundreds of round trips without guaranteeing later availability.
+        # Check each Nex blob, plus one file per upstream host.
         case "$url" in
-            https://snapshot.debian.org/archive/debian/*) source=debian ;;
-            https://snapshot.debian.org/archive/debian-security/*) source=security ;;
             https://fedorapeople.org/*) source=fedora ;;
             *) source=$relative ;;
         esac
@@ -31,10 +27,6 @@ while IFS="$(printf '\t')" read -r digest relative url; do
         checked="$checked $source"
         wget -q -t 1 -T 30 --spider "$url" || { echo 'Net installer download unavailable; check network and retry.' >&2; exit 1; }
         continue
-    fi
-    # APT selects only packages missing or outdated in the installed base system.
-    if [ "${2:-}" ] && [ "$relative" != media/virtio-win.iso ]; then
-        grep -Fxq "${relative#repo/}" "$2" || continue
     fi
     destination=$mode/$relative
     mkdir -p "$(dirname "$destination")"

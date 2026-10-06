@@ -185,22 +185,6 @@ class OsReleaseStampTest(unittest.TestCase):
                                "NEX_MD_FALLBACK_SAFE": "1"})
 
 
-class InstallationStampTest(unittest.TestCase):
-    """nex-core-local's preinst refuses a fresh install on a tree without the system stamp; mkosi installs the package
-    into a fresh tree built from image/mkosi.skeleton, so the skeleton must carry the stamp."""
-
-    def preinst(self, root):
-        return subprocess.run(["sh", str(ROOT / "packaging/core-local/preinst"), "install"],
-                              env={**os.environ, "DPKG_ROOT": str(root)}, capture_output=True, text=True)
-
-    def test_a_tree_built_from_the_image_skeleton_accepts_the_package(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertNotEqual(self.preinst(tmp).returncode, 0)
-            shutil.copytree(IMAGE / "mkosi.skeleton", tmp, dirs_exist_ok=True)
-            result = self.preinst(tmp)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-
 class FinalizeTest(unittest.TestCase):
     def test_etc_moves_to_factory_with_tmpfiles_rule_and_identity_is_written(self):
         t = Tree(self)

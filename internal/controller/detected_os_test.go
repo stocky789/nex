@@ -54,7 +54,7 @@ func TestDetectedOSReAdoptedFromCoreWithoutLiveGuest(t *testing.T) {
 		a.cookie = nil
 		a.call("GET", "/api/v1/vms", nil, nil, 401)
 		a.cookie = cookie
-		// Older Core or an explicitly cleared record does not retain a Controller copy.
+		// A Core that omits the record, or an explicitly cleared record, does not retain a Controller copy.
 		managed.DetectedOS = nil
 		report(2, 200)
 		check(false)
@@ -109,15 +109,13 @@ func TestDetectedOSCapabilityAcknowledgement(t *testing.T) {
 	host := a.enroll(a.token(a.site(), ""), csr(t))
 	cert := certificate(t, host.CertificatePEM)
 	for i, test := range []struct {
-		version      int
 		capabilities []string
 		want         bool
 	}{
-		{protocol.LegacyVersion, []string{protocol.DetectedOSCapability}, false},
-		{protocol.Version, nil, false},
-		{protocol.Version, []string{protocol.DetectedOSCapability}, true},
+		{nil, false},
+		{[]string{protocol.DetectedOSCapability}, true},
 	} {
-		response := a.report(cert, protocol.ReportRequest{Version: test.version, Sequence: uint64(i + 1), Capabilities: test.capabilities})
+		response := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: uint64(i + 1), Capabilities: test.capabilities})
 		if (response.DetectedOS != nil) != test.want || (test.want && !*response.DetectedOS) {
 			t.Fatalf("unexpected capability acknowledgement: %+v", response.DetectedOS)
 		}

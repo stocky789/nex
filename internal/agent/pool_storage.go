@@ -33,7 +33,6 @@ const poolResourceMutationPrefix = "@resource/"
 const (
 	poolProbeModeChallengeByte = "challenge-byte-v1"
 	poolProbeModeHeader        = "X-Nex-Pool-Probe-Mode"
-	poolProbeLegacyMode        = "legacy-byte-0"
 	// poolProbeLeaseLimit bounds only concurrent, challenge-addressed peer
 	// probes. Each lease is ephemeral (ten seconds) and is never VM ownership.
 	poolProbeLeaseLimit = 64
@@ -359,18 +358,12 @@ func poolProbeOffset(challenge string) (int64, error) {
 		return 0, errors.New("invalid shared-storage probe challenge")
 	}
 	digest := sha256.Sum256(b)
-	// Byte zero remains the legacy rolling-upgrade range. A collision between two
+	// Byte zero is never used. A collision between two
 	// challenge hashes can only fail a concurrent probe; it cannot report health.
 	return int64(binary.BigEndian.Uint64(digest[:8])&uint64((1<<63)-2)) + 1, nil
 }
 
 func poolProbeModeOffset(challenge, mode string) (string, int64, error) {
-	if mode == "" {
-		if _, err := poolProbeOffset(challenge); err != nil {
-			return "", 0, err
-		}
-		return poolProbeLegacyMode, 0, nil
-	}
 	if mode != poolProbeModeChallengeByte {
 		return "", 0, errors.New("unsupported shared-storage probe mode")
 	}
@@ -653,9 +646,7 @@ func PoolStorageHandler(s *Store) http.Handler {
 						http.Error(w, "lock unavailable", http.StatusConflict)
 						return
 					}
-					if mode == poolProbeModeChallengeByte {
-						w.Header().Set(poolProbeModeHeader, mode)
-					}
+					w.Header().Set(poolProbeModeHeader, mode)
 					w.WriteHeader(http.StatusNoContent)
 					return
 				}
@@ -989,17 +980,14 @@ func crossCoreLockProbe(ctx context.Context, s *Store, masterURL string, storage
 	if resp.StatusCode != http.StatusNoContent {
 		return errors.New("master could not hold shared-storage lock")
 	}
-	offset := int64(0)
-	switch mode {
-	case "": // An older master held the legacy byte-zero lock.
-	case poolProbeModeChallengeByte:
-		if offset, err = poolProbeOffset(challenge); err != nil {
-			_ = releasePoolProbeLease(c, lockURL)
-			return err
-		}
-	default:
+	if mode != poolProbeModeChallengeByte {
 		_ = releasePoolProbeLease(c, lockURL)
 		return errors.New("master returned an unsupported shared-storage probe mode")
+	}
+	offset, err := poolProbeOffset(challenge)
+	if err != nil {
+		_ = releasePoolProbeLease(c, lockURL)
+		return err
 	}
 	leased := true
 	defer func() {

@@ -194,11 +194,11 @@ func TestNFSKernelFilesystemIdentityChangesWhenServerOrFilesystemChanges(t *test
 	}
 }
 
-func TestNFSIdentityRejectsLegacyStatfsAndChangedProtocolProfiles(t *testing.T) {
+func TestNFSIdentityRejectsUndefinedStatfsAndChangedProtocolProfiles(t *testing.T) {
 	v := &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/vms"}
 	const observed = "nfs4:7f000001:801:1:2"
 	access := storageAccess{FilesystemID: "0000000000000000"}
-	for _, stored := range []string{"", "0000000000000000", "nfs:legacy:fsid=0000000000000000", "nfs4:7f000001:801:1:3"} {
+	for _, stored := range []string{"", "0000000000000000", "nfs:other:fsid=0000000000000000", "nfs4:7f000001:801:1:3"} {
 		s := protocol.StorageRegistration{Identity: protocol.StorageIdentity{NFS: &protocol.NFSStorageIdentity{Server: v.Server, Export: v.Export, FilesystemID: stored}}}
 		if _, err := nfsIdentity(s, v, "nfs.example.test:/vms", access, observed); err == nil {
 			t.Fatalf("stored NFS identity %q was auto-upgraded", stored)
@@ -363,26 +363,20 @@ func TestSMBMarkerRejectsRemovedEntryWithoutPanic(t *testing.T) {
 	}
 }
 
-func TestSMBMarkerLegacyFSIDRemainsStrict(t *testing.T) {
+func TestSMBIdentityWithoutMarkerFailsClosed(t *testing.T) {
 	v := &protocol.SMBStorageSource{Server: "smb.example.test", Share: "vms"}
-	legacy := protocol.StorageRegistration{Identity: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{Server: v.Server, Share: v.Share, FilesystemID: "old"}}}
-	if _, err := smbIdentity(legacy, v, t.TempDir(), "//smb.example.test/vms", storageAccess{FilesystemID: "new"}); err == nil {
-		t.Fatal("legacy storage auto-upgraded across a changed CIFS fsid")
-	}
-	legacyPath := t.TempDir()
-	if got, err := smbIdentity(legacy, v, legacyPath, "//smb.example.test/vms", storageAccess{FilesystemID: "old"}); err != nil || got.Observed.SMB.MarkerID != "" {
-		t.Fatalf("matching legacy filesystem identity = %+v, %v", got, err)
-	}
-	if _, err := os.Lstat(filepath.Join(legacyPath, smbMarkerName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("matching legacy identity created marker: %v", err)
-	}
-	incomplete := protocol.StorageRegistration{Identity: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{Server: v.Server, Share: v.Share}}}
-	path := t.TempDir()
-	if _, err := smbIdentity(incomplete, v, path, "//smb.example.test/vms", storageAccess{FilesystemID: "new"}); err == nil {
-		t.Fatal("incomplete legacy identity auto-upgraded")
-	}
-	if _, err := os.Lstat(filepath.Join(path, smbMarkerName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("incomplete legacy identity created marker: %v", err)
+	for _, identity := range []protocol.SMBStorageIdentity{
+		{Server: v.Server, Share: v.Share, FilesystemID: "old"},
+		{Server: v.Server, Share: v.Share},
+	} {
+		s := protocol.StorageRegistration{Identity: protocol.StorageIdentity{SMB: &identity}}
+		path := t.TempDir()
+		if _, err := smbIdentity(s, v, path, "//smb.example.test/vms", storageAccess{FilesystemID: "old"}); err == nil {
+			t.Fatalf("identity %+v without a marker was accepted", identity)
+		}
+		if _, err := os.Lstat(filepath.Join(path, smbMarkerName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("identity %+v without a marker created a marker: %v", identity, err)
+		}
 	}
 }
 

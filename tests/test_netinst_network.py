@@ -68,11 +68,14 @@ class NetinstNetwork(unittest.TestCase):
             state.mkdir(parents=True)
             (state / 'active').touch()
             (state / 'config.ini').write_text('[Host]\n')
+            (state / 'image.env').write_text('mode=install\n')
             (state / 'netinst-resolv.conf').write_text('nameserver 192.0.2.53\n')
             resolver = root / 'resolv.conf'
             media = root / 'cdrom/nex'
             media.mkdir(parents=True)
             (media / 'payloads.tsv').touch()
+            installer = media / 'nex-image-install.sh'
+            installer.write_text(f'#!/bin/sh\necho "$1" >> {root / "ran"}\n')
             fetch = media / 'netinst-fetch.sh'
             fetch.write_text(f'#!/bin/sh\ntest "$(cat {resolver})" = "nameserver 192.0.2.53"\n')
             check = root / 'nex-config'
@@ -84,14 +87,15 @@ class NetinstNetwork(unittest.TestCase):
                                            ('/etc/resolv.conf', resolver),
                                            ('/usr/bin/nex-config', check)):
                 source = source.replace(original, str(replacement))
-            source = source.replace('PARTMAN=/var/lib/partman', f'PARTMAN={root / "partman"}')
             result = subprocess.run(['sh', '-c', source], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(resolver.read_text(), 'nameserver 192.0.2.53\n')
+            self.assertEqual((root / 'ran').read_text(), 'preflight\ninstall\n')
             (state / 'netinst-resolv.conf').unlink()
             resolver.unlink()
             result = subprocess.run(['sh', '-c', source], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0, 'missing validated DNS must stop before partitioning')
+            self.assertEqual((root / 'ran').read_text(), 'preflight\ninstall\n', 'the image installer must not run without validated DNS')
 
     def test_config_network_gate_and_preflight(self):
         if not shutil.which('cc') or not shutil.which('pkg-config'):
@@ -176,7 +180,7 @@ class NetinstNetwork(unittest.TestCase):
     def test_preflight_precedes_destructive_operations(self):
         recheck = (ROOT / 'installer/gui/recheck.sh').read_text()
         self.assertLess(recheck.index('netinst-fetch.sh --check'), recheck.rindex('if [ -f /run/nex-installer/active ]'))
-        self.assertLess(recheck.index('netinst-fetch.sh --check'), recheck.index('dd if=/dev/zero'))
+        self.assertLess(recheck.index('netinst-fetch.sh --check'), recheck.index('nex-image-install.sh preflight'))
         config = (ROOT / 'installer/gui/nex-config.c').read_text()
         self.assertLess(config.index('netinst-network'), config.index('netinst-fetch.sh'))
         self.assertLess(config.index('netinst-fetch.sh'), config.index('protected_write("/run/nex-installer/answers.cfg"'))

@@ -25,7 +25,7 @@ func (v DetectedOS) Valid() error {
 // GuestInfo is what the host observed inside a running VM through its host-local
 // virtio channels. Facts come from the QEMU guest agent when it answers; channel
 // states come from the live libvirt definition. It is observation, never proof of
-// guest health, and is absent for stopped VMs and from older Core builds.
+// guest health, and is absent for stopped VMs and from Core builds that do not report it.
 type GuestInfo struct {
 	// Agent is "connected" when the guest agent answered, "unresponsive" when the
 	// channel is attached but it did not, "disconnected" when nothing in the guest

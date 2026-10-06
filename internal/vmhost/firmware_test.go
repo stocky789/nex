@@ -46,27 +46,27 @@ func TestFirmwareVariablesStayWithVMIdentity(t *testing.T) {
 	if got := parseDomain(t, after).OS.NVRAM; got == nil || got.Path != want {
 		t.Fatalf("rename changed firmware variable store to %+v, want %q", got, want)
 	}
-	// A definition from before explicit paths retains libvirt's resolved path during a stopped
+	// The observed definition's resolved variable-store path is retained during a stopped
 	// rename, rather than replacing its installed guest state with a blank UUID store.
-	legacy := parseDomain(t, before)
-	legacy.OS.NVRAM.Path = filepath.Join(firmwareVariablesDir, "before-rename_VARS.fd")
-	legacyXML, err := xml.Marshal(legacy)
+	observed := parseDomain(t, before)
+	observed.OS.NVRAM.Path = filepath.Join(firmwareVariablesDir, "before-rename_VARS.fd")
+	observedXML, err := xml.Marshal(observed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	carried, err := carryFirmwareVariables(after, legacyXML)
+	carried, err := carryFirmwareVariables(after, observedXML)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := parseDomain(t, carried).OS.NVRAM.Path; got != legacy.OS.NVRAM.Path {
-		t.Fatalf("legacy variable store changed to %q", got)
+	if got := parseDomain(t, carried).OS.NVRAM.Path; got != observed.OS.NVRAM.Path {
+		t.Fatalf("observed variable store changed to %q", got)
 	}
-	legacy.OS.NVRAM = nil
-	legacyXML, err = xml.Marshal(legacy)
+	observed.OS.NVRAM = nil
+	observedXML, err = xml.Marshal(observed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = carryFirmwareVariables(after, legacyXML); err == nil {
+	if _, err = carryFirmwareVariables(after, observedXML); err == nil {
 		t.Fatal("existing UEFI VM without an observed variable store was reset to a blank store")
 	}
 }
@@ -806,9 +806,9 @@ func TestManagedDomainXMLTwoCDDrives(t *testing.T) {
 }
 
 // The drive a media request names is resolved from the domain libvirt actually holds. A domain
-// defined by an older Core has no aliases and one cdrom: that one is always the install drive,
-// and its driver disc drive is reported absent rather than guessed, because inserting a disc
-// into the wrong tray of a running guest cannot be undone from the outside.
+// whose only cdrom carries no Nex alias treats that one as the install drive, and its driver
+// disc drive is reported absent rather than guessed, because inserting a disc into the wrong
+// tray of a running guest cannot be undone from the outside.
 func TestCDROMDriveResolution(t *testing.T) {
 	parse := func(body string) managedDomain {
 		var d managedDomain
@@ -817,16 +817,16 @@ func TestCDROMDriveResolution(t *testing.T) {
 		}
 		return d
 	}
-	legacy := parse(`<domain><devices>` +
+	unaliased := parse(`<domain><devices>` +
 		`<disk device="disk" type="file"><target dev="vda" bus="virtio"/></disk>` +
 		`<disk device="cdrom" type="file"><source file="/iso/win.iso"/><target dev="sda" bus="sata"/><readonly/></disk>` +
 		`</devices></domain>`)
-	drives := cdromDrives(legacy)
+	drives := cdromDrives(unaliased)
 	if drives[protocol.InstallDrive] == nil || drives[protocol.InstallDrive].Target.Dev != "sda" {
 		t.Fatalf("the single unaliased cdrom is the install drive: %+v", drives)
 	}
 	if drives[protocol.DriversDrive] != nil {
-		t.Fatalf("an older domain has no driver disc drive: %+v", drives[protocol.DriversDrive])
+		t.Fatalf("an unaliased domain has no driver disc drive: %+v", drives[protocol.DriversDrive])
 	}
 
 	// libvirt echoes its own aliases on every device; only the Nex user aliases name a drive.
@@ -857,8 +857,8 @@ func TestCDROMDriveResolution(t *testing.T) {
 	}
 }
 
-// managedCurrent places the driver disc drive beside the targets an older journal entry already
-// holds, so adding the drive never renames a device the guest has.
+// managedCurrent places the driver disc drive beside the targets an existing journal entry
+// already holds, so adding the drive never renames a device the guest has.
 func TestDriversTargetAvoidsExistingDevices(t *testing.T) {
 	if got := driversTarget([]string{"vda"}, "sda"); got != "sdb" {
 		t.Fatalf("drivers target %q", got)
@@ -1124,12 +1124,12 @@ esac`)
 		t.Fatalf("install eject must reach sda: %q", got)
 	}
 
-	// A drivers-drive request against a VM defined before the second drive existed must say so
+	// A drivers-drive request against a VM that has only the install drive must say so
 	// instead of inserting the disc into the install tray.
 	t.Setenv("VMHOST_XML", `<domain><devices><disk device="cdrom" type="file"><target dev="sda" bus="sata"/><readonly/></disk></devices></domain>`)
 	r, _ := e.Execute(context.Background(), command("d4", "insert", protocol.DriversDrive, "media-2"), nil)
 	if r.Status != "failed" || !strings.Contains(r.Error, "no driver disc drive while running") {
-		t.Fatalf("older domain must refuse a drivers insert while running: %+v", r)
+		t.Fatalf("a domain with only the install drive must refuse a drivers insert while running: %+v", r)
 	}
 	// Stopped, the drive is added to the persistent definition and the disc goes into it.
 	t.Setenv("VMHOST_STATE", "shut off")
@@ -1173,7 +1173,7 @@ esac`)
 	}
 	calls()
 	if r, _ = e.Execute(context.Background(), command("d10", "insert", "", "media-1"), nil); r.Status != "succeeded" {
-		t.Fatalf("re-insert into the install drive (legacy empty drive name): %+v", r)
+		t.Fatalf("re-insert into the install drive (empty drive name): %+v", r)
 	}
 	calls()
 	if r, _ = e.Execute(context.Background(), command("d11", "insert", protocol.DriversDrive, "media-1"), nil); r.Status != "failed" || !strings.Contains(r.Error, "already in the install drive") {
@@ -1188,27 +1188,27 @@ esac`)
 	}
 }
 
-// A VM defined before the driver disc drive existed is edited while running: SATA cannot
-// hot-plug, so the drive is added to the persistent definition alone and appears at the next
-// start. Without this the expected definition could never match and every live edit of such a
-// VM would fail its observation.
-func TestApplyLiveAddsDriversDriveToOlderDomain(t *testing.T) {
+// A VM with only the install drive is edited while running: SATA cannot hot-plug, so the
+// drivers drive is added to the persistent definition alone and appears at the next start.
+// Without this the expected definition could never match and every live edit of such a VM
+// would fail its observation.
+func TestApplyLiveAddsDriversDriveToInstallOnlyDomain(t *testing.T) {
 	calls := filepath.Join(t.TempDir(), "calls")
 	t.Setenv("MANAGED_CALLS", calls)
 	v := managedTestVM()
 	v.NICs = nil // Only the CD drive differs, so every attach below is the drive itself.
-	// The persistent definition an older Core left: one unaliased cdrom, no drivers drive.
-	legacy := `<domain type="kvm"><name>guest</name><uuid>` + v.ID + `</uuid><devices>` +
+	// The persistent definition holds one unaliased cdrom and no drivers drive.
+	installOnly := `<domain type="kvm"><name>guest</name><uuid>` + v.ID + `</uuid><devices>` +
 		`<disk device="disk" type="file"><source file="/vm/disk-0.qcow2"/><target dev="vda" bus="virtio"/></disk>` +
 		`<disk device="cdrom" type="file"><target dev="sda" bus="sata"/><readonly/></disk>` +
 		`</devices></domain>`
-	legacyPath := filepath.Join(t.TempDir(), "legacy.xml")
-	if err := os.WriteFile(legacyPath, []byte(legacy), 0600); err != nil {
+	installOnlyPath := filepath.Join(t.TempDir(), "install-only.xml")
+	if err := os.WriteFile(installOnlyPath, []byte(installOnly), 0600); err != nil {
 		t.Fatal(err)
 	}
 	fakeCommand(t, "virsh", `echo "$@" >> "$MANAGED_CALLS"
 case "$3" in
-dumpxml) cat "${MANAGED_XML:-`+legacyPath+`}";;
+dumpxml) cat "${MANAGED_XML:-`+installOnlyPath+`}";;
 attach-device) cat "$5" >> "$MANAGED_CALLS"; printf '\n' >> "$MANAGED_CALLS";;
 esac`)
 	expected, err := managedDomainXML(v, nil, []string{"/vm/disk-0.qcow2"}, []string{"vda"}, "sda", "", "sdb", "")
@@ -1216,7 +1216,7 @@ esac`)
 		t.Fatal(err)
 	}
 	var previous managedDomain
-	if err := xml.Unmarshal([]byte(legacy), &previous); err != nil {
+	if err := xml.Unmarshal([]byte(installOnly), &previous); err != nil {
 		t.Fatal(err)
 	}
 	expected, err = preserveLiveTuning(expected, previous)

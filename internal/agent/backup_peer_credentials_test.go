@@ -291,7 +291,7 @@ func TestSupersededBackupCredentialRetirement(t *testing.T) {
 	}
 }
 
-func TestJoinBackupCredentialSyncRetryAndLegacyNFS(t *testing.T) {
+func TestJoinBackupCredentialSyncRetryAndNFSOnly(t *testing.T) {
 	for _, withSecret := range []bool{false, true} {
 		name := "nfs-only"
 		if withSecret {

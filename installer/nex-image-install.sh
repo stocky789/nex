@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-only
-# Image edition install and repair, run inside Debian Installer after the operator
+# Install and repair of Nex Core, run inside Debian Installer after the operator
 # confirmed the selected disks. All disk work is nex-hostimage, the same implementation
 # Core's slot writer imports; this script only finds its inputs and places payloads.
 #
@@ -52,9 +52,42 @@ load_tools() {
     done
 }
 
-# UEFI only: a BIOS boot cannot start the signed UKI, and nothing may be written first.
-need_uefi() {
-    [ -d "$SYS/firmware/efi" ] || die 'The image edition installs on UEFI firmware only. Restart in UEFI mode or use the Classic edition. No disk has been changed.'
+# The boot method follows the firmware that started this installer: UEFI starts shim, systemd-boot and the signed
+# UKI from each disk's ESP; BIOS starts GRUB from each disk's MBR. The same image and layout serve both.
+BOOT=
+need_boot() {
+    if [ -d "$SYS/firmware/efi" ]; then BOOT=uefi; else BOOT=bios; fi
+    [ "$BOOT" != bios ] || grub_available || die 'The installation media carries no GRUB for BIOS firmware; the media is incomplete. No disk has been changed.'
+}
+
+# GRUB is written to each disk by grub-install, which the installer environment does not have. The media carries
+# one under $MEDIA/grub: a root-tree fragment (grub2-common, grub-common and grub-pc-bin with the libraries they need). It is
+# copied to RAM and run chrooted, with /dev, /proc and /sys bound in; nex-hostimage binds in the boot partition
+# it mounts. A grub-install already in the environment is used as it is.
+GRUB_ROOT=
+grub_available() {
+    command -v grub-install >/dev/null 2>&1 || [ -x "$MEDIA/grub/usr/sbin/grub-install" ]
+}
+prepare_grub() {
+    [ "$BOOT" = bios ] || return 0
+    ! command -v grub-install >/dev/null 2>&1 || return 0
+    root=$WORK/grub-root
+    mkdir -p "$root"
+    cp -a "$MEDIA/grub/." "$root/" || die 'Could not copy GRUB from the installation media. No disk has been changed.'
+    for dir in dev proc sys run; do
+        mkdir -p "$root/$dir"
+    done
+    GRUB_ROOT=$root
+    for dir in dev proc sys; do
+        mount -o bind "/$dir" "$root/$dir" || { release_grub; die 'Could not prepare GRUB for BIOS firmware. No disk has been changed.'; }
+    done
+}
+release_grub() {
+    [ -n "$GRUB_ROOT" ] || return 0
+    for dir in sys proc dev; do
+        umount "$GRUB_ROOT/$dir" >/dev/null 2>&1 || true
+    done
+    GRUB_ROOT=
 }
 
 # Take the static nex-hostimage from the media; ISO file modes are not trusted to be executable.
@@ -72,7 +105,7 @@ IMAGE=
 NETWORK=
 select_sources() {
     if [ -f "$MEDIA/payloads.tsv" ]; then
-        grep -q "$(printf '\timage/')" "$MEDIA/payloads.tsv" || die 'This net installer carries no image edition.'
+        grep -q "$(printf '\timage/')" "$MEDIA/payloads.tsv" || die 'This net installer carries no system image.'
         NETWORK=yes
     else
         [ -f "$MEDIA/image/manifest.json" ] && [ -f "$MEDIA/image/root.erofs" ] || die 'The installation media carries no complete system image.'
@@ -185,7 +218,7 @@ verify_media_payloads() {
     [ -z "$NETWORK" ] || return 0
     for dir in "$MEDIA"/payload/*/; do
         [ -d "$dir" ] || continue
-        for main in virtio-win.iso.gz controller.qcow2; do
+        for main in virtio-win.iso.gz controller-system.img; do
             [ -f "$dir$main" ] || continue
             case $main in
                 *.gz)
@@ -247,7 +280,7 @@ verify_payloads() {
     for dir in "$PAYLOAD_DIR"/*/; do
         [ -d "$dir" ] || continue
         name=$(basename "$dir")
-        for main in virtio-win.iso controller.qcow2; do
+        for main in virtio-win.iso controller-system.img; do
             [ -f "$dir$main" ] || continue
             printf '%s  %s\n' "$name" "$dir$main" | sha256sum -c - >/dev/null 2>&1 || {
                 die "Payload $main does not match its recorded SHA-256; the media or download is damaged."
@@ -290,13 +323,13 @@ finish() {
 
 case ${1:-} in
 preflight)
-    need_uefi
+    need_boot
     select_sources
     [ -f "$STATE/image.env" ] && read_env
     [ -f "$MEDIA/bin/nex-hostimage" ] || die 'nex-hostimage is missing from the installation media.'
     ;;
 install)
-    need_uefi
+    need_boot
     select_sources
     read_env
     [ "${mode:-install}" = install ] || die 'The settings select Repair, not Install.'
@@ -306,10 +339,13 @@ install)
     # Nothing on any disk changes until the image and the media payloads have verified.
     "$WORK/nex-hostimage" verify "$IMAGE" >/dev/null || die 'The system image failed verification; the media or download is damaged. No disk has been changed.'
     verify_media_payloads
+    prepare_grub
     release_disks
-    say "Installing the system image on $disks ($layout)"
-    run_hostimage install --layout "$layout" --disks "$disks" --image-dir "$IMAGE" --etc-seed "$STATE/target/etc" \
-        || die 'nex-hostimage could not install the image; see the installer log.'
+    say "Installing the system image on $disks ($layout, $BOOT boot)"
+    status=0
+    run_hostimage install --boot "$BOOT" ${GRUB_ROOT:+--grub-chroot "$GRUB_ROOT"} --layout "$layout" --disks "$disks" --image-dir "$IMAGE" --etc-seed "$STATE/target/etc" || status=$?
+    release_grub
+    [ "$status" -eq 0 ] || die 'nex-hostimage could not install the image; see the installer log.'
     place_payloads
     finish
     ;;
@@ -319,7 +355,7 @@ probe)
     printf 'layout=%s\ndisks=%s\n' "$FOUND_LAYOUT" "$FOUND_DISKS"
     ;;
 repair)
-    need_uefi
+    need_boot
     select_sources
     read_env
     [ "$mode" = repair ] || die 'The settings select Install, not Repair.'
@@ -329,11 +365,14 @@ repair)
         || die "Repair must name exactly the disks that hold the Nex Core data ($FOUND_DISKS). No disk has been changed."
     install_binary
     [ -z "$NETWORK" ] || download_image
+    prepare_grub
     # Repair re-lays the table, so an array holding a selected disk must stop first; refuse before any write.
     release_disks
-    say "Repairing the system image on $disks ($layout); nex-data is kept"
-    run_hostimage repair --layout "$layout" --disks "$disks" --image-dir "$IMAGE" \
-        || die 'nex-hostimage could not repair the image; see the installer log.'
+    say "Repairing the system image on $disks ($layout, $BOOT boot); nex-data is kept"
+    status=0
+    run_hostimage repair --boot "$BOOT" ${GRUB_ROOT:+--grub-chroot "$GRUB_ROOT"} --layout "$layout" --disks "$disks" --image-dir "$IMAGE" || status=$?
+    release_grub
+    [ "$status" -eq 0 ] || die 'nex-hostimage could not repair the image; see the installer log.'
     finish
     ;;
 *)

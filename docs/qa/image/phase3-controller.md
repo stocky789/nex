@@ -26,11 +26,10 @@ Nothing below was observed on a running system. Resource limits: Go builds and t
 | `web/src/image-updates.tsx`, `settings.tsx` | **Host images** list on Settings → Updates: running, staged, previous and available releases with slots, channel, rollback floor, state format, last operation and failure; Check, Download and stage, Reboot into update, Roll back, Cancel with action hints, confirmation for the two reboots and a graceful-guest-shutdown choice |
 
 Route check: `GET/POST /api/local/v1/updates*` are registered by `nex-core-local`'s `Service` (`internal/localcore/service.go`), which
-builds the engine at `Open` from the static os-release edition (`IMAGE_ID=nex-core` is the image edition); a classic host answers the
-five image-only routes and the operations route with `409 unsupported_edition` (existing `TestClassicHostRefusesImageOnlyRoutes`).
+builds the engine at `Open` from the static os-release edition (`IMAGE_ID=nex-core`).
 
 Decisions: the Controller's own APT routes (`GET /api/v1/updates`, `POST /api/v1/updates/apply`) and the Controller update panel are
-**kept**. The plan retires them with the appliance swap (work item 5, not in this slice); until then a classic Controller has no other
+**kept**. The plan retires them with the appliance swap (work item 5, not in this slice); until then the Controller has no other
 way to update itself, and nothing in the new routes conflicts with them. `PUT …/updates/settings` was not cheap (URL validation and a
 persistent write of `/etc/nex/updates.conf`) and was left out of this slice; it was added afterwards (phase3-layers-update.md).
 
@@ -40,9 +39,9 @@ persistent write of `/etc/nex/updates.conf`) and was left out of this slice; it 
 |---|---|---|
 | Image host serves check → apply (stage only, nothing armed) → activate through the host-local HTTP routes with a signed fake source; operation lookup; auth; 404 for an unknown operation | `TestImageEditionHostServesTheWholeUpdateFlow` (`internal/localcore`) | pass |
 | The embedded agent's relayed command reaches the same engine (activate armed sequence 2, reboot called, cancel after arming is refused with `already_armed: …`) | same test, via `agent.ExecuteImageUpdate` | pass |
-| Relay maps each action and the request_id to the engine; invalid or unclassified failures never leak engine internals; classic host refuses with `unsupported_edition` | `TestRelayedImageUpdateRunsOnTheHostsEngine` (`internal/agent`) | pass |
+| Relay maps each action and the request_id to the engine; invalid or unclassified failures never leak engine internals | `TestRelayedImageUpdateRunsOnTheHostsEngine` (`internal/agent`) | pass |
 | `Inventory.image` and the capability are withheld until acknowledged; acknowledgement cleared on reset; capability absent without an engine | `TestInventoryImageRequiresControllerAcknowledgement` (`internal/agent`); mutation check: disabling the withholding makes it fail (`report 0 carried image = true`), then reverted | pass |
-| The Controller acknowledges only a Core that offered the capability; projection equals the host report; a classic host is `supported:false` | `TestImageUpdateAckAndHostReportedProjection` (`internal/controller`) | pass |
+| The Controller acknowledges only a Core that offered the capability; projection equals the host report | `TestImageUpdateAckAndHostReportedProjection` (`internal/controller`) | pass |
 | Command goes to its host only, with the right fields; replay is `200` with the original operation; a changed payload is `409`; refusals, strict body, CSRF | `TestImageUpdateRelaysToItsHostOnly`, `TestImageUpdateRefusals`, `TestImageUpdateNeedsCSRF` | pass |
 | Action hints, request identity held across a retry, panel rendering from the host report; a new host report replaces a view the panel fetched earlier (the view is used only while the report it was read against is unchanged); a host that is no longer freshly connected gets every action disabled; the panel keeps reading while a submitted task is unfinished, not only while the host reports a running operation (mutation checks: ignoring the report identity and ignoring the task each fail the test, then reverted) | `web/src/image-updates.test.mjs` (also `settings`, `updates`, `ui`, `pool-members` web tests, `tsc --noEmit`) | pass |
 | Contract | `scripts/generate_api.py --check`, `tests/test_api_contract.py` (74 tests) | pass |

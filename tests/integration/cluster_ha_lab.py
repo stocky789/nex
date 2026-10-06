@@ -33,7 +33,7 @@ ALL_NAMES = (*CORE_NAMES, "storage")
 MIN_START_AVAILABLE = 6 * 1024**3
 PRESSURE_AVAILABLE = 3 * 1024**3
 MAX_SWAPOUT_PAGES = 128 * 1024
-PRISTINE_HELPER = ROOT / "packaging/core-local/corosync-pristine"
+PRISTINE_HELPER = ROOT / "tests/integration/fixtures/corosync-pristine"
 
 
 def memory_snapshot():

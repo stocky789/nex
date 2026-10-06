@@ -52,13 +52,8 @@ type PoolClusterNode struct {
 // simply never in a nodelist again rather than being handed to somebody else.
 func PoolClusterNodeID(hostID string) uint32 {
 	digest := sha256.Sum256([]byte("nex-pool-cluster-node\x00" + hostID))
-	// Keep IDs produced by the previous scheme when they were already in Corosync's
-	// 16-bit range. Knet rejects larger IDs, so fold the rest into its supported range;
+	// Knet rejects node IDs outside Corosync's 16-bit range, so fold the digest into it;
 	// RenderPoolCluster still refuses any collision within one pool.
-	legacy := binary.BigEndian.Uint32(digest[:4])&0x7fffffff | 1
-	if legacy <= 65535 {
-		return legacy
-	}
 	return binary.BigEndian.Uint32(digest[:4])%65535 + 1
 }
 
@@ -115,9 +110,9 @@ func PoolClusterOwnsCorosync() bool {
 
 // PoolClusterCanOwnCorosync checks configuration ownership before Core installs
 // the pool key, so a foreign cluster's authentication is never changed.
-func PoolClusterCanOwnCorosync(stateDir string) error {
+func PoolClusterCanOwnCorosync() error {
 	old, err := os.ReadFile(corosyncConfigPath)
-	return checkCorosyncConfigOwner(stateDir, old, err, poolClusterMarker)
+	return checkCorosyncConfigOwner(old, err, poolClusterMarker)
 }
 
 // ApplyPoolCluster brings this host's Corosync and Pacemaker to the pool's rendered
@@ -305,9 +300,9 @@ func applyPoolClusterProperties(ctx context.Context, properties []string) error 
 	if !cibHasPropertyName(current, "stonith-watchdog-timeout") {
 		return nil
 	}
-	// Removed, not merely never written: a pool whose CIB carries this from an earlier Nex
-	// Core, or from an administrator, is one node-without-sbd away from losing its whole
-	// cluster. See poolClusterProperties.
+	// Removed, not merely never written: a pool whose CIB carries this, however it got
+	// there, is one node-without-sbd away from losing its whole cluster. See
+	// poolClusterProperties.
 	_, err = clusterRun(ctx, "pcs", "property", "unset", "stonith-watchdog-timeout")
 	return err
 }

@@ -1,0 +1,17 @@
+[Unit]
+Description=Mark the booted system good (BIOS firmware)
+Documentation=man:systemd-bless-boot.service(8)
+DefaultDependencies=no
+Requires=boot-complete.target
+After=boot-complete.target
+Conflicts=shutdown.target
+Before=shutdown.target
+ConditionPathExists=!/sys/firmware/efi
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/nex/nex-bless-boot good
+
+[Install]
+WantedBy=basic.target

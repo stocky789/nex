@@ -13,6 +13,7 @@ const (
 	MiB = 1 << 20
 	GiB = 1 << 30
 
+	BIOSSize    = 1 * MiB // GRUB's core image is embedded here on BIOS hosts
 	ESPSize     = 1 * GiB
 	SlotSize    = 4 * GiB // root partition size; the erofs image must fit
 	VeritySize  = 64 * MiB
@@ -24,9 +25,17 @@ const (
 	LayoutSingle = "single"
 	LayoutRAID1  = "raid1"
 
+	BIOSLabel = "nex-bios"
 	ESPLabel  = "nex-esp"
 	DataLabel = "nex-data"
 
+	// ESPIndex is the partition number of the boot partition (the ESP; BIOS hosts keep their GRUB files there too) on
+	// every disk. BIOSIndex is the number of the BIOS boot partition: it sits in front of the ESP on the disk but
+	// carries the last number, so the numbers of every other partition do not depend on it.
+	ESPIndex  = 1
+	BIOSIndex = 7
+
+	typeBIOS   = "21686148-6449-6e6f-744e-656564454649"
 	typeESP    = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 	typeRoot   = "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
 	typeVerity = "2c7357ed-ebd2-46d9-aec1-23d437ec2bf5"
@@ -35,7 +44,7 @@ const (
 )
 
 var typeNames = map[string]string{
-	typeESP: "esp", typeRoot: "root-x86-64", typeVerity: "root-x86-64-verity",
+	typeBIOS: "bios-boot", typeESP: "esp", typeRoot: "root-x86-64", typeVerity: "root-x86-64-verity",
 	typeData: "linux-generic", typeRAID: "linux-raid",
 }
 
@@ -70,10 +79,11 @@ func ValidateLayout(layout string, disks int) error {
 
 // MinDiskBytes is the smallest disk that fits the layout with MinDataSize.
 func MinDiskBytes() int64 {
-	return MiB + ESPSize + 2*(SlotSize+VeritySize) + MinDataSize + MiB
+	return MiB + BIOSSize + ESPSize + 2*(SlotSize+VeritySize) + MinDataSize + MiB
 }
 
-// Plan returns the partition table for a disk of diskBytes.
+// Plan returns the partition table for a disk of diskBytes, ordered by partition number. Every disk carries the BIOS
+// boot partition whichever firmware the host boots with, so the same layout starts under both.
 func Plan(diskBytes int64, layout string) ([]Planned, error) {
 	if layout != LayoutSingle && layout != LayoutRAID1 {
 		return nil, fmt.Errorf("unknown layout %q (want single or raid1)", layout)
@@ -98,12 +108,14 @@ func Plan(diskBytes int64, layout string) ([]Planned, error) {
 	}
 	var out []Planned
 	off := int64(MiB)
+	bios := Planned{BIOSIndex, BIOSLabel, typeBIOS, off, BIOSSize}
+	off += BIOSSize
 	for i, s := range specs {
-		out = append(out, Planned{i + 1, s.label, s.typ, off, s.size})
+		out = append(out, Planned{ESPIndex + i, s.label, s.typ, off, s.size})
 		off += s.size
 	}
 	end := alignDown(diskBytes - backupReserve)
-	return append(out, Planned{6, DataLabel, dataType, off, end - off}), nil
+	return append(out, Planned{DataIndex, DataLabel, dataType, off, end - off}, bios), nil
 }
 
 // NodeName is the kernel partition node for a disk node: /dev/vda -> /dev/vda1, /dev/nvme0n1 -> /dev/nvme0n1p1.
@@ -137,22 +149,33 @@ func LayDisk(ctx context.Context, r Runner, d *Disk, layout string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", d.Path, err)
 	}
+	return layPlan(ctx, r, d, plan, NewGUID())
+}
+
+// layPlan wipes the signatures the plan's partitions and the disk's ends may carry and writes the plan as the
+// disk's GPT under the given disk GUID, with random partition GUIDs.
+func layPlan(ctx context.Context, r Runner, d *Disk, plan []Planned, diskID GUID) error {
 	regions := [][2]int64{{0, MiB}, {d.Size - MiB, MiB}}
 	for _, p := range plan {
 		regions = append(regions, [2]int64{p.Offset, MiB}, [2]int64{p.Offset + p.Size - MiB, MiB})
 	}
 	for _, g := range regions {
-		if err = d.zero(g[0], g[1]); err != nil {
+		if err := d.zero(g[0], g[1]); err != nil {
 			return fmt.Errorf("%s: wipe: %w", d.Path, err)
 		}
 	}
-	if err = d.WriteTable(tableFor(plan, d.SectorSize)); err != nil {
+	if err := crash("lay.wiped"); err != nil {
 		return err
 	}
-	if err = d.Reread(); err != nil {
+	t := tableFor(plan, d.SectorSize)
+	t.DiskID = diskID
+	if err := d.WriteTable(t); err != nil {
 		return err
 	}
-	if err = r.Run(ctx, "udevadm", "settle"); err != nil {
+	if err := d.Reread(); err != nil {
+		return err
+	}
+	if err := r.Run(ctx, "udevadm", "settle"); err != nil {
 		return err
 	}
 	return waitNodes(ctx, d, len(plan))

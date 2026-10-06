@@ -196,7 +196,7 @@ def main():
             assert response.status == expected, (response.status, content)
             return json.loads(content)
         # Explicit protocol simulation: a valid second enrolled identity reports the
-        # native host snapshot without the new capability, as an older agent would.
+        # native host snapshot without the new capability, as an agent lacking it would.
         other_request('/api/v1/agent/report', {'version': 1, 'sequence': 1, 'inventory': host()['inventory'], 'results': []})
         lab.api('/api/v1/storage', {**common, 'host_id': other['host_id'], 'request_id': 'qa-unsupported',
             'name': 'Unsupported agent', 'path': storage_path}, expected=409)

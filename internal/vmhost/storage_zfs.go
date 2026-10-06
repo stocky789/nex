@@ -112,8 +112,8 @@ func inspectZFS(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 	return a, nil
 }
 
-// New registrations bind an existing dataset into Core's writable, host-visible root.
-// Stored legacy paths are never changed: their existing VM disk references stay honest.
+// Imported datasets are bound into Core's writable, host-visible root; a dataset Core
+// provisioned mounts directly beneath it and has no alias.
 func prepareZFSBind(ctx context.Context, s protocol.StorageRegistration, dataset, source, alias string) error {
 	if err := os.MkdirAll(alias, 0755); err != nil {
 		return err
@@ -195,7 +195,7 @@ func verifyZFSBind(ctx context.Context, dataset, alias string) error {
 func detachZFSBind(ctx context.Context, s protocol.StorageRegistration) error {
 	alias := remoteMountPath(s)
 	if s.Path != alias {
-		return nil // legacy dataset mount; Nex never owned it.
+		return nil // No alias was bound for this registration.
 	}
 	unit := systemdMountUnit(alias)
 	path := filepath.Join(storageUnitRoot, unit)

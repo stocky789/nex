@@ -1,4 +1,4 @@
-# Phase I-6 local lab 1: image-edition installer and boot security (QEMU/KVM)
+# Phase I-6 local lab 1: installer and boot security (QEMU/KVM)
 
 Date: 2026-10-02. Plan: [Immutable Nex Core](../../plans/2026-10-01-immutable-nex-core.md). Owner decisions: approved plan options, no remote
 publishing, private hosts never in tracked files.
@@ -14,7 +14,7 @@ variables built by `virt-fw-vars`) and the virtual TPM (`swtpm`) never establish
 
 ## What was built and how the lab differs from a release
 
-The full `installer/build.sh` needs the classic package closure, the matched libvirt and dlm builds and the Controller appliance, none of
+The full `installer/build.sh` needs the full package closure, the matched libvirt and dlm builds and the Controller appliance, none of
 which is under test, so `tests/integration/image_iso_lab.py` assembles a **lab ISO** (22 s, 1.3 GB) from the pinned Debian netinst ISO: the
 image set (`.cache/core-image/out/release`, core1 sequence 1), the static `nex-hostimage`, the real `installer/nex-image-install.sh`,
 `nex-config` compiled from `installer/gui`, the real `00nex-recheck`, `prepare` and `S66nex-wizard`, and a payload directory
@@ -35,7 +35,7 @@ image set (`.cache/core-image/out/release`, core1 sequence 1), the static `nex-h
 | 2 | `nex-core-local` API answers on the host's address | **Not shown.** The run's probe asked `127.0.0.1:9443` and got connection refused (the service listens on the host address, `https://10.0.2.15:9443` is what the console banner prints); the probe now asks the host address and **was not re-run** |
 | 2 | Install and boot on **2 disks** (md RAID1 `nex-data`) | **Not run** (time) |
 | 2 | Root password from the wizard works | **Not established.** In an earlier boot of the same kind of host an SSH password login with the lab password was rejected and the serial `login` ended before the password prompt. The shadow entry was not inspected before the box ended; treat "root can log in with the password given to the installer" as **unverified and possibly broken** |
-| 3 | Legacy BIOS (SeaBIOS) boot of the installer refused before any disk write | **Pass.** The installer printed "The image edition installs on UEFI firmware only ... No disk has been changed."; SHA-256 of the first and last MiB, and of the whole 25 GiB disk (pre-filled with random data), identical before and after |
+| 3 | BIOS (SeaBIOS) boot of the installer refused before any disk write | **Pass.** The installer printed "... installs on UEFI firmware only ... No disk has been changed." (the installer refused BIOS at that point); SHA-256 of the first and last MiB, and of the whole 25 GiB disk (pre-filled with random data), identical before and after |
 | 4 | Repair on an installed 2-disk host | **Not run** |
 | 5 | Wrong-disk safety (unselected disk untouched) | **Not run** (script written: part of `image_install_lab.py raid1`) |
 | 5 | Interrupted install is re-runnable | **Not run** (script written: `interrupted`) |
@@ -63,7 +63,7 @@ certificates); PCR 4 differs with the loaded UKI. Whether PCR 11 returns to the 
 
 ## Defects found and fixed (with regression tests)
 
-1. **The image edition's `answers.cfg` kept only the locale.** Debian Installer runs its keyboard, root account, clock and network-name steps
+1. **The `answers.cfg` kept only the locale.** Debian Installer runs its keyboard, root account, clock and network-name steps
    before the partman hook where the image installer starts, so after the wizard it stopped at "Configure the keyboard". Fix: `installer/gui/nex-config.c`
    keeps those answers (not the partman/GRUB ones) for Install; Repair gets neutral answers with a locked placeholder account (**the Repair answers
    are not exercised in a VM**). Regression test: `tests/integration/installer-hostname.py` (`check_image`; shown failing on the old file, passing now).

@@ -89,11 +89,10 @@ Decision: project owner, 2026-10-02. Plan: [release channels](docs/plans/2026-10
   promotes `dev` to `main`, by a reviewed pull request that also cuts the numbered CHANGELOG heading. A fix
   that must reach `main` first is merged back into `dev` straight away, or the next development build is refused.
 - A merge to `main` releases a stable version; a merge to `dev` releases a development pre-release
-  (`X.Y.Z-dev.N`), each with its own APT archive subtree, download tree and forge release. Settings → Updates in
+  (`X.Y.Z-dev.N`), each with its own download tree and forge release. Settings → Updates in
   Nex Controller and the Nex Core host-local page offer **Stable** and **Development**; the channel is Core state
-  on each host (`channel=` in `/etc/nex/updates.conf` for the image edition, the archive `repo_url` it reads for the
-  package edition), never Controller data.
-- Changing version, release, APT, download or update-channel code also means `.gitea/workflows/` and
+  on each host (`channel=` in `/etc/nex/updates.conf`), never Controller data.
+- Changing version, release, download or update-channel code also means `.gitea/workflows/` and
   `.github/workflows/` in step, and running the release-channel tests (`tests/test_ci_security.py`,
   `tests/test_release_version.py`).
 
@@ -146,15 +145,18 @@ option as approval. These instructions cannot enable a question UI the client la
   host distribution with KVM/QEMU, libvirt, and a local agent. Do not implement a new hypervisor.
 - Use Go for controller/agent, React and TypeScript for the UI, and Debian packages/systemd plus
   installer automation for delivery. Keep the Debian base intact; prefer existing platform capabilities.
-  **Decision: project owner, 2026-10-02 (plan options approved for the immutable Nex Core).** Debian remains the source
+  **Decision: project owner, 2026-10-02 (plan options approved for the Nex Core host image).** Debian remains the source
   of every package, kernel, libvirt, QEMU and systemd binary, pinned to a dated snapshot of the Debian archive, and the
   image tooling builds on Debian's own tools (mkosi, `systemd-boot`, `shim-signed`, `erofs-utils`, `cryptsetup`). What
-  changes is how a host holds them: the image edition is UEFI-only, and its host and Controller guest are signed
-  read-only images (erofs on dm-verity), not apt-managed systems. An image-edition host never runs `apt` or `dpkg`;
+  changes is how a host holds them: a host and the Controller guest are signed
+  read-only images (erofs on dm-verity), not apt-managed systems. A host never runs `apt` or `dpkg`;
   Core replaces whole images, and the Controller guest has no in-guest update helper. "Keep the Debian base intact" now
-  means: do not fork, patch or re-package Debian software to make it immutable, and do not replace Debian's init, kernel
+  means: do not fork, patch or re-package Debian software for the image, and do not replace Debian's init, kernel
   or libvirt stack; compose the image from Debian packages and configure it through Debian's supported mechanisms
-  (units, drop-ins, presets, `/etc`). The classic apt-managed edition keeps working until the plan's phases retire it.
+  (units, drop-ins, presets, `/etc`).
+  **Decision: project owner, 2026-10-06.** A Nex Core host is a signed read-only image with A/B slot updates, on UEFI
+  (systemd-boot and a signed UKI) and on BIOS (GRUB) alike (plan decision D2); Debian Installer writes it and there is no
+  other host form. Do not market immutability: it is the baseline, so write docs and UI as "Nex Core" without a label.
   Releases carry one root signature (the update trust chain of `docs/plans/2026-10-01-immutable-nex-core.md`); there is
   no remote publishing from agents.
 - Product hierarchy: **Sites → Pools (one master host + members) → Hosts → VMs**. Pool is the

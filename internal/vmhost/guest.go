@@ -151,8 +151,8 @@ func observeGuest(ctx context.Context, virsh func(context.Context, ...string) ([
 			}
 		default:
 			// libvirt names every device it generates itself, so a cdrom carrying neither
-			// Nex alias belongs to a domain an older Core defined. Those have exactly one,
-			// and it is always the install drive.
+			// Nex alias is one Nex did not name. A domain has exactly one, and it is always
+			// the install drive.
 			if unnamed == "" {
 				unnamed = state
 			}

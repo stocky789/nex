@@ -52,8 +52,8 @@ type State struct {
 	PendingCSRPEM  string `json:"pending_csr_pem,omitempty"`
 	Sequence       uint64 `json:"sequence"`
 	// StorageProtocolReady is set only after this Core has received a positive,
-	// authenticated Controller v2 preflight. It prevents a package upgrade from
-	// sending new storage fields to a strict v1 Controller.
+	// authenticated Controller storage preflight. Until then storage fields and
+	// repository commands are withheld.
 	StorageProtocolReady bool `json:"storage_protocol_ready,omitempty"`
 	// ZFSProvisionProtocolReady is the narrower Controller acknowledgement for
 	// ZFS-only inventory and commands. It resets on Controller replacement.
@@ -76,10 +76,7 @@ type State struct {
 	DetectedOSReady          bool `json:"detected_os_ready,omitempty"`
 	// ImageUpdateReady is scoped to the current Controller connection: it acknowledged image-update-v1.
 	ImageUpdateReady bool `json:"image_update_ready,omitempty"`
-	// StorageProtocolLegacy records an explicit v2 rejection by a Controller only
-	// while Core has no v2 storage state. It preserves existing local management.
-	StorageProtocolLegacy bool                    `json:"storage_protocol_legacy,omitempty"`
-	Journal               map[string]JournalEntry `json:"journal"`
+	Journal map[string]JournalEntry `json:"journal"`
 }
 
 type Store struct {

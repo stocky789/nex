@@ -1,9 +1,9 @@
 # Nex
 
 Nex is a community-driven virtualization project built on Debian, KVM/QEMU and libvirt. Debian is the source of the
-packages; the image edition of Nex Core is a signed, read-only image assembled from them and replaced as a whole on
+packages; Nex Core is a signed, read-only image assembled from them and replaced as a whole on
 update, so a host is not an `apt` system (project owner decision, 2026-10-02; see the
-[immutable Nex Core plan](docs/plans/2026-10-01-immutable-nex-core.md) for what is built and what is not yet).
+[Nex Core host image plan](docs/plans/2026-10-01-immutable-nex-core.md) for what is built and what is not yet).
 
 - **Nex Core** is the host distribution, with a graphical installer, local management UI and agent.
 - **Nex Controller** is the centralized management service, API and web UI for sites, pools and hosts.

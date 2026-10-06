@@ -1939,16 +1939,6 @@ Append resolved defects with their evidence and the approach to avoid.
 - Regression: `test_iso_rebuilds_dlm_against_the_pinned_pacemaker_fencing_abi` in `tests/test_storage_packaging.py` now rejects BuildKit-only `COPY|ADD|RUN --chmod|--chown|--link|--mount` in every tracked Dockerfile; it failed on the old file (`packaging/cluster-storage/Dockerfile needs BuildKit; the legacy builder cannot run it`) and passes with the fix. Both `phase1` workflows run `python3 -m unittest discover -s tests -p 'test_*.py'`. Evidence: [ISO build checks](qa/iso/2026-09-15-core-0.2.3-build.md).
 - Avoid: BuildKit-only Dockerfile syntax in this repository, and ordering a cheap image build after the appliance and package rebuilds where a syntax failure costs the whole run.
 
-## BUG-0187 — Storage downgrade guard refused every upgrade on a host with storage state
-
-- Date: 2026-09-15. Status: fixed; reproduced and re-verified against real apt 3.0 on Debian 13, regression added. Not yet released: the published 0.2.3 package still carries the broken guard.
-- Symptom: the built-in updater and `apt` could not upgrade Nex Core. After downloading the new package, the install failed with `nex-core-local: refusing APT downgrade while version-2 storage state is retained; upgrade to a storage-format-v2 package instead`, `E: Sub-process /usr/lib/nex/storage-downgrade-guard --core returned an error code (1)`, although the target package does contain `usr/share/nex/core-local/storage-format-v2` and is a newer version.
-- Root cause: `target_archives` in `packaging/core-local/storage-downgrade-guard.py` read APT's `DPkg::Pre-Install-Pkgs` version-3 input as one line per package. APT sends one line per dpkg **action**: the unpack names the `.deb`, and the matching configure of that same package carries the pseudo-filename `**CONFIGURE**` (a removal carries `**REMOVE**`). The configure line has no field ending in `.deb`, so the guard yielded an empty archive and took its fail-closed branch. Any host with version-2 storage state was therefore blocked from every upgrade, Core and Controller alike, since both packages install this one script. The existing unit test fed a single hand-written line, so no check ever saw APT's real input.
-- Fix: skip lines whose action is a known APT pseudo-filename; a line naming neither an archive nor a known pseudo-action still fails closed, and the archive line still decides.
-- Regression: `test_apt_guard_refuses_legacy_archives_only_when_v2_state_requires_it` in `tests/test_storage_packaging.py` now drives the guard with APT's captured two-line payload; it failed before the fix and passes after. Both `phase1` workflows run `python3 -m unittest discover -s tests -p 'test_*.py'`. Evidence: [checks](qa/apt-downgrade-guard/checks.md), including a disposable Debian 13 container where real `apt-get` reproduced the refusal, upgraded cleanly after the fix, and still refused a package without the v2 marker.
-- Operator recovery: the guard that runs is the installed one, so a fixed package cannot install past it. Move `/etc/apt/apt.conf.d/91nex-core-storage-downgrade` aside, upgrade, and confirm the new package wrote it back ([software updates](guide/software-updates.md)).
-- Avoid: parsing an APT hook protocol from its documentation alone; asserting hook behaviour with a hand-written payload instead of one captured from the apt the product ships with; treating "cannot identify the archive" as the only fail-closed case without enumerating the actions APT actually sends.
-
 ## BUG-0188 — Ejecting a disc from a running VM was refused as a boot order change
 
 - Date: 2026-09-15. Status: fixed; reproduced by the regression checks below, which fail with the fix reverted. Not yet released: 0.2.3 hosts still carry the broken record.
@@ -6753,15 +6743,6 @@ Append resolved defects with their evidence and the approach to avoid.
 - Regression: `TestReplaceSystemDiskRefusesFaultyMemberOnChosenDisk`. Command: `go test ./internal/vmhost/ -count=1 -run TestReplaceSystemDiskRefusesFaultyMemberOnChosenDisk`.
 - Avoid: treating "not in_sync" as "already rebuilding onto this disk".
 
-## BUG-0485 — UEFI ESP copy failed when /boot/efi was the failed disk
-
-- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-003).
-- Symptom: none observed on a host. When fstab mounted /boot/efi from the failed disk, replace formatted the new ESP then failed at the copy with no usable source.
-- Root cause: nex-sync-esp and the inline copy both required /boot/efi/EFI; neither fell back to the surviving member's ESP.
-- Fix: when /boot/efi/EFI is absent, mount the surviving disk's ESP and copy from there; errors name the missing sources.
-- Regression: `TestReplaceSystemDiskCopiesESPFromSurvivingMemberWhenBootEFIMissing`. Command: `go test ./internal/vmhost/ -count=1 -run TestReplaceSystemDiskCopiesESPFromSurvivingMemberWhenBootEFIMissing`.
-- Avoid: assuming the failed disk's fstab ESP mount is still present after replacement starts.
-
 ## BUG-0475 — Temperature gauge hid Warm/Critical from assistive tech
 
 - Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-085).
@@ -7103,15 +7084,6 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: append the serial to each text choice and assert it in check.sh and the text wizard fixture.
 - Regression: `bash installer/check.sh`; `python3 tests/integration/installer-text-wizard.py`.
 - Avoid: documenting shared facts without asserting both frontends emit them.
-
-## BUG-0519 — nex-sync-esp EXIT trap leaked mounted member ESPs
-
-- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-075).
-- Symptom: none observed on hardware. A failed ESP copy left the member ESP mounted; apt hooks could accumulate mounts.
-- Root cause: EXIT trap only rmdir'd the mktemp mountpoint.
-- Fix: umount then rmdir on EXIT, matching mdCopyESP.
-- Regression: `bash installer/check.sh` (trap assertion + heredoc syntax).
-- Avoid: mounting in a set -e script without unmounting in the EXIT trap.
 
 ## BUG-0520 — Fresh UEFI lab hardcoded Arch-only OVMF paths
 
@@ -12407,15 +12379,6 @@ of real storage or hardware certification.
 - Regression: offline-repair, install-back and netinst action-navigation scenarios; `python3 tests/integration/installer-text-wizard.py`. Results: [verification](qa/2026-10-03-immutable-review-fixes.md).
 - Avoid: implementing a destructive-choice screen as a one-time prelude.
 
-## BUG-1896 — Conversion guidance excluded existing separate-var hosts
-
-- Date: 2026-10-03.
-- Symptom: the guide implied only newly installed hosts acquired the classic read-only layout or its update window.
-- Root cause: instructions described installation age rather than the implemented separate `/var`/next-boot condition.
-- Fix: correct installation and update guidance for existing eligible hosts without changing Core behavior.
-- Regression: implementation/guide scope review and documentation gate; [review-fix verification](qa/2026-10-03-immutable-review-fixes.md). No newly booted conversion or hardware workflow is claimed.
-- Avoid: substituting a date/version heuristic for the actual conversion condition.
-
 ## BUG-1897 — Installer lab treated normal array-stop progress as refusal
 
 - Date: 2026-10-03.
@@ -12717,11 +12680,11 @@ of real storage or hardware certification.
 - Regression: shell logic run on the runner host; the lab itself is the check. The "booted release 1 although a bootable release 2 entry exists" outcome is not yet explained.
 - Avoid: a test helper that touches a shared resource without the lock the product code uses.
 
-## BUG-1930 — Classic and net installer failed with exit code 100 in `late-install.sh`
+## BUG-1930 — Installer failed with exit code 100 resolving its package closure
 
 - Date: 2026-10-05.
-- Symptom: on a bare-metal host, both installers stopped at "Execution of preseeded command `/bin/sh /cdrom/nex/late-install.sh` failed with exit code 100"; the visible log tail was only a harmless `depmod ... modules.builtin.modinfo` warning.
-- Root cause: BUG-1907's iSCSI helper added `libblkid1` to `installer/packages.txt`. The ISO carries `libblkid1 2.41.5-0+deb13u1`, but the Debian 13.6.0 base has `util-linux 2.41-5`, which Pre-Depends on `libblkid1 (= 2.41-5)`. Naming `libblkid1` made APT upgrade it alone, so the plan was unsatisfiable and `apt-get` exited 100.
-- Fix: removed `libblkid1` from `packages.txt`; `nex-core-local`'s unversioned `Depends: libblkid1` is met by the base system.
-- Regression: reproduced in a Debian chroot built from the 13.6.0 release-date snapshot with the 0.4.28-dev.280 net installer's `payloads.tsv`, `Packages` and `late-install.sh`: `apt-get --print-uris install` exited 100 with the `util-linux PreDepends libblkid1 (= 2.41-5)` conflict; without `libblkid1` the plan, download, `apt-get install` and `nex-core-local` configuration succeeded. `installer/check.sh` now fails if `libblkid1` returns to `packages.txt`. A full installer boot on hardware was not run.
-- Avoid: listing a library that ships in lockstep with a base-system package in `packages.txt`; the closure the ISO carries is resolved against an empty dpkg status and never against the real base.
+- Symptom: on a bare-metal host, the offline and net installers stopped at "Execution of preseeded command ... failed with exit code 100"; the visible log tail was only a harmless `depmod ... modules.builtin.modinfo` warning.
+- Root cause: BUG-1907's iSCSI helper added `libblkid1` to the installer's package list. The ISO carried `libblkid1 2.41.5-0+deb13u1`, but the Debian 13.6.0 base has `util-linux 2.41-5`, which Pre-Depends on `libblkid1 (= 2.41-5)`. Naming `libblkid1` made APT upgrade it alone, so the plan was unsatisfiable and `apt-get` exited 100.
+- Fix: removed `libblkid1` from the package list; the unversioned `Depends: libblkid1` is met by the base system.
+- Regression: reproduced in a Debian chroot built from the 13.6.0 release-date snapshot: `apt-get --print-uris install` exited 100 with the `util-linux PreDepends libblkid1 (= 2.41-5)` conflict; without `libblkid1` the plan, download and install succeeded. A full installer boot on hardware was not run.
+- Avoid: listing a library that ships in lockstep with a base-system package in an installer package list; a package closure resolved against an empty dpkg status is never the closure the real base needs.

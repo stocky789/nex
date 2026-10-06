@@ -58,8 +58,8 @@ All runs under `systemd-run --user --scope` with `CPUQuota=200%`, `MemoryMax=4G`
 | Review fixes: a settings change waits for a check in flight | `TestSettingsWaitForACheckInFlight` | pass; failed before the fix (settings written mid-check) |
 | Channel choice in a multi-channel bundle | `TestImportNeedsAChannelWhenTheBundleHasSeveral` | pass |
 | Fetch places the payload at `<payload>/<sha256>/<name>`, replays, does not download twice, leaves a staged release alone; refuses layers, the slot image, unknown components and tampered bytes; reads from a bundle | `TestFetch…` (3 tests) | pass |
-| HTTP: session and CSRF on all four routes, unknown JSON field, replay and conflict, classic host `409 unsupported_edition` | `TestSettingsMediaImportAndFetchRoutes`, `TestClassicHostRefusesOfflineRoutes` | pass |
-| Controller relay reaches only the addressed host with every field; malformed requests refused before queueing; classic host refused | `TestImageSettingsMediaImportAndFetchAreRelayedToTheHostOnly` | pass |
+| HTTP: session and CSRF on all four routes, unknown JSON field, replay and conflict | `TestSettingsMediaImportAndFetchRoutes` | pass |
+| Controller relay reaches only the addressed host with every field; malformed requests refused before queueing | `TestImageSettingsMediaImportAndFetchAreRelayedToTheHostOnly` | pass |
 | Agent runs the four actions on the engine, carries the fields, passes the engine's refusal code, never forwards a malformed request; inventory maps `base_url` and `media` | `TestRelayedSettingsMediaImportAndFetchRunOnTheHostsEngine`, `TestInventoryImageReportsTheSourceAndMedia` | pass |
 | Publisher: layers and payloads become signed components, a layer for another base, with the wrong bytes, a duplicate id, a bad payload spec are never signed; minimal and full bundle contents | `tests/test_update_publish.py` (3 new tests) | pass |
 

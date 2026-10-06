@@ -24,13 +24,7 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'Makefil
          'appliance/corosync-qnetd-runtime.conf', 'packaging/core-local/Dockerfile',
          'packaging/cluster-storage/Dockerfile',
          'packaging/cluster-storage/cluster-iscsi-session',
-         'packaging/core-local/core-local-setup', 'packaging/core-local/corosync-pristine', 'packaging/core-local/qemu-vnc-lossy',
-         'packaging/core-local/preinst',
-         'packaging/core-local/postinst', 'packaging/core-local/prerm',
-         'packaging/core-local/initramfs-hook', 'packaging/core-local/initramfs-local-bottom',
-         'packaging/controller/Dockerfile', 'packaging/controller/run-controller',
-         'packaging/controller/apply-update', 'packaging/controller/postinst',
-         'packaging/controller/prerm',
+         'packaging/core-local/core-local-setup', 'packaging/core-local/qemu-vnc-lossy',
          'image/snapshot', 'image/mkosi.conf',
          'docs/API.md', 'docs/api/openapi.json', 'docs/api/index.html', 'docs/api/reference.css')
 TREES = {'docs/brand/logo': {'.svg', '.png', '.pdf'}, 'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
@@ -39,7 +33,6 @@ TREES = {'docs/brand/logo': {'.svg', '.png', '.pdf'}, 'cmd': {'.go'}, 'internal'
          'appliance': {'.py', '.sh', '.service', '.md'},
          'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example', '.gpg',
                                   '.conf', '.preset'},
-         'packaging/controller': {'.py', '.sh', '.service', '.path', '.md'},
          'packaging/cluster-storage': {'.sh'},
          'packaging/libvirt': {'.sh', '.patch'},
          'docs/api': {'.json', '.html', '.css'}}
@@ -62,11 +55,10 @@ SCRIPTS = ('scripts/build-source.py', 'tests/test_build_source.py',
            'tests/test_host_recovery.py', 'tests/integration/localcore_browser.py',
            'tests/integration/web_security.py',
            'tests/integration/appliance-lab.py', 'tests/integration/appliance-dhcp-boot.py',
-           'tests/integration/core-local-package.sh',
+
            'tests/integration/cluster_storage_workloads.py',
            'tests/integration/cluster_ha_lab.py',
-           'tests/test_cluster_storage_workloads.py', 'tests/test_cluster_ha_lab.py',
-           'scripts/apt-publish.py', 'tests/test_apt_publish.py')
+           'tests/test_cluster_storage_workloads.py', 'tests/test_cluster_ha_lab.py')
 
 
 def copy_sources(root, target):

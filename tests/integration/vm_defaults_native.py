@@ -40,9 +40,9 @@ def nic(xml, mac):
     return next(n for n in xml.findall('./devices/interface') if n.find('mac').get('address') == mac)
 
 
-def check_devices(xml, original_mac, added_mac=None, legacy=False, thread=True, scsi=False):
+def check_devices(xml, original_mac, added_mac=None, untuned=False, thread=True, scsi=False):
     assert xml.findtext('iothreads') == ('1' if thread else None), ET.tostring(xml, encoding='unicode')[:1200]
-    assert disk(xml, 'vda').find('driver').get('iothread') == (None if legacy else '1')
+    assert disk(xml, 'vda').find('driver').get('iothread') == (None if untuned else '1')
     controllers = [c for c in xml.findall('./devices/controller') if c.get('type') == 'scsi']
     assert len(controllers) == int(scsi)
     if scsi:
@@ -50,7 +50,7 @@ def check_devices(xml, original_mac, added_mac=None, legacy=False, thread=True, 
         assert controller.get('model') == 'virtio-scsi' and controller.find('driver').get('iothread') == '1'
         assert disk(xml, 'sdc').find('target').get('bus') == 'scsi'
     first = nic(xml, original_mac).find('driver')
-    assert (None if first is None else first.get('queues')) == (None if legacy else '4')
+    assert (None if first is None else first.get('queues')) == (None if untuned else '4')
     if added_mac:
         assert disk(xml, 'vdb').find('driver').get('iothread') == '1'
         assert nic(xml, added_mac).find('driver').get('queues') == '4'
@@ -192,8 +192,8 @@ def main():
         if base.exists():
             evidence['guest_base_sha256'] = run('sha256sum', base).stdout.split()[0]
 
-        # Simulate a historical Core definition in this disposable lab, updating
-        # both libvirt and its Core journal so the predecessor remains coherent.
+        # Simulate a domain defined without IOThread/queue tuning in this disposable lab, updating
+        # both libvirt and its Core journal so the definition remains coherent.
         lab.stop(agent)
         initial.remove(initial.find('iothreads'))
         thread_ids = initial.find('iothreadids')
@@ -201,23 +201,23 @@ def main():
             initial.remove(thread_ids)
         disk(initial, 'vda').find('driver').attrib.pop('iothread')
         nic(initial, original_mac).find('driver').attrib.pop('queues')
-        legacy_xml = lab.path / 'legacy.xml'
-        ET.ElementTree(initial).write(legacy_xml, encoding='unicode')
-        virsh('define', str(legacy_xml))
+        untuned_xml = lab.path / 'untuned.xml'
+        ET.ElementTree(initial).write(untuned_xml, encoding='unicode')
+        virsh('define', str(untuned_xml))
         journal_path = state / 'managed-vms' / (created['operation']['id'] + '.json')
         journal = json.loads(journal_path.read_text())
         journal['domain'] = base64.b64encode(ET.tostring(initial)).decode()
         replacement = journal_path.with_suffix('.tmp')
         replacement.write_text(json.dumps(journal))
         replacement.replace(journal_path)
-        agent = lab.start('agent-after-legacy-fixture', *agent_args)
-        eventually(lambda: fresh_host(lab), 'fresh Core agent after legacy fixture', timeout=60)
-        check_devices(domain(vm_id), original_mac, legacy=True, thread=False)
+        agent = lab.start('agent-after-untuned-fixture', *agent_args)
+        eventually(lambda: fresh_host(lab), 'fresh Core agent after untuned fixture', timeout=60)
+        check_devices(domain(vm_id), original_mac, untuned=True, thread=False)
         start = lab.api(f'/api/v1/vms/{vm_id}/power', {'request_id': str(uuid.uuid4()), 'action': 'start'}, expected=202)
         operation(lab, start['operation']['id'])
         eventually(lambda: next((v for v in lab.api('/api/v1/vms') if v['id'] == vm_id and v['state'] == 'running'), None), 'running guest', timeout=60)
-        check_devices(domain(vm_id, live=True), original_mac, legacy=True, thread=False)
-        lab.passed('A legacy device definition started with its original disk and NIC settings')
+        check_devices(domain(vm_id, live=True), original_mac, untuned=True, thread=False)
+        lab.passed('An untuned device definition started with its original disk and NIC settings')
 
         current = next(v for v in lab.api('/api/v1/vms') if v['id'] == vm_id)
         body = edit_spec(spec, current, disks=current['spec']['disks'] + [{'storage_id': storage['id'], 'name': 'hot-data', 'size_gib': 1, 'bus': 'virtio', 'thin': True, 'boot_order': 0}],
@@ -227,8 +227,8 @@ def main():
         operation(lab, changed['operation']['id'])
         current = eventually(lambda: next((v for v in lab.api('/api/v1/vms') if v['id'] == vm_id and v['spec']['revision'] == 1), None), 'live edit revision 1', timeout=60)
         added_mac = current['spec']['nics'][1]['mac']
-        check_devices(domain(vm_id), original_mac, added_mac, legacy=True, scsi=True)
-        check_devices(domain(vm_id, live=True), original_mac, added_mac, legacy=True, scsi=True)
+        check_devices(domain(vm_id), original_mac, added_mac, untuned=True, scsi=True)
+        check_devices(domain(vm_id, live=True), original_mac, added_mac, untuned=True, scsi=True)
         lab.passed('Core live edit added IOThread 1 before hot-plugging tuned virtio disk, new virtio-scsi controller/disk and NIC; existing devices stayed unchanged')
 
         lab.stop(agent)
@@ -249,8 +249,8 @@ def main():
         adopted_vm = eventually(lambda: next((v for v in lab.api('/api/v1/vms') if v['id'] == vm_id and v['spec']['revision'] == 1 and v['state'] == 'running'), None),
                                 'running VM adopted by replacement Controller', timeout=60)
         assert adopted_vm['name'] == spec['name'] and virsh('domstate', vm_id).strip() == 'running'
-        check_devices(domain(vm_id), original_mac, added_mac, legacy=True, scsi=True)
-        check_devices(domain(vm_id, live=True), original_mac, added_mac, legacy=True, scsi=True)
+        check_devices(domain(vm_id), original_mac, added_mac, untuned=True, scsi=True)
+        check_devices(domain(vm_id, live=True), original_mac, added_mac, untuned=True, scsi=True)
         lab.passed('Fresh Controller adopted the same running VM identity and revision with live IOThread, SCSI controller and NIC settings after original Controller data deletion')
 
         stop = lab.api(f'/api/v1/vms/{vm_id}/power', {'request_id': str(uuid.uuid4()), 'action': 'force-stop'}, expected=202)

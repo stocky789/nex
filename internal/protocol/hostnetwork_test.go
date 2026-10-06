@@ -84,7 +84,7 @@ func TestManagementNetworkWireShape(t *testing.T) {
 	if !strings.Contains(string(inventory), `"management_network":{"revision":2,"stage":"applied","operation_id":"op-1","deadline":"2026-09-19T10:10:00Z","window_seconds":600,"seconds_remaining":412,"observed_at":"2026-09-19T10:00:00Z"}`) {
 		t.Fatalf("inventory wire shape: %s", inventory)
 	}
-	// A host that reports no status at all must not emit the member: an older Controller
+	// A host that reports no status at all must not emit the member: a strict Controller decoder
 	// rejects unknown non-empty fields, and an absent record is not an empty one.
 	if strings.Contains(string(mustMarshal(t, Inventory{})), "management_network") {
 		t.Fatal("an absent management network record was serialized")

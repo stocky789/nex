@@ -319,9 +319,6 @@ func (c iscsiNodeChange) rollback(ctx context.Context, v *protocol.ISCSIStorageS
 }
 
 func configureISCSICHAP(ctx context.Context, s protocol.StorageRegistration, v *protocol.ISCSIStorageSource) (iscsiNodeChange, error) {
-	if err := migrateLegacyISCSIOwner(ctx, v); err != nil {
-		return iscsiNodeChange{}, err
-	}
 	if !s.CredentialPresent {
 		if s.CredentialReceipt != "" {
 			return iscsiNodeChange{}, errors.New("iSCSI credential receipt is not authorized")
@@ -358,11 +355,10 @@ func configureISCSICHAP(ctx context.Context, s protocol.StorageRegistration, v *
 		if string(updated) == string(config) && !rotating {
 			return iscsiNodeChange{}, nil
 		}
-		// Older Nex renderers accumulated blank lines immediately before their
-		// marker. That has no iSCSI authentication effect and must not be
-		// mistaken for a live credential rotation: changing an active session
-		// on that basis would require an unnecessary reconnect. Leave the legacy
-		// bytes in place until a real credential/lifecycle update occurs.
+		// Whitespace-only differences have no iSCSI authentication effect and must not be
+		// mistaken for a live credential rotation: changing an active session on that
+		// basis would require an unnecessary reconnect. Leave the bytes in place until a
+		// real credential/lifecycle update occurs.
 		if !rotating && ownedISCSINodeAuthMatches(config, username, secret) {
 			return iscsiNodeChange{}, nil
 		}
@@ -769,21 +765,6 @@ func iscsiOwnerPath(ctx context.Context, v *protocol.ISCSIStorageSource) string 
 	return filepath.Join(root, fmt.Sprintf("%x", sum[:]))
 }
 
-func legacyScopedISCSIOwnerPath(ctx context.Context, v *protocol.ISCSIStorageSource) string {
-	root, _ := ctx.Value(storageOwnerRootKey{}).(string)
-	if root == "" {
-		root = iscsiOwnerRoot
-	}
-	// v11/v12 keyed only target+portal. Preserve it only when the content below
-	// binds the same WWID/UUID/LUN, then migrate to the stronger key.
-	sum := sha256.Sum256([]byte(v.TargetIQN + "\x00" + v.Portal))
-	return filepath.Join(root, fmt.Sprintf("%x", sum[:]))
-}
-
-func legacyISCSIOwnerPath(v *protocol.ISCSIStorageSource) string {
-	return iscsiNodePath(v) + ".nex-owner"
-}
-
 func iscsiOwnerRecord(v *protocol.ISCSIStorageSource) string {
 	return "nex-iscsi-owner-v1\nwwid=" + canonicalWWID(v.WWID) + "\nuuid=" + v.FilesystemUUID + "\nlun=" + fmt.Sprint(v.LUN) + "\n"
 }
@@ -799,38 +780,6 @@ func writeNexISCSIOwner(ctx context.Context, v *protocol.ISCSIStorageSource) err
 func nexISCSIOwner(ctx context.Context, v *protocol.ISCSIStorageSource) bool {
 	b, err := readSmall(iscsiOwnerPath(ctx, v), 1<<12)
 	return err == nil && string(b) == iscsiOwnerRecord(v)
-}
-
-func migrateLegacyISCSIOwner(ctx context.Context, v *protocol.ISCSIStorageSource) error {
-	legacyScoped := legacyScopedISCSIOwnerPath(ctx, v)
-	if legacyScoped != iscsiOwnerPath(ctx, v) {
-		b, err := readSmall(legacyScoped, 1<<12)
-		if err == nil {
-			if string(b) != iscsiOwnerRecord(v) {
-				return errors.New("legacy iSCSI owner does not match registered LUN")
-			}
-			if err := writeNexISCSIOwner(ctx, v); err != nil {
-				return err
-			}
-			if err := os.Remove(legacyScoped); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	path := legacyISCSIOwnerPath(v)
-	b, err := readSmall(path, 1<<12)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil || string(b) != iscsiOwnerRecord(v) {
-		return errors.New("unexpected iSCSI node-tree ownership file")
-	}
-	if err := writeNexISCSIOwner(ctx, v); err != nil {
-		return err
-	}
-	return os.Remove(path)
 }
 
 func removeNexISCSINode(ctx context.Context, v *protocol.ISCSIStorageSource) error {
@@ -1061,9 +1010,6 @@ func detachISCSI(ctx context.Context, s protocol.StorageRegistration) error {
 	if err != nil {
 		return err
 	}
-	if err := migrateLegacyISCSIOwner(ctx, v); err != nil {
-		return err
-	}
 	unit, unitPath := iscsiUnitPath(s)
 	content, err := os.ReadFile(unitPath)
 	if err == nil {
@@ -1107,7 +1053,7 @@ func detachISCSI(ctx context.Context, s protocol.StorageRegistration) error {
 		} else if nodeErr != nil {
 			return nodeErr
 		}
-		// Migrate marker-only records before iscsiadm rewrites the node body.
+		// Record ownership before iscsiadm rewrites the node body and drops the marker.
 		if !nexISCSIOwner(ctx, v) {
 			if err := writeNexISCSIOwner(ctx, v); err != nil {
 				return err

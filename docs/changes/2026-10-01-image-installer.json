@@ -1,5 +1,5 @@
 {
-  "summary": "Phase I-2 installer for the image edition of the immutable Nex Core plan: nex-image-install.sh runs the static nex-hostimage inside Debian Installer (S7: keep d-i), nex-config emits layout=single|raid1 and the disk list with a 24 GiB floor, UEFI-only refusal and Repair image mode (text and graphical wizards), and installer/netinst-manifest.py generalises to payloads.tsv rows for the signed image, the Controller appliance and the VirtIO ISO, placed under /var/lib/nex/payload/<sha256>/. Repair stops the arrays that hold a selected disk and refuses before any write if one cannot be stopped; a failed payload placement unmounts and stops the nex-data array. The Classic edition stays selectable.",
+  "summary": "Phase I-2 installer for the immutable Nex Core plan: nex-image-install.sh runs the static nex-hostimage inside Debian Installer (S7: keep d-i), nex-config emits layout=single|raid1 and the disk list with a 24 GiB floor, UEFI-only refusal and Repair image mode (text and graphical wizards), and installer/netinst-manifest.py generalises to payloads.tsv rows for the signed image, the Controller appliance and the VirtIO ISO, placed under /var/lib/nex/payload/<sha256>/. Repair stops the arrays that hold a selected disk and refuses before any write if one cannot be stopped; a failed payload placement unmounts and stops the nex-data array.",
   "paths": [
     "CHANGELOG.md",
     "docs/guide/README.md",
@@ -25,7 +25,7 @@
   ],
   "guide": {
     "impact": "updated",
-    "reason": "Install page gains the image edition section; Repair image has its own page.",
+    "reason": "Install page gains the image install section; Repair image has its own page.",
     "pages": [
       "docs/guide/install-nex-core.md",
       "docs/guide/reinstall-keeping-state.md",
@@ -47,7 +47,7 @@
     "record": "GPT partition names (nex-esp, nex-root-a/b, nex-verity-a/b, nex-data), nex-data contents under /var/lib/nex (etc upper, payload/<sha256>/). A fresh Controller recovers everything through host APIs."
   },
   "verification": {
-    "method": "tests/test_image_installer.py and tests/test_netinst.py unit tests (the installer script run against fake tools: verification precedes any array stop or write, install and Repair stop only the selected disks' arrays and refuse before any write when one cannot be stopped, the data mirror is assembled from its own members, a damaged media payload stops the install, a failed payload copy leaves nothing mounted or assembled, and the serial menu entries are labelled Classic on image media), tests/integration/installer-handoff.py (the hook clears no disk before the image installer runs), tests/integration/installer-image-env.py (the real image.env layout/mode/disks and /etc seed from nex-config.c, in-memory), installer/check.sh, and a retained earlier d-i boot log for S7. Simulated, not release media: the unit tests use fake tools; installs and a Repair were also run in QEMU/OVMF from a lab ISO assembled by tests/integration/image_iso_lab.py (the real installer script and wizard components, but not a full installer/build.sh ISO and with a small payload fixture), and the graphical Repair choice was drawn under Xvfb with a synthetic /sys; see docs/qa/image/phase6-lab1.md and phase6-lab2.md for exactly what ran. Not run: a full build.sh ISO, the net installer end to end, the interactive wizards in a VM, any physical hardware.",
+    "method": "tests/test_image_installer.py and tests/test_netinst.py unit tests (the installer script run against fake tools: verification precedes any array stop or write, install and Repair stop only the selected disks' arrays and refuse before any write when one cannot be stopped, the data mirror is assembled from its own members, a damaged media payload stops the install, a failed payload copy leaves nothing mounted or assembled, and the serial menu entries are labelled so they are not mistaken for the Nex wizard), tests/integration/installer-handoff.py (the hook clears no disk before the image installer runs), tests/integration/installer-image-env.py (the real image.env layout/mode/disks and /etc seed from nex-config.c, in-memory), installer/check.sh, and a retained earlier d-i boot log for S7. Simulated, not release media: the unit tests use fake tools; installs and a Repair were also run in QEMU/OVMF from a lab ISO assembled by tests/integration/image_iso_lab.py (the real installer script and wizard components, but not a full installer/build.sh ISO and with a small payload fixture), and the graphical Repair choice was drawn under Xvfb with a synthetic /sys; see docs/qa/image/phase6-lab1.md and phase6-lab2.md for exactly what ran. Not run: a full build.sh ISO, the net installer end to end, the interactive wizards in a VM, any physical hardware.",
     "evidence": [
       "docs/qa/image/phase2-installer.md"
     ]

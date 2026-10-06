@@ -1,7 +1,7 @@
 # Release channels: stable and development
 
 Date: 2026-10-02  
-Status: implemented on the `immutable` branch, because the immutable image edition already carries the channel
+Status: implemented on the `immutable` branch, because Nex Core already carries the channel
 mechanism; checked on a workstation only (see [verification](../qa/release-channels.md)), not yet on a forge run or host.
 
 ## Decision
@@ -9,7 +9,7 @@ mechanism; checked on a workstation only (see [verification](../qa/release-chann
 Nex ships on two channels. **Stable** follows `main`. **Development** follows a new `dev` branch, the
 staging area every feature branch opens its pull request against; `dev` is promoted to `main` by a
 reviewed pull request. Operators pick the channel in Nex Core and Nex Controller settings, and each channel has its
-own release, package archive and download tree.
+own release and download tree.
 
 | | Stable | Development |
 |---|---|---|
@@ -17,13 +17,12 @@ own release, package archive and download tree.
 | Channel id (`channel=` in `/etc/nex/updates.conf`) | `stable` (the default) | `dev` |
 | Version | newest numbered CHANGELOG heading, e.g. `0.4.18` | pre-release of the next release, e.g. `0.4.19-dev.231` (Debian `0.4.19~~dev.231`) |
 | Forge release | `vX.Y.Z`, release | `vX.Y.Z-dev.N`, **pre-release**, newest 3 kept (as many as the download tree keeps, so every kept netinst ISO still works) |
-| Classic APT archive | `<site>/apt` (suite `nex`) | `<site>/apt/dev` (suite `nex`, own pool, newest 3 versions kept) |
 | Downloads | `<site>/downloads/<version>/`, `latest` | `<site>/downloads/dev/<version>/`, own `latest` |
 | Image update tree | `<base>/stable/channel.json` | `<base>/dev/channel.json` |
 | Website pages | deployed from `main` only | never deployed from `dev` |
 
-The classic archive root and the download root hold the stable channel at the top and the development channel
-under `dev/`: each is an independent repository or tree, so a mirror that copies the root carries both and the
+The download root holds the stable channel at the top and the development channel
+under `dev/`: each is an independent tree, so a mirror that copies the root carries both and the
 host setting only picks the subtree. The image update tree already has one directory per channel.
 
 ## Version identity of a development build
@@ -67,15 +66,14 @@ This changes source release numbering only, with no tag, push, publication or br
 no Controller/Core or client-facing contract changes. **Guide impact: none** — the documented
 publication steps are unchanged. **State owner: none** — no new product state.
 
-Switching a host from Development to Stable never downgrades it: apt does not install an older version by itself and
-the image engine refuses a `sequence` below the host's `rollback_floor`. The host stays put until Stable publishes
+Switching a host from Development to Stable never downgrades it: the image engine refuses a `sequence` below the host's
+`rollback_floor`. The host stays put until Stable publishes
 something newer. The guide says so next to the selector.
 
 ## Pipeline changes
 
 - `release.yml` (both forge copies): triggers on `main` and `dev`; resolves channel, version and notes with
-  `scripts/release-version.py --channel`; builds the same artifacts; publishes APT to `<apt root>` or `<apt root>/dev`
-  (`nex-apt-publish --repo-root`, no new sudoers rule: the helper already takes any arguments); publishes ISOs with
+  `scripts/release-version.py --channel`; builds the same artifacts; publishes ISOs with
   `release-publish.py --root /srv/nex-downloads[/dev]` so `latest` and the retention count are per channel; bakes the
   channel's own `/downloads[/dev]/<version>` into the netinst ISO; checks reachability of the channel's URLs; deploys
   the static website only for `main`; creates the Gitea release, as a pre-release for `dev`, and prunes older
@@ -91,32 +89,24 @@ something newer. The guide says so next to the selector.
   `website.yml` stays `main` only. `installer.yml` and `documentation.yml` already run on every branch.
 - Owner actions the repository cannot perform: create `dev` from `main` and protect it like `main`; retire the stale
   local `dev` branch and the unused `dev-2` remote branch; consider making `dev` the forge's default branch so
-  new pull requests target it; re-run `packaging/apt/bootstrap.sh` once on the website host so the installed
-  `nex-apt-publish` has `--keep` (the workflow does not upload the root-run helper, by design).
+  new pull requests target it.
 
 ## Settings
 
 The channel is Core state on each host, and the Controller keeps nothing: it asks the host and shows what the host
 reports, so a fresh Controller reads the same value from the hosts.
 
-- Image edition: `channel=` in `/etc/nex/updates.conf`, reported in `Inventory.image.channel`. `PUT /api/local/v1/updates/settings`
+- `channel=` in `/etc/nex/updates.conf`, reported in `Inventory.image.channel`. `PUT /api/local/v1/updates/settings`
   and the Controller relay already exist; the Controller UI gains an **Update channel** picker on each host's update
   card. Core writes channel and base URL together, so the picker sends the host's current base URL back.
-- Package (classic) edition: no new stored key. The archive keeps development in its `dev` subdirectory, so a host's
-  channel is the `repo_url` it reads (the archive root, or root plus `/dev`). The same host-local route accepts
-  `{channel}` (`stable` or `dev`) and rewrites `repo_url`, keeping other lines; `GET /api/local/v1/updates` reports
-  the channel. `apply-update`, the postinst scripts and `nexupdate` already read and write `repo_url`, so they follow
-  without change. The host-local page gets the same picker. The Controller does not relay it for package hosts
-  (unchanged 409), and nothing about it is reported in the inventory.
-- Controller (package form): no selector. It follows `repo_url`; the guide says how to point it at `<root>/dev`. The
-  immutable plan retires that updater, and the image-edition Controller appliance is swapped by the Core that hosts it
-  from that host's channel, so it has no separate Controller setting. Decision: project owner, 2026-10-02.
-- Builds: a development package, appliance or Controller build bakes the `/dev` archive as its default `repo_url`
-  (decided from the `~dev.` in the version), so a host installed from a development ISO starts on Development.
+- The Controller appliance is swapped by the Core that hosts it, from that host's channel, so it has no separate
+  Controller setting. Decision: project owner, 2026-10-02.
+- A development build bakes `dev` as its default channel (decided from the `~dev.` in the version), so a host installed
+  from a development ISO starts on Development.
 - Pool rollouts keep refusing a pool whose hosts are on different channels (`channel_mismatch`).
 
-API impact: changed contract (package edition answers `PUT /api/local/v1/updates/settings` and reports `channel` in
-`GET /api/local/v1/updates`; no new route, no Controller change). State owner: `core`.
+API impact: existing contract (the host-local settings route and `Inventory.image.channel` already carry the channel).
+State owner: `core`.
 
 ## Not in this slice
 

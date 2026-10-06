@@ -492,27 +492,27 @@ func TestReplacementMalformedResponseDoesNotMutateJournalOrProtocolState(t *test
 	}
 }
 
-// A host enrolled before host-owned identity keeps its Controller-issued host ID and adopts
-// the pool identity the Controller reports; a Controller that answers with a different host
-// identity is refused and leaves the host unenrolled there.
-func TestEnrollLegacyIdentityAdoptionAndChangedIdentityRefused(t *testing.T) {
+// A host that already holds a host ID keeps it when it enrolls and adopts the pool identity
+// the Controller reports; a Controller that answers with a different host identity is
+// refused and leaves the host unenrolled there.
+func TestEnrollKeepsHostIDAdoptsPoolAndChangedIdentityRefused(t *testing.T) {
 	srv, trust := issuingController(t, "")
 	s := testStore(t)
-	s.State.HostID = "legacy-host"
+	s.State.HostID = "existing-host"
 	s.State.Controller, s.State.TrustPEM = "https://old.example", "old trust"
 	if err := Enroll(context.Background(), s, srv.URL, trust, "token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	hostname, _ := os.Hostname()
-	if s.State.HostID != "legacy-host" || s.State.PoolID != "pool-of-legacy-host" || s.State.PoolName != hostname {
-		t.Fatalf("legacy host did not keep its ID and adopt the reported pool: %+v", s.State)
+	if s.State.HostID != "existing-host" || s.State.PoolID != "pool-of-existing-host" || s.State.PoolName != hostname {
+		t.Fatalf("host did not keep its ID and adopt the reported pool: %+v", s.State)
 	}
 	other, otherTrust := issuingController(t, "someone-else")
 	fresh := testStore(t)
 	if err := Enroll(context.Background(), fresh, other.URL, otherTrust, "token", "", ""); err == nil || fresh.State.HostID != "" || fresh.State.CertificatePEM != "" || fresh.State.PendingHostID == "" {
 		t.Fatalf("Controller changing the host identity was accepted: %v %+v", err, fresh.State)
 	}
-	if err := Enroll(context.Background(), s, other.URL, otherTrust, "token", "", ""); err == nil || s.State.HostID != "legacy-host" || s.State.CertificatePEM == "" {
+	if err := Enroll(context.Background(), s, other.URL, otherTrust, "token", "", ""); err == nil || s.State.HostID != "existing-host" || s.State.CertificatePEM == "" {
 		t.Fatalf("enrolled host accepted a changed identity: %v %+v", err, s.State)
 	}
 }

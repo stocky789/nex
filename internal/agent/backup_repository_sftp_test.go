@@ -511,14 +511,14 @@ func TestSFTPAbortEmptyInterruptedManifestOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".nex-intent-point-1"), []byte(intent), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(point, "disk.qcow2"), []byte("legacy partial"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(point, "disk.qcow2"), []byte("partial"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := storage.abortIncompleteOnClient(context.Background(), client, "point-1"); !errors.Is(err, ErrBackupConflict) {
-		t.Fatal("legacy artifact without manifest was removed", err)
+		t.Fatal("artifact without manifest was removed", err)
 	}
 	if _, err := os.Stat(filepath.Join(point, "disk.qcow2")); err != nil {
-		t.Fatal("legacy partial artifact changed", err)
+		t.Fatal("partial artifact changed", err)
 	}
 }
 
@@ -2347,13 +2347,13 @@ func TestSFTPConnectReportsUnsupportedHostKeyTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := ssh.NewSignerWithAlgorithms(signer.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoRSA})
+	rsaOnly, err := ssh.NewSignerWithAlgorithms(signer.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoRSA})
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := startTestSFTPServer(t, legacy)
+	port := startTestSFTPServer(t, rsaOnly)
 	storage := sftpBackupStorage{repo: protocol.BackupRepository{SFTPSource: &protocol.BackupSFTPSource{
-		Host: "127.0.0.1", Port: port, HostKeySHA256: ssh.FingerprintSHA256(legacy.PublicKey()),
+		Host: "127.0.0.1", Port: port, HostKeySHA256: ssh.FingerprintSHA256(rsaOnly.PublicKey()),
 	}}, credentials: protocol.StorageCredentials{Username: "backup", SSHPrivateKey: testSSHPrivateKey(t)}}
 	_, closeAll, err := storage.connect(context.Background())
 	if err == nil {

@@ -218,10 +218,10 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"host_id": cmd.Pool.MemberHostID, "peer_origin": cmd.Pool.PeerOrigin, "operation": op}
 	case cmd.ManagementNetwork != nil:
 		return map[string]any{"host_id": cmd.ManagementNetwork.HostID, "action": cmd.ManagementNetwork.Action, "operation": op}
-	case cmd.SystemDiskReplace != nil:
-		return map[string]any{"host_id": cmd.SystemDiskReplace.HostID, "array": cmd.SystemDiskReplace.Array, "operation": op}
 	case cmd.ImageUpdate != nil:
 		return map[string]any{"host_id": cmd.ImageUpdate.HostID, "action": cmd.ImageUpdate.Action, "operation": op}
+	case cmd.SystemDiskReplace != nil:
+		return map[string]any{"host_id": cmd.SystemDiskReplace.HostID, "operation": op}
 	case cmd.ZFSReplace != nil:
 		return map[string]any{"repository_id": cmd.ZFSReplace.RepositoryID, "host_id": cmd.ZFSReplace.HostID, "old_device": cmd.ZFSReplace.OldDevice, "operation": op}
 	case cmd.ZFSProvision != nil:
@@ -507,8 +507,8 @@ func hostSupportsCapability(tx *sql.Tx, host, capability string) bool {
 	return tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host).Scan(&raw) == nil && json.Unmarshal([]byte(raw), &caps) == nil && slices.Contains(caps, capability)
 }
 
-// vmTagsSupported reports whether both the VM's host and its pool master journal tags; an
-// older Core would drop them silently.
+// vmTagsSupported reports whether both the VM's host and its pool master journal tags; a
+// Core without the capability would drop them silently.
 func vmTagsSupported(tx *sql.Tx, pool, host string) bool {
 	master, _, err := poolMasterOf(tx, pool)
 	return err == nil && hostSupportsCapability(tx, host, protocol.VMTagsCapability) && hostSupportsCapability(tx, master, protocol.VMTagsCapability)

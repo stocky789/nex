@@ -1,7 +1,7 @@
 # Packages of the Nex Core base image (one per line; '#' comments).
-# Starting point: installer/packages.txt minus linux-headers-amd64, zfs-dkms and the groups that
-# ship as signed layers (nex-zfs: zfsutils-linux; nex-cluster: corosync, pacemaker, sanlock, fence
-# agents, sbd, dlm-controld, gfs2-utils; smb: cifs-utils, smbclient). Plus boot and image packages.
+# Host tools, minus what ships as signed layers (nex-zfs: zfsutils-linux; nex-cluster: corosync,
+# pacemaker, sanlock, fence agents, sbd, dlm-controld, gfs2-utils; smb: cifs-utils, smbclient),
+# plus boot and image packages.
 # Debian is the package source only; the host never runs apt or dpkg (image-lock.py pins this set).
 
 # Virtualisation
@@ -63,6 +63,10 @@ systemd-boot
 systemd-boot-efi
 systemd-boot-efi-amd64-signed
 shim-signed
+# BIOS boot: grub-install --target=i386-pc runs on the host (nex-hostimage esp-sync) when a replaced disk lacks boot code
+grub2-common
+grub-common
+grub-pc-bin
 udev
 dbus
 kmod

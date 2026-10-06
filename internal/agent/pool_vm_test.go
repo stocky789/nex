@@ -855,17 +855,17 @@ func TestRestorePlacementPeerReleaseRequiresExactOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := state.VMs[spec.ID]
-	legacy.CreateOperationID = ""
-	state.VMs[spec.ID] = legacy
+	unproven := state.VMs[spec.ID]
+	unproven.CreateOperationID = ""
+	state.VMs[spec.ID] = unproven
 	if err := savePoolVMs(master, state); err != nil {
 		t.Fatal(err)
 	}
 	if got := send(owner, request); got != http.StatusConflict {
-		t.Fatalf("legacy owner without creator proof was released = %d", got)
+		t.Fatalf("owner without creator proof was released = %d", got)
 	}
-	legacy.CreateOperationID = op
-	state.VMs[spec.ID] = legacy
+	unproven.CreateOperationID = op
+	state.VMs[spec.ID] = unproven
 	if err := savePoolVMs(master, state); err != nil {
 		t.Fatal(err)
 	}
@@ -1120,7 +1120,7 @@ func TestPoolVMRecoveryPeerRefusesOldMasterWithoutSpecAck(t *testing.T) {
 	}
 }
 
-func TestPoolVMStartRejectsMalformedOrLegacyMasterAcknowledgement(t *testing.T) {
+func TestPoolVMStartRejectsMalformedMasterAcknowledgement(t *testing.T) {
 	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
 	csr, err := PoolJoinCSR(member)
 	if err != nil {
@@ -1164,7 +1164,7 @@ func TestPoolVMStartRejectsMalformedOrLegacyMasterAcknowledgement(t *testing.T) 
 		name  string
 		reply poolVMRequest
 	}{
-		{name: "legacy empty 200", reply: poolVMRequest{}},
+		{name: "empty 200", reply: poolVMRequest{}},
 		{name: "wrong VM", reply: poolVMRequest{VMID: "22222222-2222-4222-8222-222222222222", Action: "start", Permit: valid.Permit, Epoch: valid.Epoch}},
 		{name: "wrong action", reply: poolVMRequest{VMID: vmID, Action: "wake", Permit: valid.Permit, Epoch: valid.Epoch}},
 		{name: "missing permit", reply: poolVMRequest{VMID: vmID, Action: "start", Epoch: valid.Epoch}},
@@ -1277,7 +1277,7 @@ func TestPoolVMDeleteAdmissionRefusesPendingSnapshotRecovery(t *testing.T) {
 	}
 }
 
-func TestPoolVMDeleteCheckRejectsMalformedLegacyAndMismatchedAcknowledgements(t *testing.T) {
+func TestPoolVMDeleteCheckRejectsMalformedAndMismatchedAcknowledgements(t *testing.T) {
 	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
 	csr, err := PoolJoinCSR(member)
 	if err != nil {
@@ -2042,13 +2042,13 @@ func TestStorageRecheckReceivesCoreOwnedClusterContext(t *testing.T) {
 	if !ok || got.Digest() != config.Digest() {
 		t.Fatalf("storage recheck did not receive durable cluster config: %#v", got)
 	}
-	legacy := op
-	legacy.Activation = nil
-	if err := saveStorageClusters(s, storageClusterState{Operations: map[string]storageClusterOperation{op.RequestID: legacy}}); err != nil {
+	noActivation := op
+	noActivation.Activation = nil
+	if err := saveStorageClusters(s, storageClusterState{Operations: map[string]storageClusterOperation{op.RequestID: noActivation}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := poolVMCommandExecutionContext(context.Background(), s, protocol.Command{Kind: "storage-recheck", StorageLifecycle: &protocol.StorageLifecycleRequest{Action: "recheck", RepositoryID: storage.ID, PoolID: "pool-1", HostID: "master-1"}}); err == nil {
-		t.Fatal("legacy healthy operation bypassed initial activation receipt")
+		t.Fatal("healthy operation without activation receipt bypassed initial activation receipt")
 	}
 	vm := *poolVMTestSpec("22222222-1111-4111-8111-111111111111", "master-1")
 	vm.Disks[0].StorageID = storage.ID
@@ -2269,7 +2269,7 @@ func TestAutomaticCreateStartCompletionRequiresDefinitiveFailure(t *testing.T) {
 		{name: "preflight failure", start: "insufficient available memory to start this VM including 2 GiB host reserve", outcome: "failed-before-request", observed: "shut off", wantState: "stopped"},
 		{name: "request outcome uncertain", start: "libvirt did not confirm the start request; inspect the VM on its host", outcome: "uncertain", observed: "shut off", wantState: "starting", pending: true},
 		{name: "interrupted start", start: "interrupted before the automatic start completed", outcome: "uncertain", observed: "shut off", wantState: "starting", pending: true},
-		{name: "legacy reason", start: "libvirt refused the start request; inspect the VM on its host", observed: "shut off", wantState: "starting", pending: true},
+		{name: "reason without outcome", start: "libvirt refused the start request; inspect the VM on its host", observed: "shut off", wantState: "starting", pending: true},
 		{name: "uncertain but currently running", start: "libvirt did not confirm the start request; inspect the VM on its host", outcome: "uncertain", observed: "running", wantState: "running"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

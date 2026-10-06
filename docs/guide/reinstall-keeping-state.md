@@ -2,10 +2,10 @@
 
 ## Status
 
-Development build, **image edition only**. The image-edition installer and its **Repair image** mode are
+Development build. The installer's **Repair image** mode is
 implemented in the installer scripts, covered by script-level tests and run once in a virtual-machine lab from a
 lab ISO (not a release ISO; see Verification), so treat this page as a procedure under validation. No real host
-has been repaired. It does not apply to hosts installed with the Classic edition. Use a disposable host.
+has been repaired. Use a disposable host.
 
 **Repair image** re-lays the partition table, system slots and boot partitions of the disks that hold a
 complete Nex Core data volume, writes the image on the installation media, and keeps the data volume
@@ -15,7 +15,7 @@ It is the way back when both system slots or the boot partitions are damaged. It
 
 ## Prerequisites
 
-- The image-edition installation media (offline or network), booted in **UEFI** mode.
+- The installation media (offline or network), booted in either **UEFI** or **BIOS** mode.
 - The host's own disks, all of them. A mirror needs every member disk attached; Repair has nothing to keep if
   a member is missing, and says so before it touches anything.
 - Each disk at least 24 GiB.
@@ -25,7 +25,7 @@ It is the way back when both system slots or the boot partitions are damaged. It
 
 ## Steps
 
-1. Boot the installation media in UEFI mode and choose the default image-edition entry.
+1. Boot the installation media (UEFI or BIOS) and choose the default entry.
 2. In the setup wizard, answer **Repair image** to the question that appears only when a complete Nex Core
    data volume is found. The wizard shows the disks that hold it. They cannot be changed.
 3. On the network installer, choose the management adapter and set its address, as for a new install.
@@ -43,10 +43,8 @@ image written by the media. Anything you added to the system image outside `/etc
 
 ## Troubleshooting
 
-- **"The image edition installs on UEFI firmware only."** Restart in UEFI mode. No disk was changed. A host
-  that can only boot with legacy BIOS keeps using the Classic edition.
 - **The Repair question never appears.** No complete data volume was found: a disk of a mirror is missing,
-  or the data was never created by the image edition. Use **Erase and install** only if the data is expendable.
+  or the data was never created by Nex Core's installer. Use **Erase and install** only if the data is expendable.
 - **"Repair must name exactly the disks that hold the Nex Core data."** The disks offered differ from the
   disks that hold the data; restart the wizard and do not change the disk list.
 - **Disk in use, partition target, duplicate disk or image too large:** do not override the
@@ -59,7 +57,7 @@ Not verified on a real host. **Repair image** was run in a QEMU lab on a two-dis
 partition's bytes were identical on both disks afterwards, files written to it before read back unchanged, both boot
 partitions and the system image were rewritten (they had been zeroed first), the host booted from both disks together and
 from each alone, and Repair was refused, changing nothing, when one mirror member was missing. Script-level tests
-(`tests/test_image_installer.py`) cover the UEFI refusal, the complete-data check and the exact-disk rule; the graphical
+(`tests/test_image_installer.py`) cover the complete-data check and the exact-disk rule; the graphical
 wizard's Repair image choice and review page were drawn and inspected under a virtual display only. See
 [Phase I-6 lab 2](../qa/image/phase6-lab2.md) for what ran and what did not.
 

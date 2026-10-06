@@ -703,7 +703,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert not any(c['name'] == '__Host-nex_session' for c in context.cookies()), 'logout retained cookie'
         assert context.request.get(lab.url + '/api/v1/sites').status == 401
         peer_throttle(page, lab.url + '/api/v1/session')
-        lab.passed('browser __Host cookie attributes, legacy rejection, restrictive CSP, real inline-script blocking, idle GET/mutation semantics and expired-session login recovery; logout and actual-peer throttle')
+        lab.passed('browser __Host cookie attributes, unprefixed-cookie rejection, restrictive CSP, real inline-script blocking, idle GET/mutation semantics and expired-session login recovery; logout and actual-peer throttle')
         assert not errors, errors
         lab.passed('browser interrupted request/retry, genuine stopped-agent stale state, revoke and re-enroll entry, sign-out; no page errors')
         lab.passed('browser delayed-token site scope, automatic pool master labels, and older inventory response cannot overwrite newer revocation')

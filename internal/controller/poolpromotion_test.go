@@ -326,7 +326,7 @@ func TestPromotionOperationRecoversFromInventoryAfterOldControllerAcknowledgedRe
 	l.send(&l.member, func(r *protocol.ReportRequest) {
 		r.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "needs_attention", Error: "temporary fencer failure", ObservedAt: time.Now().UTC()}}
 	})
-	// An older Controller acknowledges Core's later success without settling its
+	// A Controller acknowledges Core's later success without settling its
 	// operation row. Core then has no unacknowledged result to send after upgrade.
 	l.member.inv.Managed.Promotion = &protocol.PoolPromotionStatus{OperationID: accepted.Operation.ID, Stage: "repoint", Status: "needs_attention", ObservedAt: time.Now().UTC()}
 	l.send(&l.member, nil)

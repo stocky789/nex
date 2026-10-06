@@ -8,8 +8,8 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-// newImageHostLab is a pool whose member is an image-edition Core that offered image-update-v1;
-// the master is a classic host that did not.
+// newImageHostLab is a pool whose member is a Core that offered image-update-v1;
+// the master did not.
 func newImageHostLab(t *testing.T) *joinLab {
 	t.Helper()
 	l := newJoinLab(t)
@@ -54,7 +54,7 @@ func TestImageUpdateAckAndHostReportedProjection(t *testing.T) {
 	view.Image = nil
 	read(t, l.a.call("GET", "/api/v1/hosts/"+l.master.id+"/updates", nil, nil, 200), &view)
 	if view.Supported || view.Image != nil {
-		t.Fatalf("a classic host reported an image: %+v", view)
+		t.Fatalf("a host that did not offer image-update-v1 reported an image: %+v", view)
 	}
 	l.a.call("GET", "/api/v1/hosts/missing-host/updates", nil, nil, 404)
 }
@@ -106,8 +106,8 @@ func TestImageUpdateRelaysToItsHostOnly(t *testing.T) {
 func TestImageUpdateRefusals(t *testing.T) {
 	l := newImageHostLab(t)
 	member := "/api/v1/hosts/" + l.member.id + "/updates/"
-	// A classic host, or a Core that never offered image-update-v1, never receives the command.
-	l.a.call("POST", "/api/v1/hosts/"+l.master.id+"/updates/check", map[string]any{"request_id": "req-classic-001"}, nil, 409)
+	// A Core that never offered image-update-v1 never receives the command.
+	l.a.call("POST", "/api/v1/hosts/"+l.master.id+"/updates/check", map[string]any{"request_id": "req-nocap-001"}, nil, 409)
 	l.a.call("POST", "/api/v1/hosts/missing-host/updates/check", map[string]any{"request_id": "req-missing-001"}, nil, 404)
 	for name, c := range map[string]struct {
 		path string
@@ -191,8 +191,8 @@ func TestImageSettingsMediaImportAndFetchAreRelayedToTheHostOnly(t *testing.T) {
 			t.Fatalf("%s was accepted with %d", name, code)
 		}
 	}
-	// A classic host is never sent them.
-	l.a.call("POST", "/api/v1/hosts/"+l.master.id+"/updates/settings", map[string]any{"request_id": "req-classic-002", "channel": "dev"}, nil, 409)
+	// A Core that never offered image-update-v1 is never sent them.
+	l.a.call("POST", "/api/v1/hosts/"+l.master.id+"/updates/settings", map[string]any{"request_id": "req-nocap-002", "channel": "dev"}, nil, 409)
 }
 
 // A host that has gone quiet or been revoked is refused before anything is queued, because the action

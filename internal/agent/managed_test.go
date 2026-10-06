@@ -69,10 +69,10 @@ func TestManagedCommandJournalDoesNotCompleteFromInventoryOrReplayChangedInput(t
 	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{changed}}); err == nil {
 		t.Fatal("changed payload replay accepted")
 	}
-	s.State.Journal["legacy"] = JournalEntry{Status: "succeeded"}
-	cmd.OperationID = "legacy"
+	s.State.Journal["refresh"] = JournalEntry{Status: "succeeded"}
+	cmd.OperationID = "refresh"
 	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}}); err == nil {
-		t.Fatal("legacy refresh ID reused for mutation")
+		t.Fatal("refresh ID reused for mutation")
 	}
 }
 
@@ -525,7 +525,7 @@ func TestMemberPeerBackupResultDoesNotBlockControllerReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !s.State.Journal[cmd.OperationID].PeerDispatched {
-		t.Fatal("legacy peer operation was not durably classified")
+		t.Fatal("peer operation was not durably classified")
 	}
 	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
 		t.Fatalf("peer result blocked the next heartbeat: %v", err)

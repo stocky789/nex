@@ -397,7 +397,7 @@ Keep Nex pool IDs distinct from libvirt storage-pool IDs. Libvirt storage pools 
 | UI | TypeScript and React, built as static assets served by the controller |
 | Controller persistence | SQLite on local disk, one active controller process |
 | Host persistence | Small durable agent operation journal and identity/configuration files |
-| Host services | systemd; Debian packaging and APT updates |
+| Host services | systemd; signed read-only Nex Core image with A/B image updates |
 | Browser VM console | noVNC through authenticated controller/agent forwarding |
 | Initial VM disks | qcow2 on an ext4-backed local directory |
 | First shared storage | Existing external NFS service registered at pool level |
@@ -575,7 +575,7 @@ residuals: `[close record](../qa/2026-09-17-phase2-gate/CLOSED.md)`.
    **Software RAID, 2026-09-22:** a mirrored system disk (md RAID1) and degraded-but-usable ZFS repositories with a disk-replace operation are proposed, with Btrfs RAID provisioning recommended against, in the [software RAID plan](2026-09-22-software-raid.md). Decided and implemented in the working tree on 2026-09-22 (slices 1–3, Core-owned state); slice 1 has disposable-lab evidence; slice 2 was lab-walked with named outstanding reruns in its QA record; slice 3's Core/Controller half was lab-walked and the installer half is source-checked with lab acceptance outstanding.
 5. Provide first-boot hostname, management network, controller address, and enrollment setup through a minimal local interface. Generate identity and SSH keys per installation.
 6. Preserve the Debian signed boot chain, support UEFI/Secure Boot, and publish image checksums plus package/build manifests. Add legacy BIOS only if required by the initial hardware targets.
-7. Use a signed APT repository for updates; the ISO and package install must produce the same host configuration.
+7. Update hosts by replacing the signed image; the ISO and every updated host must produce the same host configuration.
 8. Deliver the host-local web UI and Controller appliance bootstrap below, reusing the VM lifecycle and console operations proven in Phase 2.
 
 **Gate:** install without internet, eject media, reboot, enroll, and create a VM. Test multiple disks, absent network, representative Intel/AMD hardware, and recovery access. No credentials or private host keys are cloned into the image.

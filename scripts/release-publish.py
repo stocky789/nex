@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Publish Nex Core installer artifacts together and prune old releases.
 
-Runs on the website host. Packages go to the APT archive through nex-apt-publish;
-this handles fresh-install ISOs and their hash-pinned netinst payloads. Retention is bounded
-because each release is over a gigabyte and the archive already holds ~740 MB of
-packages per version.
+Runs on the website host. It handles fresh-install ISOs and their hash-pinned netinst
+payloads. Retention is bounded because each release is over a gigabyte.
 
 Layout, all under one root owned by the publishing user (no root privilege needed):
 
@@ -34,7 +32,7 @@ ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-amd64\.iso$
 SOURCE_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-source\.tar\.gz$")
 NETINST_ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-amd64-netinst\.iso$")
 NETINST_MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-netinst-compliance-manifest\.json$")
-PAYLOAD_NAME = re.compile(r"^(?:nex-core-local|dlm-controld|libvirt[a-z0-9.+-]*|libnss-libvirt)-[0-9a-f]{64}\.deb$")
+PAYLOAD_NAME = re.compile(r"^[0-9a-f]{64}-[A-Za-z0-9][A-Za-z0-9._+-]*$")
 MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~-]*)-compliance-manifest\.json$")
 # Release names are readable (0.4.23-dev.251); dpkg orders the Debian form (0.4.23~~dev.251).
 PRERELEASE = re.compile(r"^(?P<release>\d+\.\d+\.\d+)-(?P<pre>[0-9A-Za-z.]+)$")
@@ -245,7 +243,7 @@ def publish(root, iso, source, manifest, keep, netinst_iso=None, netinst_manifes
         for item in expected:
             payload = supplied[item["file"]]
             digest = sha256(payload)
-            if item.get("sha256") != digest or not payload.name.endswith(f"-{digest}.deb"):
+            if item.get("sha256") != digest or not payload.name.startswith(f"{digest}-"):
                 raise ReleasePublishError(f"netinst payload binding does not match {payload.name}")
         assets.extend(supplied.values())
     digests = {asset.name: sha256(asset) for asset in assets}

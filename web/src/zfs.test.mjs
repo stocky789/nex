@@ -157,7 +157,7 @@ assert.match(src, /disks build"\} only \{layoutNames\[zfsAutoLayout\(count\)\]\}
 assert.match(src, /const \[oldDevice, setOldDevice\] = useState\(""\);/);
 assert.match(src, /chosen \? `Erase \$\{shortName\(chosen\)\} and replace` : "Erase disk and replace"/);
 assert.match(src, /<strong>ZFS retires the old disk itself when the resilver finishes<\/strong>/);
-// Erase confirmation shows the by-id to type, like the system-disk dialog (SR-028 / BUG-0487).
+// Erase confirmation shows the by-id to type (SR-028 / BUG-0487).
 assert.match(src, /Type this by-id device name to erase its old data<input[\s\S]*?<span className="mono">\{chosen\.by_id\}<\/span><\/label>/);
 
 // Blank stays muted whether or not a Spare column is last (SR-112).

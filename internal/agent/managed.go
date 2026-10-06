@@ -25,9 +25,11 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "vm-release-retained", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "pool-update", "management-network", "host-system-disk-replace":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "vm-release-retained", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "pool-update", "management-network":
 		return true
 	case "host-image-update":
+		return true
+	case "host-system-disk-replace":
 		return true
 	}
 	return false
@@ -128,6 +130,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 		})
 	}
 	defaults()
+	ResumeSystemDiskReplace(ctx, dir)
 	ticker := time.NewTicker(defaultsInterval)
 	defer ticker.Stop()
 	for {
@@ -136,6 +139,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 			return
 		case <-ticker.C:
 			defaults()
+			ResumeSystemDiskReplace(ctx, dir)
 			memberStore := &Store{dir: dir, State: identity}
 			// Pool ZFS provisioning survives Controller loss. Resume only the
 			// master-owned durable record; its provisioner re-adopts tagged pools
@@ -241,14 +245,14 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					if err == nil && cmd.Kind != "pool-maintenance" && cmd.Kind != "pool-transfer" && cmd.Kind != "pool-promote" && cmd.Kind != "pool-fence-profile" && cmd.Kind != "pool-bmc-provisioning" && cmd.Kind != "pool-host-fencing" && cmd.Kind != "pool-update" {
 						result = protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
 					}
-				} else if cmd.Kind == "host-system-disk-replace" {
-					// Host-local and pool-free: this host's own mirror, its own disks
-					// and its own bootloader.
-					result = ExecuteSystemDiskReplace(ctx, dir, cmd)
 				} else if cmd.Kind == protocol.ImageUpdateCommandKind {
 					// Host-scoped and pool-free: this host's own update engine owns the work and
 					// the record; the result only says whether it accepted the request.
 					result = ExecuteImageUpdate(ctx, cmd)
+				} else if cmd.Kind == protocol.SystemDiskReplaceCommandKind {
+					// Host-scoped and pool-free: this host's own disks and its durable record of the
+					// replacement, which goes on without this command or the Controller.
+					result = ExecuteSystemDiskReplace(ctx, dir, cmd)
 				} else if cmd.Kind == "management-network" {
 					// Host-scoped and pool-free: this host's own /etc files and its
 					// durable staged record, with no membership or storage fence.
@@ -894,7 +898,7 @@ func commandHost(cmd protocol.Command) string {
 		if cmd.ImageUpdate != nil {
 			return cmd.ImageUpdate.HostID
 		}
-	case "host-system-disk-replace":
+	case protocol.SystemDiskReplaceCommandKind:
 		if cmd.SystemDiskReplace != nil {
 			return cmd.SystemDiskReplace.HostID
 		}

@@ -10,15 +10,16 @@ and hosted publication checks have been inspected and recorded. Do not treat a s
 build as that evidence.
 
 Once those gates are recorded as complete, every push to `main` on the configured Git forge
-builds the full and network installer ISOs and both Debian packages at the newest `CHANGELOG.md` version and publishes the
+builds the Nex Core image, the Controller guest image and the full and network installer ISOs at the newest
+`CHANGELOG.md` version and publishes the
 two ISOs and their SHA-256 sidecars as the repository release for tag `vX.Y.Z[-preN]`, replacing that version's previous
-release. The two `.deb` payloads supply Nex Core (including its Controller appliance) and the
-custom DLM build to netinst. Core is installed through the installer; Controller is not offered
-as a bare package install. Enrolled hosts continue to update through APT. One version identifies a release: the changelog heading, the tag and the
-Debian package version are the same number. No tag is pushed by hand; the workflow creates or
+release. The network installer downloads the signed system image, the Controller appliance and the other payloads,
+each bound to its SHA-256, from the download tree. Core is installed through the installer and hosts update by
+replacing their image. One version identifies a release: the changelog heading, the tag and the
+version inside the image are the same number. No tag is pushed by hand; the workflow creates or
 moves it.
 
-The same Release run publishes the packages to the signed APT archive, both ISOs, source,
+The same Release run publishes both ISOs, source,
 compliance manifests and netinst payloads to the download tree, and the static website pages.
 All four website deploy secrets are required because the netinst ISO downloads from that tree. A separate
 Website workflow still exists for website-only pushes that skip the ISO build; see
@@ -36,7 +37,6 @@ Nex Controller and in the Nex Core host settings; see [software updates](softwar
 | --- | --- | --- |
 | Version | the newest `CHANGELOG.md` heading, `0.4.18` | a pre-release of the next release, `0.4.19-dev.231` (Debian `0.4.19~~dev.231`) |
 | Forge release | `v0.4.18`, a release | `v0.4.19-dev.231`, a **pre-release**; the newest three stay |
-| APT archive | `<site>/apt/` | `<site>/apt/dev/`: its own pool and indexes, newest three versions kept |
 | Downloads | `<site>/downloads/<version>/` and `latest` | `<site>/downloads/dev/<version>/` and its own `latest` |
 | Static website | deployed | never deployed |
 | Release notes | the version's changelog section | `[Unreleased]`; when the changelog already has a numbered heading ahead of what `main` published (a cut made on `dev`), the notes are that heading's section followed by any entries added under `[Unreleased]` since |
@@ -55,12 +55,9 @@ numerically ordered. If `main` already published a prerelease with that same bas
 alpha/rc heading on `dev` is not enough: cut a heading for the next numeric release before
 building development packages.
 
-The development archive and downloads sit under the stable ones on the same host, behind the same
-signing key and web server, so the web server needs no change and the first development release
-creates `/srv/nex-apt/dev` and `/srv/nex-downloads/dev`. The root-run `nex-apt-publish` is the copy
-that `packaging/apt/bootstrap.sh` installed. Re-run the updated bootstrap on an existing publishing
-host before publishing, so its installed helper has both channel retention and interrupted-publication
-fixes; changing the repository checkout does not replace that root-run copy. A netinst ISO fetches
+The development downloads sit under the stable ones on the same host, behind the same
+web server, so the web server needs no change and the first development release
+creates `/srv/nex-downloads/dev`. A netinst ISO fetches
 its payloads from its own channel's tree.
 
 ## Prerequisites
@@ -95,21 +92,8 @@ its payloads from its own channel's tree.
 - `CHANGELOG.md` has a `## [X.Y.Z]` or `## [X.Y.Z-preN]` section for the version being released and it is the
   newest version heading. Day-to-day work lives under `[Unreleased]`; before tagging, move those
   entries under the version heading and leave `[Unreleased]` empty (blockquote guidance may remain).
-- Repository secret `NEX_APPLIANCE_SIGNING_KEY`: the Ed25519 PEM private key that signs the
-  Controller appliance manifest, the same key used for local builds. Without it each run signs
-  with a throwaway key and warns; the release still installs, but its Controller appliance is
-  trusted only by the Core package built in that same run.
-- Website publishing requires a configured publishing account. Bootstrap the website host once:
-
-  ```sh
-  sudo NEX_PUBLISH_USER=<publishing-user> packaging/apt/bootstrap.sh
-  ```
-
-  This creates the signed APT archive, the `/srv/nex-downloads` tree owned by the publishing
-  user, and the two nginx includes. `NEX_PUBLISH_USER` is required. Re-run the updated
-  bootstrap on an existing website host before publishing the short download pages;
-  it installs the HTML content type and reloads nginx. Then
-  set the deployment secrets; without them the run says so and publishes to Gitea only.
+- Website publishing requires a configured publishing account on the website host that owns the
+  `/srv/nex-downloads` tree. Set the deployment secrets; without them the run says so and publishes to Gitea only.
 
   | Secret | Value |
   | --- | --- |
@@ -139,8 +123,8 @@ its payloads from its own channel's tree.
 3. After the exact-artifact evidence is complete, push to `main` (stable) or merge into `dev`
    (development; promote it to stable with a pull request from `dev` to `main` that also cuts the
    changelog heading). Watch the **Release** workflow: it resolves the channel and version, builds the
-   appliance, both packages and both ISOs, checks artifact versions and source/payload bindings,
-   builds the static website, publishes packages to APT and both ISOs, source, manifests
+   Controller guest image, the Nex Core image and both ISOs, checks artifact versions and source/payload bindings,
+   builds the static website, publishes both ISOs, source, manifests
    and netinst payloads to the download tree, verifies those downloads, then creates the
    forge release. A failing website
    build or a missing deploy secret stops the run before the tag moves. A second push at the
@@ -162,15 +146,15 @@ The changelog supplies the notes. The release includes:
 Forge titles, ISO filenames, source bundles, compliance manifests and the website download
 directories all use the readable hyphenated version, for example
 `nex-core-0.4.20-dev.247-amd64.iso` in `/downloads/dev/0.4.20-dev.247/`, never Debian's
-`0.4.20~~dev.247`. Only the Debian packages and APT indexes carry the Debian form, which
+`0.4.20~~dev.247`. Only the Debian package version carries the Debian form, which
 `release-publish.py` converts internally to order releases. The sidecars name the downloaded
 files, so `sha256sum -c <filename>.sha256` works. Download directories published before this
 change keep their `~~` names until retention removes them.
 
 The versioned website download directory holds the matching source bundle,
-compliance manifests and hash-pinned netinst `.deb` files with checksums. Opening
+compliance manifests and hash-pinned netinst payloads with checksums. Opening
 `/downloads/latest/` or a version directory shows installer links, checksums and
-source/compliance links without listing the network-installer packages. The packages
+source/compliance links without listing the network-installer payloads. The payloads
 remain available at their exact URLs inside the network installer.
 
 Each channel root also gets `latest.json`, rewritten on every publication, naming the newest
@@ -195,8 +179,7 @@ rather than failing the run. On Gitea, the replacement stays a draft until every
 that check, then is published. A handled upload failure deletes the draft; the previous
 release has already been removed, so rerun publication to restore that version.
 
-`https://<site>/apt/` also serves the new packages in the signed
-`Release`/`Packages` index, so enrolled hosts see the update under **Updates**. The publisher
+The publisher
 copies both ISOs, their shared source bundle, separate manifests and netinst payloads into
 `https://<site>/downloads/<Debian-version>/`, writes a SHA-256 sidecar for each, and moves
 `latest` to the newest retained release; releases beyond the newest three download directories
@@ -204,12 +187,10 @@ are pruned. An older netinst ISO stops working if its payloads are pruned or rep
 same-version rebuild; use the current matching ISO. The publisher rejects mismatched ISO,
 source-bundle or netinst payload bindings. The compliance manifest inventories ISO
 components for licensing; it does not enable or block publication by package name. The workflow
-then fetches the published APT indexes,
-ISO checksums, source bundle, manifests and netinst payload availability over HTTPS and fails if any are missing or
-the package index does not list the released version.
+then fetches the published
+ISO checksums, source bundle, manifests and netinst payload availability over HTTPS and fails if any are missing.
 
-Development releases are the same files at their own locations: `https://<site>/apt/dev/` is the
-APT repository (suite `nex`, component `main`, the same signing key), and
+Development releases are the same files at their own locations:
 `https://<site>/downloads/dev/latest/` is the newest build. Each keeps the newest three builds,
 and the final check verifies the development URLs, not the stable ones.
 
@@ -217,18 +198,17 @@ and the final check verifies the development URLs, not the stable ones.
 
 - **Publication succeeds but the final check returns 401** — the configured public
   URL requires authentication from the runner. Verify `NEX_PUBLIC_URL` points to
-  the intended public download/APT site, and check that site's proxy/authentication
+  the intended public download site, and check that site's proxy/authentication
   routing. Do not rerun the full build just to diagnose it: inspect the already
-  published `/apt/dists/nex/InRelease`, package index and versioned downloads.
-  The final workflow check uses HEAD for reachability, then reads the small package
-  index to verify the version. It does not download the multi-gigabyte source archive
+  published versioned downloads.
+  The final workflow check uses HEAD for reachability. It does not download the multi-gigabyte source archive
   or establish a complete downloaded-artifact integrity check.
 - **A download page opens as a file download, or the home page cards show "Open downloads"** —
-  the website host's nginx predates the HTML and JSON download types or the same-origin
-  `connect-src` policy. Copy `packaging/apt/nginx-downloads.inc` to
-  `/etc/nex-website/nginx-downloads.inc` (re-running `packaging/apt/bootstrap.sh` does this),
-  make `connect-src 'self'` in the `Content-Security-Policy` of `/etc/nex-website/nginx.conf`
-  match `packaging/website/nginx.conf.template`, run `nginx -t` and reload `nex-website`. Check
+  the website host's nginx does not serve the HTML and JSON download types or has a stricter
+  `connect-src` policy. Make `connect-src 'self'` in the `Content-Security-Policy` of
+  `/etc/nex-website/nginx.conf`
+  match `packaging/website/nginx.conf.template`, serve `.html` as `text/html` and `.json` as `application/json`
+  from the downloads tree, run `nginx -t` and reload `nex-website`. Check
   `curl -I https://<site>/downloads/latest/` returns `text/html` and
   `https://<site>/downloads/latest.json` returns `application/json`. If `latest.json` is
   missing, the next release publication writes it.
@@ -238,20 +218,10 @@ and the final check verifies the development URLs, not the stable ones.
 - **"main already published X, newer than dev's Y; merge main into dev first"** — a release
   went to `main` that `dev` does not contain, typically a hotfix. Merge `main` into `dev` and
   push; the next development build numbers above that release.
-- **"nex-apt-publish: error: unrecognized arguments: --keep 3"** on a development run — the helper
-  installed on the website host predates channels. Re-run `packaging/apt/bootstrap.sh` there (see
-  [Release channels](#release-channels)); nothing was published, so re-run the workflow afterwards.
 - **A heavy run is waiting for another workflow** — heavy steps wait on the shared-host lock
   rather than cancelling another workflow. Checkout/setup actions and waiting containers can
   coexist; queue waiting counts toward the existing job timeout. Check the running workload
   and execution-mode prerequisites, not a forge concurrency group's pending-run replacement.
-- **APT publication failed or was interrupted** — retry the same publication with the updated
-  installed helper. Indexing and signing happen in staging; old indexed package bytes remain
-  until replacement metadata has been installed. Rebuilt packages of the same version have
-  content-addressed pool paths, so new bytes cannot overwrite an old index's payload.
-  Metadata files are replaced individually: interruption can temporarily cause metadata
-  hash/signature mismatches until retry completes. This is not a collectively atomic archive
-  cutover. A previously signed archive refuses publication without a usable signing key.
 - **An image publication reused a manifest but its signature is missing or unusable** — retry
   with a configured usable release key authorized by the trust document. The publisher repairs
   the signature over the original immutable manifest bytes before exposing a channel pointer;
@@ -293,18 +263,15 @@ and the final check verifies the development URLs, not the stable ones.
   See the [Gitea configuration reference](https://docs.gitea.com/administration/config-cheat-sheet/#repository---release-repositoryrelease).
   Confirm the actual configured limit and upload route before retrying; more retries cannot
   bypass a fixed size limit.
-- **A throwaway signing key warning** — set the `NEX_APPLIANCE_SIGNING_KEY` secret so every
-  release is signed with the operator key.
 - **Deploy secrets are not set** — the workflow stops before creating a release because
-  the netinst ISO requires the website's package downloads. Configure all four secrets
+  the netinst ISO requires the website's payload downloads. Configure all four secrets
   after the exact-artifact distribution review is complete.
 - **Nothing published and no error** — check the runner can reach the website host; the host
   is on a private address and the runner must be on a network with a route to it.
-- **Disk pressure on the website host** — the stable APT archive keeps every package version and
-  each `nex-core-local` embeds the Controller appliance image; the packaging check records its
-  actual size. The development archive keeps the newest three versions, and each channel's
-  download tree prunes to the newest three releases (including their netinst payloads). Check
-  `du -sh /srv/nex-apt /srv/nex-downloads` before large release runs.
+- **Disk pressure on the website host** — each channel's
+  download tree prunes to the newest three releases (including their netinst payloads), and the
+  netinst payloads include the Controller appliance image, so check
+  `du -sh /srv/nex-downloads` before large release runs.
 
 ## Verification
 
@@ -318,21 +285,21 @@ paths passed against a local simulated forge; this does not establish hosted pub
 (`test_build_source.py`), whole-media source bundling (`test_source_bundle.py`) and firmware
 pruning/index regeneration (`test_prune_iso_packages.py`).
 
-For 0.2.9, the exact final-artifact hashes, final-media inspection, boot/install results, public
-website downloads, signed APT metadata and package payloads are recorded in the
+For 0.2.9, the exact final-artifact hashes, final-media inspection, boot/install results and public
+website downloads are recorded in the
 [release QA evidence](../qa/2026-09-16-nex-core-0.2.9-release.md). Hosted CI remains pending.
 Do not substitute an earlier image, a staging tree, or a successful unit test for those checks.
 
 For 0.3.1, see the [exact-artifact release report](../qa/2026-09-17-nex-core-0.3.1-release.md)
 for rebuilt packages, matching sources/notices, BIOS installation and reboot, both firmware
-boot menus, signed APT and public delivery checks. This was direct website/APT publication;
+boot menus and public delivery checks. This was direct website publication;
 no Git-forge release or hosted CI completion is implied.
 
 For the development 0.4.12 netinst changes, see [network-installer verification](../qa/iso/2026-09-24-net-installer.md). Local publication fixtures do not establish a hosted release run.
 
 The download-page regression checks cover generated installer/source
-links, hidden package names, retained-version backfill, and nginx HTML delivery while
-exact package URLs remain reachable. The live website and forge release require a new
+links, hidden payload names, retained-version backfill, and nginx HTML delivery while
+exact payload URLs remain reachable. The live website and forge release require a new
 owner-published run and separate inspection.
 
 The immutable review-fix batch is covered by [review-fix verification](../qa/2026-10-03-immutable-review-fixes.md).

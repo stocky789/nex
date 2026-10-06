@@ -1,36 +1,31 @@
 name: Release
 # Push-driven release for two channels. Every push to main (stable) or dev (development)
-# rebuilds both ISOs and Debian packages, publishes them to that channel's APT archive and
-# download tree, then creates the Gitea release for the tag. Stable builds the newest
+# rebuilds both ISOs, publishes them to that channel's download tree, then creates the Gitea
+# release for the tag. Stable builds the newest
 # CHANGELOG version, tag vX.Y.Z[-preN], replacing that version's previous release and
 # moving its tag when the version was already published. Development builds a pre-release
 # of the next release, tag vX.Y.Z-dev.N (scripts/release-version.py --channel dev), marked
 # as a Gitea pre-release with only the newest builds kept.
 # Forge release assets are the two ISOs and their checksums.
 # Source, compliance manifests and hash-pinned Nex netinst payloads live in the
-# website download tree. Packages remain build
-# products for the ISO and the signed APT update feed.
+# website download tree.
 # The CHANGELOG heading and the Debian package version are one number in two
 # notations, so a release can never ship stamped with a version its changelog does
 # not describe.
 #
-# The development channel is a subtree of each stable root on the website host: the APT
-# archive at /apt/dev (/srv/nex-apt/dev) and the downloads at /downloads/dev
-# (/srv/nex-downloads/dev). Only a stable run deploys the static website pages.
+# The development channel is a subtree of the stable download root on the website host:
+# /downloads/dev (/srv/nex-downloads/dev). Only a stable run deploys the static website pages.
 #
 # The ISO build runs builder containers on the runner's Docker host. On a runner that
 # executes jobs inside a container, the workspace is a Docker volume; the job finds
 # that volume's host path and scripts/ci-docker.sh rewrites every bind mount to it.
 #
 # Secrets:
-#   NEX_APPLIANCE_SIGNING_KEY   Ed25519 PEM private key that signs the Controller
-#                               appliance manifest. Without it the build signs with a
-#                               throwaway key generated for that run, and warns.
 #   NEX_DEPLOY_HOST             website publishing: host address, publishing user, that
 #   NEX_DEPLOY_USER             user's SSH key, and the host's public key. Set all four
 #   NEX_DEPLOY_KEY              together; all four are required for a release.
-#   NEX_DEPLOY_KNOWN_HOSTS      The same run publishes signed APT packages,
-#                               ISO/source downloads, and the static website pages.
+#   NEX_DEPLOY_KNOWN_HOSTS      The same run publishes ISO/source downloads and the static
+#                               website pages.
 on:
   push:
     branches:
@@ -73,9 +68,9 @@ jobs:
           # development channel: a numbered pre-release of the release main publishes next.
           args=()
           case "$NEX_BRANCH" in
-            main) channel=stable apt=apt downloads=downloads ;;
+            main) channel=stable downloads=downloads ;;
             dev)
-              channel=dev apt=apt/dev downloads=downloads/dev
+              channel=dev downloads=downloads/dev
               git show origin/main:CHANGELOG.md > .cache/stable-changelog.md
               args=(--channel dev --build "$(git rev-list --count HEAD)" --stable-changelog .cache/stable-changelog.md) ;;
             *) echo "Release runs for main and dev only, not $NEX_BRANCH" >&2; exit 1 ;;
@@ -87,7 +82,6 @@ jobs:
             echo "version=$version"
             echo "public_version=$tag_version"
             echo "channel=$channel"
-            echo "apt_path=$apt"
             echo "downloads_path=$downloads"
           } >> "$GITHUB_OUTPUT"
           echo "Releasing v$tag_version on the $channel channel as Debian version $version"
@@ -120,62 +114,26 @@ jobs:
           echo "workspace=$host" >> "$GITHUB_OUTPUT"
           echo "The Docker host sees the workspace at $host"
 
-      - name: Restore the pinned Debian cloud base image
-        id: base-image
-        uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: .cache/appliance
-          key: appliance-base-debian-13-genericcloud-amd64-20260831-2587
-      - name: Fetch the pinned Debian cloud base image
-        if: steps.base-image.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          # installer/build.sh verifies this file against its pinned SHA-256 before use.
-          mkdir -p .cache/appliance
-          image=debian-13-genericcloud-amd64-20260831-2587.qcow2
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --continue-at - \
-            "https://cloud.debian.org/images/cloud/trixie/20260831-2587/$image" \
-            -o ".cache/appliance/$image.partial"
-          mv ".cache/appliance/$image.partial" ".cache/appliance/$image"
-
-      - name: Prepare the appliance signing key
-        id: signing
-        env:
-          NEX_APPLIANCE_SIGNING_KEY_PEM: ${{ secrets.NEX_APPLIANCE_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          umask 077
-          # appliance/build.py requires the key outside the repository with mode 0600.
-          key=$HOME/nex-appliance-signing.pem
-          if [ -n "${NEX_APPLIANCE_SIGNING_KEY_PEM:-}" ]; then
-            printf '%s\n' "$NEX_APPLIANCE_SIGNING_KEY_PEM" > "$key"
-          else
-            openssl genpkey -algorithm ed25519 -out "$key"
-            echo "::warning::NEX_APPLIANCE_SIGNING_KEY is not set: the Controller appliance in this release is signed with a throwaway key generated for this run."
-          fi
-          echo "key=$key" >> "$GITHUB_OUTPUT"
-
       # libvirt and dlm are rebuilt from pinned Debian sources by a recipe that rarely changes.
-      # installer/build.sh records a digest of each build's inputs beside its output and reuses
-      # the output when the digest still matches, so a restored entry skips about eight minutes.
-      # The key names the same inputs; build.sh's digest is what makes a stale entry harmless.
+      # scripts/build-release-packages.sh records a digest of each build's inputs beside its output and
+      # reuses the output when the digest still matches, so a restored entry skips about eight minutes.
+      # The key names the same inputs; the script's digest is what makes a stale entry harmless.
       - name: Restore the matched libvirt and dlm builds
         uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
-            .cache/nex-iso/matched-libvirt
-            .cache/nex-iso/matched-libvirt.inputs
-            .cache/nex-iso/cluster-storage-dlm
-            .cache/nex-iso/cluster-storage-dlm.inputs
-          key: matched-builds-${{ hashFiles('packaging/libvirt/**', 'packaging/cluster-storage/**', 'tests/integration/libvirt_readonly_policy.py', 'installer/build.sh') }}
+            .cache/release-packages/libvirt
+            .cache/release-packages/libvirt.inputs
+            .cache/release-packages/dlm
+            .cache/release-packages/dlm.inputs
+          key: matched-builds-${{ hashFiles('packaging/libvirt/**', 'packaging/cluster-storage/**', 'tests/integration/libvirt_readonly_policy.py', 'scripts/build-release-packages.sh') }}
 
-      - name: Build source archive, packages and both ISOs
+      - name: Build the image, the packages and both ISOs
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
           NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
           NEX_DOWNLOADS_PATH: ${{ steps.version.outputs.downloads_path }}
           NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
-          NEX_APPLIANCE_SIGNING_KEY: ${{ steps.signing.outputs.key }}
           NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
         run: |
           set -euo pipefail
@@ -184,13 +142,20 @@ jobs:
           # temporary build inputs must live there too.
           export TMPDIR=$PWD/.cache/tmp
           mkdir -p "$TMPDIR"
-          # build.sh rebuilds the appliance and the nex-core-local package from current
-          # source, then the ISO from that package. The Controller package is separate.
-          export NEX_NETINST_BASE_URL="${NEX_PUBLIC_URL%/}/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}"
-          bash installer/build.sh
-          python3 packaging/controller/build.py \
+          sequence=$(git rev-list --count HEAD)
+          packages=$PWD/.cache/release-packages
+          out=$PWD/.cache/image-release
+          # installer/build.sh builds the Controller guest image and the corresponding source itself;
+          # the Core image is built first and handed to it.
+          python3 packaging/core-local/build.py \
             --source dist/nex-source.tar.gz --version "$NEX_VERSION" \
-            --output dist/controller --docker "$NEX_DOCKER"
+            --output "$packages/core-local" --docker "$NEX_DOCKER"
+          bash scripts/build-release-packages.sh "${packages#"$PWD"/}"
+          NEX_LABEL="$NEX_PUBLIC_VERSION" NEX_SEQUENCE="$sequence" NEX_IMAGE_OUT="$out" \
+            NEX_PACKAGE_DIRS="$packages/core-local:$packages/dlm:$packages/libvirt" sh image/build.sh all
+          export NEX_NETINST_BASE_URL="${NEX_PUBLIC_URL%/}/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}"
+          export NEX_IMAGE_DIR=.cache/image-release/release NEX_HOSTIMAGE_BIN=.cache/image-release/nex-hostimage
+          bash installer/build.sh
 
       - name: Verify every artifact carries the released version
         env:
@@ -201,34 +166,23 @@ jobs:
           iso="dist/nex-core-${NEX_PUBLIC_VERSION}-amd64.iso"
           source="dist/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz"
           manifest="dist/nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json"
-          core="dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb"
-          controller="dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
+          core=".cache/release-packages/core-local/nex-core-local_${NEX_VERSION}_amd64.deb"
           netinst="dist/nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso"
           netinst_manifest="dist/nex-core-${NEX_PUBLIC_VERSION}-netinst-compliance-manifest.json"
-          for artifact in "$iso" "$source" "$manifest" "$core" "$controller" "$netinst" "$netinst_manifest" dist/netinst/*.deb; do
+          for artifact in "$iso" "$source" "$manifest" "$core" "$netinst" "$netinst_manifest" dist/netinst/*; do
             [ -f "$artifact" ] || { echo "missing artifact: $artifact" >&2; exit 1; }
             stat --printf='%n: %s bytes\n' "$artifact"
           done
           # A matching filename is not proof of a matching package version.
-          for deb in "$core" "$controller"; do
-            actual=$(dpkg-deb -f "$deb" Version)
-            [ "$actual" = "$NEX_VERSION" ] || {
-              echo "$deb declares $actual, expected $NEX_VERSION" >&2; exit 1; }
-          done
-          for payload in dist/netinst/*.deb; do
-            package=$(dpkg-deb -f "$payload" Package)
+          actual=$(dpkg-deb -f "$core" Version)
+          [ "$actual" = "$NEX_VERSION" ] || {
+            echo "$core declares $actual, expected $NEX_VERSION" >&2; exit 1; }
+          # Every netinst payload is served as <sha256>-<file name>, bound to its own bytes.
+          for payload in dist/netinst/*; do
             payload_hash=$(sha256sum "$payload" | cut -d' ' -f1)
-            [ "${payload##*/}" = "$package-$payload_hash.deb" ] || {
-              echo "netinst payload filename is not bound to its package hash: $payload" >&2; exit 1; }
-            case "$package" in
-              nex-core-local)
-                [ "$(dpkg-deb -f "$payload" Version)" = "$NEX_VERSION" ] || exit 1 ;;
-              dlm-controld)
-                [ "$(dpkg-deb -f "$payload" Version)" = '4.3.0-3+nex1' ] || exit 1 ;;
-              libvirt*|libnss-libvirt)
-                [ "$(dpkg-deb -f "$payload" Source | cut -d' ' -f1)" = libvirt ] || exit 1
-                [ "$(dpkg-deb -f "$payload" Version)" = '11.3.0-3+deb13u3+nex4' ] || exit 1 ;;
-              *) echo "unexpected netinst payload package: $package" >&2; exit 1 ;;
+            case "${payload##*/}" in
+              "$payload_hash"-*) ;;
+              *) echo "netinst payload filename is not bound to its hash: $payload" >&2; exit 1 ;;
             esac
           done
           ( cd dist && for artifact in \
@@ -243,7 +197,7 @@ jobs:
           validation=$(mktemp -d)
           trap 'rm -rf "$validation"' EXIT
           payload_args=()
-          for payload in dist/netinst/*.deb; do
+          for payload in dist/netinst/*; do
             payload_args+=(--netinst-payload "$payload")
           done
           python3 scripts/release-publish.py --check --root "$validation" \
@@ -275,17 +229,6 @@ jobs:
           done
           exit "$status"
 
-      - name: Smoke-start the packaged Controller
-        env:
-          NEX_VERSION: ${{ steps.version.outputs.version }}
-          NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
-          NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
-        run: |
-          set -euo pipefail
-          scripts/ci-docker.sh run --rm --entrypoint python3 -v "$PWD:/repo:ro" \
-            nex-controller-builder /repo/scripts/check-controller-package.py \
-            "/repo/dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
-
       - name: Check for deploy credentials
         id: deploy
         env:
@@ -295,7 +238,7 @@ jobs:
           NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -eu
-          # Netinst packages live on the download site, so every release needs it.
+          # Netinst payloads live on the download site, so every release needs it.
           missing=""
           for pair in "NEX_DEPLOY_HOST=${NEX_DEPLOY_HOST:-}" \
                       "NEX_DEPLOY_USER=${NEX_DEPLOY_USER:-}" \
@@ -362,31 +305,24 @@ jobs:
             "dist/nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json" \
             "dist/nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso" \
             "dist/nex-core-${NEX_PUBLIC_VERSION}-netinst-compliance-manifest.json" \
-            dist/netinst/*.deb \
-            "dist/controller/nex-controller_${NEX_VERSION}_amd64.deb" \
+            dist/netinst/* \
             scripts/release-publish.py \
             "$target:$staging/"
 
-          # Expand every staged netinst .deb into its own --netinst-payload, matching the
-          # local validation loop. Unquoted libvirt*-*.deb would pass one literal glob.
+          # Expand every staged netinst payload into its own --netinst-payload, matching the
+          # local validation loop. Unquoted globs would pass one literal pattern.
           payload_args=()
-          for payload in dist/netinst/*.deb; do
+          for payload in dist/netinst/*; do
             payload_args+=(--netinst-payload "'$staging/${payload##*/}'")
           done
-          # Reuse the transferred Core bytes under APT's required package filename.
-          # Packages first: the signing key never leaves the host, and nex-apt-publish
-          # is the one command the publishing user may run as root without a password.
-          # The development channel is its own repository and download root beneath the
-          # stable ones, so it has its own pool, indexes, `latest` link and retention.
-          apt_args="" root_args=""
+          # The development channel is its own download root beneath the stable one, so it has
+          # its own `latest` link and retention.
+          root_args=""
           if [ "$NEX_CHANNEL" = dev ]; then
-            apt_args="--repo-root /srv/nex-apt/dev --keep 3"
             root_args="--root /srv/nex-downloads/dev"
           fi
           # shellcheck disable=SC2086
           ssh $ssh_opts "$target" "set -eu
-            ln '$staging'/nex-core-local-*.deb '$staging/nex-core-local_${NEX_VERSION}_amd64.deb'
-            sudo -n /usr/local/sbin/nex-apt-publish $apt_args '$staging/nex-core-local_${NEX_VERSION}_amd64.deb' '$staging/nex-controller_${NEX_VERSION}_amd64.deb'
             python3 '$staging/release-publish.py' $root_args --iso '$staging/nex-core-${NEX_PUBLIC_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json' --netinst-iso '$staging/nex-core-${NEX_PUBLIC_VERSION}-amd64-netinst.iso' --netinst-manifest '$staging/nex-core-${NEX_PUBLIC_VERSION}-netinst-compliance-manifest.json' ${payload_args[*]} --keep 3
             rm -rf '$staging'"
 
@@ -399,26 +335,21 @@ jobs:
       - name: Confirm the release is actually reachable
         if: steps.deploy.outputs.enabled == 'true'
         env:
-          NEX_VERSION: ${{ steps.version.outputs.version }}
           NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
-          NEX_APT_PATH: ${{ steps.version.outputs.apt_path }}
           NEX_DOWNLOADS_PATH: ${{ steps.version.outputs.downloads_path }}
           NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
         run: |
           set -euo pipefail
           # Check reachability without downloading multi-gigabyte payloads.
-          # Read the small Packages index below to verify the released version.
           # The site answers 503 for a moment while the publish it just did settles (run 4319),
           # and curl treats 5xx as retryable only with --retry.
           payload_paths=()
-          for payload in dist/netinst/*.deb; do
+          for payload in dist/netinst/*; do
             [ -f "$payload" ] || { echo 'missing netinst payloads' >&2; exit 1; }
             payload_paths+=("/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/${payload##*/}")
           done
           for path in \
             "/" \
-            "/${NEX_APT_PATH}/dists/nex/InRelease" \
-            "/${NEX_APT_PATH}/dists/nex/main/binary-amd64/Packages" \
             "/${NEX_DOWNLOADS_PATH}/latest.json" \
             "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-amd64.iso.sha256" \
             "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz" \
@@ -429,9 +360,6 @@ jobs:
             code=$(curl -sSI -o /dev/null -w '%{http_code}' --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}${path}")
             [ "$code" = 200 ] || { echo "$path returned $code" >&2; exit 1; }
           done
-          curl -sS --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}/${NEX_APT_PATH}/dists/nex/main/binary-amd64/Packages" \
-            | grep -x "Version: ${NEX_VERSION}" > /dev/null || {
-              echo "published index does not list ${NEX_VERSION}" >&2; exit 1; }
 
       - name: Create or replace the release
         env:

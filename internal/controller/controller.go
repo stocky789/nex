@@ -114,22 +114,9 @@ func Open(cfg Config) (*Controller, error) {
 	}
 
 	c := &Controller{db: db, cfg: cfg, seen: map[string]time.Time{}, lock: lock, observed: map[string]observationReceipt{}, credentials: newCredentialBroker(), stop: make(chan struct{}), stopped: make(chan struct{})}
-	// Pool-bound tokens and bootstrap pool records predate automatic pools. Tokens live ten
-	// minutes and completed handoffs never retry bootstrap, so the old tables are dropped.
-	for _, table := range []string{"tokens", "appliance_bootstraps"} {
-		old, err := columns(db, table)
-		if err != nil {
-			return nil, err
-		}
-		if old["pool_id"] {
-			if _, err = db.Exec("DROP TABLE " + table); err != nil {
-				return nil, err
-			}
-		}
-	}
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL); INSERT INTO schema_version SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM schema_version);
  CREATE TABLE IF NOT EXISTS admins(username TEXT PRIMARY KEY,salt TEXT NOT NULL,password TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,username TEXT NOT NULL,csrf TEXT NOT NULL,expires INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,username TEXT NOT NULL,csrf TEXT NOT NULL,expires INTEGER NOT NULL,idle_expires INTEGER NOT NULL DEFAULT 0);
  CREATE TABLE IF NOT EXISTS sites(id TEXT PRIMARY KEY,name TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS pools(id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),name TEXT NOT NULL,master_host_id TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS hosts(id TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pools(id),hostname TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen TEXT,inventory TEXT,sequence INTEGER NOT NULL DEFAULT 0);
@@ -143,27 +130,6 @@ func Open(cfg Config) (*Controller, error) {
 	if err != nil {
 		db.Close()
 		return nil, err
-	}
-	// Add an idle deadline to existing databases. Old sessions expire immediately.
-	sessions, err := columns(db, "sessions")
-	if err != nil {
-		return nil, err
-	}
-	if !sessions["idle_expires"] {
-		if _, err = db.Exec("ALTER TABLE sessions ADD COLUMN idle_expires INTEGER NOT NULL DEFAULT 0"); err != nil {
-			return nil, err
-		}
-	}
-	// Pools created by hand predate pool masters: the earliest enrolled active host
-	// (or any host) becomes master, and pools that never received a host are removed below.
-	pools, err := columns(db, "pools")
-	if err != nil {
-		return nil, err
-	}
-	if !pools["master_host_id"] {
-		if _, err = db.Exec("ALTER TABLE pools ADD COLUMN master_host_id TEXT NOT NULL DEFAULT ''; UPDATE pools SET master_host_id=coalesce((SELECT id FROM hosts WHERE pool_id=pools.id ORDER BY revoked,rowid LIMIT 1),'')"); err != nil {
-			return nil, err
-		}
 	}
 	var version int
 	if err = db.QueryRow("SELECT version FROM schema_version").Scan(&version); err != nil || version != 1 {
@@ -193,11 +159,6 @@ func Open(cfg Config) (*Controller, error) {
 	if err = c.initManaged(); err != nil {
 		return nil, err
 	}
-	// Runs on every start so an Open interrupted after the ALTER above still finishes the cleanup;
-	// automatically created pools always carry a master, so only manual leftovers match.
-	if _, err = db.Exec("DELETE FROM pools WHERE master_host_id='' AND NOT EXISTS(SELECT 1 FROM hosts WHERE pool_id=pools.id) AND NOT EXISTS(SELECT 1 FROM managed_resources WHERE pool_id=pools.id) AND NOT EXISTS(SELECT 1 FROM appliances WHERE pool_id=pools.id)"); err != nil {
-		return nil, err
-	}
 	c.cfg.Password = ""
 	success = true
 	// An invitation left in a stored command outlives the process that scheduled its scrub.
@@ -213,25 +174,6 @@ func (c *Controller) Close() error {
 	return err
 }
 
-// columns lists a table's column names; a missing table yields an empty set.
-func columns(db *sql.DB, table string) (map[string]bool, error) {
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var cid, notnull, pk int
-		var name, kind string
-		var def any
-		if err := rows.Scan(&cid, &name, &kind, &notnull, &def, &pk); err != nil {
-			return nil, err
-		}
-		out[name] = true
-	}
-	return out, rows.Err()
-}
 func random() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -377,9 +319,9 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/vms/{id}/stats", c.admin(c.vmStats))
 	m.HandleFunc("GET /api/v1/hosts/{id}/stats", c.admin(c.hostStats))
 	m.HandleFunc("GET /api/v1/hosts/{id}/hardware", c.admin(c.hostHardware))
-	m.HandleFunc("POST /api/v1/hosts/{id}/system-disk", c.admin(c.replaceSystemDisk))
 	m.HandleFunc("GET /api/v1/hosts/{id}/updates", c.admin(c.hostImageUpdates))
 	m.HandleFunc("POST /api/v1/hosts/{id}/updates/{action}", c.admin(c.relayImageUpdate))
+	m.HandleFunc("POST /api/v1/hosts/{id}/system-disk", c.admin(c.replaceSystemDisk))
 	m.HandleFunc("POST /api/v1/agent/console/{token}", c.agent(c.agentConsole))
 	m.HandleFunc("POST /api/v1/agent/stats/{token}", c.agent(c.agentStats))
 	m.HandleFunc("GET /api/v1/agent/media/{id}", c.agent(c.agentMedia))
@@ -392,8 +334,6 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("POST /api/v1/hosts/{id}/operations", c.admin(c.operation))
 	m.HandleFunc("GET /api/v1/operations", c.admin(c.operations))
 	m.HandleFunc("GET /api/v1/audit", c.admin(c.audits))
-	m.HandleFunc("GET /api/v1/updates", c.admin(c.updates))
-	m.HandleFunc("POST /api/v1/updates/apply", c.admin(c.applyUpdate))
 	m.HandleFunc("POST /api/v1/agent/enroll", c.enroll)
 	m.HandleFunc("POST /api/v1/agent/report", c.agent(c.report))
 	m.HandleFunc("GET /api/v1/agent/storage/credentials/{handle}", c.agent(c.agentStorageCredential))

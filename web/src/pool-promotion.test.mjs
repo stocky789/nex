@@ -57,8 +57,8 @@ const ready = verdictOf([
   { name: "accepted-ownership", status: "passed" },
   { name: "old-master-exclusion", status: "unknown", reason: notFenced, hosts: ["host-a"] },
 ], { blocking: [notFenced], ready_to_fence: true, fence_recorded: true, fence_usable: true, fence_unusable_reason: "", fence_host_ids: ["host-a"] });
-// The same situation reported by a Core old enough to send none of the structural fields.
-const legacyReady = verdictOf(ready.checks, { blocking: [notFenced] });
+// The same situation reported without any of the structural fields.
+const bareReady = verdictOf(ready.checks, { blocking: [notFenced] });
 
 // react-dom/server escapes apostrophes, so Core's sentences are matched as they are rendered.
 const rx = text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "(&#x27;|')"));
@@ -109,7 +109,7 @@ assert.match(bmcText({ ...member, fence: { configured: false, system_uuid_confli
 // Set BMC access… is offered everywhere except a host whose own Core configured its controller.
 assert.equal(manualBMCOffered(provisioned), false);
 assert.equal(manualBMCOffered(noInBand), true);
-assert.equal(manualBMCOffered(member), true, "a host whose Core is too old to report keeps the manual form");
+assert.equal(manualBMCOffered(member), true, "a host whose Core reports nothing here keeps the manual form");
 // Letting Nex configure the controller again is offered only where an operator turned it off,
 // and never while the master is not fresh. It is the pool master's own recorded decision, not
 // the host's echo of it: a host that is down after its device was cleared has echoed nothing
@@ -223,9 +223,9 @@ assert.equal(promotionRunnable(full), false, "another check blocked is never pas
 assert.equal(promotionRunnable(null), false);
 assert.equal(promotionRunnable(verdictOf([])), false, "a verdict with no checks claims nothing");
 // Core's no outranks a set of checks that would otherwise read as ready: no inference is left.
-assert.equal(promotionRunnable({ ...legacyReady, ready_to_fence: false }), false);
-// A Core old enough to report neither field is never runnable; nothing is inferred from checks.
-assert.equal(promotionRunnable(legacyReady), false, "without Core's structural fields nothing is inferred");
+assert.equal(promotionRunnable({ ...bareReady, ready_to_fence: false }), false);
+// A report carrying neither field is never runnable; nothing is inferred from checks.
+assert.equal(promotionRunnable(bareReady), false, "without Core's structural fields nothing is inferred");
 assert.equal(promotionRunnable(verdictOf([{ name: "replica-integrity", status: "unknown" }])), false);
 const reachableVerdict = verdictOf([
   { name: "replica-integrity", status: "passed" }, { name: "replica-supremacy", status: "passed" },
@@ -244,7 +244,7 @@ assert.equal(oldMasterReachable(noProfileVerdict), false);
 assert.equal(fenceProfileMissing(noProfileVerdict), true);
 assert.equal(fenceProfileMissing(ready), false);
 assert.equal(fenceProfileMissing(reachableVerdict), false);
-assert.equal(fenceProfileMissing(legacyReady), false, "an older Core reports no flag, so nothing is claimed");
+assert.equal(fenceProfileMissing(bareReady), false, "a report without the flag claims nothing");
 assert.equal(fenceProfileMissing({ ...ready, fence_recorded: false }), true);
 // A profile that is recorded but cannot run: the candidate holds no credential for it, or the
 // kind cannot be verified at all. One branch, told apart by Core's own reason.
@@ -254,7 +254,7 @@ assert.equal(fenceUnusableReason(noCredentialVerdict), noCredential);
 assert.equal(fenceUnusableReason(unverifiableVerdict), unverifiable);
 assert.equal(fenceUnusableReason(ready), "", "a usable profile has no unusable reason");
 assert.equal(fenceUnusableReason(noProfileVerdict), "", "no profile is its own state, not an unusable one");
-assert.equal(fenceUnusableReason(legacyReady), "", "an older Core claims nothing here either");
+assert.equal(fenceUnusableReason(bareReady), "", "a report without the field claims nothing here either");
 assert.equal(fenceUnusableReason({ ...ready, fence_usable: false }), "Nex Core reported no reason.");
 
 // ------------------------------------------------------------ the two-step dialog
@@ -348,7 +348,7 @@ const twoHosts = verdictOf([
 const threeReport = { ...report, members: [master, member, { host_id: "host-c", name: "core-c", role: "member", connection: "stale" }] };
 assert.deepEqual(fenceHostIDs(twoHosts), ["host-a", "host-c"]);
 assert.deepEqual(fenceHostIDs(ready), ["host-a"]);
-assert.deepEqual(fenceHostIDs(legacyReady), [], "an older Core names none, so nothing is claimed");
+assert.deepEqual(fenceHostIDs(bareReady), [], "a report without the field names none, so nothing is claimed");
 assert.deepEqual(unfenceableBlockers(twoHosts), [], "a blocking host Core will fence is not a blocker for the operator");
 
 // The per-host table says, for every host, whether it stops the promotion and what happens to it.
@@ -674,7 +674,7 @@ console.log("pool-promotion.test.mjs: ok");
   assert.match(fencingText(unchecked, true).label, /^Not protected — no other host/);
   assert.notEqual(fencingText(unchecked, true).badge, "ok");
 
-  // A pool master too old to report readiness is "not reported", never ready.
+  // A pool master that reports no readiness is "not reported", never ready.
   const older = { ...member, fence: { configured: true, kind: "ipmilan" } };
   assert.equal(fencingText(older, true).label, "not reported");
   assert.match(fencingText(older, true).reasons[0], /does not report fencing readiness/);

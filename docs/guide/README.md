@@ -7,11 +7,14 @@ the separate management service and web UI. An installed host reports one versio
 verification limits that apply to its workflow.
 
 1. [Install Nex Core in a disposable VM](install-nex-core.md)
-   (offline whole-disk safety checks; classic hosts with separate `/var` adopt the read-only layout at boot).
+   (UEFI or BIOS; offline whole-disk safety checks, a read-only system image written to two slots per disk).
 2. [Verify the installed Nex Core host](verify-nex-core.md).
-   Image edition: [reinstall the system image and keep the data](reinstall-keeping-state.md)
+   [Reinstall the system image and keep the data](reinstall-keeping-state.md)
    (**Repair image**; text Back/No navigation, virtual-only verification).
-   Image edition: [check and switch optional host features](optional-host-features.md)
+   [Replace a failed system disk](replace-a-failed-system-disk.md)
+   (rebuild one disk of a two-disk host from the other: partition table, verified system image, boot loader and
+   data mirror; unverified on real disks).
+   [Check and switch optional host features](optional-host-features.md)
    (feature layers such as OpenZFS, from the host's root shell; development, lab-simulated only).
 3. [Set up Nex Controller and enroll a host](manage-controller.md).
 4. [Navigate the Controller console](navigate-the-controller-console.md)
@@ -68,35 +71,31 @@ verification limits that apply to its workflow.
 22. [Read VM and host usage history, hardware and temperatures](usage-history.md)
    (**Performance** tab charts up to a year back, with Stacked, zoom and legend toggles, and a
    host's **Hardware** tab, gauges and temperature chart).
-23. [Replace a failed system disk](replace-a-failed-system-disk.md)
-   (rebuild a host's mirrored system disk from its panel's **Storage** tab while the host keeps
-   running).
-24. [Check and apply software updates](software-updates.md)
-   (Controller and host-local package updates from a configured repo; image-edition hosts update
-   themselves from **Settings → Updates → Host images**, with task refusals and interruption-safe API retries;
+23. [Check and apply software updates](software-updates.md)
+   (hosts update themselves from **Settings → Updates → Host images**, with task refusals and interruption-safe API retries;
    [Roll back a host update](roll-back-a-host-update.md) returns one to its previous release;
    [Update a pool](update-a-pool.md) runs a pool-wide update from **Settings → Updates → Pool update**, unverified).
-25. [Publish a Nex Core release](publish-a-release.md)
+24. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; ISO and package build, readable forge downloads, and website publication).
-26. [Set up backup repositories](backup-repositories.md)
+25. [Set up backup repositories](backup-repositories.md)
    (Settings → Backup repositories; NFS, SMB3, S3 and SFTP destinations, access checks, exact retries and forgetting).
-27. [Back up a VM now](backup-now.md)
+26. [Back up a VM now](backup-now.md)
    (Backups → Recovery points → Back up now; destination and review for stopped or running BIOS crash-consistent capture).
-28. [Restore a backup as a new VM](restore-as-new.md)
+27. [Restore a backup as a new VM](restore-as-new.md)
    (recovery-point details → Restore… → Restore as new; new stopped guest with new UUID/MACs and disconnected NICs).
-29. [Test a backup restore](test-restore.md)
+28. [Test a backup restore](test-restore.md)
    (recovery-point details → Restore… → Test restore; inspect, record a result and confirm exact-VM cleanup).
-30. [Set up backup jobs and schedules](backup-policies.md)
+29. [Set up backup jobs and schedules](backup-policies.md)
    (Backups → Backup jobs; named coverage/schedule/review steps and expanded Pause, Run now and View points controls).
-31. [Restore a backup over an existing VM](restore-replace.md)
+30. [Restore a backup over an existing VM](restore-replace.md)
    (recovery-point details → Restore… → Replace original VM; exact-name confirmation, retained originals and shut-off gates).
-32. [Rebuild the backup catalog](catalog-rebuild.md)
+31. [Rebuild the backup catalog](catalog-rebuild.md)
    (import/rebuild from repository manifests; CLI and local API syntax).
-33. [Recover backups without Controller](recover-without-controller.md)
+32. [Recover backups without Controller](recover-without-controller.md)
    (Core-local status, restore, protect, test restore and catalog rebuild).
-34. [Explore the public Controller demo](explore-controller-demo.md)
+33. [Explore the public Controller demo](explore-controller-demo.md)
    (fictional inventory, shared demo credentials, read-only limits and source access).
-35. [Operate the public Controller demo](operate-controller-demo.md)
+34. [Operate the public Controller demo](operate-controller-demo.md)
    (authorized maintainers; isolated container, automatic publication and rollback).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification

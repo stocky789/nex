@@ -860,10 +860,10 @@ func TestPoolVMRecoverySettlementRequiresExactTerminalEvidenceAndKeepsReplay(t *
 	}
 }
 
-func TestLegacySnapshotSettlementKeepsUnknownDependenciesConservative(t *testing.T) {
+func TestSnapshotSettlementWithoutRecordedDependenciesStaysConservative(t *testing.T) {
 	spec := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", "host-a")
 	record := poolVMRecord{PoolID: spec.PoolID, VMID: spec.ID, HostID: "host-a", Epoch: 7, State: "stopped", Spec: spec}
-	reservation, err := poolVMRecoveryReservationFor(record, "legacy-snapshot-1", "snapshot-create", strings.Repeat("d", 64), 1)
+	reservation, err := poolVMRecoveryReservationFor(record, "undeclared-deps-snapshot-1", "snapshot-create", strings.Repeat("d", 64), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -875,13 +875,13 @@ func TestLegacySnapshotSettlementKeepsUnknownDependenciesConservative(t *testing
 	record.PendingSnapshot = &descriptor
 	evidence := protocol.PoolVMRecoveryEvidence{Reservation: reservation, Outcome: "completed", JournalSHA256: strings.Repeat("a", 64), Snapshot: &descriptor}
 	if err := settlePoolVMRecovery(&record, "host-a", evidence); err != nil {
-		t.Fatalf("exact legacy evidence could not settle: %v", err)
+		t.Fatalf("exact evidence without recorded dependencies could not settle: %v", err)
 	}
 	if len(record.Snapshots) != 1 || record.Snapshots[0].Dependencies != nil {
-		t.Fatalf("legacy descriptor was incorrectly upgraded to an invented empty dependency set: %#v", record.Snapshots)
+		t.Fatalf("descriptor was incorrectly upgraded to an invented empty dependency set: %#v", record.Snapshots)
 	}
 	if !poolVMSnapshotUsesResource(record, "network", "unrecorded-network") || !poolVMSnapshotUsesResource(record, "media", "unrecorded-media") || !poolVMSnapshotUsesResource(record, "storage", "unrecorded-storage") {
-		t.Fatal("legacy snapshot with unknown dependencies did not fail closed for all resource classes")
+		t.Fatal("snapshot with unknown dependencies did not fail closed for all resource classes")
 	}
 }
 
@@ -1278,9 +1278,9 @@ func TestPoolVMSnapshotSettlementAckRequiresExactEvidence(t *testing.T) {
 	if !validPoolVMSnapshotSettlementAck(ack, evidence) {
 		t.Fatal("exact owner-settlement acknowledgement was rejected")
 	}
-	for _, legacy := range []poolVMRequest{{}, {VMID: reservation.VMID, Action: "snapshot-settle", RecoveryEvidence: &evidence}} {
-		if validPoolVMSnapshotSettlementAck(legacy, evidence) {
-			t.Fatalf("settlement accepted a legacy or missing-positive-ack response: %#v", legacy)
+	for _, rejected := range []poolVMRequest{{}, {VMID: reservation.VMID, Action: "snapshot-settle", RecoveryEvidence: &evidence}} {
+		if validPoolVMSnapshotSettlementAck(rejected, evidence) {
+			t.Fatalf("settlement accepted an empty or missing-positive-ack response: %#v", rejected)
 		}
 	}
 	changed := evidence

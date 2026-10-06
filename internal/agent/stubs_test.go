@@ -50,5 +50,13 @@ func runWithStubbedHostTools(m *testing.M) (int, error) {
 	// authentication; vmhost refuses the real tool inside any test binary.
 	vmhost.SetSystemdCredsRunner(vmhosttest.FakeSystemdCreds)
 	localWatchdogArmed = func(context.Context) (bool, error) { return false, nil }
+	// Guest bridge stanzas go to an empty scratch directory, never to the host's /etc/network:
+	// as root a native apply there leaves a stanza behind that later runs read as foreign.
+	network, err := os.MkdirTemp("", "nex-test-network")
+	if err != nil {
+		return 0, err
+	}
+	defer os.RemoveAll(network)
+	defer vmhost.HostNetworkDirForTests(network)()
 	return m.Run(), nil
 }

@@ -78,7 +78,7 @@ assert.match(tpmText({ tpm: "2.0" }), /^TPM 2\.0 · /);
 assert.equal(tpmText({}), "None");
 assert.equal(tpmText({ tpm: "none" }), "None");
 
-// The second CD drive exists only on a host whose Core defines it; an older Core would ignore
+// The second CD drive exists only on a host whose Core defines it; a Core without it would ignore
 // the driver ISO and leave the operator believing a disc is attached.
 const driversHost = { id: "host-1", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", "vm-media-v1", "vm-media-drivers-drive-v1"] };
 // U6: an authoritative pool-members response, rather than the host inventory, decides whether
@@ -164,7 +164,7 @@ for (const h of [undefined, driversHost, { ...baselineHost, connection: "stale" 
 }
 assert.match(cpuSelectionIssue({ ...manualCPU, model: "" }, baselineHost), /explicitly select/);
 assert.match(cpuSelectionIssue(savedCPU, driversHost), /Upgrade Nex Core/);
-assert.equal(cpuSelectionIssue(manualCPU, driversHost), "", "older Core manual behavior stays valid");
+assert.equal(cpuSelectionIssue(manualCPU, driversHost), "", "manual CPU behavior stays valid");
 assert.equal(cpuSelectionIssue({ ...manualCPU, features: [] }, driversHost), "", "empty feature list requires no extension support");
 const unavailableHost = { ...baselineHost, inventory: { cpu_baseline: { error: "member unreachable" } } };
 assert.match(baselineUnavailable(unavailableHost), /member unreachable/);

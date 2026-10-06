@@ -13,8 +13,8 @@ export type Transfer = {
   // Reported by the host that owns the transfer when its Core is new enough to say. Until
   // then the stage inference below is all there is, and Core decides again either way.
   cancellable?: boolean;
-  // The source's own answer to "have I signed this pool's authority away?". Absent means an
-  // older Core that cannot say, which is never treated as false.
+  // The source's own answer to "have I signed this pool's authority away?". Absent means a
+  // Core that cannot say, which is never treated as false.
   handed_off?: boolean;
 };
 export type Authority = { generation: number; digest?: string; observed_at?: string };
@@ -59,7 +59,7 @@ const transferActions: Record<string, string> = {
 };
 // Whether a cancel can still succeed is Core's own answer, reported as `cancellable` by the
 // host that owns the transfer and computed from the same predicate the cancel route enforces.
-// These stage lists are only a fallback for a host too old to report it, and they mirror Core's
+// These stage lists are only a fallback for a host that does not report it, and they mirror Core's
 // rule: a master change is cancellable until the pool-CA-signed hand-off (so through `activate`,
 // whose hand-off window the target's own never-activate record decides), and an eject until the
 // membership without that member is written (so through `remove`, which names the step still to
@@ -92,7 +92,7 @@ export function transferCancellable(report: AuthorityReport) {
 // from Core's own reported fields — the source says it has handed the authority over
 // (`handed_off`), the transfer is unfinished, and the target's own row is not fresh, so
 // nothing on the reachable side can still complete it. Core's sentence is displayed, never
-// matched on. A Core too old to report `handed_off` offers nothing: an unsaid flag is unknown,
+// matched on. A Core that does not report `handed_off` offers nothing: an unsaid flag is unknown,
 // not false. `cancellable` is deliberately not part of this: Core keeps a handed-off master
 // change cancellable, because the plain cancel still succeeds if the target answers that it
 // never activated. So both are offered, the plain cancel first, and this is what is left when

@@ -12,7 +12,7 @@ publication, SSH hardening, host-firewall rules and access-allowlist testing are
 this procedure.
 
 Every Release on `main` with deploy secrets set also builds and publishes the static site
-through `nex-website-publish` on this host, together with APT and downloads. Pushes that
+through `nex-website-publish` on this host, together with downloads. Pushes that
 only change `website/` still run the lighter Website workflow so a page fix does not wait
 on an ISO rebuild. This page covers the static pages and manual publish or rollback.
 
@@ -30,8 +30,6 @@ on an ISO rebuild. This page covers the static pages and manual publish or rollb
 - An existing Pangolin HTTPS route and the operator-approved private access policy.
 - A prior verified release retained under `/srv/nex-website/releases` before replacing
   `current`. Use the installed release tool, not a source checkout on the server.
-- Optional: root once to bootstrap the private APT tree (`packaging/apt/bootstrap.sh`) so
-  `/apt/` is served beside the static site; see [software updates](software-updates.md).
 
 ## Steps
 

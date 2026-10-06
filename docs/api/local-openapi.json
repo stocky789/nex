@@ -1440,7 +1440,7 @@
       "get": {
         "operationId": "localGetUpdates",
         "summary": "Report host-local update status",
-        "description": "Image edition (static os-release IMAGE_ID=nex-core): returns ImageUpdateStatus from Core's own record (/var/lib/nex/image/state.json, reconciled with the boot entries on the disks) with no side effects beyond folding the boot state into that record. Classic edition: refreshes the apt package index (at most every 5 minutes) and reports apt's candidate version for nex-core-local against the installed version; a package no configured source offers surfaces in error with HTTP 200. Root local session required.",
+        "description": "Returns ImageUpdateStatus from Core's own record (/var/lib/nex/image/state.json, reconciled with the boot entries on the disks) with no side effects beyond folding the boot state into that record.",
         "security": [
           {
             "LocalSession": []
@@ -1450,18 +1450,11 @@
         "x-audience": "host-local client",
         "responses": {
           "200": {
-            "description": "Success. The schema depends on the edition.",
+            "description": "Success.",
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/UpdateStatus"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ImageUpdateStatus"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ImageUpdateStatus"
                 }
               }
             }
@@ -1477,7 +1470,7 @@
             }
           },
           "409": {
-            "description": "The boot state could not be read (image edition).",
+            "description": "The boot state could not be read.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1493,7 +1486,7 @@
       "post": {
         "operationId": "localApplyUpdates",
         "summary": "Apply a host-local update",
-        "description": "Image edition: verifies signed release metadata (trust.json, channel.json, manifest), downloads the slot image with Range resume, writes it to the inactive slot on every disk and, only when activate is reboot, arms the boot entry and reboots. activate stage_only (default) never changes the next boot. request_id is the operation ID: an exact replay returns the original operation with 200 (an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. scope controller swaps the Controller appliance's read-only system image on the host that owns the Controller VM, as a journaled operation under this request_id (kind controller): the vm-image component's digest in the signed release manifest is verified, the component is staged under /var/lib/nex/payload/<sha256>/, the guest shuts down gracefully through its guest agent (never forced), controller-data.qcow2 is checkpointed (fsynced and read back against the disk; the swap is refused while another domain, running or defined, references the disk), the domain is redefined with the new system disk (same UUID and MAC) and started, and readiness (the running domain booted from the expected image and the Controller answering) is probed for 10 minutes; on failure the data checkpoint and the old image are restored (controller_rolled_back) and, if that fails too, the VM stays stopped (controller_needs_attention). A controller swap never changes the host's own image lifecycle, has no activation step (activate reboot is invalid_request), cannot be cancelled while it runs (swap_in_progress), and is resumed by repeating its request_id. Refusals: scope_unavailable (no appliance engine on this host), no_controller_image, controller_no_appliance, controller_not_profile, controller_digest_mismatch, controller_shutdown_failed, controller_rolled_back, controller_needs_attention, controller_swap_in_progress. Classic edition: runs apt-get update then apt-get install nex-core-local as root against the signed Nex archive and returns 202 scheduled; the request body is ignored. CSRF and same-origin required.",
+        "description": "Verifies signed release metadata (trust.json, channel.json, manifest), downloads the slot image with Range resume, writes it to the inactive slot on every disk and, only when activate is reboot, arms the boot entry and reboots. activate stage_only (default) never changes the next boot. request_id is the operation ID: an exact replay returns the original operation with 200 (an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. scope controller swaps the Controller appliance's read-only system image on the host that owns the Controller VM, as a journaled operation under this request_id (kind controller): the vm-image component's digest in the signed release manifest is verified, the component is staged under /var/lib/nex/payload/<sha256>/, the guest shuts down gracefully through its guest agent (never forced), controller-data.qcow2 is checkpointed (fsynced and read back against the disk; the swap is refused while another domain, running or defined, references the disk), the domain is redefined with the new system disk (same UUID and MAC) and started, and readiness (the running domain booted from the expected image and the Controller answering) is probed for 10 minutes; on failure the data checkpoint and the old image are restored (controller_rolled_back) and, if that fails too, the VM stays stopped (controller_needs_attention). A controller swap never changes the host's own image lifecycle, has no activation step (activate reboot is invalid_request), cannot be cancelled while it runs (swap_in_progress), and is resumed by repeating its request_id. Refusals: scope_unavailable (no appliance engine on this host), no_controller_image, controller_no_appliance, controller_not_profile, controller_digest_mismatch, controller_shutdown_failed, controller_rolled_back, controller_needs_attention, controller_swap_in_progress. CSRF and same-origin required.",
         "security": [
           {
             "LocalSession": []
@@ -1506,34 +1499,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/ImageUpdateApplyRequest"
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "description": "Classic edition: empty object."
-                  }
-                ]
+                "$ref": "#/components/schemas/ImageUpdateApplyRequest"
               }
             }
           }
         },
         "responses": {
           "202": {
-            "description": "Update scheduled (classic: UpdateApplyResult) or operation started (image: ImageUpdateOperation).",
+            "description": "Operation started.",
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/UpdateApplyResult"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ImageUpdateOperation"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ImageUpdateOperation"
                 }
               }
             }
@@ -1559,17 +1536,17 @@
             }
           },
           "500": {
-            "description": "Download, install or restart failed; also arm_incomplete when activate: reboot could not arm every disk and could not undo it (the record stays armed).",
+            "description": "arm_incomplete when activate: reboot could not arm every disk and could not undo it (the record stays armed).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UpdateApplyResult"
+                  "$ref": "#/components/schemas/UpdateRefusal"
                 }
               }
             }
           },
           "200": {
-            "description": "Exact replay of an earlier request_id (image edition).",
+            "description": "Exact replay of an earlier request_id.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1589,7 +1566,7 @@
             }
           },
           "409": {
-            "description": "Refused: update_in_progress, request_conflict, already_armed, scope_unavailable, running_vms (image edition); insufficient_space is raised as the failed operation's error (before download when free space is below about twice the slot image plus layers and 64 MiB, or on ENOSPC); classic: UpdateApplyResult with status failed. scope controller also: controller_stage_failed, controller_insufficient_storage, controller_shutdown_failed (also when a restarted old image will not stop at the checkpoint or define step).",
+            "description": "Refused: update_in_progress, request_conflict, already_armed, scope_unavailable, running_vms; insufficient_space is raised as the failed operation's error (before download when free space is below about twice the slot image plus layers and 64 MiB, or on ENOSPC). scope controller also: controller_stage_failed, controller_insufficient_storage, controller_shutdown_failed (also when a restarted old image will not stop at the checkpoint or define step).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4409,7 +4386,7 @@
       "post": {
         "operationId": "localCheckUpdates",
         "summary": "Refresh and verify update metadata",
-        "description": "Image edition only. Fetches trust.json, channel.json and the manifest from the configured update base URL and checks, in order: the trust chain from the pinned root keys, the channel signature and expires, channel_serial not older than stored, sequence not below the rollback floor, the manifest hash and signature, architecture and compatibility. Only a fully verified result updates channel_serial and the rollback floor and sets available. Within 60 seconds of the previous successful check the answer is 429 check_throttled with Retry-After. Root local session, CSRF and same-origin required.",
+        "description": "Fetches trust.json, channel.json and the manifest from the configured update base URL and checks, in order: the trust chain from the pinned root keys, the channel signature and expires, channel_serial not older than stored, sequence not below the rollback floor, the manifest hash and signature, architecture and compatibility. Only a fully verified result updates channel_serial and the rollback floor and sets available. Within 60 seconds of the previous successful check the answer is 429 check_throttled with Retry-After. Root local session, CSRF and same-origin required.",
         "security": [
           {
             "LocalSession": []
@@ -4460,7 +4437,7 @@
             }
           },
           "409": {
-            "description": "Classic edition (unsupported_edition) or a release this host cannot take: wrong_architecture, engine_too_old, bridge_required, unsupported_component, below_rollback_floor, clock_behind, not_newer, unknown_sequence, layers_unavailable.",
+            "description": "A release this host cannot take: wrong_architecture, engine_too_old, bridge_required, unsupported_component, below_rollback_floor, clock_behind, not_newer, unknown_sequence, layers_unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4516,7 +4493,7 @@
       "post": {
         "operationId": "localActivateUpdate",
         "summary": "Arm the staged release and reboot",
-        "description": "Image edition only. Arms the staged release: writes its UKI as nex-core_<label>_<sequence>+3.efi on every boot partition (temp file, flush, rename) beside the running version's UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required. On an armed release that has not booted it re-issues the reboot instead of refusing nothing_staged; after arm_incomplete it first takes the boot entry back from every disk and arms again. 500 arm_incomplete when arming failed on a later disk and could not be undone (the record stays armed, no reboot is scheduled) or when that disarm fails.",
+        "description": "Arms the staged release: writes its UKI as nex-core_<label>_<sequence>+3.efi on every boot partition (temp file, flush, rename) beside the running version's UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required. On an armed release that has not booted it re-issues the reboot instead of refusing nothing_staged; after arm_incomplete it first takes the boot entry back from every disk and arms again. 500 arm_incomplete when arming failed on a later disk and could not be undone (the record stays armed, no reboot is scheduled) or when that disarm fails.",
         "security": [
           {
             "LocalSession": []
@@ -4576,7 +4553,7 @@
             }
           },
           "409": {
-            "description": "Refused: nothing_staged, update_in_progress, request_conflict, state_format_downgrade, state_format_too_old, md_generation_unsafe, md_generation_downgrade, running_vms, image_invalid, roothash_mismatch, unsupported_edition.",
+            "description": "Refused: nothing_staged, update_in_progress, request_conflict, state_format_downgrade, state_format_too_old, md_generation_unsafe, md_generation_downgrade, running_vms, image_invalid, roothash_mismatch.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4602,7 +4579,7 @@
       "post": {
         "operationId": "localRollbackUpdate",
         "summary": "Arm the retained previous version and reboot",
-        "description": "Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required. A rollback that changed some disks and failed on another is 500 rollback_incomplete: the record is armed on the previous release with its layers, and repeating the call finishes the rest. A rollback that failed before any disk changed is previous_unavailable.",
+        "description": "Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required. A rollback that changed some disks and failed on another is 500 rollback_incomplete: the record is armed on the previous release with its layers, and repeating the call finishes the rest. A rollback that failed before any disk changed is previous_unavailable.",
         "security": [
           {
             "LocalSession": []
@@ -4662,7 +4639,7 @@
             }
           },
           "409": {
-            "description": "Refused: nothing_to_roll_back, previous_unavailable, already_armed, update_in_progress, request_conflict, state_format_downgrade, state_format_too_old, md_generation_downgrade, running_vms, unsupported_edition.",
+            "description": "Refused: nothing_to_roll_back, previous_unavailable, already_armed, update_in_progress, request_conflict, state_format_downgrade, state_format_too_old, md_generation_downgrade, running_vms.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4688,7 +4665,7 @@
       "post": {
         "operationId": "localCancelUpdate",
         "summary": "Cancel a running apply or discard a staged release",
-        "description": "Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required. In the arm_incomplete state it first tries to take the boot entry back from every disk and then discards the stage; 500 arm_incomplete if a disk cannot be cleaned, 409 already_armed if the release booted.",
+        "description": "Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required. In the arm_incomplete state it first tries to take the boot entry back from every disk and then discards the stage; 500 arm_incomplete if a disk cannot be cleaned, 409 already_armed if the release booted.",
         "security": [
           {
             "LocalSession": []
@@ -4748,7 +4725,7 @@
             }
           },
           "409": {
-            "description": "Refused: already_armed, write_in_progress, update_in_progress (an activate or rollback is running), nothing_to_cancel, request_conflict, unsupported_edition.",
+            "description": "Refused: already_armed, write_in_progress, update_in_progress (an activate or rollback is running), nothing_to_cancel, request_conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4774,7 +4751,7 @@
       "get": {
         "operationId": "localGetUpdateOperation",
         "summary": "Read one recorded update operation",
-        "description": "Image edition only. Returns one operation of the host engine's record (the last 20 are kept) by the request_id that created it; unknown or aged-out IDs are 404 unknown_operation. Root local session required; read-only.",
+        "description": "Returns one operation of the host engine's record (the last 20 are kept) by the request_id that created it; unknown or aged-out IDs are 404 unknown_operation. Root local session required; read-only.",
         "security": [
           {
             "LocalSession": []
@@ -4816,16 +4793,6 @@
           },
           "404": {
             "description": "No such operation (unknown_operation).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UpdateRefusal"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Classic edition (unsupported_edition).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5159,7 +5126,7 @@
       "put": {
         "operationId": "localPutUpdateSettings",
         "summary": "Set the channel and update server of this host",
-        "description": "Image edition: validates the channel (lower-case letters, digits and -, starting with a letter) and the base URL (http or https, no credentials, query or fragment; empty clears it), writes channel= and base_url= to /etc/nex/updates.conf and answers with the stored values. The change takes effect for the next check. The channel pointer history (channel_serial) belongs to the update server and channel it came from, so a changed source starts empty and an earlier source keeps its own; the rollback floor is kept. Refused while an update operation or an update check is running (409 update_in_progress) and while NEX_UPDATE_BASE_URL or NEX_UPDATE_CHANNEL fix the settings in the service environment (409 settings_overridden). Package edition: takes a channel only, stable or dev (400 invalid_channel otherwise; a base_url is refused with 400 invalid_base_url because the host updates from its package archive), and records it as the archive the host reads: repo_url in /etc/nex/updates.conf becomes the archive root for stable and its dev subdirectory for dev, other lines are kept, and the next check refreshes the package index from the new archive. Refused while NEX_UPDATE_REPO fixes the archive (409 settings_overridden). The settings are host-scoped; the Controller reads the image edition's from Inventory.image.base_url and never stores them. Root local session, CSRF and same-origin required.",
+        "description": "Validates the channel (lower-case letters, digits and -, starting with a letter) and the base URL (http or https, no credentials, query or fragment; empty clears it), writes channel= and base_url= to /etc/nex/updates.conf and answers with the stored values. The change takes effect for the next check. The channel pointer history (channel_serial) belongs to the update server and channel it came from, so a changed source starts empty and an earlier source keeps its own; the rollback floor is kept. Refused while an update operation or an update check is running (409 update_in_progress) and while NEX_UPDATE_BASE_URL or NEX_UPDATE_CHANNEL fix the settings in the service environment (409 settings_overridden).",
         "security": [
           {
             "LocalSession": []
@@ -5235,7 +5202,7 @@
       "get": {
         "operationId": "localListUpdateMedia",
         "summary": "List offline update bundles",
-        "description": "Image edition only. Read-only: lists the host inbox (/var/lib/nex/image/inbox and its directories) and the device labelled NEXUPDATE; nothing is mounted and nothing on the media is changed. The scan is remembered in the engine's record and reported in GET /updates and Inventory.image.media. Channels are the unverified channel.json of each bundle; only import verifies. Root local session required.",
+        "description": "Read-only: lists the host inbox (/var/lib/nex/image/inbox and its directories) and the device labelled NEXUPDATE; nothing is mounted and nothing on the media is changed. The scan is remembered in the engine's record and reported in GET /updates and Inventory.image.media. Channels are the unverified channel.json of each bundle; only import verifies. Root local session required.",
         "security": [
           {
             "LocalSession": []
@@ -5274,16 +5241,6 @@
                 }
               }
             }
-          },
-          "409": {
-            "description": "unsupported_edition.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UpdateRefusal"
-                }
-              }
-            }
           }
         }
       }
@@ -5292,7 +5249,7 @@
       "post": {
         "operationId": "localImportUpdate",
         "summary": "Stage a release from offline media",
-        "description": "Image edition only. The same pipeline as apply with the bundle as source: trust.json (rotation allowed, as online), channel.json signature and its own expires (a bundle is signed with a later expiry, default 180 days), channel_serial and rollback-floor checks, manifest hash and signature, a host clock earlier than the manifest's created is refused (clock_behind), every blob SHA-256, then layers, slot write and verity as for an online stage. Stage never changes the next boot; activate reboot also arms. request_id is the operation ID: an exact replay returns the original operation (200, an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. Unlabelled or unmounted labelled media is mounted read-only for the operation and released at its end. Root local session, CSRF and same-origin required.",
+        "description": "The same pipeline as apply with the bundle as source: trust.json (rotation allowed, as online), channel.json signature and its own expires (a bundle is signed with a later expiry, default 180 days), channel_serial and rollback-floor checks, manifest hash and signature, a host clock earlier than the manifest's created is refused (clock_behind), every blob SHA-256, then layers, slot write and verity as for an online stage. Stage never changes the next boot; activate reboot also arms. request_id is the operation ID: an exact replay returns the original operation (200, an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. Unlabelled or unmounted labelled media is mounted read-only for the operation and released at its end. Root local session, CSRF and same-origin required.",
         "security": [
           {
             "LocalSession": []
@@ -5362,7 +5319,7 @@
             }
           },
           "409": {
-            "description": "unsupported_edition, update_in_progress, request_conflict, already_armed, running_vms. Failures of the background operation (unknown_media, channel_ambiguous, channel_not_in_bundle, channel_expired, channel_replayed, below_rollback_floor, clock_behind, bad_signature, manifest_mismatch, layer_base_mismatch, blob_mismatch, image_invalid, roothash_mismatch, ...) are in the operation's error.",
+            "description": "update_in_progress, request_conflict, already_armed, running_vms. Failures of the background operation (unknown_media, channel_ambiguous, channel_not_in_bundle, channel_expired, channel_replayed, below_rollback_floor, clock_behind, bad_signature, manifest_mismatch, layer_base_mismatch, blob_mismatch, image_invalid, roothash_mismatch, ...) are in the operation's error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5378,7 +5335,7 @@
       "post": {
         "operationId": "localFetchUpdateComponent",
         "summary": "Fetch an on_demand payload",
-        "description": "Image edition only. Downloads one on_demand component of the release the source offers (the update server, or the bundle named by media) to /var/lib/nex/payload/<sha256>/<name>, after the same metadata checks as a check and with Range resume and a SHA-256 check of the whole file; a payload already in place is not downloaded again. The slot image and layers are not payloads (not_on_demand: they come with a stage); an unknown component is unknown_component. It never changes the lifecycle phase of a staged release. request_id is the operation ID, with the replay and conflict rules of apply. Root local session, CSRF and same-origin required.",
+        "description": "Downloads one on_demand component of the release the source offers (the update server, or the bundle named by media) to /var/lib/nex/payload/<sha256>/<name>, after the same metadata checks as a check and with Range resume and a SHA-256 check of the whole file; a payload already in place is not downloaded again. The slot image and layers are not payloads (not_on_demand: they come with a stage); an unknown component is unknown_component. It never changes the lifecycle phase of a staged release. request_id is the operation ID, with the replay and conflict rules of apply. Root local session, CSRF and same-origin required.",
         "security": [
           {
             "LocalSession": []
@@ -5459,7 +5416,7 @@
             }
           },
           "409": {
-            "description": "unsupported_edition, update_in_progress, request_conflict. Background failures (unknown_component, not_on_demand, blob_mismatch, source_unreachable, ...) are in the operation's error.",
+            "description": "update_in_progress, request_conflict. Background failures (unknown_component, not_on_demand, blob_mismatch, source_unreachable, ...) are in the operation's error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7104,81 +7061,6 @@
         "required": [
           "error",
           "host_id"
-        ],
-        "additionalProperties": false
-      },
-      "UpdateStatus": {
-        "type": "object",
-        "properties": {
-          "package": {
-            "type": "string"
-          },
-          "installed_version": {
-            "type": "string"
-          },
-          "available_version": {
-            "type": "string"
-          },
-          "update_available": {
-            "type": "boolean"
-          },
-          "repo_url": {
-            "type": "string"
-          },
-          "channel": {
-            "type": "string",
-            "enum": [
-              "stable",
-              "dev"
-            ],
-            "description": "Package edition, host-local check only: stable, or dev when repo_url is the development subdirectory of the archive."
-          },
-          "phase": {
-            "type": "string",
-            "description": "idle, downloading, installing, restarting, verifying, attention, done, or failed when an apply is tracked. On a Core host, verifying means the service has restarted and Core is waiting for the host to report to its Controller; attention means no report was accepted in time (the package is installed and the host keeps retrying)."
-          },
-          "progress": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 100,
-            "description": "Percent complete for the current apply when known."
-          },
-          "message": {
-            "type": "string"
-          },
-          "error": {
-            "type": "string",
-            "description": "Non-fatal repo or apply problem; installed_version remains valid for check."
-          }
-        },
-        "required": [
-          "package",
-          "installed_version",
-          "update_available",
-          "repo_url"
-        ],
-        "additionalProperties": false
-      },
-      "UpdateApplyResult": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "scheduled",
-              "completed",
-              "failed"
-            ]
-          },
-          "message": {
-            "type": "string"
-          },
-          "operation": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "status"
         ],
         "additionalProperties": false
       },
@@ -9604,7 +9486,10 @@
             "format": "date-time"
           },
           "controls": {
-            "type": ["array", "null"],
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "$ref": "#/components/schemas/PoolUpdateControlResult"
             }
@@ -9629,21 +9514,49 @@
         "description": "Core-owned replicated control receipt retained across later rollouts. Exact request_id/normalized intent replay returns the original snapshot or error; snapshots omit controls. No rollout and no code means an unresolved outcome, continued by Core without Controller. replication_pending also blocks competing transitions until the terminal result is acknowledged. At most one unresolved/ACK-pending receipt exists; it names the current rollout. Terminal records have no reservation; rollback_started is valid only for an unresolved rollback_host.",
         "x-go-type": "protocol.PoolUpdateControlResult",
         "properties": {
-          "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
-          "request": {"$ref": "#/components/schemas/PoolUpdateRequest"},
-          "replication_pending": {"type": "boolean", "description": "The immutable terminal result awaits the existing required authority ACK; Core retries acknowledgement before admitting another transition."},
-          "reserved_result_bytes": {"type": "integer", "minimum": 0, "maximum": 1048576, "description": "Reserved addressed-authority capacity for an unresolved result; included in all admission checks and released when its terminal snapshot/error is recorded."},
-          "rollback_started": {"type": "boolean", "description": "Durable rollback intent retaining the original host attempt/step identity; it does not prove a replica ACK or host dispatch. Transport loss is reconciled under that unchanged identity."},
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "request": {
+            "$ref": "#/components/schemas/PoolUpdateRequest"
+          },
+          "replication_pending": {
+            "type": "boolean",
+            "description": "The immutable terminal result awaits the existing required authority ACK; Core retries acknowledgement before admitting another transition."
+          },
+          "reserved_result_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1048576,
+            "description": "Reserved addressed-authority capacity for an unresolved result; included in all admission checks and released when its terminal snapshot/error is recorded."
+          },
+          "rollback_started": {
+            "type": "boolean",
+            "description": "Durable rollback intent retaining the original host attempt/step identity; it does not prove a replica ACK or host dispatch. Transport loss is reconciled under that unchanged identity."
+          },
           "rollout": {
             "anyOf": [
-              {"$ref": "#/components/schemas/PoolUpdateRollout"},
-              {"type": "null"}
+              {
+                "$ref": "#/components/schemas/PoolUpdateRollout"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "code": {"type": "string"},
-          "message": {"type": "string"}
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
         },
-        "required": ["request_id", "request"]
+        "required": [
+          "request_id",
+          "request"
+        ]
       },
       "PoolUpdateRequest": {
         "type": "object",
@@ -9651,13 +9564,39 @@
         "description": "Core pool-update command input; control receipts retain the normalized rollout_id, control, force and rollback_host host_id.",
         "x-go-type": "protocol.PoolUpdateRequest",
         "properties": {
-          "sequence": {"type": "integer", "minimum": 0},
-          "running_vms": {"type": "string", "enum": ["refuse", "shutdown", "evacuate"]},
-          "dry_run": {"type": "boolean"},
-          "rollout_id": {"type": "string"},
-          "control": {"type": "string", "enum": ["pause", "resume", "abort", "rollback_host"]},
-          "force": {"type": "boolean"},
-          "host_id": {"type": "string"}
+          "sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "running_vms": {
+            "type": "string",
+            "enum": [
+              "refuse",
+              "shutdown",
+              "evacuate"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "rollout_id": {
+            "type": "string"
+          },
+          "control": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "abort",
+              "rollback_host"
+            ]
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "host_id": {
+            "type": "string"
+          }
         },
         "required": []
       },

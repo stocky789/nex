@@ -415,16 +415,16 @@ func TestClusterActivationReceiptSeparatesInitialAdmissionFromDegradedRuntime(t 
 		t.Fatalf("missing master health did not block degraded status: %#v", op)
 	}
 
-	// No durable receipt may be inferred from legacy status or historical
+	// No durable receipt may be inferred from the status or historical
 	// member reports. Such a record must requalify with all fresh reports.
-	legacy := op
-	legacy.Activation = nil
-	legacy.Status = "healthy"
-	if err := saveStorageClusters(s, storageClusterState{Operations: map[string]storageClusterOperation{legacy.RequestID: legacy}}); err != nil {
+	unreceipted := op
+	unreceipted.Activation = nil
+	unreceipted.Status = "healthy"
+	if err := saveStorageClusters(s, storageClusterState{Operations: map[string]storageClusterOperation{unreceipted.RequestID: unreceipted}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := StorageClusterConfigForRepository(s, config.RepositoryID); err == nil || poolVMClusterOperationActivated(s, mustMembership(t, s), config) {
-		t.Fatal("legacy healthy state bypassed initial activation qualification")
+		t.Fatal("healthy state without receipt bypassed initial activation qualification")
 	}
 	for _, tc := range []struct {
 		name   string

@@ -65,7 +65,7 @@ func validateManagedSnapshotRevertRequest(command protocol.Command) error {
 		command.Media != nil || command.Power != nil || command.Delete != nil || command.VMMedia != nil ||
 		command.StorageLifecycle != nil || command.ResourceLifecycle != nil || command.CredentialRetire != nil ||
 		command.ZFSProvision != nil || command.ZFSReplace != nil || command.Pool != nil ||
-		command.ManagementNetwork != nil || command.SystemDiskReplace != nil {
+		command.ManagementNetwork != nil {
 		return errors.New("invalid stopped snapshot revert request")
 	}
 	if command.Snapshot.SnapshotID == command.OperationID || command.Snapshot.Target.VMID != command.VM.ID {
@@ -542,7 +542,7 @@ func (e *ManagedEngine) verifyRevertedNativeSnapshot(ctx context.Context, js []m
 		seconds, secondsErr := strconv.ParseInt(snapshot.CreationTime, 10, 64)
 		if secondsErr != nil || snapshot.Parent.Name != "" || snapshot.Description != j.Command.Snapshot.Target.Description ||
 			absDuration(time.Unix(seconds, 0).Sub(j.Command.Snapshot.Target.CreatedAt)) > 2*time.Minute {
-			return "", errors.New("legacy revert target metadata cannot be bounded to its captured point")
+			return "", errors.New("revert target metadata cannot be bounded to its captured point")
 		}
 	}
 	var saved managedDomain

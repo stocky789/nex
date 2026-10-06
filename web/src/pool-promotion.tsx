@@ -267,7 +267,7 @@ export function bmcText(member: PromotionMember, authoritative: boolean) {
 // created. It is decided from the pool master's record, never from the host's echo of it —
 // a host that is down after its device was cleared has echoed nothing, and would otherwise
 // be left with no action at all. It stays offered on a host whose profile an operator set by
-// hand, because that is where they change or clear it; on a host whose Core is too old to
+// hand, because that is where they change or clear it; on a host whose Core does not
 // report; and while the master is not fresh, where the button is disabled anyway.
 export function manualBMCOffered(member: PromotionMember) {
   return !(member.fence?.configured && member.fence.provisioned_by_core);
@@ -287,7 +287,7 @@ export function bmcReenableOffered(member: PromotionMember, authoritative: boole
 // in the row's details. Every judgement here is the pool master's: this only chooses the wording.
 //
 //   - The master is not reporting            → unknown. Its record is the only one.
-//   - It reports no readiness at all         → not reported. An older Core; never ready.
+//   - It reports no readiness at all         → not reported. Never ready.
 //   - A method is ready                      → the method, and how many hosts confirm it.
 //   - Every check is stale                   → stale. A stale check is never readiness.
 //   - Anything else                          → not protected, and Core's own reason.

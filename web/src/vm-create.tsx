@@ -106,7 +106,7 @@ export const cpuMigrationHelp = "The pool CPU baseline covers the current member
 
 
 // A host defines a VM's second CD drive, for a driver disc beside the install media, only when
-// its Core reports this capability; an older Core would ignore the drive and silently create a
+// its Core reports this capability; a Core without it would drop the drive and silently create a
 // VM whose driver ISO is nowhere.
 export const driversDriveReady = (h?: Host) => Boolean(h && !h.revoked && h.connection === "fresh" && h.capabilities?.includes("vm-media-drivers-drive-v1"));
 

@@ -391,21 +391,11 @@ class CandidatePackageTests(unittest.TestCase):
             self.assertIn(patch, recipe)
         self.assertNotIn("serialized-snapshot-delete.patch", recipe)
         self.assertNotIn("snapshot-delete-recovery.patch", recipe)
-        delivery_files = (
-            root / "installer" / "build.sh",
-            root / ".github" / "workflows" / "release.yml",
-            root / ".gitea" / "workflows" / "release.yml",
-        )
-        for path in delivery_files:
-            self.assertIn(CI.SOURCE_VERSION, path.read_text(), path)
-        validation = '[ "$(dpkg-deb -f "$payload" Version)" = '
-        version_checks = []
-        for path in delivery_files[1:]:
-            matching = [line.strip() for line in path.read_text().splitlines()
-                        if validation in line and CI.SOURCE_VERSION in line]
-            self.assertEqual(len(matching), 1, path)
-            version_checks.append(matching[0])
-        self.assertEqual(version_checks[0], version_checks[1])
+        # The matched libvirt is built by the release package script, which pins the exact
+        # version and refuses a build whose source or inputs name another one.
+        build = (root / "scripts" / "build-release-packages.sh").read_text()
+        self.assertEqual(build.count(f"libvirt_{CI.SOURCE_VERSION}.dsc"), 1)
+        self.assertEqual(build.count(f"local_version={CI.SOURCE_VERSION}"), 1)
 
     def test_runtime_result_requires_readonly_media_revert_regression(self):
         steps = [

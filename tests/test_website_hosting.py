@@ -37,7 +37,7 @@ class WebsiteHosting(unittest.TestCase):
         downloads = cls.base / 'downloads' / '0.4.14'
         downloads.mkdir(parents=True)
         (downloads / 'index.html').write_text('<!doctype html><title>Nex Core downloads</title>')
-        (downloads / 'nex-core-local-fixture.deb').write_bytes(b'netinst payload')
+        (downloads / 'payload-fixture.img').write_bytes(b'netinst payload')
         (cls.base / 'downloads' / 'latest.json').write_text('{"version": "0.4.14"}')
         cls.log_dir = cls.base / 'log'
         cls.log_dir.mkdir()
@@ -45,10 +45,7 @@ class WebsiteHosting(unittest.TestCase):
         config = TEMPLATE.read_text()
         config = config.replace('@NEX_WEBSITE_LISTEN@', f'127.0.0.1:{cls.port}')
         config = config.replace('/srv/nex-website/current', str(cls.release))
-        download_location = (ROOT / 'packaging/apt/nginx-downloads.inc').read_text()
-        config = config.replace('        location / {',
-                                download_location.replace('/srv/nex-downloads/', str(cls.base / 'downloads') + '/')
-                                + '\n        location / {', 1)
+        config = config.replace('/srv/nex-downloads/', str(cls.base / 'downloads') + '/')
         config = config.replace('/run/nex-website', str(cls.base / 'runtime'))
         (cls.base / 'runtime').mkdir()
         config = config.replace('/var/log/nex-website', str(cls.log_dir))
@@ -132,7 +129,7 @@ class WebsiteHosting(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers['Content-Type'], 'text/html')
         self.assertIn(b'Nex Core downloads', body)
-        status, _, _ = self.request('/downloads/0.4.14/nex-core-local-fixture.deb', 'HEAD')
+        status, _, _ = self.request('/downloads/0.4.14/payload-fixture.img', 'HEAD')
         self.assertEqual(status, 200)
         status, headers, body = self.request('/downloads/latest.json')
         self.assertEqual(status, 200)

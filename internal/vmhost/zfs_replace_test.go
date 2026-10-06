@@ -40,10 +40,10 @@ func newReplaceLab(t *testing.T, failedState string) *replaceLab {
 		{Name: "/dev/disk/by-id/disk-keep-part1", Path: "/dev/disk/by-id/disk-keep-part1", State: "ONLINE"},
 		{Name: "/dev/disk/by-id/disk-old-part1", Path: "/dev/disk/by-id/disk-old-part1", State: failedState},
 	}}
-	oldStatus, oldRun, oldDiscover := zfsReplaceStatus, zfsProvisionRun, mdDiscoverDevice
-	t.Cleanup(func() { zfsReplaceStatus, zfsProvisionRun, mdDiscoverDevice = oldStatus, oldRun, oldDiscover })
+	oldStatus, oldRun, oldDiscover := zfsReplaceStatus, zfsProvisionRun, zfsReplaceDiscover
+	t.Cleanup(func() { zfsReplaceStatus, zfsProvisionRun, zfsReplaceDiscover = oldStatus, oldRun, oldDiscover })
 	zfsReplaceStatus = func(context.Context, string) *protocol.ZFSPoolStatus { return lab.status }
-	mdDiscoverDevice = func(context.Context) ([]ZFSDeviceCandidate, error) { return lab.disks, nil }
+	zfsReplaceDiscover = func(context.Context) ([]ZFSDeviceCandidate, error) { return lab.disks, nil }
 	zfsProvisionRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		lab.calls = append(lab.calls, append([]string{name}, args...))
 		return nil, nil
@@ -266,14 +266,14 @@ func TestZFSReplaceRefusesAnUnreadableJournal(t *testing.T) {
 	}
 }
 
-// ZFS replace takes the same host-wide disk-ops flock as system-disk replace and ZFS provision.
+// ZFS replace takes the same host-wide disk-ops flock as ZFS provision.
 func TestZFSReplaceTakesHostDiskOpsLock(t *testing.T) {
 	host := t.TempDir()
 	state := filepath.Join(host, "zfs-replace")
 	if err := os.MkdirAll(state, 0700); err != nil {
 		t.Fatal(err)
 	}
-	held, err := withExclusiveDiskLock(filepath.Join(host, "system-disk-replace"), errors.New("locked"))
+	held, err := withExclusiveDiskLock(filepath.Join(host, "zfs-provision"), errors.New("locked"))
 	if err != nil {
 		t.Fatal(err)
 	}

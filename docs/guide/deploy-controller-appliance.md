@@ -3,20 +3,18 @@
 ## Status
 
 Development workflow for explicitly selected disposable lab hosts. The host-local web service
-(`nex-core-local`, included in every Nex Core ISO) deploys a prepared Debian 13 virtual appliance
+(`nex-core-local`, part of every Nex Core image) deploys a prepared Debian 13 virtual appliance
 that configures itself on first boot, and provides restricted local power recovery for that
 appliance. Take the current Core update before using root login. Deployment uses the `br0`
-bridge created by current GUI installations; hosts installed by an older ISO need a prepared
-management bridge. Login/session rules are described in [secure web access](secure-web-access.md).
+bridge created by the installer. Login/session rules are described in [secure web access](secure-web-access.md).
 
-Rebuilding media does not update an already deployed Controller VM. A Controller deployed in the two-disk profile (a read-only
-system image plus a persistent data disk) is updated by the Core that hosts it, either with the **Controller first** step of a
+Rebuilding media does not update an already deployed Controller VM. The Controller is a read-only
+system image plus a persistent data disk; it is updated by the Core that hosts it, either with the **Controller first** step of a
 [pool rollout](update-a-pool.md) or with the host-local `scope:"controller"` update; the swap is journaled, checks the Controller's
 ownership and storage first, shuts the Controller down gracefully, checkpoints its data, and restores the previous image and data if the
 new one is not ready (a new image whose guest agent never started is forced off for that restore; nothing else is ever forced). The guest image is built by
-`python3 appliance/build.py --profile controller` and a host is told to deploy it with `core-local-setup configure ... --controller-image-sha256`
-(see [appliance/README.md](../../appliance/README.md#controller-profile-read-only-system-image-and-data-disk-phase-i-4b)); without that
-setting, every appliance this page deploys is still the single-disk form and is not updated this way. **Unverified:** the image was
+`python3 appliance/build.py` and a host is told to deploy it with `core-local-setup configure ... --controller-image-sha256`
+(see [appliance/README.md](../../appliance/README.md#system-image-and-data-disk)). **Unverified:** the image was
 booted once under QEMU on a development workstation (`docs/qa/image/phase4-controller-image.md`); no deployment by Core and no swap ran. Use a private management
 network or VPN, with no direct Internet exposure. Automatic Controller failover is not provided. Navigation on this page follows the development build 0.4.8 console layout; see
 [Navigate the Controller console](navigate-the-controller-console.md).
@@ -24,9 +22,9 @@ network or VPN, with no direct Internet exposure. Automatic Controller failover 
 ## Prerequisites
 
 - A selected disposable Debian 13 amd64 host with working KVM/libvirt and root console access.
-- A trusted `nex-core-local` development package containing a compatible signed appliance
+- A Nex Core release whose image carries a compatible signed appliance
   and the independently trusted release public key. Obtain matching source and retain the
-  package's version; see the [development instructions](../development.md).
+  release version; see the [development instructions](../development.md).
 - An existing local storage directory with capacity for the appliance and a working Linux
   bridge connected to the management LAN. Selecting storage creates a guest disk; it does
   not format host disks. Do not select shared storage.
@@ -41,11 +39,9 @@ network or VPN, with no direct Internet exposure. Automatic Controller failover 
 
 ## Steps
 
-1. On a Nex Core host the package and management bridge are already configured;
-   continue to step 2. Nex Core is a distribution, so the host must have been installed
-   from the Nex Core ISO — installing `nex-core-local` onto an arbitrary Debian system
-   is refused, because the package alone does not establish the storage layout,
-   networking, console identity and recovery paths a supported host needs.
+1. On a Nex Core host the service and management bridge are already configured;
+   continue to step 2. Nex Core is a distribution: a host is installed from the Nex Core ISO, because the image
+   alone establishes the storage layout, networking, console identity and recovery paths a supported host needs.
 
    Local access uses the default-route management IPv4 address and
    `/var/lib/libvirt/images`, and treats the default-route interface as a bridge only

@@ -80,32 +80,9 @@ def iso_files(root):
             for path in sorted(root.rglob('*')) if path.is_file()]
 
 
-def components_for_tree(repository, tree):
-    debs = sorted({*repository.glob('*.deb'), *tree.rglob('*.deb'), *tree.rglob('*.udeb')})
-    components = []
-    for path in debs:
-        added = path.parent == repository
-        display_path = str(Path('nex/repo') / path.name) if added else str(path.relative_to(tree))
-        components.append(deb_component(
-            path, 'Nex ISO repository' if added else 'Debian installer media', display_path))
-    for deb, component in zip(debs, components):
-        if component['package'] != 'nex-core-local':
-            continue
-        contents = deb_member(deb, '/usr/share/nex/appliance/components.tsv')
-        if not contents:
-            continue
-        for line in contents.decode().splitlines():
-            fields = line.split('\t')
-            if fields[0] == 'package':
-                continue
-            if len(fields) == 5:
-                package, version, arch, source_package, source_version = fields
-            else:
-                package, version, arch, source = fields
-                source_package, source_version = source_name_version(source, version, package)
-            components.append({'kind': 'package-record', 'path': 'nex/appliance/components.tsv', 'origin': 'Nex appliance qcow2',
-                               'package': package, 'version': version, 'architecture': arch,
-                               'sha256': None, 'source_package': source_package, 'source_version': source_version})
+def components_for_tree(tree):
+    debs = sorted({*tree.rglob('*.deb'), *tree.rglob('*.udeb')})
+    components = [deb_component(path, 'Debian installer media', str(path.relative_to(tree))) for path in debs]
     return debs, components
 
 
@@ -202,8 +179,6 @@ def archive_notices(source_bundle):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', required=True, type=Path)
-    parser.add_argument('--repository', required=True, type=Path,
-                        help='directory containing every added binary .deb')
     parser.add_argument('--tree', type=Path,
                         help='assembled ISO tree; inventories base firmware and installer files before mastering')
     parser.add_argument('--version', required=True)
@@ -217,14 +192,14 @@ def main(argv=None):
     parser.add_argument('--source-input', action='append', default=[], type=Path,
                         help='already retained source tree/archive, repeated for rebuilt packages')
     args = parser.parse_args(argv)
-    if not args.iso.is_file() or not args.repository.is_dir():
-        raise SystemExit('ISO and repository must exist')
+    if not args.iso.is_file():
+        raise SystemExit('ISO must exist')
     if not args.output and not args.compliance_manifest:
         raise SystemExit('provide --output or --compliance-manifest')
     if args.compliance_manifest:
         if not args.tree or not args.source_bundle or not args.source_bundle.is_file():
             raise SystemExit('--compliance-manifest needs --tree and an existing --source-bundle')
-        _, components = components_for_tree(args.repository, args.tree)
+        _, components = components_for_tree(args.tree)
         data = {'version': args.version,
                 'iso': {'file': args.iso.name, 'sha256': digest(args.iso)},
                 'source_bundle': {'file': args.source_bundle.name, 'sha256': digest(args.source_bundle)},
@@ -243,7 +218,7 @@ def main(argv=None):
         if args.tree is None:
             subprocess.run(['xorriso', '-osirrox', 'on', '-indev', str(args.iso), '-extract', '/', str(extracted)], check=True,
                            stdout=subprocess.DEVNULL)
-        debs, components = components_for_tree(args.repository, extracted)
+        debs, components = components_for_tree(extracted)
         manifest = {'version': args.version,
                     'input_iso': {'file': args.iso.name, 'sha256': digest(args.iso)},
                     'staged_files': iso_files(extracted), 'components': components,

@@ -109,6 +109,8 @@ type Host struct {
 	W         *Writer
 	DiskPaths func() ([]string, error)
 	ESPs      func() ([]string, error)
+	// Running is the whole-disk node the running system started from; nil asks the boot method (RunningDisk).
+	Running func() (string, error)
 }
 
 func (h *Host) espNodes() ([]string, error) {
@@ -217,6 +219,11 @@ func slotSelected(d *Disk, rootHash string) (string, bool, error) {
 // not belong to keepSequence (the running version) is removed: the UKI is the commit point and a
 // stale one would name a slot that is about to be torn. It returns the slot written. Nothing is armed.
 func (h *Host) StageSlot(ctx context.Context, rel *Release, bootedRootHash string, keepSequence int) (string, error) {
+	unlock, err := lockDisks(ctx, diskLockWait)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	bootedID, _, err := SlotIDs(bootedRootHash)
 	if err != nil {
 		return "", fmt.Errorf("running root hash: %w", err)
@@ -242,7 +249,7 @@ func (h *Host) StageSlot(ctx context.Context, rel *Release, bootedRootHash strin
 		return "", err
 	}
 	for _, n := range nodes {
-		if err = h.W.WithESP(ctx, n, func(root string) error { return pruneOtherUKIs(root, keepSequence) }); err != nil {
+		if err = h.W.WithESP(ctx, n, func(root string) error { return h.W.method().prune(root, keepSequence) }); err != nil {
 			return "", fmt.Errorf("%s: %w", n, err)
 		}
 	}
@@ -308,7 +315,7 @@ func (h *Host) Entries(ctx context.Context) ([]UKIEntry, error) {
 	var out []UKIEntry
 	for _, n := range nodes {
 		if err = h.W.WithESP(ctx, n, func(root string) error {
-			us, err := readUKIs(root, n)
+			us, err := h.W.method().entries(root, n)
 			out = append(out, us...)
 			return err
 		}); err != nil {
@@ -318,16 +325,23 @@ func (h *Host) Entries(ctx context.Context) ([]UKIEntry, error) {
 	return out, nil
 }
 
-// requireSlot refuses unless every disk holds the release's slot, selected by its root hash.
-func requireSlot(disks []*Disk, rootHash string) error {
+// requireSlot refuses unless every disk holds the release's slot, selected by its root hash, and returns that slot:
+// the disks must agree on it, the boot entry names it.
+func requireSlot(disks []*Disk, rootHash string) (string, error) {
+	slot := ""
 	for _, d := range disks {
-		if _, ok, err := slotSelected(d, rootHash); err != nil {
-			return err
+		s, ok, err := slotSelected(d, rootHash)
+		if err != nil {
+			return "", err
 		} else if !ok {
-			return fmt.Errorf("%s: no slot holds root hash %s", d.Path, rootHash)
+			return "", fmt.Errorf("%s: no slot holds root hash %s", d.Path, rootHash)
 		}
+		if slot != "" && s != slot {
+			return "", fmt.Errorf("%s: the disks disagree on the slot that holds root hash %s", d.Path, rootHash)
+		}
+		slot = s
 	}
-	return nil
+	return slot, nil
 }
 
 // Arm puts the release's UKI on every ESP as nex-core_<label>_<sequence>+3.efi and refreshes the
@@ -340,11 +354,17 @@ func requireSlot(disks []*Disk, rootHash string) error {
 // every ESP reached so far (the failed one included), so a failed Arm leaves the release staged. If
 // that undo fails too, the error wraps ErrArmNotUndone and the caller must treat the release as armed.
 func (h *Host) Arm(ctx context.Context, rel *Release) error {
+	unlock, err := lockDisks(ctx, diskLockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	m := h.W.method()
 	disks, err := h.openDisks()
 	if err != nil {
 		return err
 	}
-	err = requireSlot(disks, rel.Manifest.RootHash)
+	slot, err := requireSlot(disks, rel.Manifest.RootHash)
 	closeAll(disks)
 	if err != nil {
 		return err
@@ -354,7 +374,7 @@ func (h *Host) Arm(ctx context.Context, rel *Release) error {
 		return err
 	}
 	for i, n := range nodes {
-		if err = h.W.WithESP(ctx, n, func(root string) error { return armESP(root, rel, ArmTries) }); err != nil {
+		if err = h.W.WithESP(ctx, n, func(root string) error { return m.arm(root, rel, slot, ArmTries) }); err != nil {
 			return h.undoArm(ctx, rel.Manifest.Sequence, nodes[:i+1], fmt.Errorf("%s: %w", n, err))
 		}
 		h.W.logf("armed %s", n)
@@ -376,7 +396,7 @@ func (h *Host) undoArm(ctx context.Context, sequence int, nodes []string, cause 
 	ctx = context.WithoutCancel(ctx)
 	var failed []error
 	for _, n := range nodes {
-		if err := h.W.WithESP(ctx, n, func(root string) error { return disarmESP(root, sequence) }); err != nil {
+		if err := h.W.WithESP(ctx, n, func(root string) error { return h.W.method().disarm(root, sequence) }); err != nil {
 			failed = append(failed, fmt.Errorf("undo %s: %w", n, err))
 		}
 	}
@@ -500,11 +520,17 @@ func copyFile(src, dst string) error {
 // A failure before any ESP changed leaves every disk as it was; one after it wraps ErrRollbackPartial.
 // Repeating the call finishes the ESPs that are left.
 func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRootHash string) error {
+	unlock, err := lockDisks(ctx, diskLockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	m := h.W.method()
 	disks, err := h.openDisks()
 	if err != nil {
 		return err
 	}
-	err = requireSlot(disks, toRootHash)
+	_, err = requireSlot(disks, toRootHash)
 	closeAll(disks)
 	if err != nil {
 		return err
@@ -516,7 +542,7 @@ func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRoo
 	// Check every ESP before touching any.
 	for _, n := range nodes {
 		if err = h.W.WithESP(ctx, n, func(root string) error {
-			us, err := readUKIs(root, n)
+			us, err := m.entries(root, n)
 			if err != nil {
 				return err
 			}
@@ -525,7 +551,7 @@ func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRoo
 					return nil
 				}
 			}
-			return fmt.Errorf("no UKI of sequence %d to roll back to", toSequence)
+			return fmt.Errorf("no boot entry of sequence %d to roll back to", toSequence)
 		}); err != nil {
 			return fmt.Errorf("%s: %w", n, err)
 		}
@@ -533,7 +559,7 @@ func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRoo
 	for i, n := range nodes {
 		changed := false
 		if err = h.W.WithESP(ctx, n, func(root string) (err error) {
-			changed, err = rollbackESP(root, fromSequence, toSequence)
+			changed, err = m.rollback(root, fromSequence, toSequence)
 			return err
 		}); err != nil {
 			err = fmt.Errorf("%s: %w", n, err)
@@ -550,17 +576,22 @@ func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRoo
 	return nil
 }
 
-// Disarm takes the entry of an armed release back from every ESP, so that every disk boots what it booted
-// before the Arm: the way out of an Arm that could not be undone (ErrArmNotUndone). Every ESP is tried; the
+// Disarm takes the entry of an armed release back from every boot partition, so that every disk boots what it booted
+// before the Arm: the way out of an Arm that could not be undone (ErrArmNotUndone). Every one is tried; the
 // error joins the ones that failed, and then the release may still boot.
 func (h *Host) Disarm(ctx context.Context, sequence int) error {
+	unlock, err := lockDisks(ctx, diskLockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	nodes, err := h.espNodes()
 	if err != nil {
 		return err
 	}
 	var failed []error
 	for _, n := range nodes {
-		if err = h.W.WithESP(ctx, n, func(root string) error { return disarmESP(root, sequence) }); err != nil {
+		if err = h.W.WithESP(ctx, n, func(root string) error { return h.W.method().disarm(root, sequence) }); err != nil {
 			failed = append(failed, fmt.Errorf("%s: %w", n, err))
 		}
 	}

@@ -12,15 +12,14 @@ import (
 // User aliases naming a VM's two CD drives, declared once for the package. libvirt requires the
 // "ua-" prefix on an alias the definition supplies, keeps it across dumpxml and never reassigns
 // it, so a media request can name a drive without depending on the target letters libvirt
-// happened to assign. A domain defined before the second drive existed carries neither alias and
-// has exactly one cdrom; that one is always the install drive (see observeGuest and cdromDrives).
+// happened to assign. A cdrom carrying neither alias is the install drive (see observeGuest
+// and cdromDrives).
 const (
 	cdromInstallAlias = "ua-nex-cdrom-install"
 	cdromDriversAlias = "ua-nex-cdrom-drivers"
 )
 
-// driveAlias is the user alias for a drive name. "" is the install drive: that is what every
-// Controller sent before the drivers drive existed.
+// driveAlias is the user alias for a drive name. "" (the drive omitted) is the install drive.
 func driveAlias(drive string) (string, error) {
 	switch drive {
 	case "", protocol.InstallDrive:
@@ -217,8 +216,8 @@ func checkFirmwareAndTPM(got, want managedDomain) error {
 // hostTPMSupport reports whether this host can run an emulated TPM 2.0 on the machine type the
 // capabilities describe. libvirt advertises the emulator backend only when swtpm is installed
 // and usable, so this is the host's own answer rather than a guess from a package list. Core
-// ships swtpm and swtpm-tools; a host that was upgraded from an image that did not, or where
-// they were removed, must refuse the VM instead of defining a TPM that cannot start.
+// ships swtpm and swtpm-tools; a host where they are missing must refuse the VM instead of
+// defining a TPM that cannot start.
 func hostTPMSupport(caps domainCapabilities) error {
 	tpm := caps.Devices.TPM
 	if tpm.Supported != "yes" {

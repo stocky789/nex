@@ -1,7 +1,7 @@
-# Phase I-2 installer: S7 result and image-edition install
+# Phase I-2 installer: S7 result and Nex Core install
 
 Date: 2026-10-01. Plan: [Immutable Nex Core](../../plans/2026-10-01-immutable-nex-core.md), spike S7 and
-"Installer" D1. Owner-approved options: UEFI-only image edition, initrd `/etc` overlay unit, Debian stays the
+"Installer" D1. Owner-approved options: UEFI-only at that point, initrd `/etc` overlay unit, Debian stays the
 package source, Secure Boot supported not required, reinstall dev hosts.
 
 - API impact: none (installer and media only). Guide impact: updated. State owner: `core`
@@ -30,7 +30,7 @@ Observed in that log:
 That run laid the GPT with `sfdisk`, not with the Go code; `internal/hostimage` writes the GPT natively
 (`gpt.go`) and was not exercised inside d-i in this pass. See [Outstanding](#outstanding).
 
-**Menu pruning.** Not proven and not needed for this phase. The image edition leaves d-i's menu items
+**Menu pruning.** Not proven and not needed for this phase. The installer leaves d-i's menu items
 alone: the GUI/text wizard runs from `preseed/early_command`, `partman/init.d/00nex-recheck` hands the selected
 disks to `nex-image-install.sh install` (which verifies, then clears them), which ends by rebooting, so `partman`,
 `base-installer`, `apt-setup`, `grub-installer` and `late-install.sh` are never reached. Pruning udebs from
@@ -47,11 +47,10 @@ Record `docs/changes/2026-10-01-image-installer.json`; CHANGELOG entry under `[U
 - `installer/nex-image-install.sh`: `preflight`, `install`, `probe`, `repair`. UEFI check first, then settings
   validation; the static `nex-hostimage` is copied from `/cdrom/nex/bin`; a net installer downloads the image
   set to RAM (memory-checked) before any disk is touched and the payloads onto the new `nex-data`.
-- `installer/gui/nex-config.c`: image edition (media `edition` file, not `nex.edition=classic` on the command
-  line) refuses non-UEFI firmware, enforces the 24 GiB floor, stages the `/etc` seed, writes
+- `installer/gui/nex-config.c`: refuses non-UEFI firmware (at that point), enforces the 24 GiB floor, stages the `/etc` seed, writes
   `image.env` (`mode`, `layout=single|raid1`, `disks`) and no partman answers. Repair mode skips host identity checks.
-- `installer/gui/recheck.sh`: the image edition `exec`s the installer straight after preflight and clears nothing
-  itself (classic media keeps its disk-clearing loop). `install` runs `nex-hostimage verify` on the release and
+- `installer/gui/recheck.sh`: `exec`s the installer straight after preflight and clears nothing
+  itself. `install` runs `nex-hostimage verify` on the release and
   checks each media payload's SHA-256 first; only then does it stop the md arrays that hold a selected disk (by
   `/proc/mdstat` membership, never `--scan`) and let `nex-hostimage` wipe and lay out the disks. The data mirror is
   assembled from the install's own member partitions, not with `mdadm --assemble --scan`. Net installs verify the
@@ -67,8 +66,7 @@ Record `docs/changes/2026-10-01-image-installer.json`; CHANGELOG entry under `[U
   `image/<file>`, `payload/<sha256>/<file>` rows; `NEX_NETINST_ROWS` picks the rows per edition; the hosting
   base URL is an argument only (CI configuration), none is tracked.
 - `installer/build.sh`: `NEX_IMAGE_DIR` + `NEX_HOSTIMAGE_BIN` stage the image set, binary, installer script,
-  `edition` file and `payload/<sha256>/` (appliance bundle from `dist/appliance`, gzip VirtIO ISO); Classic boot
-  entries are added (the serial entries on image media are relabelled Classic: they never reach the Nex wizard); the net ISO drops the carried image and payloads.
+  `edition` file and `payload/<sha256>/` (appliance bundle from `dist/appliance`, gzip VirtIO ISO); the serial entries on the media are relabelled (they never reach the Nex wizard); the net ISO drops the carried image and payloads.
 
 ## Checks actually run (2026-10-01, this pass)
 
@@ -87,10 +85,10 @@ Record `docs/changes/2026-10-01-image-installer.json`; CHANGELOG entry under `[U
    data volume, fixed disk set, own review page, `mode=repair`): **written, compiled and text-pinned; never drawn or clicked** (see [phase2-packaging.md](phase2-packaging.md)).
 3. `payloads.tsv` generalisation, offline/netinst media assembly in `build.sh`: **written, unit-tested for the
    manifest and fetch parts; `build.sh` image staging has only had a syntax check**. Splitting the appliance out of
-   the `nex-core-local` deb is outside this write set (packaging) and not done: the image edition stages
-   `dist/appliance` directly and the classic path is untouched.
+   the `nex-core-local` deb is outside this write set (packaging) and not done: the installer stages
+   `dist/appliance` directly.
 4. `installer/check.sh` and netinst tests pass: **reached**.
-5. QEMU image-edition install: **not run in this pass** (this page's own pass had no release directory and no ISO).
+5. QEMU install: **not run in this pass** (this page's own pass had no release directory and no ISO).
    It was run later from a **lab ISO** (not a `build.sh` release ISO; real installer script and wizard components, small
    payload fixture) in QEMU/OVMF: see [phase 6 lab 1](phase6-lab1.md) and [lab 2](phase6-lab2.md) for which installs and
    which Repair ran and which scenarios did not. The shell-level tests in this pass use fake tools and are simulation only.
@@ -103,13 +101,13 @@ Record `docs/changes/2026-10-01-image-installer.json`; CHANGELOG entry under `[U
   GPT writer there); confirm `efibootmgr` absence only warns.
 - The graphical wizard's Repair image choice is done (see level 2) but was only compiled (`debian:trixie-slim` container, no
   warnings) and pinned by text; it still needs a VM click-through. The `tests/integration/installer-disk.py` and
-  `installer-handoff.py` pins for the image edition (24 GiB floor, UEFI refusal, Repair skips host identity checks, classic
-  media unchanged, installer hand-off and net-installer rows) are also done: `installer-disk.py` passed under Xvfb in that
+  `installer-handoff.py` pins for the installer (24 GiB floor, UEFI refusal at that point, Repair skips host identity checks,
+  installer hand-off and net-installer rows) are also done: `installer-disk.py` passed under Xvfb in that
   container ([phase2-packaging.md](phase2-packaging.md)) and `installer-handoff.py` passed on the workstation on 2026-10-01.
 - d-i menu/udeb pruning (size only).
 - **Serial console.** The serial boot entries run Debian's own questions and the media preseed, never the Nex wizard, so
-  on image media they install the Classic edition (they are labelled that way). There is no serial route to the image
-  edition yet; a headless machine needs the text entry on a console it can display (or a BMC virtual console).
+  they do not reach the Nex install (they are labelled that way). There is no serial route to the installer
+  yet; a headless machine needs the text entry on a console it can display (or a BMC virtual console).
 - **Secure Boot chain on the ESP.** `image/release.py` now installs shim (`BOOTX64.EFI`), the Debian-signed sd-boot
   (`grubx64.efi`) and MokManager on the removable path, per the phase 0 S5 layout. Only the unit test builds that tree;
   no image was rebuilt or booted in this pass. The firmware boot entry `nex-hostimage` registers still points at

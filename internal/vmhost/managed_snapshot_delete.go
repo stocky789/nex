@@ -52,7 +52,7 @@ func validateManagedSnapshotDeleteRequest(command protocol.Command) error {
 		command.Media != nil || command.Power != nil || command.Delete != nil || command.VMMedia != nil ||
 		command.StorageLifecycle != nil || command.ResourceLifecycle != nil || command.CredentialRetire != nil ||
 		command.ZFSProvision != nil || command.ZFSReplace != nil || command.Pool != nil ||
-		command.ManagementNetwork != nil || command.SystemDiskReplace != nil {
+		command.ManagementNetwork != nil {
 		return errors.New("invalid stopped snapshot delete request")
 	}
 	if command.Snapshot.SnapshotID == command.OperationID || command.Snapshot.Target.VMID != command.VM.ID {

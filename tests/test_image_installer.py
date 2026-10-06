@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -56,14 +57,6 @@ class ImageInstallerTests(unittest.TestCase):
         else:
             probe += ['E:ID_FS_TYPE=linux_raid_member', 'E:ID_FS_LABEL=host:nex-data']
         (self.udev / f'b8:{minor}').write_text('\n'.join(probe) + '\n')
-
-    def test_bios_boot_is_refused_before_anything_is_touched(self):
-        (self.state / 'image.env').write_text('mode=install\nlayout=single\ndisks=/dev/sda\n')
-        result = self.run_script('install')
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('UEFI firmware only', result.stderr)
-        self.assertIn('No disk has been changed', result.stderr)
-        self.assertFalse((Path(self.tmp.name) / 'work').exists(), 'nothing may be staged before the firmware check')
 
     def test_probe_accepts_a_complete_mirror_and_rejects_a_single_member(self):
         self.add_data_partition('sdb', 6, 'raid1', 22)
@@ -140,7 +133,7 @@ class ImageInstallerTests(unittest.TestCase):
         self.stage_install()
         payload = self.media / 'payload' / ('0' * 64)
         payload.mkdir(parents=True)
-        (payload / 'controller.qcow2').write_text('not the recorded bytes')
+        (payload / 'controller-system.img').write_text('not the recorded bytes')
         result = self.run_script('install')
         self.assertEqual(result.returncode, 1)
         self.assertIn('does not match its recorded SHA-256', result.stderr)
@@ -265,6 +258,95 @@ class ImageInstallerTests(unittest.TestCase):
         self.assertEqual(calls[1].split()[:2], ['nex-hostimage', 'repair'])
         self.assertFalse([c for c in calls if 'md1' in c], 'a foreign array was touched')
 
+    def without_system_grub(self):
+        """A PATH without whatever grub-install the machine running the test happens to have."""
+        minimal = Path(self.tmp.name) / 'minimal'
+        minimal.mkdir()
+        for tool in ('sh', 'sed', 'grep', 'cat', 'tr', 'sort', 'basename', 'readlink', 'mkdir', 'cp', 'chmod', 'rm', 'dirname'):
+            (minimal / tool).symlink_to(shutil.which(tool))
+        self.env['PATH'] = f'{self.env["PATH"].split(":")[0]}:{minimal}'
+
+    def hostimage_args(self, verb):
+        line = next(c for c in self.calls() if c.startswith(f'nex-hostimage {verb} '))
+        return line.split()
+
+    def test_uefi_firmware_selects_the_uefi_boot_method(self):
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        result = self.run_script('install')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.hostimage_args('install')
+        self.assertEqual(args[args.index('--boot') + 1], 'uefi')
+        self.assertNotIn('--grub-chroot', args)
+
+    def test_bios_firmware_installs_with_the_grub_the_environment_has(self):
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        (self.sys / 'firmware/efi').rmdir()
+        (Path(self.env['PATH'].split(':')[0]) / 'grub-install').write_text('#!/bin/sh\nexit 0\n')
+        (Path(self.env['PATH'].split(':')[0]) / 'grub-install').chmod(0o755)
+        result = self.run_script('install')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.hostimage_args('install')
+        self.assertEqual(args[args.index('--boot') + 1], 'bios')
+        self.assertNotIn('--grub-chroot', args, 'a grub-install on PATH is used as it is')
+        self.assertFalse((Path(self.env['NEX_IMAGE_WORK']) / 'grub-root').exists())
+
+    def test_bios_firmware_runs_the_media_grub_chrooted_and_unbinds_it_afterwards(self):
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        (self.sys / 'firmware/efi').rmdir()
+        self.without_system_grub()
+        tool = self.media / 'grub/usr/sbin/grub-install'
+        tool.parent.mkdir(parents=True)
+        tool.write_text('#!/bin/sh\n')
+        tool.chmod(0o755)
+        result = self.run_script('install')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        root = Path(self.env['NEX_IMAGE_WORK']) / 'grub-root'
+        self.assertTrue((root / 'usr/sbin/grub-install').exists(), 'the media GRUB is copied to RAM')
+        args = self.hostimage_args('install')
+        self.assertEqual(args[args.index('--boot') + 1], 'bios')
+        self.assertEqual(args[args.index('--grub-chroot') + 1], str(root))
+        calls = self.calls()
+        binds = [c for c in calls if c.startswith('mount -o bind')]
+        self.assertEqual(binds, [f'mount -o bind /{d} {root}/{d}' for d in ('dev', 'proc', 'sys')])
+        unmounts = [c for c in calls if c.startswith(f'umount {root}')]
+        self.assertEqual(unmounts, [f'umount {root}/{d}' for d in ('sys', 'proc', 'dev')])
+        self.assertLess(calls.index(binds[-1]), calls.index(next(c for c in calls if c.startswith('nex-hostimage install'))))
+        self.assertLess(calls.index(next(c for c in calls if c.startswith('nex-hostimage install'))), calls.index(unmounts[0]))
+
+    def test_the_media_grub_is_unbound_when_the_image_install_fails(self):
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        (self.sys / 'firmware/efi').rmdir()
+        self.without_system_grub()
+        tool = self.media / 'grub/usr/sbin/grub-install'
+        tool.parent.mkdir(parents=True)
+        tool.write_text('#!/bin/sh\n')
+        tool.chmod(0o755)
+        (self.media / 'bin/nex-hostimage').write_text('#!/bin/sh\necho "nex-hostimage $*" >> "$NEX_TEST_LOG"\n[ "$1" != install ]\n')
+        result = self.run_script('install')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('could not install the image', result.stderr)
+        self.assertEqual(len([c for c in self.calls() if c.startswith('umount')]), 3)
+
+    def test_bios_firmware_without_grub_is_refused_before_anything_is_touched(self):
+        self.stage_install('raid1', '/dev/sda,/dev/sdb')
+        (self.sys / 'firmware/efi').rmdir()
+        self.without_system_grub()
+        for verb in ('preflight', 'install'):
+            with self.subTest(verb=verb):
+                result = self.run_script(verb)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('no GRUB for BIOS firmware', result.stderr)
+                self.assertIn('No disk has been changed', result.stderr)
+                self.assertFalse((Path(self.tmp.name) / 'work').exists(), 'nothing may be staged before the GRUB check')
+                self.assertEqual(self.calls(), [], 'no tool may run before the GRUB check')
+
+    def test_repair_passes_the_boot_method_too(self):
+        self.stage_repair()
+        result = self.run_script('repair')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.hostimage_args('repair')
+        self.assertEqual(args[args.index('--boot') + 1], 'uefi')
+
     def test_repair_refuses_before_any_write_when_an_array_cannot_be_stopped(self):
         self.stage_repair()
         tools = Path(self.env['PATH'].split(':')[0])
@@ -277,32 +359,36 @@ class ImageInstallerTests(unittest.TestCase):
 
 
 class MediaMenuTests(unittest.TestCase):
-    """The boot menus installer/build.sh writes: the serial entries run Debian's own questions, never the Nex wizard."""
+    """The boot menus installer/build.sh writes: BIOS (isolinux) and UEFI (GRUB) offer the same entries, all running the Nex installer."""
     BUILD = SCRIPT.parent / 'build.sh'
 
-    def menus(self, image):
+    def menus(self):
         lines = self.BUILD.read_text().splitlines()
         start = next(i for i, l in enumerate(lines) if l.startswith('cat > "$stage/isolinux/menu.cfg"'))
-        image_if = next(i for i in range(start, len(lines)) if lines[i].startswith('if [[ -n ${NEX_IMAGE_DIR:-} ]]'))
-        end = next(i for i in range(image_if, len(lines)) if lines[i] == 'fi')
+        end = next(i for i in range(start, len(lines)) if lines[i].startswith('# Recompute media checksums'))
         with tempfile.TemporaryDirectory() as stage:
             Path(stage, 'isolinux').mkdir()
             Path(stage, 'boot/grub').mkdir(parents=True)
-            env = dict(os.environ, stage=stage, NEX_IMAGE_DIR='image/out/release' if image else '')
-            subprocess.run(['bash', '-ec', '\n'.join(lines[start:end + 1])], env=env, check=True)
+            subprocess.run(['bash', '-ec', '\n'.join(lines[start:end])], env=dict(os.environ, stage=stage), check=True)
             return Path(stage, 'isolinux/menu.cfg').read_text(), Path(stage, 'boot/grub/grub.cfg').read_text()
 
-    def serial_titles(self, text):
-        return re.findall(r"(?:menu label|menuentry) '?([^'\n{]*serial console[^'\n{]*?)'? *\{?$", text, re.M)
+    def test_bios_and_uefi_menus_offer_the_same_entries(self):
+        bios, uefi = self.menus()
+        titles = re.findall(r'^  menu label (.+)$', bios, re.M)
+        self.assertEqual(titles, re.findall(r"^menuentry '(.+)' \{$", uefi, re.M))
+        self.assertEqual(titles, ['GUI install - Nex Core', 'Minimal install - Nex Core (text)',
+                                  'Install Nex Core (serial console ttyS0)', 'Debian rescue mode'])
 
-    def test_serial_entries_on_image_media_say_they_install_the_classic_edition(self):
-        for menu in self.menus(image=True):
-            self.assertEqual(self.serial_titles(menu), ['Classic edition install (serial console ttyS0)'], menu)
+    def test_every_install_entry_boots_the_wizard_initrd(self):
+        for menu in self.menus():
+            self.assertEqual(len(re.findall(r'/install\.amd/gtk/initrd\.gz', menu)), 3, menu)
+            self.assertNotIn('preseed/file', menu)
 
-    def test_serial_entry_of_classic_only_media_keeps_its_name(self):
-        for menu in self.menus(image=False):
-            self.assertEqual(self.serial_titles(menu), ['Install Nex Core (serial console ttyS0)'], menu)
-            self.assertNotIn('Classic', menu)
+    def test_serial_entry_runs_the_text_wizard_on_the_serial_console(self):
+        for menu in self.menus():
+            entry = re.search(r"serial console ttyS0\)'?\n?.*?\n.*?(?:append|linux) ([^\n]*)", menu, re.S).group(1)
+            self.assertIn('DEBIAN_FRONTEND=newt', entry)
+            self.assertIn('console=ttyS0,115200n8', entry)
 
 
 if __name__ == '__main__':

@@ -154,13 +154,11 @@ still running; interruption of the executing agent between `wipefs` and `zpool r
 
 ## Slice 3 — mirrored system disk in the installer
 
-Status 2026-09-22: the Core and Controller half is implemented in the working tree — `md_arrays`
-in the host hardware report, the `host-system-disk-replace-v1` operation, the host page's System
-disk mirror with **Replace disk…**, the [API reference](../API.md#replacing-a-failed-system-disk-post-apiv1hostsidsystem-disk),
-the [guide page](../guide/replace-a-failed-system-disk.md) and the
-[QA record](../qa/2026-09-22-system-disk-replace.md), whose disposable-host run reached a
-completed replacement, rebuild and boot from the replacement disk before it was stopped part way;
-its Outstanding section is the remaining acceptance work. That run also found that the installer
+Status 2026-09-22: the Core and Controller half was implemented in the working tree — `md_arrays`
+in the host hardware report and the host page's System disk mirror. The operation that rebuilt a failed
+system mirror member (`host-system-disk-replace-v1`, **Replace disk…**) assumed a software-RAID root and is not part of
+Nex Core, whose image mirrors only its `nex-data` volume (see the [host image plan](2026-10-01-immutable-nex-core.md)).
+That run also found that the installer
 must mount the EFI system partition with `nofail`: a host whose fstab names the replaced disk's
 ESP stops in emergency mode even with a healthy mirror.
 

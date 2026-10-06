@@ -13,6 +13,21 @@ import (
 type Writer struct {
 	Runner Runner
 	Logf   func(format string, args ...any)
+	// Boot is how the disks start the image. Nil means the method of the running firmware (DetectBoot).
+	Boot BootMethod
+	// GrubChroot, when set, is a directory with its own grub-install (BIOS only): the installer environment has none,
+	// so the media carries one and the tool runs chrooted into it. /dev and /run must be visible inside it.
+	GrubChroot string
+	// nodeDisk, when set, names the disk of a boot partition node; nil means sysfs (diskOf). The system disk
+	// replacement knows its disk before the kernel's sysfs does.
+	nodeDisk func(node string) (string, error)
+}
+
+func (w *Writer) diskOfNode(node string) (string, error) {
+	if w.nodeDisk != nil {
+		return w.nodeDisk(node)
+	}
+	return diskOf(node)
 }
 
 func (w *Writer) logf(format string, args ...any) {
@@ -41,11 +56,16 @@ type partIO struct {
 }
 
 func openPart(d *Disk, t *Table, p Partition) (*partIO, error) {
+	return openPartFlag(d, t, p, os.O_RDWR)
+}
+
+// openPartFlag opens the partition read-write or, for a source that is only read, os.O_RDONLY.
+func openPartFlag(d *Disk, t *Table, p Partition, flag int) (*partIO, error) {
 	if !d.block {
 		return &partIO{f: d.File, off: t.Offset(p), size: t.Size(p)}, nil
 	}
 	node := NodeName(d.Path, p.Index)
-	f, err := os.OpenFile(node, os.O_RDWR, 0)
+	f, err := os.OpenFile(node, flag, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +130,29 @@ func resolveSlot(d *Disk, slot string) (slotTarget, *Table, error) {
 	return slotTarget{d: d, root: root, verity: verity}, t, nil
 }
 
+// slotData is what a slot is written from: the root hash it will be selected by, and the bytes of its erofs
+// image and hash tree. A release directory provides it at install and update; the other disk's verified slot
+// provides it when a replacement disk is rebuilt.
+type slotData struct {
+	hash                 string
+	rootSize, veritySize int64 // bytes to write; the hash tree partition may be larger than the tree
+	openRoot, openVerity func() (io.ReadCloser, error)
+}
+
+func releaseData(rel *Release) (slotData, error) {
+	erofsSt, err := os.Stat(rel.Erofs())
+	if err != nil {
+		return slotData{}, err
+	}
+	verityBytes, err := os.Stat(rel.Verity())
+	if err != nil {
+		return slotData{}, err
+	}
+	return slotData{hash: rel.Manifest.RootHash, rootSize: erofsSt.Size(), veritySize: verityBytes.Size(),
+		openRoot:   func() (io.ReadCloser, error) { return os.Open(rel.Erofs()) },
+		openVerity: func() (io.ReadCloser, error) { return os.Open(rel.Verity()) }}, nil
+}
+
 // WriteSlot writes the release's erofs and hash tree into one slot of every disk in S2 order:
 //
 //  1. give both slot partitions fresh random GUIDs on all disks, so that nothing, not even a stale
@@ -122,15 +165,18 @@ func resolveSlot(d *Disk, slot string) (slotTarget, *Table, error) {
 // A crash anywhere leaves the slot unselectable and the other slot untouched. booted is the root
 // hash of the running system (empty at install time); the slot that holds it is refused.
 func (w *Writer) WriteSlot(ctx context.Context, disks []*Disk, slot string, rel *Release, booted string) error {
-	rootID, verityID, err := SlotIDs(rel.Manifest.RootHash)
+	if _, _, err := SlotIDs(rel.Manifest.RootHash); err != nil {
+		return err
+	}
+	data, err := releaseData(rel)
 	if err != nil {
 		return err
 	}
-	erofsSt, err := os.Stat(rel.Erofs())
-	if err != nil {
-		return err
-	}
-	verityBytes, err := os.Stat(rel.Verity())
+	return w.writeSlot(ctx, disks, slot, data, booted)
+}
+
+func (w *Writer) writeSlot(ctx context.Context, disks []*Disk, slot string, data slotData, booted string) error {
+	rootID, verityID, err := SlotIDs(data.hash)
 	if err != nil {
 		return err
 	}
@@ -147,11 +193,11 @@ func (w *Writer) WriteSlot(ctx context.Context, disks []*Disk, slot string, rel 
 				return fmt.Errorf("%s: slot %s holds the running system and is never rewritten", d.Path, slot)
 			}
 		}
-		if erofsSt.Size() > t.Size(tg.root) || verityBytes.Size() > t.Size(tg.verity) {
+		if data.rootSize > t.Size(tg.root) || data.veritySize > t.Size(tg.verity) {
 			return fmt.Errorf("%s: release (%d + %d bytes) does not fit slot %s (%d + %d bytes)",
-				d.Path, erofsSt.Size(), verityBytes.Size(), slot, t.Size(tg.root), t.Size(tg.verity))
+				d.Path, data.rootSize, data.veritySize, slot, t.Size(tg.root), t.Size(tg.verity))
 		}
-		tg.rootSize, tg.hash = erofsSt.Size(), rel.Manifest.RootHash
+		tg.rootSize, tg.hash = data.rootSize, data.hash
 		targets = append(targets, tg)
 	}
 	w.logf("invalidating slot %s on %d disk(s)", slot, len(targets))
@@ -163,12 +209,18 @@ func (w *Writer) WriteSlot(ctx context.Context, disks []*Disk, slot string, rel 
 	if err = w.settle(ctx); err != nil {
 		return err
 	}
+	if err = crash("slot.invalidated"); err != nil {
+		return err
+	}
 	for _, tg := range targets {
-		if err = w.writeAndVerify(tg, rel); err != nil {
+		if err = w.writeAndVerify(tg, data); err != nil {
 			return err
 		}
 	}
-	w.logf("slot %s verified on %d disk(s); selecting it by root hash %s", slot, len(targets), rel.Manifest.RootHash)
+	if err = crash("slot.written"); err != nil {
+		return err
+	}
+	w.logf("slot %s verified on %d disk(s); selecting it by root hash %s", slot, len(targets), data.hash)
 	for _, tg := range targets {
 		if err = tg.d.SetPartitionIDs(map[int]GUID{tg.root.Index: rootID, tg.verity.Index: verityID}); err != nil {
 			return err
@@ -191,16 +243,16 @@ func (w *Writer) WriteSlot(ctx context.Context, disks []*Disk, slot string, rel 
 	return nil
 }
 
-func (w *Writer) writeAndVerify(tg slotTarget, rel *Release) error {
+func (w *Writer) writeAndVerify(tg slotTarget, data slotData) error {
 	t, err := tg.d.ReadTable()
 	if err != nil {
 		return err
 	}
 	for _, step := range []struct {
 		part Partition
-		src  string
+		src  func() (io.ReadCloser, error)
 		what string
-	}{{tg.root, rel.Erofs(), "root"}, {tg.verity, rel.Verity(), "hash tree"}} {
+	}{{tg.root, data.openRoot, "root"}, {tg.verity, data.openVerity, "hash tree"}} {
 		pio, err := openPart(tg.d, t, step.part)
 		if err != nil {
 			return err
@@ -217,8 +269,8 @@ func (w *Writer) writeAndVerify(tg slotTarget, rel *Release) error {
 	return w.verifyPartitions(t, tg)
 }
 
-func copyInto(dst *partIO, srcPath string) error {
-	src, err := os.Open(srcPath)
+func copyInto(dst *partIO, open func() (io.ReadCloser, error)) error {
+	src, err := open()
 	if err != nil {
 		return err
 	}

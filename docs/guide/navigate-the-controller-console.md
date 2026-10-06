@@ -94,8 +94,8 @@ flows are available in matching development builds.
      values at that time; with the chart focused, Left and Right step through the points and
      Escape hides the reading. On **1D**, **1W** and **1M** each point is the average of the
      samples in its interval, and the reading says *Average of N samples*.
-   - **Needs attention**: unhealthy or stale hosts, failed tasks, storage faults, busy VMs and
-     available Nex Core updates, each linking to where it can be dealt with.
+   - **Needs attention**: unhealthy or stale hosts, failed tasks, storage faults and busy VMs,
+     each linking to where it can be dealt with.
    - **Placement**: one column per host, with its role and each VM as a block sized by memory.
      A host with more than twelve VMs shows the first twelve and a **+N more** link to its panel.
    - **Recent tasks**, with a **History** link to **Tasks**.

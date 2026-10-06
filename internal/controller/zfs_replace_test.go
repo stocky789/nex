@@ -71,7 +71,7 @@ func TestZFSReplaceRefusesOldCoreAndInvalidInput(t *testing.T) {
 	old := zfsReplaceBody(l, "replace-old-core")
 	old["pool_id"], old["host_id"] = l.member.pool, l.member.id
 	if body := l.a.call("POST", zfsReplacePath, old, nil, 409).Body.String(); !strings.Contains(body, protocol.ZFSReplaceCapability) {
-		t.Fatalf("an old Core was refused for another reason: %s", body)
+		t.Fatalf("a Core without the capability was refused for another reason: %s", body)
 	}
 	for name, mutate := range map[string]func(map[string]any){
 		"no repository":       func(body map[string]any) { delete(body, "repository_id") },

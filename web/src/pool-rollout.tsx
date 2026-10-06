@@ -78,7 +78,7 @@ export const canRollBackHost = (view: RolloutView | undefined, host: RolloutHost
   view?.connection === "fresh" && view.rollout?.state === "paused" && activated[host.stage] === true;
 
 // The sequence the pool's hosts agree is available, to prefill the request: the smallest one every
-// image-edition host reports, so no host is asked for a release it has not found.
+// host reports, so no host is asked for a release it has not found.
 export function offeredSequence(hosts: Host[]): number | undefined {
   const seen = hosts.filter(h => !h.revoked).map(h => hostImage(h)?.available?.sequence);
   return seen.length && seen.every((s): s is number => typeof s === "number") ? Math.min(...seen) : undefined;

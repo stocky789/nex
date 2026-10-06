@@ -114,7 +114,7 @@ func managedDiskChains(j managedJournal) ([][]string, error) {
 	if len(j.Disks) == 0 {
 		return nil, nil
 	}
-	if len(j.DiskChains) == 0 { // Journals written before chain tracking may own standalone disks only.
+	if len(j.DiskChains) == 0 { // A journal without recorded chains may own standalone disks only.
 		chains := make([][]string, len(j.Disks))
 		for i, path := range j.Disks {
 			clean, err := cleanImagePath(path)

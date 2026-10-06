@@ -4,208 +4,23 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Every ISO build rebuilds from current tree source:
-#   1) corresponding source archive
-#   2) Controller appliance (qcow with current nex-controller/UI)
-#   3) nex-core-local package from that appliance + source
-# Reusing an older CORE_LOCAL_DEB is intentionally not supported.
-default_appliance_base=.cache/appliance/debian-13-genericcloud-amd64-20260831-2587.qcow2
-default_appliance_sha256=85a969b7e99d7c817414136033df18c58d5c45ac8d27bb36e8ccb67173d2d4e3
-default_signing_key=$HOME/.local/share/nex-dev/nex-appliance-signing.pem
-
+# Every ISO build rebuilds from current tree source: appliance/build.py regenerates the corresponding
+# source archive (dist/nex-source.tar.gz) and builds the Controller system image, a payload of the media.
+# The Core system image (NEX_IMAGE_DIR) and nex-hostimage are built beforehand and passed in.
 rebuild_iso_artifacts() {
     local version=$1
     local docker_bin=${NEX_DOCKER:-docker}
-    local signing_key=${NEX_APPLIANCE_SIGNING_KEY:-$default_signing_key}
-    local base_image=${NEX_APPLIANCE_BASE_IMAGE:-$default_appliance_base}
-    local base_sha=${NEX_APPLIANCE_BASE_SHA256:-$default_appliance_sha256}
     local appliance_out=.cache/nex-iso/appliance
-    local trusted_key=.cache/nex-iso/release-public-key.raw
-    local package_out=.cache/nex-iso/core-local
-    [[ -f $signing_key ]] || { echo "appliance signing key missing: $signing_key (set NEX_APPLIANCE_SIGNING_KEY)" >&2; exit 1; }
-    [[ -f $base_image ]] || { echo "Debian cloud base image missing: $base_image (set NEX_APPLIANCE_BASE_IMAGE)" >&2; exit 1; }
-    python3 scripts/build-source.py
     rm -rf "$appliance_out"
     mkdir -p "$appliance_out"
-    # Rebuilds dist/nex-source.tar.gz again and embeds that exact archive in the qcow.
-    python3 appliance/build.py \
-        --base-image "$base_image" \
-        --base-sha256 "$base_sha" \
-        --version "$version" \
-        --signing-key "$signing_key" \
-        --output "$appliance_out" \
-        --docker "$docker_bin"
-    install -m644 "$appliance_out/public-key.raw" "$trusted_key"
-    # Use the same source snapshot the appliance just embedded — do not regenerate
-    # again, or Core and Controller could diverge.
-    product_source=$(sha256sum dist/nex-source.tar.gz | awk '{print $1}')
-    appliance_source=$(sha256sum "$appliance_out/nex-source.tar.gz" | awk '{print $1}')
-    [[ $product_source == "$appliance_source" ]] || {
-        echo "dist/nex-source.tar.gz ($product_source) != appliance source ($appliance_source)" >&2
+    python3 appliance/build.py --version "$version" --output "$appliance_out" --docker "$docker_bin"
+    [[ -s $appliance_out/controller-system.img && -s dist/nex-source.tar.gz ]] || {
+        echo 'the Controller build produced no system image or source archive' >&2
         exit 1
     }
-    rm -rf "$package_out"
-    mkdir -p "$package_out"
-    python3 packaging/core-local/build.py \
-        --source dist/nex-source.tar.gz \
-        --bundle "$appliance_out" \
-        --trusted-key "$trusted_key" \
-        --version "$version" \
-        --output "$package_out" \
-        --docker "$docker_bin"
-    mkdir -p dist/core-local dist/appliance
-    cp -f "$package_out/nex-core-local_${version}_amd64.deb" "dist/core-local/"
+    mkdir -p dist/appliance
     rm -rf dist/appliance/*
     cp -a "$appliance_out"/. dist/appliance/
-}
-
-# Digest of everything a matched third-party build reads: its snapshot pins, then its recipe files.
-# Unchanged inputs reuse the previous output instead of compiling the same package again.
-inputs_digest() {
-    { printf '%s\n' "$1"; shift; find "$@" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum; } | sha256sum | cut -d' ' -f1
-}
-
-build_matched_dlm() {
-    local docker_bin=$1 output=.cache/nex-iso/cluster-storage-dlm deb digest
-    digest=$(inputs_digest '' packaging/cluster-storage)
-    if [[ $(cat "$output.inputs" 2>/dev/null) == "$digest" ]]; then
-        echo 'reusing the matched dlm-controld build: its inputs are unchanged' >&2
-    else
-        rm -rf "$output" "$output.inputs"
-        mkdir -p "$output"
-        "$docker_bin" build -t nex-dlm-pacemaker-abi -f packaging/cluster-storage/Dockerfile packaging/cluster-storage >&2
-        "$docker_bin" run --rm -v "$PWD/$output:/output" nex-dlm-pacemaker-abi >&2
-    fi
-    deb=$(find "$output" -maxdepth 1 -type f -name 'dlm-controld_4.3.0-3+nex1_amd64.deb' -print -quit)
-    [[ -n $deb ]] || { echo 'matched dlm-controld build did not produce its pinned package' >&2; exit 1; }
-    [[ $(dpkg-deb -f "$deb" Package) == dlm-controld ]]
-    dpkg-deb -f "$deb" Depends | grep -Fq 'libstonithd56 (= 3.0.0-2)'
-    printf '%s\n' "$digest" > "$output.inputs"
-    printf '%s\n' "$deb"
-}
-
-build_matched_libvirt() {
-    local docker_bin=$1 source_snapshot=$2 security_snapshot=$3
-    local output=.cache/nex-iso/matched-libvirt digest
-    [[ -f tests/integration/libvirt_readonly_policy.py ]] || {
-        echo 'matched libvirt helper-policy regression is missing' >&2
-        exit 1
-    }
-    digest=$(inputs_digest "$source_snapshot $security_snapshot" packaging/libvirt tests/integration/libvirt_readonly_policy.py)
-    if [[ $(cat "$output.inputs" 2>/dev/null) == "$digest" ]]; then
-        echo 'reusing the matched libvirt build: its inputs are unchanged' >&2
-    else
-        rm -rf "$output" "$output.inputs"
-        mkdir -p "$output"
-        (
-            local recipe
-            recipe=$(mktemp -d .cache/nex-iso/libvirt-recipe.XXXXXX)
-            trap 'rm -rf "$recipe"' EXIT
-            cp -a packaging/libvirt/. "$recipe/"
-            cp tests/integration/libvirt_readonly_policy.py "$recipe/"
-            "$docker_bin" run --rm --init --platform linux/amd64 \
-                -v nex-build-cache:/apt-cache \
-                -v "$PWD/$recipe:/recipe:ro" -v "$PWD/$output:/output" \
-                -e "NEX_DEBIAN_SOURCE_SNAPSHOT=$source_snapshot" \
-                -e "NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT=$security_snapshot" \
-                debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 \
-                /recipe/build-matched-libvirt.sh >&2
-        )
-    fi
-    [[ -f $output/SHA256SUMS && -f $output/binary-packages.txt && -f $output/source/libvirt_11.3.0-3+deb13u3+nex4.dsc ]] || {
-        echo 'matched libvirt build is missing its verified source or binary manifest' >&2
-        exit 1
-    }
-    (cd "$output" && sha256sum --check SHA256SUMS) >&2
-    [[ $(grep -Fxc 'local_version=11.3.0-3+deb13u3+nex4' "$output/build-inputs.txt") == 1 ]] || {
-        echo 'matched libvirt build has an unexpected local version' >&2
-        exit 1
-    }
-    printf '%s\n' "$digest" > "$output.inputs"
-    printf '%s\n' "$output"
-}
-
-replace_matched_libvirt() {
-    local repository=$1 build_output=$2 third_party=$3
-    python3 - "$repository" "$build_output" "$third_party" <<'PYLIBVIRT'
-import hashlib
-from pathlib import Path
-import shutil
-import subprocess
-import sys
-
-repository, output, third_party = map(Path, sys.argv[1:])
-expected_version = '11.3.0-3+deb13u3+nex4'
-debian_version = '11.3.0-3+deb13u3'
-
-def fields(path):
-    result = subprocess.run(['dpkg-deb', '-f', str(path)], check=True,
-                            capture_output=True, text=True)
-    return {key: value for line in result.stdout.splitlines() if ': ' in line
-            for key, value in [line.split(': ', 1)]}
-
-def source_name(control):
-    return control.get('Source', control.get('Package', '')).split(' ', 1)[0]
-
-slots = {}
-for deb in sorted(repository.glob('*.deb')):
-    control = fields(deb)
-    if source_name(control) == 'libvirt':
-        if control.get('Version') != debian_version:
-            raise SystemExit(f'unexpected Debian libvirt version in APT closure: {deb.name}')
-        key = (control['Package'], control['Architecture'])
-        if key in slots:
-            raise SystemExit(f'duplicate libvirt package slot: {key}')
-        slots[key] = deb
-
-candidates = {}
-for deb in sorted(output.glob('*.deb')):
-    control = fields(deb)
-    if source_name(control) != 'libvirt':
-        continue
-    if control.get('Version') != expected_version:
-        raise SystemExit(f'unexpected matched libvirt version in {deb.name}')
-    key = (control['Package'], control['Architecture'])
-    if key in candidates:
-        raise SystemExit(f'duplicate matched libvirt package: {key}')
-    candidates[key] = deb
-
-if not slots:
-    raise SystemExit('APT closure has no libvirt source-package slots to replace')
-if not slots.keys() <= candidates.keys():
-    raise SystemExit(f'matched libvirt packages missing for APT slots: {sorted(slots.keys() - candidates.keys())}')
-
-third_party.mkdir(parents=True, exist_ok=False)
-for name in ('source', 'notices', 'recipe'):
-    shutil.copytree(output / name, third_party / name)
-for name in ('binary-packages.txt', 'build-inputs.txt', 'build.log'):
-    shutil.copy2(output / name, third_party / name)
-
-rows = ['package\tarchitecture\tdebian_version\tdebian_sha256\tmatched_version\tmatched_sha256\n']
-for key, original in sorted(slots.items()):
-    candidate = candidates[key]
-    old = fields(original)
-    new = fields(candidate)
-    def digest(path):
-        with path.open('rb') as stream:
-            return hashlib.file_digest(stream, 'sha256').hexdigest()
-    old_hash = digest(original)
-    new_hash = digest(candidate)
-    destination = repository / candidate.name
-    if destination.exists() and destination != original:
-        raise SystemExit(f'matched package filename already exists: {destination.name}')
-    original.unlink()
-    shutil.copy2(candidate, destination)
-    rows.append(f"{key[0]}\t{key[1]}\t{old['Version']}\t{old_hash}\t{new['Version']}\t{new_hash}\n")
-
-(third_party / 'replaced-packages.tsv').write_text(''.join(rows))
-files = sorted(path for path in third_party.rglob('*') if path.is_file())
-checksums = []
-for path in files:
-    checksums.append(f"{digest(path)}  {path.relative_to(third_party)}\n")
-(third_party / 'SHA256SUMS').write_text(''.join(checksums))
-print(f'replaced {len(slots)} existing libvirt Package+Architecture slots')
-PYLIBVIRT
 }
 
 ensure_perl_exact_source() {
@@ -344,64 +159,59 @@ MANIFEST
     )
 }
 
-# Image edition media: the release directory built by image/build.sh (NEX_IMAGE_DIR, relative
-# to the repository), the static nex-hostimage that installs and repairs it, and the payloads
-# that live on nex-data rather than in the verity slot, in directories named by the SHA-256 of
-# their main file. The classic package set is staged as before, so the Classic edition stays
-# selectable from the boot menu.
-stage_image_edition() {
-    [[ -n ${NEX_IMAGE_DIR:-} ]] || return 0
-    local image=/work/$NEX_IMAGE_DIR hostimage=/work/${NEX_HOSTIMAGE_BIN:?NEX_HOSTIMAGE_BIN is required with NEX_IMAGE_DIR}
+# The release directory built by image/build.sh (NEX_IMAGE_DIR, relative to the repository), the
+# static nex-hostimage that installs and repairs it, and the payloads that live on nex-data rather
+# than in the verity slot, in directories named by the SHA-256 of their main file.
+stage_image_media() {
+    local image=/work/${NEX_IMAGE_DIR:?NEX_IMAGE_DIR is required} hostimage=/work/${NEX_HOSTIMAGE_BIN:?NEX_HOSTIMAGE_BIN is required}
     local appliance=/work/dist/appliance virtio_sha=303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d
     [[ -x $hostimage ]] || { echo "nex-hostimage missing or not executable: $hostimage" >&2; exit 1; }
     "$hostimage" verify "$image"
-    for name in controller.qcow2 manifest.json manifest.sig; do
-        [[ -f $appliance/$name ]] || { echo "Controller appliance bundle incomplete: $appliance/$name" >&2; exit 1; }
-    done
+    [[ -s $appliance/controller-system.img ]] || { echo "Controller system image missing: $appliance/controller-system.img" >&2; exit 1; }
     mkdir -p "$stage/nex/image" "$stage/nex/bin"
     cp -a "$image"/. "$stage/nex/image/"
     install -m755 "$hostimage" "$stage/nex/bin/nex-hostimage"
     install -m755 installer/nex-image-install.sh "$stage/nex/nex-image-install.sh"
-    printf 'image\n' > "$stage/nex/edition"
     local primary
-    primary=$(sha256sum "$appliance/controller.qcow2" | awk '{print $1}')
+    primary=$(sha256sum "$appliance/controller-system.img" | awk '{print $1}')
     mkdir -p "$stage/nex/payload/$primary" "$stage/nex/payload/$virtio_sha"
-    cp "$appliance/controller.qcow2" "$appliance/manifest.json" "$appliance/manifest.sig" "$stage/nex/payload/$primary/"
+    cp "$appliance/controller-system.img" "$stage/nex/payload/$primary/"
     cp "$stage/nex/media/virtio-win.iso.gz" "$stage/nex/payload/$virtio_sha/virtio-win.iso.gz"
 }
 
-assert_iso_artifacts_current() {
-    local deb=$1
-    local want=$2
-    local work extract appliance_version package_source product_source appliance_source
-    work=$(mktemp -d)
-    extract=$work/pkg
-    dpkg-deb -x "$deb" "$extract"
-    appliance_version=$(python3 -c "import json; print(json.load(open('$extract/usr/share/nex/appliance/manifest.json'))['version'])")
-    package_source=$(sha256sum "$extract/usr/share/nex/core-local/nex-source.tar.gz" | awk '{print $1}')
-    product_source=$(sha256sum dist/nex-source.tar.gz | awk '{print $1}')
-    appliance_source=$(sha256sum "$extract/usr/share/nex/appliance/nex-source.tar.gz" | awk '{print $1}')
-    rm -rf "$work"
-    [[ $appliance_version == "$want" ]] || {
-        echo "Controller appliance in package is $appliance_version; expected $want from this ISO build." >&2
-        exit 1
-    }
-    [[ $package_source == "$product_source" ]] || {
-        echo "Core package source digest $package_source does not match dist/nex-source.tar.gz $product_source." >&2
-        exit 1
-    }
-    # Appliance source is captured when the qcow is built; it must still match the
-    # product source used for this ISO (no intervening tree drift).
-    [[ $appliance_source == "$product_source" ]] || {
-        echo "Controller appliance source digest $appliance_source does not match dist/nex-source.tar.gz $product_source." >&2
-        echo "Rebuild refused: Core and Controller must share the same current source snapshot." >&2
-        exit 1
-    }
+# BIOS firmware: Debian Installer has no grub-install. nex-image-install.sh copies this root fragment to RAM
+# and chroots into it, so it carries grub-install, its helpers, the i386-pc modules and the full shared
+# library closure, all taken from the system image's own tree (the same GRUB the installed host runs).
+stage_grub_bios() {
+    local tree=$cache/grub-image-tree grub=$stage/nex/grub bin lib
+    rm -rf "$tree" "$grub"
+    mkdir -p "$tree" "$grub/usr/lib" "$grub/usr/lib64" "$grub/usr/bin" "$grub/usr/sbin"
+    fsck.erofs --extract="$tree" "$stage/nex/image/root.erofs" > /dev/null
+    for link in bin sbin lib lib64; do ln -s "usr/$link" "$grub/$link"; done
+    for file in usr/sbin/grub-install usr/sbin/grub-probe usr/bin/grub-mkimage usr/bin/grub-mkrelpath \
+                usr/bin/grub-editenv usr/lib/grub/i386-pc/grub-bios-setup; do
+        [[ -f $tree/$file ]] || { echo "the system image carries no $file; add grub2-common, grub-common and grub-pc-bin to image/base.packages" >&2; exit 1; }
+    done
+    mkdir -p "$grub/usr/lib/grub"
+    cp -a "$tree/usr/lib/grub/i386-pc" "$grub/usr/lib/grub/"
+    [[ ! -d $tree/usr/share/grub ]] || { mkdir -p "$grub/usr/share"; cp -a "$tree/usr/share/grub" "$grub/usr/share/"; }
+    for bin in usr/sbin/grub-install usr/sbin/grub-probe usr/bin/grub-mkimage usr/bin/grub-mkrelpath \
+               usr/bin/grub-editenv usr/lib/grub/i386-pc/grub-bios-setup; do
+        install -D -m755 "$tree/$bin" "$grub/$bin"
+        # ldd runs in the image's own tree so the closure is the image's libraries, not this builder's.
+        chroot "$tree" ldd "/$bin" | awk '/=> \// {print $3} $1 ~ /^\// {print $1}' | while read -r lib; do
+            mkdir -p "$(dirname "$grub/${lib#/}")"
+            cp -L --no-preserve=ownership "$tree/${lib#/}" "$grub/${lib#/}"
+        done
+    done
+    [[ -x $grub/usr/sbin/grub-install ]] || { echo 'GRUB for BIOS firmware was not staged' >&2; exit 1; }
+    [[ -e $grub/lib64/ld-linux-x86-64.so.2 ]] || { echo 'the dynamic loader is missing from the staged GRUB' >&2; exit 1; }
+    rm -rf "$tree"
 }
 
 if [[ ${1:-} != --inside ]]; then
     mkdir -p .cache/nex-iso dist
-    # Keep binary downloads and source-bundle fetches on the same immutable
+    # Keep every source fetch (cdebconf, retained Debian sources) on the same immutable
     # snapshots. Live deb.debian.org advanced past 20260916 with unbound
     # 1.26.1-0+deb13u1 (first on snapshot 2026-09-19) and release run 4223
     # failed apt-get source for a version the pinned sources did not have.
@@ -422,28 +232,18 @@ if [[ ${1:-} != --inside ]]; then
     version=${NEX_VERSION:-$(python3 "$(dirname "$0")/../scripts/release-version.py" --current)}
     [[ -n $version ]] || { echo 'could not resolve a build version' >&2; exit 1; }
     docker_bin=${NEX_DOCKER:-docker}
-    if [[ -n ${CORE_LOCAL_DEB:-} || ${NEX_SKIP_APPLIANCE_REBUILD:-} == 1 ]]; then
-        echo 'ISO builds always rebuild Core and Controller from current source.' >&2
-        echo 'Unset CORE_LOCAL_DEB and NEX_SKIP_APPLIANCE_REBUILD.' >&2
-        exit 1
-    fi
+    : "${NEX_IMAGE_DIR:?NEX_IMAGE_DIR is required: the image release directory built by image/build.sh}"
+    : "${NEX_HOSTIMAGE_BIN:?NEX_HOSTIMAGE_BIN is required: the static nex-hostimage that installs the image}"
     rebuild_iso_artifacts "$version"
-    matched_dlm_deb=$(build_matched_dlm "$docker_bin")
-    matched_libvirt_dir=$(build_matched_libvirt "$docker_bin" "$source_snapshot" "$security_snapshot")
-    iso_core_local=.cache/nex-iso/core-local/nex-core-local_${version}_amd64.deb
-    assert_iso_artifacts_current "$iso_core_local" "$version"
     "$docker_bin" build -t nex-iso-builder -f installer/Dockerfile installer
     exec "$docker_bin" run --rm --platform linux/amd64 \
         -v "$PWD:/work" -e BUILD_UID="$(id -u)" -e BUILD_GID="$(id -g)" \
-        -e "CORE_LOCAL_DEB=/work/${iso_core_local#"$PWD"/}" \
-        -e "MATCHED_DLM_DEB=/work/${matched_dlm_deb#"$PWD"/}" \
-        -e "MATCHED_LIBVIRT_DIR=/work/${matched_libvirt_dir#"$PWD"/}" \
         -e "NEX_DEBIAN_SOURCE_SNAPSHOT=$source_snapshot" \
         -e "NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT=$security_snapshot" \
         -e "NEX_ISO_VERSION=$version" \
         -e "NEX_NETINST_BASE_URL=${NEX_NETINST_BASE_URL:-}" \
-        -e "NEX_IMAGE_DIR=${NEX_IMAGE_DIR:-}" \
-        -e "NEX_HOSTIMAGE_BIN=${NEX_HOSTIMAGE_BIN:-}" \
+        -e "NEX_IMAGE_DIR=$NEX_IMAGE_DIR" \
+        -e "NEX_HOSTIMAGE_BIN=$NEX_HOSTIMAGE_BIN" \
         nex-iso-builder
 fi
 [[ $(dpkg --print-architecture) == amd64 ]]
@@ -461,21 +261,8 @@ snapshot_url_ok "$source_snapshot" && snapshot_url_ok "$security_snapshot" || {
     echo 'NEX_DEBIAN_SOURCE_SNAPSHOT and NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT must be immutable https://snapshot.debian.org/archive/(debian|debian-security)/<stamp>/ URLs.' >&2
     exit 1
 }
-# The ISO carries exactly one Nex Core version: the nex-core-local package it installs.
-core_local_deb=${CORE_LOCAL_DEB:?nex-core-local package path required}
-[[ -f $core_local_deb ]] || { echo "missing nex-core-local package: $core_local_deb" >&2; exit 1; }
-matched_dlm_deb=${MATCHED_DLM_DEB:?matched dlm-controld package path required}
-[[ -f $matched_dlm_deb ]] || { echo "missing matched dlm-controld package: $matched_dlm_deb" >&2; exit 1; }
-[[ $(dpkg-deb -f "$matched_dlm_deb" Package) == dlm-controld ]]
-[[ $(dpkg-deb -f "$matched_dlm_deb" Version) == 4.3.0-3+nex1 ]]
-dpkg-deb -f "$matched_dlm_deb" Depends | grep -Fq 'libstonithd56 (= 3.0.0-2)'
-matched_libvirt_dir=${MATCHED_LIBVIRT_DIR:?matched libvirt output directory required}
-[[ -f $matched_libvirt_dir/SHA256SUMS && -f $matched_libvirt_dir/binary-packages.txt ]] || {
-    echo "incomplete matched libvirt output: $matched_libvirt_dir" >&2
-    exit 1
-}
-(cd "$matched_libvirt_dir" && sha256sum --check SHA256SUMS)
-version=$(dpkg-deb -f "$core_local_deb" Version)
+# The ISO carries exactly one Nex Core version: the one this build was started for.
+version=${NEX_ISO_VERSION:?NEX_ISO_VERSION required}
 # Artifact names use the readable release version (0.4.23-dev.251), not Debian's 0.4.23~~dev.251.
 file_version=${version//\~\~/-}
 file_version=${file_version//\~/-}
@@ -507,7 +294,7 @@ if [[ ! -f $downloads/$iso ]]; then
 fi
 printf '%s  %s\n' "$expected" "$downloads/$iso" | sha256sum --check
 rm -rf "$stage"
-mkdir -p "$stage/nex/repo"
+mkdir -p "$stage/nex"
 xorriso -osirrox on -indev "$downloads/$iso" -extract / "$stage"
 chmod -R u+w "$stage"
 # These optional firmware packages are outside the reviewed server-hardware
@@ -515,18 +302,16 @@ chmod -R u+w "$stage"
 python3 scripts/prune-iso-packages.py --tree "$stage" \
     dahdi-firmware-nonfree atmel-firmware bluez-firmware firmware-sof-signed \
     firmware-b43-installer firmware-b43legacy-installer
-# Both frontends must exist on the pinned media before advertising the choice.
+# The installer environment must exist on the pinned media (rescue boots the plain initrd).
 for image in install.amd/vmlinuz install.amd/initrd.gz install.amd/gtk/initrd.gz; do
     test -s "$stage/$image"
 done
-# Late install restores the compressed VirtIO ISO before APT installs anything.
-# Both installer frontends must therefore provide BusyBox's gunzip applet.
-for initrd in install.amd/initrd.gz install.amd/gtk/initrd.gz; do
-    initrd_root=$(mktemp -d)
-    (cd "$initrd_root" && gzip -dc "$stage/$initrd" | cpio -id --quiet usr/bin/busybox)
-    "$initrd_root/usr/bin/busybox" --list | grep -Fx gunzip
-    rm -rf "$initrd_root"
-done
+# nex-image-install.sh expands the compressed VirtIO ISO with BusyBox's gunzip applet, so the
+# initrd that runs the wizard must provide it.
+initrd_root=$(mktemp -d)
+(cd "$initrd_root" && gzip -dc "$stage/install.amd/gtk/initrd.gz" | cpio -id --quiet usr/bin/busybox)
+"$initrd_root/usr/bin/busybox" --list | grep -Fx gunzip
+rm -rf "$initrd_root"
 printf '%s\n' "Nex Core $version amd64 development installer — derived from Debian 13" > "$stage/.disk/info"
 cat > "$stage/README-NEX.txt" <<MEDIA
 Nex Core $version — development installation media
@@ -542,87 +327,34 @@ This local alpha installs Nex Core with its host-local web UI. Central Nex Contr
 is deployed from that UI or separately. Install only onto an explicitly selected
 disposable lab disk and retain recovery access.
 MEDIA
-cp installer/preseed.cfg "$stage/preseed.cfg"
-cp installer/late-install.sh appliance/package-service-policy.sh installer/root-account.sh installer/packages.txt "$stage/nex/"
-# Empty dpkg status is intentional: resolve the whole closure, including packages
-# already installed in this build container. Real installer base may differ.
-# Resolve the offline closure from the same immutable snapshots used for the
-# corresponding-source archive. Live trixie/security moves ahead of those pins
-# and leaves apt-get source unable to find the versions on the media.
-# Include deb-src here too: build-gui.sh fetches the exact cdebconf ABI from
-# these pins (release run 4228 failed when only binary URIs were active).
+install -m755 installer/root-account.sh "$stage/nex/root-account.sh"
+# The same immutable snapshots as the corresponding-source archive. build-gui.sh fetches the
+# exact cdebconf ABI from these pins (release run 4228 failed when only binary URIs were
+# active in a bare apt-get source).
 cat > "$cache/snapshot-sources.list" <<SOURCES
-deb $source_snapshot trixie main contrib non-free non-free-firmware
-deb $source_snapshot trixie-updates main contrib non-free non-free-firmware
-deb $security_snapshot trixie-security main contrib non-free non-free-firmware
 deb-src $source_snapshot trixie main contrib non-free non-free-firmware
 deb-src $source_snapshot trixie-updates main contrib non-free non-free-firmware
 deb-src $security_snapshot trixie-security main contrib non-free non-free-firmware
 SOURCES
 export NEX_SNAPSHOT_SOURCES=$cache/snapshot-sources.list
-apt_snapshot=(
-    -o "Dir::Etc::sourcelist=$cache/snapshot-sources.list"
-    -o 'Dir::Etc::sourceparts=-'
-    -o 'Acquire::Check-Valid-Until=false'
-)
-apt-get "${apt_snapshot[@]}" update
-: > "$cache/empty-status"
-mapfile -t packages < installer/packages.txt
-apt_closure=(-y --download-only --no-install-recommends "${apt_snapshot[@]}" -o Dir::State::status="$cache/empty-status")
-# Against an empty archive directory apt lists every file of the closure; the download
-# then runs against the kept archive directory, where apt verifies and reuses what is
-# already there and fetches only the rest.
-resolve=$(mktemp -d "$cache/resolve.XXXXXX")
-mkdir -p "$resolve/partial" "$downloads/debs"
-apt-get "${apt_closure[@]}" --print-uris -o Dir::Cache::archives="$resolve" install "${packages[@]}" \
-    | tee "$cache/debs.uris" | sed -n "s/^'[^']*' \([^ ]*\) .*/\1/p" | sort > "$cache/debs.list"
-rm -rf "$resolve"
-[[ -s $cache/debs.list ]] || { echo 'APT did not resolve the requested offline package closure' >&2; exit 1; }
-apt-get "${apt_closure[@]}" -o Dir::Cache::archives="$downloads/debs" install "${packages[@]}"
-xargs -a "$cache/debs.list" -I{} cp "$downloads/debs/{}" "$stage/nex/repo/"
 stage_virtio_win
-stage_image_edition
-# Keep only the DLM rebuilt against this media's Pacemaker fencing ABI.
-rm -f "$stage/nex/repo"/dlm-controld_*.deb
-cp -f "$matched_dlm_deb" "$stage/nex/repo/"
-runtime_version=$(dpkg-deb -f "$matched_dlm_deb" Depends | sed -n 's/.*libstonithd56 (= \([^)]*\)).*/\1/p')
-[[ -n $runtime_version ]]
-for deb in "$stage/nex/repo"/libstonithd56_*.deb; do
-    [[ $(dpkg-deb -f "$deb" Version) == "$runtime_version" ]] || {
-        echo "APT closure libstonithd56 does not match custom DLM runtime pin $runtime_version" >&2
-        exit 1
-    }
-done
-replace_matched_libvirt "$stage/nex/repo" "$matched_libvirt_dir" "$stage/nex/third-party/libvirt"
-dlm_source=$(dirname "$matched_dlm_deb")
-[[ -f $dlm_source/build.log && -f $dlm_source/source/dlm_4.3.0-3.dsc && -f $dlm_source/notices/dlm-copyright ]]
-mkdir -p "$stage/nex/third-party"
-cp -a "$dlm_source" "$stage/nex/third-party/dlm-pacemaker-abi"
-# Host-local UI is a Nex package, not from Debian APT; CORE_LOCAL_DEB was validated above.
-cp -f "$core_local_deb" "$stage/nex/repo/"
-printf 'nex-core-local\n' >> "$stage/nex/packages.txt"
-(cd "$stage/nex/repo" && dpkg-scanpackages --multiversion . /dev/null > Packages)
-printf 'package\tversion\tarchitecture\tsource\n' > "$stage/nex/package-manifest.tsv"
-for deb in "$stage/nex/repo/"*.deb; do
-    dpkg-deb --show --showformat='${Package}\t${Version}\t${Architecture}\t${Source}\n' "$deb"
-done | sort >> "$stage/nex/package-manifest.tsv"
+stage_image_media
+stage_grub_bios
 cp "$cache/SHA256SUMS" "$cache/SHA256SUMS.sign" "$cache/cd-key.asc" "$stage/nex/"
 cat > "$stage/nex/BUILD.txt" <<BUILD
 Nex Core $version / internal development image
 Base: $base/$iso
 Base SHA256: $expected
 Debian signing fingerprint: $fingerprint
-APT sources: immutable Debian trixie snapshot.debian.org pins ($source_snapshot, $security_snapshot)
+Debian sources: immutable Debian trixie snapshot.debian.org pins ($source_snapshot, $security_snapshot)
 Bundled media: Fedora virtio-win 0.1.302 with matching Fedora corresponding-source RPM
 Build UTC: $(date -u +%FT%TZ)
-Nex package version: ${NEX_ISO_VERSION:-unknown}
+Nex version: ${NEX_ISO_VERSION:-unknown}
 Nex source: AGPL-3.0-only; upstream packages retain their own licenses.
 Core and Controller on this media were rebuilt from the same corresponding-source
 snapshot for this ISO build (see nex-source.product.sha256).
 Public redistribution requires the matching source bundle and compliance manifest.
-Build recipe: installer/build.sh; installed packages: nex/package-manifest.tsv
-Packages authenticated by Debian APT signed repository metadata during build.
-Package versions follow the pinned snapshots above (not live trixie).
+Build recipe: installer/build.sh; the system image on this media is built by image/build.sh.
 BUILD
 ./installer/build-gui.sh
 mkdir -p "$stage/nex/docs"
@@ -642,8 +374,8 @@ rm -rf "$source_stage"
 (cd "$stage/nex" && sha256sum nex-source.tar.gz > nex-source.tar.gz.sha256)
 # Record that media source matches the regenerated archive inputs.
 cp /work/dist/nex-source.tar.gz.sha256 "$stage/nex/nex-source.product.sha256"
-# A public ISO must have one retained bundle covering the base installer, all
-# added packages, rebuilt packages, appliance closure, notices, and exact hashes.
+# A public ISO must have one retained bundle covering the base installer, rebuilt and
+# bundled components, notices, and exact hashes.
 cat > "$cache/source-sources.list" <<SOURCES
 deb-src $source_snapshot trixie main contrib non-free non-free-firmware
 deb-src $source_snapshot trixie-updates main contrib non-free non-free-firmware
@@ -656,7 +388,7 @@ SOURCES
 # 5.40.1-6+deb13u1; retain the exact dsc/tarballs so the source bundle stays complete.
 ensure_perl_exact_source
 python3 /work/scripts/build-source-bundle.py \
-    --version "$file_version" --iso "$downloads/$iso" --tree "$stage" --repository "$stage/nex/repo" \
+    --version "$file_version" --iso "$downloads/$iso" --tree "$stage" \
     --apt-sources "$cache/source-sources.list" \
     --source-input "$cache/virtio-win-retained-source" --source-input "$stage/nex/third-party" --source-input "$stage/nex/nex-source.tar.gz" \
     --source-input "$downloads/perl-exact-source" --source-cache "$downloads/sources" \
@@ -693,7 +425,7 @@ label nex
 label serial
   menu label Install Nex Core (serial console ttyS0)
   kernel /install.amd/vmlinuz
-  append initrd=/install.amd/initrd.gz preseed/file=/cdrom/preseed.cfg console=ttyS0,115200n8 --- console=ttyS0,115200n8
+  append initrd=/install.amd/gtk/initrd.gz DEBIAN_FRONTEND=newt console=ttyS0,115200n8 --- console=ttyS0,115200n8
 label rescue
   menu label Debian rescue mode
   kernel /install.amd/vmlinuz
@@ -735,34 +467,14 @@ menuentry 'Minimal install - Nex Core (text)' {
   initrd /install.amd/gtk/initrd.gz
 }
 menuentry 'Install Nex Core (serial console ttyS0)' {
-  linux /install.amd/vmlinuz preseed/file=/cdrom/preseed.cfg console=ttyS0,115200n8 --- console=ttyS0,115200n8
-  initrd /install.amd/initrd.gz
+  linux /install.amd/vmlinuz DEBIAN_FRONTEND=newt console=ttyS0,115200n8 --- console=ttyS0,115200n8
+  initrd /install.amd/gtk/initrd.gz
 }
 menuentry 'Debian rescue mode' {
   linux /install.amd/vmlinuz rescue/enable=true --- quiet
   initrd /install.amd/initrd.gz
 }
 GRUB
-# The image edition is the default of media that carries it. The Classic GUI entry keeps the
-# package-installed host selectable, and is the only way to install on legacy BIOS firmware.
-# The serial entries boot Debian's own questions and the media preseed, never the Nex wizard, so
-# on this media they install the Classic edition and are labelled that way.
-if [[ -n ${NEX_IMAGE_DIR:-} ]]; then
-    sed -i 's/^  menu label Install Nex Core (serial console ttyS0)$/  menu label Classic edition install (serial console ttyS0)/' "$stage/isolinux/menu.cfg"
-    sed -i "s/^menuentry 'Install Nex Core (serial console ttyS0)'/menuentry 'Classic edition install (serial console ttyS0)'/" "$stage/boot/grub/grub.cfg"
-    cat >> "$stage/isolinux/menu.cfg" <<'BIOS'
-label classic
-  menu label Classic edition install - Nex Core (BIOS or UEFI, GUI)
-  kernel /install.amd/vmlinuz
-  append vga=788 initrd=/install.amd/gtk/initrd.gz nex.edition=classic --- quiet
-BIOS
-    cat >> "$stage/boot/grub/grub.cfg" <<'GRUB'
-menuentry 'Classic edition install - Nex Core (GUI)' {
-  linux /install.amd/vmlinuz vga=788 nex.edition=classic --- quiet
-  initrd /install.amd/gtk/initrd.gz
-}
-GRUB
-fi
 # Recompute media checksums without the boot catalog (regenerated by xorriso).
 (cd "$stage" && find . -type f ! -name md5sum.txt ! -path './isolinux/boot.cat' ! -path './isolinux/isolinux.bin' -print0 | sort -z | xargs -0 md5sum > md5sum.txt)
 rm -f "$output"
@@ -785,9 +497,8 @@ grep -Fq $'\tyes' "$stage/nex/third-party/virtio-win/manifest.tsv"
 # Replay original hybrid BIOS/UEFI boot structure and signed EFI binaries.
 xorriso -indev "$downloads/$iso" -outdev "$output" \
     -boot_image any replay -update_r "$stage" / -volid NEX_CORE -commit -end
-cp "$stage/nex/package-manifest.tsv" /work/dist/package-manifest.tsv
 python3 /work/scripts/build-source-bundle.py \
-    --version "$file_version" --iso "$output" --tree "$stage" --repository "$stage/nex/repo" \
+    --version "$file_version" --iso "$output" --tree "$stage" \
     --source-bundle "/work/dist/nex-core-${file_version}-source.tar.gz" \
     --compliance-manifest "/work/dist/nex-core-${file_version}-compliance-manifest.json"
 (cd /work/dist && sha256sum "nex-core-${file_version}-compliance-manifest.json" > "nex-core-${file_version}-compliance-manifest.json.sha256")
@@ -795,30 +506,20 @@ cp "$stage/nex/BUILD.txt" /work/dist/BUILD.txt
 (cd /work/dist && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 printf '\nBuilt %s\n' "$output"
 
-# Reuse the exact tested closure and boot files; only payload transport changes.
+# The net installer carries the same boot files; the image set and payloads are downloaded
+# by hash (payloads.tsv rows image/ and payload/) instead of carried.
 if [[ -n ${NEX_NETINST_BASE_URL:-} ]]; then
     netstage=$cache/netinst-stage
     rm -rf "$netstage" /work/dist/netinst
     cp -al "$stage" "$netstage"
-    image_args=()
-    if [[ -n ${NEX_IMAGE_DIR:-} ]]; then
-        image_args=(--image "$stage/nex/image" --appliance /work/dist/appliance)
-    fi
-    python3 installer/netinst-manifest.py "$netstage" "$cache/debs.uris" "$NEX_NETINST_BASE_URL" /work/dist/netinst "${image_args[@]}"
+    python3 installer/netinst-manifest.py "$netstage" "$NEX_NETINST_BASE_URL" /work/dist/netinst \
+        --image "$stage/nex/image" --appliance /work/dist/appliance
     install -m755 installer/netinst-fetch.sh "$netstage/nex/netinst-fetch.sh"
-    rm -f "$netstage/nex/repo/"*.deb "$netstage/nex/media/virtio-win.iso.gz"
-    # The image set and payloads are downloaded by hash, not carried (payloads.tsv rows image/ and payload/).
+    rm -f "$netstage/nex/media/virtio-win.iso.gz"
     rm -rf "$netstage/nex/image" "$netstage/nex/payload"
     # The shared source bundle retains these redundant payloads and exact notices.
     rm -rf "$netstage/nex/third-party/virtio-win/source"
-    rm -rf "$netstage/nex/third-party/dlm-pacemaker-abi"
-    mkdir -p "$netstage/nex/third-party/dlm-pacemaker-abi"
-    cp -a "$stage/nex/third-party/dlm-pacemaker-abi/notices" "$netstage/nex/third-party/dlm-pacemaker-abi/"
-    rm -rf "$netstage/nex/third-party/libvirt"
-    mkdir -p "$netstage/nex/third-party/libvirt"
-    cp -a "$stage/nex/third-party/libvirt/notices" "$netstage/nex/third-party/libvirt/"
-    (cd "$netstage/nex/third-party/libvirt" && sha256sum notices/* > SHA256SUMS)
-    # Replace transport descriptions without modifying hardlinked offline metadata.
+    # Replace transport descriptions without modifying hardlinked media files.
     python3 - "$netstage" <<'PYNOTICE'
 from pathlib import Path
 import sys
@@ -839,15 +540,6 @@ build.unlink()
 build.write_text(text)
 PYNOTICE
     (cd "$netstage/nex/third-party/virtio-win" && sha256sum NOTICE manifest.tsv > checksums.sha256)
-    # Native serial installation needs the same pre-partition availability gate.
-    serial_overlay=$(mktemp -d)
-    mkdir -p "$serial_overlay/usr/lib/partman/init.d"
-    install -m755 installer/gui/recheck.sh "$serial_overlay/usr/lib/partman/init.d/00nex-recheck"
-    # Break the hardlink before appending so the offline initrd stays byte-identical.
-    cp "$netstage/install.amd/initrd.gz" "$netstage/install.amd/initrd.gz.new"
-    mv "$netstage/install.amd/initrd.gz.new" "$netstage/install.amd/initrd.gz"
-    (cd "$serial_overlay" && find . -print0 | cpio --null -o -H newc --quiet | gzip -n) >> "$netstage/install.amd/initrd.gz"
-    rm -rf "$serial_overlay"
     netoutput=/work/dist/nex-core-${file_version}-amd64-netinst.iso
     rm -f "$netstage/.disk/info" "$netstage/md5sum.txt"
     printf '%s\n' "Nex Core $version amd64 net installer — internet required" > "$netstage/.disk/info"
@@ -856,7 +548,7 @@ PYNOTICE
     xorriso -indev "$downloads/$iso" -outdev "$netoutput" \
         -boot_image any replay -update_r "$netstage" / -volid NEX_NETINST -commit -end
     python3 /work/scripts/build-source-bundle.py \
-        --version "$file_version" --iso "$netoutput" --tree "$netstage" --repository "$netstage/nex/repo" \
+        --version "$file_version" --iso "$netoutput" --tree "$netstage" \
         --source-bundle "/work/dist/nex-core-${file_version}-source.tar.gz" \
         --compliance-manifest "/work/dist/nex-core-${file_version}-netinst-compliance-manifest.json"
     python3 - "/work/dist/nex-core-${file_version}-netinst-compliance-manifest.json" /work/dist/netinst "$netstage/nex/payloads.tsv" <<'PYMANIFEST'
@@ -867,7 +559,7 @@ data = json.loads(path.read_text())
 data['netinst_downloads'] = [dict(zip(('sha256', 'destination', 'url'), line.split('\t')))
                              for line in Path(sys.argv[3]).read_text().splitlines()]
 data['netinst_payloads'] = []
-for payload in sorted(Path(sys.argv[2]).glob('*.deb')):
+for payload in sorted(p for p in Path(sys.argv[2]).iterdir() if p.is_file()):
     with payload.open('rb') as stream:
         checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
     data['netinst_payloads'].append({'file': payload.name, 'sha256': checksum})

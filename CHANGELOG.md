@@ -18,6 +18,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+## [0.4.30] — 2026-10-06
+
+### Major Feature
+
+- Nex Core is now only the signed, read-only system image. The package-based host, its installer path, the package update screens and the apt archive are removed; every host installs from, and updates by replacing, the image.
+
+### Minor Feature
+
+- The Nex Core installer now installs the same signed, read-only system image on both UEFI and BIOS hosts, and a host is updated by replacing that image (with automatic fallback to the previous version) instead of installing packages. The package update screens on the host and in the Controller are gone, and **Replace disk** for a degraded system mirror is removed (a mirrored data volume is repaired by reinstalling with **Repair image**). Development work: not yet booted on real hardware.
+- A failed disk of a two-disk Nex Core host can be replaced from Nex Controller (host panel, **Storage** tab, **Replace disk…**). Nex Core lays the same partition table on the blank replacement, copies the verified system image from the disk that still works, makes the new disk able to start the host (UEFI or BIOS) and adds it to the data mirror, which then rebuilds in the background with its progress shown on the host. It never touches the disk the host runs from and erases a used disk only after you type its name. An interrupted replacement, a restart of the host or a lost Controller connection does not repeat or lose any work. Not yet run on real disks.
+- Hosts, the host panel, Members and Overview show an **Update available**, **Update staged** or **Update pending reboot** badge, taken only from what each host reports about its image; a host that is not freshly connected shows its last report as such.
+
+### Bug Fixes
+
+- The installer's BIOS boot files are now staged correctly on the installation media (`grub-install` was missing from the image's package list).
+- Running the agent tests as root no longer writes a bridge file into the host's real `/etc/network`, which made later tests fail.
+
+### Miscellaneous
+
+- The Controller and Nex Core now speak a single protocol version, and the older-version report fallback, upgrade-only database steps and other back-compatibility code are removed.
+
 ## [0.4.29] — 2026-10-05
 
 ### Bug Fixes
@@ -184,9 +205,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only; updating a whole pool, one host at a time, is not available yet.
 - Installation media can now carry an image edition: Nex Core installs as a read-only,
   integrity-checked system image with two update slots per disk and its settings and data on a
-  separate volume, on UEFI hosts with disks of at least 24 GiB. A **Repair image** option reinstalls the
-  system image and keeps the data. The Classic edition stays selectable and is the way to install on legacy
-  BIOS hosts. This is development work: no installer ISO has been booted with it yet.
+  separate volume, on hosts with disks of at least 24 GiB. A **Repair image** option reinstalls the
+  system image and keeps the data. This is development work: no installer ISO has been booted with it yet.
 - New Nex Core installs keep the system files read-only and put everything the host changes on
   a separate `/var` volume (two mirrored volumes when you pick two or more disks). Settings,
   SSH keys and root's files live on `/var` and survive reboots as before. Updates open a short
@@ -259,7 +279,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the note under it ran off the screen.
 - The image edition's root password now works where the installer says it does ([record](docs/qa/image/phase6-lab2.md), development only, found
   in a QEMU lab): the image had no `login` program, so the console ended the sign-in before asking for the password, and SSH refused a
-  password for root (the classic edition's SSH policy was never carried over). The image now installs `login` and ships the same root SSH
+  password for root. The image now installs `login` and ships the same root SSH
   policy; the root password from the installer was then shown to open a root shell on the serial console, over SSH and through the host's
   local web API in a virtual machine.
 - Roll back during the first boot of an update: the Updates panel offers **Roll back** while a new release is on trial (phase **Booted**),

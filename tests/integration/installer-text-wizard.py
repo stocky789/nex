@@ -237,7 +237,7 @@ BLOCKS = {
     'sda': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:0',
             'queue/rotational': '0',
             'device/serial': 'TESTSERIAL1', 'device/model': 'QEMU HARDDISK'},
-    'sdb': {'size': '2048', 'ro': '0', 'removable': '0', 'dev': '8:16'},          # under 16 GiB
+    'sdb': {'size': '2048', 'ro': '0', 'removable': '0', 'dev': '8:16'},          # under 24 GiB
     'sdc': {'size': '67108864', 'ro': '0', 'removable': '1', 'dev': '8:32'},      # removable
     'sde': {'size': '67108864', 'ro': '1', 'removable': '0', 'dev': '8:64'},      # read-only
     'sdd': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:48'},      # installation media
@@ -247,9 +247,9 @@ BLOCKS = {
     'sdg': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:96',
             'queue/rotational': '1', 'device/model': 'QEMU HARDDISK',
             'device/vpd_pg80': b'\x00\x80\x00\x14TESTSERIAL2         \x00'},        # mirror partner
-    'sdh': {'size': '33554432', 'ro': '0', 'removable': '0', 'dev': '8:112',
+    'sdh': {'size': '50331648', 'ro': '0', 'removable': '0', 'dev': '8:112',
             'queue/rotational': '0',
-            'device/serial': 'TESTSERIAL3', 'device/model': 'QEMU HARDDISK'},     # half the size
+            'device/serial': 'TESTSERIAL3', 'device/model': 'QEMU HARDDISK'},     # the smallest offered disk, 25% smaller than sda
     'sdi': {'size': '63753421', 'ro': '0', 'removable': '0', 'dev': '8:128',
             'queue/rotational': '0',
             'serial': 'TESTSERIAL4', 'device/model': 'QEMU HARDDISK'},            # ~5% smaller; virtio-style serial
@@ -257,7 +257,7 @@ BLOCKS = {
 
 DISK_ONE = 'sda - 32 GiB - SSD - QEMU HARDDISK - TESTSERIAL1 - blank'
 DISK_PARTNER = 'sdg - 32 GiB - HDD - QEMU HARDDISK - TESTSERIAL2 - has partitions'
-DISK_SMALLER = 'sdh - 16 GiB - SSD - QEMU HARDDISK - TESTSERIAL3 - blank'
+DISK_SMALLER = 'sdh - 24 GiB - SSD - QEMU HARDDISK - TESTSERIAL3 - blank'
 DISK_NEAR = 'sdi - 30 GiB - SSD - QEMU HARDDISK - TESTSERIAL4 - blank'
 DISK_CHOICES = ', '.join([DISK_ONE, DISK_PARTNER, DISK_SMALLER, DISK_NEAR])
 DISK_MIRROR = ', '.join([DISK_ONE, DISK_PARTNER])
@@ -1164,8 +1164,6 @@ def scenario_abandoned_setup_leaves_no_handoff(shell, root):
 
 def image_fixture(root, repair=True, netinst=False):
     build_fixture(root)
-    write(root / 'cdrom/nex/edition', 'image\n')
-    write(root / 'proc/cmdline', '')
     probe = ('printf "%s\\n" "disks=/dev/sda,/dev/sdg"\n' if repair else
              'exit 1\n')
     executable(root / 'cdrom/nex/nex-image-install.sh',

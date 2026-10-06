@@ -10,6 +10,7 @@ import { unfinished } from "./dock";
 import { operationLabel, relativeTime } from "./labels";
 import { Icon } from "./icons";
 import { AttentionList, Badge, Meter, badgeTone, monotone, date } from "./ui";
+import { ImageUpdateBadge } from "./image-updates";
 import { type BackupCatalogPage, type BackupRunPage } from "./backup-types";
 import "./overview.css";
 
@@ -47,8 +48,8 @@ const chipLimit = 12;
 
 // Overview is the landing screen for the selected pool, or site-wide totals for "All pools".
 // Every figure is computed here from the hosts' current reports; nothing is stored.
-export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loading, busy, onCreateSite, onAddHost }: {
-  data: Data; site?: Site; pool?: Pool; hosts: Host[]; vms: VM[]; api: API; coreAvailable?: string; loading: boolean; busy: boolean; onCreateSite: () => void; onAddHost: () => void;
+export function Overview({ data, site, pool, hosts, vms, api, loading, busy, onCreateSite, onAddHost }: {
+  data: Data; site?: Site; pool?: Pool; hosts: Host[]; vms: VM[]; api: API; loading: boolean; busy: boolean; onCreateSite: () => void; onAddHost: () => void;
 }) {
   const [range, setRange] = useState<ChartRange>("1D");
   const [histories, setHistories] = useState<StatsHistory[] | null>(null);
@@ -137,7 +138,7 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const memoryShare = usage.memoryTotal ? 100 * usage.memoryUsed! / usage.memoryTotal : null;
   const storageShare = capacity ? 100 * (capacity - free) / capacity : null;
 
-  const attention = attentionItems(data, hosts, vms, storage, coreAvailable);
+  const attention = attentionItems(data, hosts, vms, storage);
   const failedBackups = runPage?.attention_count ?? 0;
   if (failedBackups) attention.push({ tone: "bad", title: `${failedBackups} backup or restore runs need attention`, detail: "Review Core run outcomes and errors.", href: "#/backups" });
   const untestedPoints = catalogPage?.untested_count ?? 0;
@@ -226,7 +227,7 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
         const isFresh = h.connection === "fresh";
         return <div key={h.id} className={`ov-host${isFresh ? "" : " stale"}`}>
           <header><a href={`#/hosts/${h.id}`}><span className={`dot ${isFresh ? "ok" : h.revoked ? "bad" : "warn"}`} aria-hidden="true" />{h.hostname}</a>
-            <Badge value={master ? "master" : "member"} label={master ? "Master" : "Member"} /></header>
+            <Badge value={master ? "master" : "member"} label={master ? "Master" : "Member"} /><ImageUpdateBadge host={h} /></header>
           <div className="ov-cap" role="meter" aria-label={`${h.hostname} memory assigned`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={memory ? Math.round(100 * assigned / memory) : 0}>
             <i style={{ width: `${memory ? Math.min(100, 100 * assigned / memory) : 0}%` }} /></div>
           <span className="ov-meta">{!pool && `${data.pools.find(p => p.id === h.pool_id)?.name} · `}{gib(assigned)} / {gib(memory)} GiB · {isFresh

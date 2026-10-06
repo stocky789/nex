@@ -54,12 +54,12 @@ when it runs; that threshold is not a disk quota.
 ## CI publish account
 
 For the Release and Website workflows to publish without an interactive password, install
-the publish wrapper and passwordless sudo for the same publishing account used by APT
-bootstrap:
+the publish wrapper and passwordless sudo for the publishing account:
 
 ```sh
 sudo NEX_PUBLISH_USER=<publishing-user> packaging/website/bootstrap-publish.sh
 ```
 
-That installs `website-release.py`, `nex-website-publish`, and a sudoers rule so the
+That creates `/srv/nex-downloads` owned by the publishing account (served at `/downloads/`),
+installs `website-release.py`, `nex-website-publish`, and a sudoers rule so the
 account may run only `sudo -n /usr/local/sbin/nex-website-publish`. Re-running is safe.

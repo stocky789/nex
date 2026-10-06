@@ -3,10 +3,7 @@ package protocol
 
 import "time"
 
-const (
-	LegacyVersion = 1
-	Version       = 2
-)
+const Version = 1
 
 type Site struct {
 	ID   string `json:"id"`
@@ -204,7 +201,7 @@ type Inventory struct {
 	Virtualization []string     `json:"virtualization"`
 	OSVersion      string       `json:"os_version"`
 	AgentVersion   string       `json:"agent_version"`
-	// UptimeSeconds is how long the host had been up at observed_at; absent from older agents.
+	// UptimeSeconds is how long the host had been up at observed_at; absent when the agent does not report it.
 	UptimeSeconds uint64 `json:"uptime_seconds,omitempty"`
 	NICs          []NIC  `json:"nics"`
 	// Managed is the pool-scoped configuration this host has durably applied, reported from
@@ -215,9 +212,9 @@ type Inventory struct {
 	// host-scoped rather than pool-scoped. It is the only path by which a Controller
 	// learns that a rollback deadline is running.
 	ManagementNetwork *ManagementNetworkStatus `json:"management_network,omitempty"`
-	// Image is this host's immutable-image update state (booted, staged and previous release,
+	// Image is this host's image update state (booted, staged and previous release,
 	// phase, rollback floor, state format). Core withholds it until the Controller acknowledges
-	// ImageUpdateCapability, so a strict older decoder never sees it; absent on classic hosts.
+	// ImageUpdateCapability, so a strict decoder that does not know the field never sees it.
 	Image  *ImageStatus `json:"image,omitempty"`
 	Disks  []Disk       `json:"disks"`
 	VMs    []VM         `json:"vms"`
@@ -355,8 +352,8 @@ type Command struct {
 	ZFSReplace        *ZFSReplaceRequest              `json:"zfs_replace,omitempty"`
 	Pool              *PoolCommand                    `json:"pool,omitempty"`
 	ManagementNetwork *ManagementNetworkRequest       `json:"management_network,omitempty"`
-	SystemDiskReplace *SystemDiskReplaceRequest       `json:"system_disk_replace,omitempty"`
 	ImageUpdate       *ImageUpdateRequest             `json:"image_update,omitempty"`
+	SystemDiskReplace *SystemDiskReplaceRequest       `json:"system_disk_replace,omitempty"`
 	OperationID       string                          `json:"operation_id"`
 	Kind              string                          `json:"kind"`
 
@@ -400,16 +397,16 @@ type ReportResponse struct {
 
 // StorageClusterCapability acknowledges the proof request identifier. A Core
 // must receive StorageClusterSupport for this exact capability before it sends
-// clustered-storage results, so a strict older Controller never sees fields it
+// clustered-storage results, so a strict Controller decoder never sees fields it
 // cannot decode.
 const StorageClusterCapability = "storage-clustered-iscsi-v2"
 
 // StorageClusterSessionMonitorCapability is an additive report-envelope
 // extension. A Core sends member session-monitor readiness only after the
 // Controller returns this exact acknowledgement. Keeping the negotiation in
-// the existing capability string makes both directions safe for strict older
-// decoders: older Controllers ignore the offered capability and acknowledge
-// only StorageClusterCapability; older Cores never offer it.
+// the existing capability string makes both directions safe for strict
+// decoders: Controllers that do not know it ignore the offered capability and acknowledge
+// only StorageClusterCapability; Cores without it never offer it.
 const StorageClusterSessionMonitorCapability = "storage-cluster-session-monitor-v1"
 
 const DetectedOSCapability = "detected-os-v1"

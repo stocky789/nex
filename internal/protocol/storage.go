@@ -16,7 +16,7 @@ const StorageRepositoryCapability = "storage-repositories-v1"
 const StorageDiscoveryCapability = "storage-discovery-v1"
 
 // StorageDiscoveryPurposeCapability marks a Core that honours the discovery purpose field.
-// An older Core ignores the field, so the Controller refuses a purpose request for it.
+// A Core without it ignores the field, so the Controller refuses a purpose request for it.
 const StorageDiscoveryPurposeCapability = "storage-discovery-purpose-v1"
 const ISCSIInspectCapability = "storage-iscsi-inspect-v1"
 const ZFSProvisionCapability = "storage-zfs-provision-v1"
@@ -62,7 +62,7 @@ type ISCSIStorageSource struct {
 	// ExclusiveTarget is the operator attestation required when Core cannot inspect the
 	// target ACL. CHAP authenticates an initiator but does not prove exclusive write access.
 	ExclusiveTarget bool `json:"exclusive_target"`
-	// Mode is exclusive (the legacy/default single-writer profile) or clustered_gfs2.
+	// Mode is exclusive (the default single-writer profile) or clustered_gfs2.
 	// A clustered LUN is an already-formatted GFS2 filesystem; Core never formats it.
 	Mode            string   `json:"mode,omitempty"`
 	ClusterID       string   `json:"cluster_id,omitempty"`
@@ -71,7 +71,7 @@ type ISCSIStorageSource struct {
 }
 
 // StorageSource carries only typed, non-secret connection configuration. Local repositories
-// retain the pre-v2 StorageRegistration.Path field so old Core journals remain readable.
+// keep using the StorageRegistration.Path field.
 type StorageSource struct {
 	NFS   *NFSStorageSource   `json:"nfs,omitempty"`
 	ZFS   *ZFSStorageSource   `json:"zfs,omitempty"`
@@ -146,7 +146,7 @@ type StorageAccess struct {
 }
 
 // StorageLifecycleRequest changes an existing repository. Register deliberately remains the
-// legacy Command.Storage shape; that lets old local journals replay unchanged.
+// Command.Storage shape; that lets local journals replay unchanged.
 type StorageLifecycleRequest struct {
 	Action             string               `json:"action"`
 	RepositoryID       string               `json:"repository_id"`

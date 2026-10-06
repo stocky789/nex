@@ -133,7 +133,7 @@ func TestManagedCPUFeaturesRenderedAndVerified(t *testing.T) {
 	}
 }
 
-func TestCPUFeaturesRejectUnsupportedStartAndPreserveLegacy(t *testing.T) {
+func TestCPUFeaturesRejectUnsupportedStartAndPreserveFeaturelessStart(t *testing.T) {
 	calls := startLibvirt(t)
 	lowMemoryHost(t, 16384)
 	t.Setenv("VMHOST_STATE", "shut off")
@@ -156,14 +156,14 @@ func TestCPUFeaturesRejectUnsupportedStartAndPreserveLegacy(t *testing.T) {
 	t.Setenv("VMHOST_STATE", "shut off")
 	v.CPU.Features = nil
 	if err := powerVM(context.Background(), protocol.VMPowerRequest{VMID: v.ID, Action: "start"}, &v); err != nil {
-		t.Fatalf("legacy start changed: %v", err)
+		t.Fatalf("featureless start changed: %v", err)
 	}
 	if got := calls(); !strings.Contains(got, "\nstart ") {
-		t.Fatalf("legacy start lost: %s", got)
+		t.Fatalf("featureless start lost: %s", got)
 	}
 }
 
-func TestLegacyCPUDefinitionWithoutExplicitFeaturesKeepsNativeNormalization(t *testing.T) {
+func TestCPUDefinitionWithoutExplicitFeaturesKeepsNativeNormalization(t *testing.T) {
 	v := managedTestVM()
 	want, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}, []string{"/disk-0"}, "/iso")
 	if err != nil {
@@ -171,7 +171,7 @@ func TestLegacyCPUDefinitionWithoutExplicitFeaturesKeepsNativeNormalization(t *t
 	}
 	normalized := strings.Replace(string(want), "</cpu>", `<feature name="native-extra" policy="require"/></cpu>`, 1)
 	if err := validateManagedDefinition([]byte(normalized), want); err != nil {
-		t.Fatalf("legacy native normalization changed: %v", err)
+		t.Fatalf("native normalization changed: %v", err)
 	}
 }
 

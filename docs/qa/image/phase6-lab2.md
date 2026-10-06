@@ -61,8 +61,8 @@ ended before the password prompt. Two independent causes, both in the image, nei
    lock). The Controller guest list (`image/controller/controller.packages`) lacked it too and got the same line; that guest was **not built or
    booted** here.
 2. **SSH refused a root password.** sshd's default `PermitRootLogin` is `prohibit-password`, and the image shipped no
-   `sshd_config.d` drop-in; the classic edition writes `00-nex-core.conf` (`PermitRootLogin yes`, `PasswordAuthentication yes`) from
-   `late-install.sh`, and the guide promises "fresh installs allow root password SSH on the management network". Fix:
+   `sshd_config.d` drop-in, so no `00-nex-core.conf` (`PermitRootLogin yes`, `PasswordAuthentication yes`) existed,
+   and the guide promises "fresh installs allow root password SSH on the management network". Fix:
    `image/mkosi.extra/etc/ssh/sshd_config.d/00-nex-core.conf` with the same two lines.
 
 Regression test: `tests/test_image_layout.py::test_root_can_sign_in_at_the_console_and_over_ssh` (the package lists, the lock and the drop-in).

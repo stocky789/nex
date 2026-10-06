@@ -97,7 +97,7 @@ export function diffRows(nics: NIC[] | undefined, spec: Spec) {
 }
 
 // What a staged change will give the operator once it is applied: the host's own recorded
-// window, or an honest "not reported" for a host whose Core is older than that field.
+// window, or an honest "not reported" for a host that does not report that field.
 export function stagedWindowText(windowSeconds?: number) {
   if (!windowSeconds) return `Once applied, the host restores its previous configuration by itself unless you confirm it within the rollback window it recorded (${MIN_WINDOW_MINUTES}\u2013${MAX_WINDOW_MINUTES} minutes); this host did not report which.`;
   const minutes = Math.max(1, Math.round(windowSeconds / 60));

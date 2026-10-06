@@ -20,7 +20,7 @@ RUN test -n "$SNAPSHOT" \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
       > /etc/apt/sources.list.d/snapshot.sources \
     && printf '%s\n' 'Acquire::Check-Valid-Until "false";' 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/10snapshot \
-    && apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libpam0g-dev pkg-config libiscsi-dev libblkid-dev python3 dpkg-dev openssl ca-certificates xz-utils && rm -rf /var/lib/apt/lists/*
+    && apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libpam0g-dev pkg-config libiscsi-dev libblkid-dev python3 dpkg-dev ca-certificates xz-utils && rm -rf /var/lib/apt/lists/*
 # Pin the supported upstream compiler; C compilation still uses Debian gcc/libc.
 RUN python3 -c 'import urllib.request; urllib.request.urlretrieve("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz", "/tmp/go.tar.gz")' && echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  /tmp/go.tar.gz" | sha256sum -c - && tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz
 # The web build's Node and npm: one upstream archive instead of Debian's npm, which drags in about 300 node-* packages.

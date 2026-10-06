@@ -334,7 +334,7 @@ func bindCredentialReceipt(stateDir, receipt, repositoryID, poolID, hostID, regi
 // StorageCredentialReceipts exposes only durable, opaque receipt metadata for adoption after a
 // Controller replacement. Credential material and replay proofs remain Core-local. Every
 // report calls it, so it also settles what a crash left in the directory: a credentials file
-// or temp file no receipt names, and a receipt that still carries a plaintext secret.
+// or temp file no receipt names.
 func StorageCredentialReceipts(stateDir string) ([]protocol.StorageCredentialReceipt, error) {
 	credentialStoreMu.Lock()
 	defer credentialStoreMu.Unlock()
@@ -361,51 +361,17 @@ func StorageCredentialReceipts(stateDir string) ([]protocol.StorageCredentialRec
 		if err = json.Unmarshal(b, &stored); err != nil || stored.Receipt == "" || stored.RequestID == "" || stored.PoolID == "" || stored.HostID == "" {
 			return nil, errors.New("credential receipt is invalid")
 		}
-		if stored, err = scrubLegacyCredential(path, b, stored); err != nil {
-			return nil, err
-		}
 		named[stored.Receipt] = true
 		out = append(out, stored.StorageCredentialReceipt)
 	}
 	for _, entry := range entries {
 		name := entry.Name()
 		if !entry.IsDir() && !strings.HasSuffix(name, ".json") && !named[name] &&
-			(strings.HasPrefix(name, ".write-") || name == "receipt-key" || storageID.MatchString(name)) {
+			(strings.HasPrefix(name, ".write-") || storageID.MatchString(name)) {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
 	return out, nil
-}
-
-// scrubLegacyCredential rewrites a receipt written before the secret moved out of the receipt
-// JSON. It still holds the plaintext and a keyed proof the current code cannot check, so the
-// plaintext is dropped and the proof recomputed from it the way a new receipt's is; a retired
-// receipt keeps no proof. The credentials file beside it was written with the receipt. The
-// legacy receipt-key file is then an unnamed file and the sweep removes it.
-func scrubLegacyCredential(path string, raw []byte, stored storedCredential) (storedCredential, error) {
-	var legacy struct {
-		Username string `json:"username"`
-		Secret   string `json:"secret"`
-		Domain   string `json:"domain"`
-	}
-	retired := stored.Status != "ready"
-	switch {
-	case retired && stored.Proof != "":
-		stored.Proof = ""
-	case !retired && json.Unmarshal(raw, &legacy) == nil && legacy.Secret != "":
-		proof, err := credentialBodyProof(protocol.StorageCredentials{Username: legacy.Username, Secret: legacy.Secret, Domain: legacy.Domain})
-		if err != nil {
-			return stored, err
-		}
-		stored.Proof = proof
-	default:
-		return stored, nil
-	}
-	b, err := json.Marshal(stored)
-	if err != nil {
-		return stored, err
-	}
-	return stored, atomicWrite(path, b)
 }
 
 // releaseStorageCredential deletes the Core-local secret for a repository that is being

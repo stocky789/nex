@@ -348,7 +348,7 @@ func nfsAccess(s protocol.StorageRegistration, v *protocol.NFSStorageSource, pat
 func nfsIdentity(s protocol.StorageRegistration, v *protocol.NFSStorageSource, source string, a storageAccess, fsid string) (storageAccess, error) {
 	if want := s.Identity.NFS; want != nil {
 		// A persisted NFS identity must be the kernel NFSv4 server FSID profile.
-		// In particular, do not upgrade legacy statfs values: statfs f_fsid is
+		// In particular, do not accept statfs values: statfs f_fsid is
 		// allowed to be zero or undefined, so doing so would hide a replacement.
 		if !validNFSFilesystemID(want.FilesystemID) || want.FilesystemID != fsid {
 			return storageAccess{}, errors.New("NFS filesystem identity does not match registration")
@@ -498,10 +498,6 @@ func smbIdentity(s protocol.StorageRegistration, v *protocol.SMBStorageSource, p
 		// time changes across reconnects. The marker is the durable alias-collision key.
 		a.FilesystemID = "smb-marker:" + marker
 		a.Identity = "smb:" + source + ":marker=" + marker
-	} else if want := s.Identity.SMB; want != nil && want.FilesystemID != "" {
-		if want.FilesystemID != a.FilesystemID {
-			return storageAccess{}, errors.New("SMB filesystem identity does not match registration")
-		}
 	} else if s.Identity.SMB == nil {
 		marker, err := smbMarker(path)
 		if err != nil {
@@ -511,7 +507,7 @@ func smbIdentity(s protocol.StorageRegistration, v *protocol.SMBStorageSource, p
 		a.FilesystemID = "smb-marker:" + marker
 		a.Identity = "smb:" + source + ":marker=" + marker
 	} else {
-		return storageAccess{}, errors.New("SMB legacy identity is incomplete")
+		return storageAccess{}, errors.New("SMB repository marker is missing from registration")
 	}
 	a.Observed.SMB = identity
 	return a, nil

@@ -261,7 +261,7 @@ staleForm.fill("NFS server", "nas.example.test");
 assert.equal(staleForm.button("Browse exports").props.disabled, true, "an unreachable pool master cannot browse");
 staleForm.close();
 
-// An older Core ignores the purpose field, so it would list ordinary directories: the Controller refuses, and the form does not offer the picker.
+// A Core without the purpose capability ignores the purpose field, so it would list ordinary directories: the Controller refuses, and the form does not offer the picker.
 const oldCoreForm = repositoryForm(async () => [], [{ ...master, capabilities: ["storage-repositories-v1", "storage-discovery-v1"] }]);
 await oldCoreForm.settle();
 oldCoreForm.open();

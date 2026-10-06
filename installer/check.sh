@@ -5,11 +5,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 bash -n installer/build.sh
 bash -n installer/build-gui.sh
-sh -n installer/late-install.sh
 sh -n installer/netinst-fetch.sh
 python3 -m py_compile installer/netinst-manifest.py
 sh -n installer/gui/wizard-text.sh
 sh -n installer/root-account.sh
+sh -n installer/nex-image-install.sh
 python3 - <<'PY'
 from pathlib import Path
 import re
@@ -20,41 +20,47 @@ grub = build.split("<<'GRUB'\n")[1].split('\nGRUB')[0]
 
 
 def boot_entry(label):
-    """The BIOS and GRUB entries of one boot menu item."""
+    """The BIOS (isolinux) and UEFI (GRUB) entries of one boot menu item."""
     return (next(entry for entry in re.split(r'(?m)^label ', bios)[1:]
                  if f'menu label {label}\n' in entry),
             grub.split(f"menuentry '{label}' {{\n")[1].split('}')[0])
 
 
-# Both Nex modes boot the initrd carrying the Nex overlay, which supplies the wizard
-# and its embedded safe seed; only the cdebconf frontend differs. A mode booting the
-# untouched Debian initrd would silently install a different host.
-for label, frontend in [('GUI install - Nex Core', ''),
-                        ('Minimal install - Nex Core (text)', 'newt')]:
+# The media boots on BIOS and UEFI firmware: the base media's hybrid boot structure and signed
+# EFI binaries are replayed, and every entry exists in both menus.
+assert '-boot_image any replay' in build, 'the hybrid BIOS/UEFI boot structure must be replayed'
+assert 'isolinux/isolinux.cfg' in build and 'boot/grub/grub.cfg' in build
+assert len(re.findall(r'(?m)^label ', bios)) == len(re.findall(r'(?m)^menuentry ', grub)) == 4, \
+    'the BIOS and UEFI menus must offer the same four entries'
+# Every Nex mode boots the initrd carrying the Nex overlay, which supplies the wizard and its
+# embedded account policy; only the cdebconf frontend and console differ. A mode booting the
+# untouched Debian initrd would run Debian's own questions instead of the Nex installer.
+for label, frontend, console in [('GUI install - Nex Core', '', False),
+                                 ('Minimal install - Nex Core (text)', 'newt', False),
+                                 ('Install Nex Core (serial console ttyS0)', 'newt', True)]:
     b, g = boot_entry(label)
     assert 'kernel /install.amd/vmlinuz' in b
     assert 'initrd=/install.amd/gtk/initrd.gz' in b
     assert 'linux /install.amd/vmlinuz' in g
     assert 'initrd /install.amd/gtk/initrd.gz' in g
-    assert 'preseed/file=' not in b + g, f'{label} uses the initrd seed, not the media file'
+    assert 'preseed/file=' not in b + g, f'{label} must not bypass the Nex wizard with a media seed'
     if frontend:
         assert f'DEBIAN_FRONTEND={frontend}' in b and f'DEBIAN_FRONTEND={frontend}' in g
     else:
         assert 'DEBIAN_FRONTEND=' not in b + g, 'the graphical mode selects its own frontend'
+    if console:
+        assert 'console=ttyS0,115200n8' in b and 'console=ttyS0,115200n8' in g
+    else:
+        assert 'console=' not in b + g
     assert 'auto=true' not in b + g
-# Serial and rescue both boot the untouched Debian initrd, but only the serial
-# entries install: they carry the media seed. Rescue must reach a shell without
-# seeding anything, so a preseed argument there would change what it does.
-for entry in boot_entry('Install Nex Core (serial console ttyS0)'):
-    assert '/install.amd/initrd.gz' in entry and '/install.amd/gtk/initrd.gz' not in entry
-    assert 'preseed/file=/cdrom/preseed.cfg' in entry, 'the serial install needs the media seed'
-    assert 'console=ttyS0,115200n8' in entry
+# Rescue reaches a shell without seeding anything.
 for entry in boot_entry('Debian rescue mode'):
     assert '/install.amd/initrd.gz' in entry and '/install.amd/gtk/initrd.gz' not in entry
     assert 'preseed' not in entry, 'rescue must boot Debian unseeded'
     assert 'rescue/enable=true' in entry
 assert 'timeout 0' in build and 'set timeout=-1' in grub
-print('PASS: BIOS/UEFI GUI and minimal text entries, serial media seed, unseeded rescue, no timeout')
+assert 'nex.edition' not in build and '/nex/edition' not in build
+print('PASS: BIOS and UEFI menus offer GUI, text, serial and rescue; no timeout')
 
 # Both wizards write the same handoff and nex-config remains the single validator.
 start = Path('installer/gui/start.sh').read_text()
@@ -69,6 +75,7 @@ assert 'nex-config --apply /run/nex-installer/config.ini' in start
 assert start.count('nex-config --apply') == 1, 'One apply site for both frontends'
 assert "install -m 755 installer/gui/wizard-text.sh" in gui and 'wizard-text.templates' in gui
 assert "assert (root / 'usr/lib/cdebconf/frontend/newt.so').is_file()" in gui
+assert 'install -m 644 installer/preseed.cfg "$overlay/preseed.cfg"' in gui
 assert '/run/nex-installer/config.ini' in wizard and '/usr/bin/nex-config' not in wizard, \
     'The text wizard writes the handoff; the shared setup loop applies it'
 assert '/usr/lib/nex-installer/validate-config' in wizard, \
@@ -84,7 +91,7 @@ for name in ('wizard-text.sh', 'wizard-text.templates', 'nex-network.c', 'nex-co
 assert 'g_ptr_array_sort(names, compare_names)' in Path('installer/gui/nex-wizard.c').read_text(), \
     'The graphical wizard must sort /sys/class/net, like the text wizard glob'
 # The text frontend must not weaken the disk, account or network contract.
-assert 'MIN_SECTORS=33554432' in wizard and 'MIN_SECTORS=50331648' in wizard, 'text wizard needs the 16 and 24 GiB floors'
+assert 'MIN_SECTORS=50331648' in wizard, 'text wizard needs the 24 GiB floor'
 assert 'sd*|vd*|xvd*|nvme*' in wizard
 assert '[ -e "$path/partition" ] && continue' in wizard
 assert '"$(read_attr "$path/removable")" = 0' in wizard
@@ -103,48 +110,19 @@ print('PASS: one setup handoff for both installer frontends')
 entries = [line.split(None, 3) for line in Path('installer/preseed.cfg').read_text().splitlines()
            if line.strip() and not line.lstrip().startswith('#')]
 account_policy = {'passwd/root-login': 'true', 'passwd/make-user': 'false'}
+assert sorted(entry[1] for entry in entries) == sorted(account_policy), \
+    'The seed carries only the root-only account policy'
 for key, value in account_policy.items():
     assert entries.count(['d-i', key, 'boolean', value]) == 1, f'Required account policy: {key}={value}'
-for entry in entries:
-    assert len(entry) >= 3, f'Malformed preseed entry: {entry}'
-    key = entry[1]
-    # Only the root-only policy is preseeded; passwords must remain interactive.
-    if key.startswith('passwd/'):
-        assert key in account_policy and entry == ['d-i', key, 'boolean', account_policy[key]], entry
-    assert not key.startswith(('partman', 'netcfg/', 'grub-installer/')), key
-    if key == 'preseed/early_command':
-        assert entry == ['d-i', key, 'string', '/bin/sh /cdrom/nex/root-account.sh'], entry
-    assert key not in ('preseed/run', 'auto-install/enable'), key
-assert entries.count(['d-i', 'preseed/early_command', 'string', '/bin/sh /cdrom/nex/root-account.sh']) == 1
-# BUG-0413: recheck.sh clears only the selected disk; partman's RAID removal zeroes every
-# array member, so it must never be answered for the operator.
+# Passwords, disks, networking and confirmations remain interactive; the image installer, not
+# Debian's partitioning, base-system or boot loader steps, does the disk work.
 seed = Path('installer/gui/nex-config.c').read_text()
 assert 'partman-md/device_remove_md' not in seed, 'RAID removal would touch disks the operator did not select'
-# Two or more selected disks install two md RAID1 mirrors (/ and /var), with an ESP per
-# disk on the GPT label a UEFI install uses. One disk installs separate ext4 / and /var.
-# Generated lines (including NVMe "p" suffixes and disk counts) are exercised by
-# tests/integration/installer-hostname.py driving render(); keep only structural guards here.
-assert 'd-i partman-auto/method string raid' in seed and 'd-i partman-auto/method string regular' in seed
-assert 'd-i partman-auto/expert_recipe string nex-mirror :: ' in seed
-assert 'd-i partman-auto/expert_recipe string nex-single :: ' in seed
-assert 'd-i partman-partitioning/default_label string gpt' in seed
-assert '1 1 1 free $iflabel{ gpt } method{ biosgrub } . ' in seed
-assert '538 538 538 free $iflabel{ gpt } method{ efi } format{ } . ' in seed
-assert '6000 8000 10000 raid $primary{ } method{ raid } . ' in seed
-assert '4000 20000 1000000000 raid $primary{ } method{ raid } .' in seed
-assert 'mountpoint{ / } . ' in seed and 'mountpoint{ /var } . ' in seed, 'a single disk needs / and a separate /var'
-assert 'ext4 / %s . 1 %u 0 ext4 /var %s .' in seed, 'a mirror needs separate / and /var arrays'
-assert 'choose_recipe select atomic' not in seed, 'the stock atomic recipe puts /var on /'
-assert 'd-i grub-installer/force-efi-extra-removable boolean true' in seed, 'every ESP needs the removable boot path'
-assert 'd-i partman-basicfilesystems/no_swap boolean false' in seed, 'the mirror has no swap; partman must not ask'
 # Every selected disk is validated, not just the first, and a mirror of mismatched
 # disks is refused rather than silently shrunk to the smallest one.
 assert 'validate_disk(disk[i],size[i],serial[i],dev[i])' in seed
 assert "within 10% of the smallest selected disk's capacity" in seed
 assert 'fail("Select each mirror disk only once.")' in seed
-recheck = Path('installer/gui/recheck.sh').read_text()
-assert "sed -n 's/^disk=//p' /run/nex-installer/config.ini | tr ';' ' '" in recheck, \
-    'signatures must be cleared on every selected disk'
 graphical = Path('installer/gui/nex-wizard.c').read_text()
 # Both frontends offer the mirror the same way: a tick list of disks, keyboard included.
 assert 'gtk_cell_renderer_toggle_new()' in graphical and 'disk_toggled' in graphical, \
@@ -174,85 +152,32 @@ assert [a for a in ('device/serial', '"serial"', 'device/vpd_pg80') if a in help
 assert shell.index('device/serial') < shell.index('/serial"') < shell.index('device/vpd_pg80')
 assert 'Disabled, dhcp, static' in wizard, 'both frontends use Disabled for an unconfigured adapter'
 assert 'ini_list()' in wizard, ';-separated disk list values must escape semicolons'
-assert 'bytes < disk_floor()) continue' in graphical and '(image_edition() ? 24ULL : 16ULL)' in graphical, \
-    'GTK discover must skip disks below the edition floor (16 GiB classic, 24 GiB image) like the text frontend'
+assert 'bytes < disk_floor()) continue' in graphical, \
+    'GTK discover must skip disks below the floor like the text frontend'
 assert 'not pooled storage' in graphical, 'mirror summary must say capacity is not pooled'
 assert 'Template: nex-installer/disk-error\n' in templates
-assert '"/var/log/partman"' in Path('installer/gui/nex-shell.c').read_text(), 'View log must include the partman log'
 assert 'nex-live-log' in Path('installer/gui/nex-shell.c').read_text(), 'Install progress must show a live activity log'
 assert 'Still working' in Path('installer/gui/nex-shell.c').read_text(), 'Install progress must show activity while a step is quiet'
 assert 'nex_progress_tick' in Path('installer/gui/nex-shell.c').read_text()
 
-packages = Path('installer/packages.txt').read_text().split()
-assert len(packages) == len(set(packages)), 'Duplicate package'
-assert {'qemu-system-x86', 'libvirt-daemon-system', 'libvirt-clients', 'openssh-server', 'genisoimage', 'ovmf', 'python3-virt-firmware'} <= set(packages)
-assert 'ovmf-generic' not in packages, 'Use Debian stable OVMF only'
-assert 'nex-core-local' not in packages, 'Ship nex-core-local via the ISO repo copy, not Debian APT download'
-assert all(p.replace('-', '').isalnum() for p in packages), 'Unexpected package argument'
-late = Path('installer/late-install.sh').read_text()
-assert 'Dir::Etc::sourceparts=-' in late and 'file:/var/cache/nex-install/repo' in late
-assert "'PermitRootLogin yes' 'PasswordAuthentication yes' > /etc/ssh/sshd_config.d/00-nex-core.conf" in late
-assert 'systemctl disable zfs-import-scan.service' in late, 'Leftover ZFS pools on unselected disks must not be imported at boot'
-# Embedded configure.sh and nex-sync-esp are data to sh -n on late-install.sh; syntax-check them.
-import subprocess as _sp
-for marker, label in (("<<'TARGET'", 'TARGET'), ("<<'ESP'", 'ESP')):
-    block = late.split(f"{marker}\n", 1)[1].split(f'\n{label}\n', 1)[0]
-    _sp.run(['sh', '-n'], input=block, text=True, check=True)
-    print(f'PASS: late-install {label} heredoc is valid shell')
-# A mirrored system disk is assembled by the kernel from the members' own superblocks;
-# the installed host needs mdadm, its config in the initramfs and GRUB on every ESP.
-# Gate on the installed root being an md device, not on any leftover array in mdstat.
-assert 'mdadm' in packages
-assert "case $root in /dev/md*)" in late
-assert 'mdadm --detail --scan "$root" ${var:+"$var"}' in late and 'findmnt -no SOURCE /var' in late and 'update-initramfs -u' in late, \
-    'the initramfs must know both the root and (when it is its own md mount) the /var array'
-assert '/usr/local/sbin/nex-sync-esp' in late and 'DPkg::Post-Invoke' in late
-assert 'mkdir -p "$copy/EFI"' in late, 'a freshly formatted ESP has no EFI directory to copy into'
-assert 'sed -i' in late and 'UUID=' in late.split('nex-sync-esp', 1)[1], \
-    'nex-sync-esp must rewrite fstab when it remounts a surviving ESP'
-# The mounted ESP is one member's own partition: a replaced or failed disk must not drop the
-# host into emergency mode while the mirror itself is healthy. Apply the real sed to a fixture.
-fstab_fixture = (
-    '# / was on /dev/md0 during installation\n'
-    'UUID=root-uuid / ext4 errors=remount-ro 0 1\n'
-    '# /boot/efi was on /dev/sda1 during installation\n'
-    'UUID=esp-uuid /boot/efi vfat umask=0077 0 1\n'
-    '/dev/sr0 /media/cdrom0 udf,iso9660 user,noauto 0 0\n'
-)
-sed_expr = None
-for line in late.splitlines():
-    if 'sed -i' in line and 'boot' in line and 'nofail' in line and 'x-systemd.device-timeout' in line:
-        # late-install runs: sed -i 'EXPR' /etc/fstab — extract EXPR
-        start = line.index("'") + 1
-        end = line.rindex("'")
-        sed_expr = line[start:end]
-        break
-assert sed_expr, 'late-install must rewrite the /boot/efi fstab options'
-rewritten = _sp.run(['sed', sed_expr], input=fstab_fixture, text=True, capture_output=True, check=True).stdout
-assert rewritten.splitlines()[0] == fstab_fixture.splitlines()[0]
-assert rewritten.splitlines()[1] == fstab_fixture.splitlines()[1]
-assert rewritten.splitlines()[2] == fstab_fixture.splitlines()[2]
-assert 'UUID=esp-uuid /boot/efi vfat umask=0077,nofail,x-systemd.device-timeout=5s 0 1' in rewritten
-assert rewritten.splitlines()[4] == fstab_fixture.splitlines()[4]
-print('PASS: /boot/efi fstab rewrite adds only nofail and a short device timeout')
-# Copying to no ESP is a failure, so the replace operation can tell and install the ESP
-# itself; the installer and the APT hook both tolerate that status.
-assert '[ "$written" -gt 0 ]' in late, 'nex-sync-esp must report copying nothing'
-assert "trap 'umount \"$copy\" 2>/dev/null || true; rmdir \"$copy\" 2>/dev/null || true' EXIT" in late, \
-    'nex-sync-esp must unmount a failed member ESP copy on EXIT'
-assert '/usr/local/sbin/nex-sync-esp || true' in late
-assert 'DPkg::Post-Invoke { "/usr/local/sbin/nex-sync-esp || true"; };' in late
-assert 'systemd.ssh_auto=no' in late
-assert 'nex-core-local.service' in late
-assert 'Local alpha: no Nex Controller' not in late
-assert r"Host: \n  Console: \l" in late
-assert 'CORE_LOCAL_DEB' in build and 'nex-core-local_' in build
-assert "printf 'nex-core-local\\n' >>" in build
-assert 'scripts/build-source.py' in build, 'ISO builds must regenerate corresponding source'
-assert 'appliance/build.py' in build, 'ISO builds must rebuild the Controller appliance'
-assert 'assert_iso_artifacts_current' in build, 'ISO builds must verify Core/Controller source freshness'
-assert 'stage_ovmf_generic' not in build and ' sid main' not in build
-assert 'install "${packages[@]}"' in build, 'All installer packages must use the pinned Debian stable closure'
+# The media is the image and the static installer; the builder needs both.
+assert 'NEX_IMAGE_DIR is required' in build and 'NEX_HOSTIMAGE_BIN is required' in build, \
+    'the media cannot be built without the image and the static nex-hostimage'
+assert '"$hostimage" verify "$image"' in build, 'the staged image must verify before it is put on the media'
+assert 'install -m755 installer/nex-image-install.sh "$stage/nex/nex-image-install.sh"' in build
+assert 'stage_grub_bios\n' in build and 'local tree=$cache/grub-image-tree grub=$stage/nex/grub' in build, \
+    'BIOS firmware needs a GRUB the installer environment lacks: it is staged at nex/grub (grub-install)'
+assert 'usr/sbin/grub-install' in build and 'usr/lib/grub/i386-pc/grub-bios-setup' in build
+assert all(p in Path('image/base.packages').read_text().split() for p in ('grub2-common', 'grub-common', 'grub-pc-bin')), \
+    'grub-install (grub2-common) and its i386-pc parts must be in the system image'
+assert '"$grub/usr/lib64"' in build and 'fsck.erofs --extract="$tree"' in build, \
+    'the staged GRUB needs usr/lib64 for the loader (/lib64 is a link into usr) and is read from the erofs'
+assert '--parents' not in build.split('stage_grub_bios() {')[1].split('\n}\n')[0], \
+    'library copies go through the same symlinked layout; no silent cp fallback'
+assert 'install -m755 installer/root-account.sh "$stage/nex/root-account.sh"' in build, \
+    'the preparation step reads the account hook from the media'
+assert 'dist/nex-source.tar.gz' in build and 'appliance/build.py --version' in build, 'ISO builds must regenerate corresponding source'
+assert 'controller-system.img' in build, 'ISO builds must carry the Controller system image'
 assert 'stage_virtio_win' in build and 'virtio-win-0.1.302-1.src.rpm' in build
 assert 'ensure_perl_exact_source' in build and 'perl-exact-source' in build
 assert '303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d' in build
@@ -260,10 +185,8 @@ assert '25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d' in bui
 assert 'third-party/virtio-win' in build and 'source_retained' in build
 assert 'BusyBox\'s gunzip applet' in build
 assert 'grep -Fx gunzip' in build
-assert 'refusing to publish virtio-win.iso without complete corresponding-source and legal accounting' not in build
 assert 'virtio-win corresponding source RPM missing' in build
-assert 'Dir::Etc::sourceparts=-' in build and ' trixie main' in build
-assert 'Unset CORE_LOCAL_DEB and NEX_SKIP_APPLIANCE_REBUILD' in build, 'ISO builds must reject reused packages'
+assert 'deb-src $source_snapshot trixie main' in build and 'Dir::Etc::sourceparts=-' in gui
 assert 'dist/nex-source.tar.gz required' in build
 assert 'ARTWORK-LICENSE.md is required for branded media.' in build
 assert 'cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$stage/nex/docs/"' in build
@@ -271,37 +194,10 @@ assert 'cp -f LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$source_stage
 assert 'cp -a installer "$source_stage/nex-source/"' in build
 assert re.search(r'tar .* -czf "\$stage/nex/nex-source\.tar\.gz" \\\s*LICENSE NOTICE docs/LICENSING\.md installer', build) is None, \
     'Do not ship installer-only source as the sole ISO archive'
-# BUG-0004: raw chroot inherits the installer's stale debconf descriptors.
-assert '\nin-target /bin/sh /var/cache/nex-install/configure.sh\n' in late, 'Use Debian in-target for package configuration'
-assert '\nchroot /target ' not in late, 'Raw chroot bypasses installer setup'
-post = Path('packaging/core-local/postinst').read_text()
-core_package = Path('packaging/core-local/build-inside.sh').read_text()
-# BUG-0406: the installed system resolves nex-core-local from the ISO's offline repo,
-# whose closure is downloaded from packages.txt alone. A dependency that nothing in that
-# list pulls in is simply absent from the media and the in-target install fails.
-core_depends_field = re.findall(r'(?m)^Depends: (.+)$', core_package)
-assert len(core_depends_field) == 1, 'One nex-core-local control stanza expected'
-core_depends = {d.split()[0] for d in core_depends_field[0].split(',')}
-# Supplied by the Debian base system or already pulled in by a listed package's own
-# dependencies; everything else nex-core-local needs must be downloaded explicitly.
-# libblkid1 ships in lockstep with util-linux, whose Pre-Depends pin it to the base's exact
-# version. Listing it makes APT upgrade it alone and the in-target install fails with exit 100.
-base_system = {'init-system-helpers', 'libc6', 'python3', 'openssl', 'libpam0g',
-               'libpam-modules', 'iproute2', 'libblkid1'}
-assert 'libblkid1' not in packages, 'libblkid1 must come from the base system, not packages.txt'
-undownloaded = sorted(core_depends - base_system - set(packages))
-assert not undownloaded, f'nex-core-local depends on packages the ISO repo never downloads: {undownloaded}'
-assert 'python3-virt-firmware' in core_package, 'nex-core-local must depend on the Secure Boot variable tool package'
-assert 'dpkg-divert --local --add --rename --divert /etc/os-release.debian /etc/os-release' in post
-assert 'ID=nex-core\nID_LIKE=debian\n' in post and "dpkg-query -W -f='${Version}' nex-core-local" in post
-assert 'systemd.ssh_auto=no' in post
-assert '0.1.0-alpha1' not in build + late and 'test "$ID" = nex-core' in late, 'One Nex Core version: the package'
-assert 'if [ -d /cdrom/nex/third-party/virtio-win ]' in late
-assert '/cdrom/nex/media/virtio-win.iso.gz' in late
-assert '/cdrom/nex/media/virtio-win.iso.sha256' in late
-assert 'gunzip -c /cdrom/nex/media/virtio-win.iso.gz > "$virtio_iso"' in late
-assert "trap 'rm -f \"$virtio_iso\"' 0 1 2 15" in late
-assert '> /usr/lib/os-release' not in late, 'Preserve upstream release metadata'
-assert 'third-party/ovmf-generic' not in late
-print('PASS: shell syntax, interactive disk/account/network contract, package inputs, offline APT scope')
+# The net installer carries the same boot files and downloads only the image set and payloads.
+fetch = Path('installer/netinst-fetch.sh').read_text()
+assert 'image/*|payload/*/*' in fetch and 'repo/' not in fetch and 'media/' not in fetch
+assert '--image "$stage/nex/image" --appliance /work/dist/appliance' in build
+assert 'rm -rf "$netstage/nex/image" "$netstage/nex/payload"' in build
+print('PASS: shell syntax, interactive disk/account/network contract, image-only media inputs')
 PY

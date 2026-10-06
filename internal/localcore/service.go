@@ -26,7 +26,7 @@ type Config struct {
 	DataDir, AgentStateDir, UIPath, DocsPath, SourcePath string
 	Authenticate                                         func(context.Context, string) error
 	Engine                                               vmhost.Config
-	// ImageUpdate replaces the update engine an image-edition host builds for itself (tests).
+	// ImageUpdate replaces the update engine the service builds for itself (tests).
 	ImageUpdate *nexupdate.Engine
 }
 
@@ -72,7 +72,7 @@ type Service struct {
 	lock       *os.File
 	wg         sync.WaitGroup
 	enrollMu   sync.Mutex
-	// imageUpdate is the image edition's update engine; nil on a classic host.
+	// imageUpdate is this host's update engine.
 	imageUpdate *nexupdate.Engine
 }
 type DeployRequest struct {
@@ -145,11 +145,9 @@ func Open(cfg Config) (*Service, error) {
 		return nil, err
 	}
 	s.imageUpdate = s.newImageUpdateEngine()
-	if s.imageUpdate != nil {
-		// The embedded agent relays the Controller's update actions to this same engine, so the
-		// host has exactly one writer of its update record.
-		agent.SetImageUpdater(s.imageUpdate)
-	}
+	// The embedded agent relays the Controller's update actions to this same engine, so the
+	// host has exactly one writer of its update record.
+	agent.SetImageUpdater(s.imageUpdate)
 	ok = true
 	return s, nil
 }
@@ -159,14 +157,8 @@ func (s *Service) Close() error {
 	// The embedded enrollment agent is not on s.wg; wait for it so callers (and
 	// testing.T.TempDir cleanup) can remove AgentStateDir without racing Save().
 	releaseHandoffAgent(s.cfg.AgentStateDir)
-	// A background update apply is not on s.wg either, and it keeps writing
-	// progress into DataDir; abandoning it would leave dpkg running and write
-	// into a directory the caller is about to remove.
-	nexupdate.WaitApply()
-	if s.imageUpdate != nil {
-		agent.SetImageUpdater(nil)
-		s.imageUpdate.Close()
-	}
+	agent.SetImageUpdater(nil)
+	s.imageUpdate.Close()
 	return s.lock.Close()
 }
 

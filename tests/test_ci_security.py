@@ -219,8 +219,8 @@ class ReleaseChannelTests(unittest.TestCase):
     def test_branch_decides_the_channel_version_and_publish_paths(self):
         for provider in PROVIDERS:
             for branch, expected in (
-                    ('main', 'tag=v0.4.18\nversion=0.4.18\npublic_version=0.4.18\nchannel=stable\napt_path=apt\ndownloads_path=downloads\n'),
-                    ('dev', 'tag=v0.4.19-dev.2\nversion=0.4.19~~dev.2\npublic_version=0.4.19-dev.2\nchannel=dev\napt_path=apt/dev\ndownloads_path=downloads/dev\n')):
+                    ('main', 'tag=v0.4.18\nversion=0.4.18\npublic_version=0.4.18\nchannel=stable\ndownloads_path=downloads\n'),
+                    ('dev', 'tag=v0.4.19-dev.2\nversion=0.4.19~~dev.2\npublic_version=0.4.19-dev.2\nchannel=dev\ndownloads_path=downloads/dev\n')):
                 with self.subTest(provider=provider, branch=branch), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     self.checkout(root)
@@ -247,9 +247,8 @@ class ReleaseChannelTests(unittest.TestCase):
     def test_development_publishes_into_its_own_subtree_and_never_the_website(self):
         for provider in PROVIDERS:
             for channel, version, flags in (
-                    ('stable', '0.4.18', ("nex-apt-publish '", "release-publish.py' --iso")),
-                    ('dev', '0.4.19~~dev.7', ("nex-apt-publish --repo-root /srv/nex-apt/dev --keep 3 '",
-                                             "release-publish.py' --root /srv/nex-downloads/dev --iso"))):
+                    ('stable', '0.4.18', ("release-publish.py' --iso",)),
+                    ('dev', '0.4.19~~dev.7', ("release-publish.py' --root /srv/nex-downloads/dev --iso",))):
                 with self.subTest(provider=provider, channel=channel), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     (root / 'dist/netinst').mkdir(parents=True)
@@ -267,8 +266,7 @@ class ReleaseChannelTests(unittest.TestCase):
                     remote = ' '.join((root / 'ssh.log').read_text().split())
                     for flag in flags:
                         self.assertIn(flag, remote)
-                    if channel == 'dev':
-                        self.assertNotIn("nex-apt-publish '", remote)
+                    self.assertNotIn('apt-publish', remote)
                     # Only the stable channel replaces the live pages.
                     self.assertEqual((root / 'website-deployed').exists(), channel == 'stable')
 
@@ -370,7 +368,7 @@ class GitHubMinuteBudgetTests(unittest.TestCase):
                 self.assertNotIn('NEX_DOCKER_CPUS', text)
                 self.assertNotIn('NEX_DOCKER_MEMORY', text)
                 for step in ('image/build.sh all', 'tests/integration/image_boot.py',
-                             'appliance/build.py --profile controller', 'tests/integration/controller_image_boot.py'):
+                             'appliance/build.py', 'tests/integration/controller_image_boot.py'):
                     self.assertIn(step, text)
                 # The runner is a nested guest that its hypervisor hard-resets while KVM guests run: the labs emulate.
                 self.assertIn('NEX_QEMU_ACCEL: tcg', text)

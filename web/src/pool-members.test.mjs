@@ -57,9 +57,7 @@ assert.match(rows, /Checks 1 healthy, 1 failed · Access 2 healthy, 1 failed/);
 assert.match(rows, /https:\/\/192\.0\.2\.12:9444/);
 // Nex Core is each host's own inventory report, as on the Hosts list.
 assert.match(rows, /<small class="pool-version">Nex Core not reported<\/small>/);
-const versioned = table({ report, hosts: [{ id: "host-b", inventory: { os_version: "Nex Core 0.4.4" } }], coreAvailable: "0.4.5" });
-assert.match(versioned, /<small class="pool-version">Nex Core 0\.4\.4 <span class="badge warn">Update<\/span><\/small>/);
-assert.match(table({ report, hosts: [{ id: "host-b", inventory: { os_version: "Nex Core 0.4.5" } }], coreAvailable: "0.4.5" }), /<small class="pool-version">Nex Core 0\.4\.5<\/small>/);
+assert.match(table({ report, hosts: [{ id: "host-b", inventory: { os_version: "Nex Core 0.4.4" } }] }), /<small class="pool-version">Nex Core 0\.4\.4<\/small>/);
 
 // Joined is the pool master's own record; a Core that does not report it shows a dash.
 assert.match(table({ report: { ...report, members: [{ ...master, joined_at: "2026-09-01T10:00:00Z" }] } }), /<time dateTime="2026-09-01T10:00:00Z" title="[^"]+">[^<]+<\/time>/);
@@ -499,7 +497,7 @@ console.log("pool-members.test.mjs: ok");
   assert.match(fencingSummaryText(fenced), new RegExp(report.members[1].name));
   assert.match(fencingSummaryText(withPool({ ready: 2, total: 2, host_fencing: true })), /Fencing: ready for 2 of 2 hosts\./);
   assert.match(fencingSummaryText({ ...fenced, authoritative: false }), /^Fencing: unknown/);
-  // A master too old to report a count, and a pool of one host, each say their own thing.
+  // A master that reports no count, and a pool of one host, each say their own thing.
   assert.match(fencingSummaryText(withPool(undefined)), /^Fencing: not reported/);
   assert.match(fencingSummaryText(withPool({ ready: 0, total: 1, host_fencing: true })), /this pool has one host/);
   // Each row carries its own Fencing result and a labelled Fencing detail.

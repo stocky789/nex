@@ -139,7 +139,7 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	req.Path = "/different"
 	a.call("POST", "/api/v1/storage", req, nil, 409)
 	if len(report(false).Commands) != 0 {
-		t.Fatal("old agent received managed command")
+		t.Fatal("agent without the capability received managed command")
 	}
 	commands := report(true).Commands
 	if len(commands) != 1 || commands[0].Storage.ID != storage.ID {
@@ -251,14 +251,14 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	if list[0].Spec == nil || list[0].Spec.MediaID != media.ID {
 		t.Fatalf("an ejected tray must not change the recorded media %#v", list[0].Spec)
 	}
-	// An unknown observation is refused like any other guest value; an older Core sends none.
+	// An unknown observation is refused like any other guest value; a Core that does not read the drive sends none.
 	unknown := *guest
 	unknown.Media = "exploding"
 	sequence++
 	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inventory(&unknown)}, cert, 400)
-	legacy := *guest
-	legacy.Media = ""
-	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inventory(&legacy)})
+	withoutMedia := *guest
+	withoutMedia.Media = ""
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: sequence, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inventory(&withoutMedia)})
 }
 func TestManagedAuthorizationAndActualBodyLimits(t *testing.T) {
 	a := newClient(t)
@@ -294,7 +294,7 @@ func TestVLANNetworkRegistration(t *testing.T) {
 	host := a.enroll(a.token(a.site(), ""), csr(t))
 	pool := a.poolOf(host.HostID)
 	cert := certificate(t, host.CertificatePEM)
-	nics := []protocol.NIC{{Name: "nex0", Kind: "physical"}, {Name: "br0", Kind: "bridge"}, {Name: "nex1", Kind: "physical"}, {Name: "legacy"}}
+	nics := []protocol.NIC{{Name: "nex0", Kind: "physical"}, {Name: "br0", Kind: "bridge"}, {Name: "nex1", Kind: "physical"}, {Name: "kindless"}}
 	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Hostname: "core", NICs: nics}})
 	base := registrationRequest{RequestID: "vlan1", PoolID: pool, HostID: host.HostID, Name: "Servers", Kind: "vlan", Uplink: "nex1", VLAN: 100}
 	for name, bad := range map[string]func(r *registrationRequest){
@@ -341,11 +341,11 @@ func TestVLANNetworkRegistration(t *testing.T) {
 	}
 	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 5, Capabilities: []string{protocol.ManagedVMCapability}, Results: []protocol.Result{
 		{OperationID: dupNetwork.OperationID, Status: "failed", Error: reason}, {OperationID: plainNetwork.OperationID, Status: "failed", Error: reason}}})
-	// Untagged on the legacy-reported NIC without a kind, and a second tag on the same uplink, are distinct.
+	// Untagged on the NIC reported without a kind, and a second tag on the same uplink, are distinct.
 	other := base
-	other.RequestID, other.Name, other.Uplink, other.VLAN = "vlan-legacy", "Untagged", "legacy", 0
+	other.RequestID, other.Name, other.Uplink, other.VLAN = "vlan-kindless", "Untagged", "kindless", 0
 	read(t, a.call("POST", "/api/v1/networks", other, nil, 201), &network)
-	if network.Source != "legacyv0" {
+	if network.Source != "kindlessv0" {
 		t.Fatal(network.Source)
 	}
 	var list []protocol.NetworkRegistration
@@ -354,7 +354,7 @@ func TestVLANNetworkRegistration(t *testing.T) {
 	for _, n := range list {
 		byName[n.Name] = n
 	}
-	if len(list) != 4 || byName["Servers"].VLAN != 100 || byName["Untagged"].Uplink != "legacy" || byName["Servers again"].Status != "failed" || byName["Manual"].Error != reason {
+	if len(list) != 4 || byName["Servers"].VLAN != 100 || byName["Untagged"].Uplink != "kindless" || byName["Servers again"].Status != "failed" || byName["Manual"].Error != reason {
 		t.Fatalf("list %+v", list)
 	}
 }
@@ -384,7 +384,7 @@ func TestHostReportedDefaultsAreMirroredNotIssued(t *testing.T) {
 	report(1, false)
 	load()
 	if len(networks) != 0 || len(storage) != 0 {
-		t.Fatal("old agent must not get resources")
+		t.Fatal("agent without the capability must not get resources")
 	}
 	for seq := uint64(2); seq < 4; seq++ {
 		if cmds := report(seq, true).Commands; len(cmds) != 0 {
@@ -849,7 +849,7 @@ func TestCoreRecoverySettlesControllerOperation(t *testing.T) {
 	seq := uint64(0)
 	report := func(results []protocol.Result, outcomes []protocol.ManagedOutcome) protocol.ReportResponse {
 		seq++
-		return a.report(cert, protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Results: results, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: outcomes}}})
+		return a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Results: results, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: outcomes}}})
 	}
 	report(nil, nil)
 	req := storageRegisterRequest{RequestID: "recovered-storage", PoolID: pool, HostID: host.HostID, Name: "Local", Path: "/var/lib/nex/vms"}
@@ -873,7 +873,7 @@ func TestCoreRecoverySettlesControllerOperation(t *testing.T) {
 		t.Fatalf("mismatched kind changed operation: %+v", still)
 	}
 	other := a.enroll(a.token(a.site(), ""), csr(t))
-	a.report(certificate(t, other.CertificatePEM), protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: []protocol.ManagedOutcome{{OperationID: queued.OperationID, Kind: "storage-register", ID: queued.ID, Status: "succeeded"}}}}})
+	a.report(certificate(t, other.CertificatePEM), protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: []protocol.ManagedOutcome{{OperationID: queued.OperationID, Kind: "storage-register", ID: queued.ID, Status: "succeeded"}}}}})
 	read(t, a.call("POST", "/api/v1/storage", req, nil, 200), &still)
 	if still.Status != "needs_attention" {
 		t.Fatalf("cross-host outcome changed operation: %+v", still)
@@ -902,7 +902,7 @@ func TestQueuedOutcomeReasonShowsOnDispatchedTask(t *testing.T) {
 	seq := uint64(0)
 	report := func(outcomes []protocol.ManagedOutcome) protocol.ReportResponse {
 		seq++
-		return a.report(cert, protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: outcomes}}})
+		return a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: outcomes}}})
 	}
 	report(nil)
 	req := storageRegisterRequest{RequestID: "waiting-storage", PoolID: a.poolOf(host.HostID), HostID: host.HostID, Name: "Local", Path: "/var/lib/nex/vms"}

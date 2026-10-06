@@ -7,7 +7,7 @@ import { relativeTime } from "./labels";
 import { unfinished } from "./dock";
 import { ChannelPicker, channelLabel } from "./channel";
 
-// Image-edition hosts update themselves: the host's own engine fetches and verifies the release,
+// Hosts update themselves: the host's own engine fetches and verifies the release,
 // writes the unused slot, arms the next boot only on Activate and falls back by itself when a boot
 // fails. This panel shows exactly what the host reports in inventory.image and relays one action at a
 // time. It stores nothing; a replaced Controller shows the same state from the next host report.
@@ -37,6 +37,28 @@ const running = (image: ImageStatus) => Boolean(image.operation && !image.operat
 export const imageHosts = (hosts: Host[]) =>
   hosts.filter(h => !h.revoked && (h.capabilities?.includes(IMAGE_UPDATE_CAPABILITY) || (h.inventory as { image?: unknown } | null)?.image));
 export const hostImage = (host: Host) => (host.inventory as { image?: ImageStatus } | null)?.image;
+
+// What a host's own report says about an update, for the lists that only need a hint. Derived from the
+// reported inventory.image alone: the Controller does not look for releases. A host that reports nothing
+// gets no notice; a host that is not freshly connected keeps its last report but says so.
+export type ImageUpdateNotice = { kind: "available" | "staged" | "armed"; label: string; detail: string; current: boolean };
+export function imageUpdateNotice(host: Host): ImageUpdateNotice | null {
+  const image = hostImage(host);
+  if (host.revoked || !image?.booted) return null;
+  const current = host.connection === "fresh";
+  const make = (kind: ImageUpdateNotice["kind"], label: string, release: ImageRelease | undefined): ImageUpdateNotice => ({
+    kind, current, label: current ? label : `${label} (last report)`,
+    detail: `${release ? `${release.label} (sequence ${release.sequence}). ` : ""}${current ? "" : "The host is not connected; this is its last report. "}Reported by the host.`,
+  });
+  if (image.phase === "armed") return make("armed", "Update pending reboot", image.staged);
+  if (image.phase === "staged" && image.staged) return make("staged", "Update staged", image.staged);
+  if (image.available && image.available.sequence > image.booted.sequence && image.available.sequence !== image.staged?.sequence) return make("available", "Update available", image.available);
+  return null;
+}
+export function ImageUpdateBadge({ host }: { host: Host }) {
+  const notice = imageUpdateNotice(host);
+  return notice ? <span title={notice.detail}><Badge value={`update-${notice.kind}`} label={notice.label} tone={notice.current ? "info" : "neutral"} /></span> : null;
+}
 
 // Which actions make sense now. These are hints so a button is not offered that cannot work; the host's
 // engine refuses again on its own record with a stable code, and that refusal is shown as the task error.
@@ -96,7 +118,7 @@ export function ImageUpdates({ hosts, api, busy }: { hosts: Host[]; api: API; bu
   if (!list.length) return null;
   return <Section icon="refresh" title="Host images" count={list.length}>
     {list.map(host => <ImageHost key={host.id} host={host} api={api} busy={busy} />)}
-    <p className="note">Each image-edition host checks, downloads and verifies releases itself and keeps the update record on its own disks. Staging never changes the next boot; only rebooting into the update does, and a failed boot returns to the previous release by itself.</p>
+    <p className="note">Each host checks, downloads and verifies releases itself and keeps the update record on its own disks. Staging never changes the next boot; only rebooting into the update does, and a failed boot returns to the previous release by itself.</p>
   </Section>;
 }
 

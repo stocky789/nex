@@ -51,7 +51,7 @@ assert.equal(coreVersion("Debian 13"), "Debian 13");
 
 const nics = [{ name: "eno1", kind: "physical", state: "up" }, { name: "br0", kind: "bridge", state: "up" }, { name: "lo", state: "up" }, { name: "eth0", state: "down" }];
 assert.deepEqual(ports({ inventory: { nics: nics.slice(0, 3) } }).map(n => n.name), ["eno1"], "only physical ports when Core reports kinds");
-assert.deepEqual(ports({ inventory: { nics: nics.filter(n => !n.kind) } }).map(n => n.name), ["eth0"], "an older Core without kinds leaves out only lo");
+assert.deepEqual(ports({ inventory: { nics: nics.filter(n => !n.kind) } }).map(n => n.name), ["eth0"], "a report without kinds leaves out only lo");
 
 const zfs = { name: "tank", devices: [{ name: "tank", state: "DEGRADED" }, { name: "mirror-0", parent: "tank", state: "DEGRADED" }, { name: "sda", parent: "mirror-0", state: "ONLINE" }, { name: "sdb1", parent: "mirror-0", state: "FAULTED" }, { name: "sdc", parent: "tank", state: "ONLINE" }] };
 const storage = [
@@ -81,13 +81,13 @@ assert.deepEqual(addresses({ inventory: { nics: [{ name: "lo", addresses: ["127.
 assert.deepEqual(addresses({ inventory: { nics: [{ name: "br0", addresses: null }] } }), [], "a bridge without an address stays unknown");
 const data = { sites: [], pools: [{ id: "p1", name: "pool-1", site_id: "s1", master_host_id: "h1" }], hosts, operations: [], audit: [], storage: [], networks: [], media: [],
   vms: [{ id: "v1", name: "app-01", host_id: "h2", pool_id: "p1", state: "shut off", freshness: "stale", spec: { cpu: { count: 2 }, memory: { size_mib: 2048 } } }] };
-const render = (selectedID, unavailable = false) => renderToStaticMarkup(createElement(HostList, { data, hosts, selectedID, api: async () => ({}), busy: false, unavailable, loading: false, coreAvailable: "0.4.5",
+const render = (selectedID, unavailable = false) => renderToStaticMarkup(createElement(HostList, { data, hosts, selectedID, api: async () => ({}), busy: false, unavailable, loading: false,
   openHostConsole: async () => "", onRefreshInventory() {}, onReenroll() {}, onRevoke() {}, onRetry() {} }));
 
 const table = render();
 assert.match(table, /192\.0\.2\.11</, "the IP address is shown without its prefix length");
 assert.doesNotMatch(table, /127\.0\.0\.1/, "the loopback address is not shown as the host IP");
-assert.match(table, /0\.4\.4 <span class="badge warn">Update</, "a host behind the available Core is marked");
+assert.match(table, /<td title="Nex Core 0\.4\.4 \(Debian 13\)">0\.4\.4<\/td>/, "the Core version is the host's own report");
 assert.match(table, /badge warn">Stale</, "a stale host says so in words");
 assert.ok(!/\d+%/.test(table), "no usage is shown before a host has reported any");
 

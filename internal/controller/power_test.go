@@ -159,7 +159,7 @@ func TestPowerQueuePreservesOrderDependenciesAndReplay(t *testing.T) {
 	if len(cmds) != 2 || cmds[0].OperationID != editID || cmds[1].OperationID != powerID || cmds[1].Power.AfterOperationID != editID {
 		t.Fatalf("queue order/dependency: %+v", cmds)
 	}
-	// An older Core must never receive a queued command whose prerequisite it ignores.
+	// A Core without the capability must never receive a queued command whose prerequisite it ignores.
 	l.caps = []string{protocol.ManagedVMCapability, protocol.PowerCapability, protocol.UpdateCapability}
 	cmds = l.report().Commands
 	if len(cmds) != 1 || cmds[0].OperationID != editID {

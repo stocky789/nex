@@ -1392,13 +1392,13 @@ func TestGuestStepRefusalsPauseWithTheHostsWords(t *testing.T) {
 	t.Run("drain", func(t *testing.T) {
 		lab := newUpdateLab(t, 3)
 		lab.pool.host("member-2").guests["vm-a"] = true
-		lab.pool.host("member-2").guestCode = "unsupported_edition"
+		lab.pool.host("member-2").guestCode = "no_image_update_engine"
 		began := lab.clock
 		if err := lab.start("drain-refused", "shutdown"); err != nil {
 			t.Fatal(err)
 		}
 		r := lab.run(100, paused)
-		if r.Pause.Code != protocol.PoolUpdateNeedsAttention || !strings.Contains(r.Pause.Message, "unsupported_edition") ||
+		if r.Pause.Code != protocol.PoolUpdateNeedsAttention || !strings.Contains(r.Pause.Message, "no_image_update_engine") ||
 			!strings.Contains(r.Pause.Message, "the host cannot do this") || poolUpdateHostRecord(r, "member-2").Stage != stageDrain {
 			t.Fatalf("pause = %+v hosts = %+v", r.Pause, r.Hosts)
 		}
@@ -1415,7 +1415,7 @@ func TestGuestStepRefusalsPauseWithTheHostsWords(t *testing.T) {
 		lab.run(400, func(r *protocol.PoolUpdateRollout) bool {
 			return poolUpdateHostRecord(r, "member-2").Stage == stageRestart
 		})
-		lab.pool.host("member-2").guestCode = "unsupported_edition"
+		lab.pool.host("member-2").guestCode = "no_image_update_engine"
 		began := lab.clock
 		r := lab.run(100, paused)
 		if r.Pause.Code != protocol.PoolUpdateNeedsAttention || !strings.Contains(r.Pause.Message, "the host cannot do this") {

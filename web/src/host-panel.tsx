@@ -9,8 +9,8 @@ import { SystemDiskMirror, mdMemberFailed, type MDArray } from "./md";
 import { HostNetwork } from "./host-network";
 import { HostRestrictedBanner, fencingText } from "./pool-promotion";
 import { maintenanceText, type Report } from "./pool-members";
-import { versionLight } from "./updates";
 import { checkLabel, relativeTime } from "./labels";
+import { ImageUpdateBadge, imageUpdateNotice } from "./image-updates";
 import { Activity, Badge, Banner, Meter, Panel, Sparkline, date } from "./ui";
 import { Icon } from "./icons";
 import "./hosts.css";
@@ -71,7 +71,7 @@ export function uptime(host: Host) {
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 const speedLabel = (mbps: number) => mbps >= 1000 ? `${mbps / 1000}G` : `${mbps}M`;
-// The interfaces that are ports on the machine. An older Core reports no kind, so only lo is left out.
+// The interfaces that are ports on the machine. A report with no kind leaves only lo out.
 export const ports = (host: Host) => (host.inventory?.nics || []).filter(n => n.kind ? n.kind === "physical" : n.name !== "lo");
 
 // What each disk is used for, from what the host reports: its ZFS pools' vdev layout and its md
@@ -102,8 +102,8 @@ const tabs = ["Overview", "Hardware", "Performance", "Networking", "Storage", "C
 
 // The selected host's slide-over. Hardware and the pool's member report are read from the hosts
 // when it opens; nothing here is kept after it closes.
-export function HostPanel({ data, host, history, api, busy, unavailable, coreAvailable, consoleBlocker, openHostConsole, onRefreshInventory, onReenroll, onRevoke, onClose }: {
-  data: Data; host: Host; history?: StatsHistory; api: API; busy: boolean; unavailable: boolean; coreAvailable?: string; consoleBlocker: string;
+export function HostPanel({ data, host, history, api, busy, unavailable, consoleBlocker, openHostConsole, onRefreshInventory, onReenroll, onRevoke, onClose }: {
+  data: Data; host: Host; history?: StatsHistory; api: API; busy: boolean; unavailable: boolean; consoleBlocker: string;
   openHostConsole: (id: string) => Promise<string>; onRefreshInventory: () => void; onReenroll: () => void; onRevoke: () => void; onClose: () => void;
 }) {
   const [tab, setTab] = useState<string>("Overview");
@@ -179,13 +179,14 @@ export function HostPanel({ data, host, history, api, busy, unavailable, coreAva
     const kind = hw ? hw.transport === "nvme" ? "NVMe" : hw.rotational ? "HDD" : "SSD" : "";
     return <div className="host-disk" key={d.name} title={hw?.model}>
       <b>{d.name}</b>{formatValue("bytes", d.size_bytes)} {kind}
+      {hardware?.system_disk?.booted_disk === `/dev/${d.name}` && <span className="ok">running system</span>}
       {(roles[d.name] || []).map(r => <span key={r.text} className={r.failed ? "bad" : "ok"}>{r.text}</span>)}
     </div>;
   })}</div>;
   const mdView = hardware && mdArraysView(hardware.md_arrays);
   const mirror = mdView === "unavailable" ? <section className="panel"><div className="section-heading"><h2>System disk</h2></div><p className="empty">{hardware?.md_arrays?.reason || "This section is not available on this host."}</p></section>
     : mdView && <SystemDiskMirror arrays={arrays} disks={hardware.disks?.devices ?? []} hostID={host.id} poolID={host.pool_id} api={api}
-      supported={systemDiskReplaceSupported(host.capabilities)} reported={mdView !== "unreported"} onReplaced={reread} />;
+      supported={systemDiskReplaceSupported(host.capabilities)} reported={mdView !== "unreported"} systemDisk={hardware.system_disk} onRefresh={reread} />;
   const hardwareNote = !hardwareSupported ? "This host does not report hardware details. Upgrade Nex Core on it."
     : hardwareFailure ? hardwareFailure.kind === "stale" ? "The host is not reporting, so its hardware cannot be read." : `Could not read the hardware: ${hardwareFailure.message}`
     : hardware ? "" : "Reading hardware from the host…";
@@ -202,7 +203,7 @@ export function HostPanel({ data, host, history, api, busy, unavailable, coreAva
     </>}>
     <div className="host-panel">
       {tab === "Overview" && <Overview data={data} host={host} master={master} poolName={pool?.name} history={history} hardware={hardware} hardwareNote={hardwareNote}
-        report={report} disks={disks} coreAvailable={coreAvailable} api={api} onNetworking={() => setTab("Networking")} />}
+        report={report} disks={disks} api={api} onNetworking={() => setTab("Networking")} />}
       {tab === "Hardware" && <HardwareReport hw={hardware} note={hardwareNote} onRetry={hardwareSupported ? reread : undefined} />}
       {tab === "Performance" && <>
         <section className="host-card">
@@ -235,12 +236,11 @@ function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
   return <dl className="host-kv">{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v ?? "—"}</dd></div>)}</dl>;
 }
 
-function Overview({ data, host, master, poolName, history, hardware, hardwareNote, report, disks, coreAvailable, api, onNetworking }: {
+function Overview({ data, host, master, poolName, history, hardware, hardwareNote, report, disks, api, onNetworking }: {
   data: Data; host: Host; master: boolean; poolName?: string; history?: StatsHistory; hardware: HostHardware | null; hardwareNote: string;
-  report: Report | null; disks: ReactNode; coreAvailable?: string; api: API; onNetworking: () => void;
+  report: Report | null; disks: ReactNode; api: API; onNetworking: () => void;
 }) {
   const inv = host.inventory;
-  const light = inv && versionLight(inv.os_version, coreAvailable);
   const memory = hostUsage(host.connection === "fresh" ? history : null).memory;
   const member = report?.members?.find(m => m.host_id === host.id);
   const fencing = member && fencingText(member, report!.authoritative);
@@ -289,7 +289,8 @@ function Overview({ data, host, master, poolName, history, hardware, hardwareNot
         <KeyValues rows={[
           ["IP address", addresses(host)[0] ? <span className="mono">{addresses(host)[0]}</span> : null],
           ["CPU", `${inv.cpu_model} · ${inv.cpu_count} logical CPUs`],
-          ["Nex Core", light ? <><span className={`version-light ${light.level}`} aria-hidden="true" /><span title={light.title}>{coreVersion(inv.os_version)} · {light.label}</span></> : coreVersion(inv.os_version)],
+          ["Nex Core", coreVersion(inv.os_version)],
+          ...(imageUpdateNotice(host) ? [["Image update", <ImageUpdateBadge host={host} />] as [string, ReactNode]] : []),
           ["Uptime", uptime(host)],
           ["Fencing", fencing ? <Badge value={fencing.badge} label={fencing.label} /> : null],
           ["Maintenance", maintenance ? <Badge value={maintenance.badge} label={maintenance.label} /> : null],

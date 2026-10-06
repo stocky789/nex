@@ -11,7 +11,7 @@ import (
 )
 
 func TestObserveGuest(t *testing.T) {
-	const legacy = `<domain><devices><channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0' state='disconnected'/></channel></devices></domain>`
+	const channelOnly = `<domain><devices><channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0' state='disconnected'/></channel></devices></domain>`
 	const full = `<domain><devices>
 	<channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0' state='connected'/></channel>
 	<channel type='qemu-vdagent'><source><clipboard copypaste='yes'/></source><target type='virtio' name='com.redhat.spice.0' state='connected'/></channel>
@@ -56,7 +56,7 @@ qemu-agent-command) [ "$4" = --timeout ] || exit 3; [ -n "$GUEST_FAIL" ] && exit
 		facts           bool
 		want            *protocol.GuestInfo
 	}{
-		{"legacy definition", legacy, "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "no-channel", Media: "no-drive"}},
+		{"agent channel only", channelOnly, "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "no-channel", Media: "no-drive"}},
 		// BUG-0201: the VirtIO display is there, but nothing in the guest opened the vdagent
 		// channel, so nothing would act on a resize request. Availability must say so.
 		{"channels waiting", strings.ReplaceAll(full, "state='connected'", "state='disconnected'"), "", true, &protocol.GuestInfo{Agent: "disconnected", Clipboard: "waiting", Media: "no-drive"}},
@@ -74,9 +74,9 @@ qemu-agent-command) [ "$4" = --timeout ] || exit 3; [ -n "$GUEST_FAIL" ] && exit
 		{"disc loaded", loaded, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "loaded"}},
 		{"guest ejected the disc", strings.ReplaceAll(loaded, `<source file='/var/lib/libvirt/images/debian.iso'/>`, ""), "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "empty"}},
 		{"tray opened with media still named", strings.ReplaceAll(loaded, `<target dev='sda' bus='sata'/>`, `<target dev='sda' bus='sata' tray='open'/>`), "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "empty"}},
-		// A domain defined by an older Core has neither Nex alias and exactly one cdrom;
-		// libvirt still echoes back the alias it assigned itself. That drive is the install
-		// drive, and the VM has no drivers drive to report.
+		// A domain with neither Nex alias and exactly one cdrom; libvirt still echoes back
+		// the alias it assigned itself. That drive is the install drive, and the VM has no
+		// drivers drive to report.
 		{"single drive named only by libvirt", strings.ReplaceAll(loaded, `<target dev='sda' bus='sata'/><readonly/>`, `<target dev='sda' bus='sata'/><readonly/><alias name='sata0-0-0'/>`),
 			"", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "loaded"}},
 		{"two named drives, drivers empty", drives, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "loaded", DriversMedia: "empty"}},

@@ -1,5 +1,5 @@
 # Packages that must never reach the image (outside the reviewed server-hardware scope).
-# image-lock.py fails when the resolved set contains one. Moved from installer/build.sh prune-time removal.
+# image-lock.py fails when the resolved set contains one. installer/build.sh prunes the same packages from the installation media.
 dahdi-firmware-nonfree
 atmel-firmware
 bluez-firmware

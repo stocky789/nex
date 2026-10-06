@@ -1,10 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: AGPL-3.0-only
 set -euo pipefail
-# classic: the apt-managed host package. image: the package the read-only image installs at build time; it has no
-# maintainer scripts (nothing runs on the host), apt or initramfs hooks, appliance or cluster/ZFS/SMB dependencies.
-edition=${NEX_EDITION:-classic}
-[ "$edition" = classic ] || [ "$edition" = image ] || { echo "NEX_EDITION must be classic or image, not $edition" >&2; exit 1; }
+# The package the read-only image installs at build time: no maintainer scripts (nothing runs on the host), no
+# apt or initramfs hooks, no appliance and no cluster/ZFS/SMB dependencies (layers carry those).
 mkdir /build
 cd /build
 tar -xzf /input/nex-source.tar.gz --strip-components=1
@@ -18,18 +16,8 @@ cc -Wall -Wextra -Werror -O2 -Wl,--export-dynamic packaging/core-local/nex-iscsi
 cc -Wall -Wextra -Werror -O2 -Wl,--export-dynamic packaging/core-local/nex-iscsi-inspect-test.c $(pkg-config --cflags --libs libiscsi blkid) -o /build/nex-iscsi-inspect-test
 /build/nex-iscsi-inspect-test
 pkg=/build/package
-install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/nex/appliance" "$pkg/usr/share/doc/nex-core-local" "$pkg/etc/libvirt/hooks/qemu.d" "$pkg/usr/share/nex/core-local"
-install -d "$pkg/usr/share/keyrings"
-install -d "$pkg/etc/pam.d" "$pkg/etc/nex" "$pkg/etc/modules-load.d"
-# A development build (version X.Y.Z~~dev.N) installs hosts on the development channel: the dev subtree of the archive.
-repo_url=https://nexvirtualization.com/apt
-case "$NEX_VERSION" in *~dev.*) repo_url=$repo_url/dev ;; esac
-if [ "$edition" = classic ]; then
-    printf 'repo_url=%s\n' "$repo_url" > "$pkg/etc/nex/updates.conf"
-    install -m644 packaging/core-local/nex.list.example "$pkg/usr/share/nex/core-local/"
-    # The Nex APT archive public key; postinst writes the matching signed apt source.
-    install -m644 packaging/core-local/nex-archive-keyring.gpg "$pkg/usr/share/keyrings/nex-archive-keyring.gpg"
-fi
+install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/doc/nex-core-local" "$pkg/etc/libvirt/hooks/qemu.d" "$pkg/usr/share/nex/core-local"
+install -d "$pkg/etc/pam.d" "$pkg/etc/modules-load.d"
 install -m644 packaging/core-local/nex-core-local.pam "$pkg/etc/pam.d/nex-core-local"
 # SATA and SAS disks report their temperature only once drivetemp is loaded; CPU, NVMe and GPU
 # sensors bind on their own. The agent never loads modules (ProtectKernelModules=yes).
@@ -37,20 +25,11 @@ install -m644 packaging/core-local/nex-sensors.conf "$pkg/etc/modules-load.d/nex
 # /dev/ipmi0 exists only once the IPMI driver is loaded. It is what lets a host configure
 # its own management controller for fencing without an operator typing an address.
 install -m644 packaging/core-local/nex-ipmi.conf "$pkg/etc/modules-load.d/nex-ipmi.conf"
-if [ "$edition" = classic ]; then
-    printf '/etc/pam.d/nex-core-local\n/etc/nex/updates.conf\n/etc/modules-load.d/nex-sensors.conf\n/etc/modules-load.d/nex-ipmi.conf\n' > "$pkg/DEBIAN/conffiles"
-else
-    printf '/etc/pam.d/nex-core-local\n/etc/modules-load.d/nex-sensors.conf\n/etc/modules-load.d/nex-ipmi.conf\n' > "$pkg/DEBIAN/conffiles"
-fi
+printf '/etc/pam.d/nex-core-local\n/etc/modules-load.d/nex-sensors.conf\n/etc/modules-load.d/nex-ipmi.conf\n' > "$pkg/DEBIAN/conffiles"
 install -m755 /build/nex-root-auth "$pkg/usr/lib/nex/"
 install -m755 /build/nex-iscsi-inspect "$pkg/usr/lib/nex/"
 install -m755 /build/nex-core-local "$pkg/usr/lib/nex/"
 install -m755 packaging/core-local/core-local-setup "$pkg/usr/lib/nex/"
-if [ "$edition" = classic ]; then
-    install -m755 packaging/core-local/corosync-pristine "$pkg/usr/lib/nex/"
-    install -m755 packaging/core-local/libvirtd-apparmor-policy.py "$pkg/usr/lib/nex/libvirtd-apparmor-policy"
-    install -m755 packaging/core-local/storage-downgrade-guard.py "$pkg/usr/lib/nex/storage-downgrade-guard"
-fi
 install -d "$pkg/usr/lib/ocf/resource.d/nex"
 install -m755 packaging/cluster-storage/cluster-iscsi-session "$pkg/usr/lib/ocf/resource.d/nex/cluster-iscsi-session"
 printf '2\n' > "$pkg/usr/share/nex/core-local/storage-format-v2"
@@ -61,33 +40,19 @@ install -m755 packaging/core-local/qemu-vnc-lossy "$pkg/usr/lib/nex/"
 install -m755 appliance/host-recovery.py "$pkg/usr/lib/nex/host-recovery"
 install -m644 packaging/core-local/nex-core-local.service "$pkg/usr/lib/systemd/system/"
 # Optional feature layers: verified and merged early in boot, only once Core has recorded an enabled layer
-# (the unit's ConditionPathExists). Enablement ships in /usr (vendor wants link plus preset) rather than in
-# postinst, so a verified image slot carries it and every slot update keeps it.
+# (the unit's ConditionPathExists). Enablement ships in /usr (vendor wants link plus preset), so a verified
+# image slot carries it and every slot update keeps it.
 install -m644 packaging/core-local/nex-layers.service "$pkg/usr/lib/systemd/system/"
 install -d "$pkg/usr/lib/systemd/system/sysinit.target.wants"
 ln -s ../nex-layers.service "$pkg/usr/lib/systemd/system/sysinit.target.wants/nex-layers.service"
 install -D -m644 packaging/core-local/30-nex-core-local.preset "$pkg/usr/lib/systemd/system-preset/30-nex-core-local.preset"
-if [ "$edition" = classic ]; then
-    # A read-only root keeps /etc and /root on /var: the initramfs binds them, systemd then remounts / ro.
-    install -D -m755 packaging/core-local/initramfs-local-bottom "$pkg/usr/share/initramfs-tools/scripts/local-bottom/nex-root-state"
-    install -D -m755 packaging/core-local/initramfs-hook "$pkg/usr/share/initramfs-tools/hooks/nex-root-state"
-    install -m644 packaging/core-local/nex-root-ro.service "$pkg/usr/lib/systemd/system/"
-    install -m755 packaging/core-local/preinst packaging/core-local/postinst packaging/core-local/prerm "$pkg/DEBIAN/"
-else
-    # No postinst enables the service: like nex-layers above, the vendor wants link ships in /usr, so every
-    # verified slot carries it and a first-boot preset pass cannot drop it.
-    install -d "$pkg/usr/lib/systemd/system/multi-user.target.wants"
-    ln -s ../nex-core-local.service "$pkg/usr/lib/systemd/system/multi-user.target.wants/nex-core-local.service"
-fi
+# No postinst enables the service: like nex-layers above, the vendor wants link ships in /usr, so every
+# verified slot carries it and a first-boot preset pass cannot drop it.
+install -d "$pkg/usr/lib/systemd/system/multi-user.target.wants"
+ln -s ../nex-core-local.service "$pkg/usr/lib/systemd/system/multi-user.target.wants/nex-core-local.service"
 cp -a web/dist/. "$pkg/usr/share/nex/core-local/web/"
 cp web/dist/local.html "$pkg/usr/share/nex/core-local/web/index.html"
-if [ "$edition" = classic ]; then
-    # The appliance source is verified equal to this build input before Docker starts.
-    # Keep one archive in the package while preserving the Core source-serving path.
-    ln -s ../appliance/nex-source.tar.gz "$pkg/usr/share/nex/core-local/nex-source.tar.gz"
-else
-    install -m644 /input/nex-source.tar.gz "$pkg/usr/share/nex/core-local/nex-source.tar.gz"
-fi
+install -m644 /input/nex-source.tar.gz "$pkg/usr/share/nex/core-local/nex-source.tar.gz"
 cp -a docs/api "$pkg/usr/share/nex/core-local/"
 cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$pkg/usr/share/doc/nex-core-local/"
 install -m644 /usr/local/go/LICENSE "$pkg/usr/share/doc/nex-core-local/go-LICENSE"
@@ -119,54 +84,25 @@ for file in \
     install -D -m644 "$file" "$pkg/usr/share/doc/nex-core-local/go-dependencies/${file#vendor/}"
 done
 go version /build/nex-core-local > "$pkg/usr/share/doc/nex-core-local/go-version.txt"
-if [ "$edition" = classic ]; then
-    # The signed appliance image and manifest are inside the package under /usr/share/nex/appliance, with the
-    # source offer, the notices, the update helpers and the trust key.
-    for artifact in controller.qcow2 manifest.json manifest.sig nex-source.tar.gz components.tsv LICENSE NOTICE ARTWORK-LICENSE.md build-inputs.json; do
-        cp "/input/bundle/$artifact" "$pkg/usr/share/nex/appliance/"
-    done
-    install -d "$pkg/usr/share/nex/appliance/update"
-    install -m755 packaging/controller/apply-update "$pkg/usr/share/nex/appliance/update/"
-    install -m755 appliance/firstboot.py "$pkg/usr/share/nex/appliance/update/appliance-firstboot"
-    install -m644 packaging/controller/nex-controller-update.path "$pkg/usr/share/nex/appliance/update/"
-    install -m644 packaging/controller/nex-controller-update.service "$pkg/usr/share/nex/appliance/update/"
-    printf 'repo_url=%s\n' "$repo_url" > "$pkg/usr/share/nex/appliance/update/updates.conf"
-    cp /input/trusted-key.raw "$pkg/usr/share/nex/appliance/release.pub"
-fi
-# OpenZFS lives in Debian contrib. A host installed before Nex enabled contrib has
-# no candidate for it, and a hard dependency there makes the in-product update fail
-# permanently on exactly those hosts. Recommends keeps it installed by default on
-# every host that can resolve it (apt skips an unsatisfiable recommendation), the
-# ISO installs it explicitly from installer/packages.txt, postinst enables contrib,
-# and Core reports ZFS discovery as unavailable until the packages are present.
+# The read-only image gets cluster, ZFS and SMB software from layers, never from this package's dependencies.
 #
 # ifupdown, bridge-utils and vlan are what Core's networking actually runs on: it writes
 # /etc/network/interfaces and interfaces.d stanzas and calls ifup/ifdown (ifupdown), the
 # guest and management bridges are bridge_ports/bridge_stp/bridge_fd stanzas whose hooks
 # ship in bridge-utils, and a tagged management NIC is a vlan-raw-device stanza whose hook
-# ships in vlan. Without them a pool VLAN registration or a management network edit fails
-# on a host that installed this package on its own. All three are main, so they are hard
-# dependencies rather than Recommends.
+# ships in vlan. Without them a pool VLAN registration or a management network edit fails.
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: nex-core-local
 Version: ${NEX_VERSION}
 Architecture: amd64
 Maintainer: Nex contributors
-Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, ifupdown, bridge-utils, vlan, dmidecode, pciutils, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, libiscsi7, libblkid1, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh, ipmitool, sbd
-Recommends: linux-headers-amd64, zfs-dkms, zfsutils-linux
+Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, ifupdown, bridge-utils, vlan, dmidecode, pciutils, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, open-iscsi, libiscsi7, libblkid1, ipmitool
 Section: admin
 Priority: optional
-Description: Nex Core local management and Controller virtual appliance
- Authenticated host-local VM controls and signed Controller appliance deployment.
- The appliance image is inside the package (classic edition) or a separate payload (image edition).
+Description: Nex Core local management
+ Authenticated host-local VM controls and Controller virtual appliance deployment.
+ The appliance image is a separate payload.
  First boot selects the default-route management IP without changing networking.
 CONTROL
-if [ "$edition" = image ]; then
-    # The read-only image gets cluster, ZFS and SMB software from layers (never from this package's dependencies).
-    for layer_package in cifs-utils smbclient corosync dlm-controld gfs2-utils pacemaker pacemaker-cli-utils pcs fence-agents-redfish fence-agents-ipmilan fence-agents-virsh sbd; do
-        sed -i "/^Depends:/s/, $layer_package\(,\|\$\)/\1/" "$pkg/DEBIAN/control"
-    done
-    sed -i '/^Recommends:/d' "$pkg/DEBIAN/control"
-fi
 chmod -R a+rX "$pkg/usr"
 dpkg-deb --root-owner-group --build "$pkg" "/output/nex-core-local_${NEX_VERSION}_amd64.deb"

@@ -12,7 +12,7 @@ import (
 // efiSecureBootVar is the firmware's SecureBoot variable: four attribute bytes, then 1 when enforcing.
 var efiSecureBootVar = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 
-// imageProbe reports Inventory.image on an image-edition host. It only reads: the running release comes
+// imageProbe reports Inventory.image on the host. It only reads: the running release comes
 // from the kernel command line and os-release, the rest from the update engine's record, which the engine
 // (one per host) alone writes. The record may lag a boot until nex-update-reconcile.service has run.
 func imageProbe(ctx context.Context) (any, error) {

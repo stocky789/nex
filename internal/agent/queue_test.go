@@ -62,7 +62,7 @@ func TestManagedQueueAdmissionReplayAndRestart(t *testing.T) {
 	}
 }
 
-func TestManagedQueueLegacyOrderAndOverflow(t *testing.T) {
+func TestManagedQueueStableOrderAndOverflow(t *testing.T) {
 	now := time.Now()
 	journal := map[string]JournalEntry{}
 	for _, id := range []string{"a", "b", "c"} {
@@ -74,13 +74,13 @@ func TestManagedQueueLegacyOrderAndOverflow(t *testing.T) {
 	e.RequestedAt = now.Add(-time.Hour)
 	journal["c"] = e
 	if got := nextManagedCommand(journal, ""); got != "a" {
-		t.Fatalf("legacy stable tie-break: %q", got)
+		t.Fatalf("stable tie-break: %q", got)
 	}
 	e = journal["b"]
 	e.RequestedAt = now.Add(-time.Minute)
 	journal["b"] = e
 	if got := nextManagedCommand(journal, ""); got != "b" {
-		t.Fatalf("legacy receipt order: %q", got)
+		t.Fatalf("receipt order: %q", got)
 	}
 	s := testStore(t)
 	s.State.Journal["full"] = JournalEntry{Order: math.MaxUint64}

@@ -3,13 +3,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./stats.css";
-import { SystemDiskMirror, SYSTEM_DISK_CAPABILITY, type MDArray } from "./md";
+import { SystemDiskMirror, SYSTEM_DISK_CAPABILITY, type MDArray, type SystemDiskReport } from "./md";
 import { Sparkline } from "./ui";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 export type StatsSeries = { key: string; group: string; label: string; unit: string; values: (number | null)[] };
 export type StatsHistory = { object: string; id: string; host_id?: string; range: string; step_seconds: number; start: string; series: StatsSeries[] };
-// A reply without series (an older or failing Core) reads as no data rather than breaking every chart.
+// A reply without series (a failing Core, or one without usage history) reads as no data rather than breaking every chart.
 export const statsHistory = (reply: StatsHistory): StatsHistory => ({ ...reply, series: reply?.series || [] });
 
 export const ranges = [["10m", "Last 10 minutes"], ["24h", "Last 24 hours"], ["30d", "Last 30 days"], ["1y", "Last year"]] as const;
@@ -224,7 +224,7 @@ function GaugeTile({ gauge }: { gauge: Gauge }) {
 
 export type StatsFailure = { kind: "capability" | "stale" | "error"; message: string };
 
-// The stats relay uses 409 for both a stale host and an older Core. Keep the distinction the
+// The stats relay uses 409 for both a stale host and a Core without usage history. Keep the distinction the
 // operator needs without adding a second API contract solely for presentation.
 export function statsFailure(error: unknown): StatsFailure {
   const message = error instanceof Error ? error.message : String(error);
@@ -252,6 +252,7 @@ export type HostHardware = {
   pci: Unavailable & { devices?: PCIDevice[] };
   sensors: Unavailable & { temperatures?: TemperatureSensor[] };
   md_arrays?: Unavailable & { arrays?: MDArray[] | null };
+  system_disk?: SystemDiskReport;
 };
 
 const join = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(" ");
@@ -276,7 +277,7 @@ export function sectionNote(section: Unavailable | undefined, rows: number): str
 }
 
 // System-disk panel states derived from md_arrays. The Controller always remarsals the field, so
-// an older Core that never sent it arrives as arrays:null; a current Core that looked and found
+// a Core that never sent it arrives as arrays:null; a current Core that looked and found
 // none sends arrays:[]. Keep "Single system disk" only for the latter.
 export type MDArraysView = "unreported" | "unavailable" | "empty" | "arrays";
 export function mdArraysView(section: HostHardware["md_arrays"]): MDArraysView {
@@ -389,7 +390,7 @@ export function HardwarePanel({ hardware, loading, failure, onRetry, id, poolID,
       <p className="empty">{hardware.md_arrays?.reason || "This section is not available on this host."}</p>
     </div>}
     {hardware && mdView && mdView !== "unavailable" && <SystemDiskMirror arrays={hardware.md_arrays?.arrays ?? []} disks={hardware.disks?.devices ?? []}
-      hostID={id} poolID={poolID} api={api} supported={replaceSupported} reported={mdView !== "unreported"} onReplaced={onRetry} />}
+      hostID={id} poolID={poolID} api={api} supported={replaceSupported} reported={mdView !== "unreported"} systemDisk={hardware.system_disk} onRefresh={onRetry} />}
     {hardware && <div className="stats-hw-sections"><HardwareSections hw={hardware} /></div>}
   </section>;
 }
@@ -507,14 +508,14 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
   const hidden = useRef(new Set<string>());
   const plots = useRef(new Set<uPlot>());
   const shown = useRef("");
-  // Hardware is static, so it is read once when the tab opens and on an explicit Retry. An older
+  // Hardware is static, so it is read once when the tab opens and on an explicit Retry. A
   // Core that does not report the capability is not asked at all.
   const hardwareSupported = kind === "host" && !!capabilities?.includes(HARDWARE_CAPABILITY);
   const [hardware, setHardware] = useState<HostHardware | null>(hardwareProp ?? null);
   const [hardwareFailure, setHardwareFailure] = useState<StatsFailure | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareAttempt, setHardwareAttempt] = useState(0);
-  // Stable identity so SystemDiskMirror's rebuild/task intervals are not torn down on every
+  // Stable identity so SystemDiskMirror's rebuild interval is not torn down on every
   // Stats history re-render (default 10m range polls every 5s).
   const rereadHardware = useCallback(() => setHardwareAttempt(a => a + 1), []);
 
@@ -553,7 +554,7 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
         if (!stopped) {
           const next = statsFailure(e);
           setFailure(next);
-          // An older Core cannot serve this feature at all, so do not present an old chart as
+          // A Core without this feature cannot serve it at all, so do not present an old chart as
           // current usage after it has told us the capability is absent.
           if (next.kind === "capability") setHistory(null);
         }

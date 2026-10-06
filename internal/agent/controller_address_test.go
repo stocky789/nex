@@ -116,6 +116,6 @@ func TestControllerHostnameTrustAndAddressPersistence(t *testing.T) {
 	c.CloseIdleConnections()
 	reopened.State.ControllerServerName = ""
 	if err := UpdateControllerURL(context.Background(), reopened, srv.URL); err == nil {
-		t.Fatal("legacy IP identity silently changed")
+		t.Fatal("IP identity silently changed")
 	}
 }

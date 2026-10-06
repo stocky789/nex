@@ -1352,7 +1352,7 @@ type poolVMRequest struct {
 	Previous    *protocol.VMCreateSpec   `json:"previous,omitempty"`
 	Update      *vmhost.VMUpdateEvidence `json:"update,omitempty"`
 	// UpdateAccepted is set only by the master after its durable record was
-	// saved.  It prevents a newer member from mistaking a legacy empty 200 for
+	// saved. It prevents a member from mistaking an empty 200 for
 	// a definition-transition acknowledgement.
 	UpdateAccepted bool `json:"update_accepted,omitempty"`
 	UpdateRevision int  `json:"update_revision,omitempty"`
@@ -1480,7 +1480,7 @@ func abortPoolVMUpdate(record *poolVMRecord, owner string, evidence vmhost.VMUpd
 
 // recoverPoolVMUpdate accepts only a journal-backed, one-revision successor
 // from the already recorded owner. It is the bounded recovery path for an
-// update applied by an older Core before update reservations existed; inventory
+// update applied without a recorded update reservation; inventory
 // alone never reaches this function.
 func recoverPoolVMUpdate(record *poolVMRecord, owner string, evidence vmhost.VMUpdateEvidence) error {
 	if record.PoolID == "" || record.HostID != owner || record.PendingUpdate != nil || evidence.Status != "succeeded" || !validPoolVMUpdateOperation(evidence.OperationID) || !reflect.DeepEqual(evidence.Previous, record.Spec) || evidence.Current.ID != record.VMID || evidence.Current.PoolID != record.PoolID || evidence.Current.HostID != record.HostID || evidence.Current.Revision != record.Spec.Revision+1 || protocol.ValidateVMSpec(evidence.Current) != nil {
@@ -2218,7 +2218,7 @@ func PoolVMHandler(s *Store) http.Handler {
 					return
 				}
 				if errors.Is(err, errPoolVMInventoryIncomplete) || errors.Is(err, errPoolVMOwnersDeferred) {
-					// The snapshot is durable but cannot activate legacy owner
+					// The snapshot is durable but cannot activate owner
 					// adoption until every current ready member has reported.
 					w.WriteHeader(http.StatusAccepted)
 					return
@@ -3433,9 +3433,6 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 	restricted := requirePoolStartPath(s)
 	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
 	managed, checks := engine.Applied(ctx)
-	// Guests an update shut down for a reboot return with the autostart ones, through the
-	// same gates below. The record only counts on a boot after the one that wrote it.
-	restart := pendingUpdateRestart(s)
 	// libvirt starts enabled domains before this agent can confirm pool authority. Keep
 	// native autostart disabled for every managed VM; the durable Core Autostart setting
 	// below is the boot intent, and this pass starts it only after current master admission.
@@ -3463,7 +3460,7 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 		return "pool VM autostart skipped: managed VM checks are not ready"
 	}
 	for _, vm := range managed.VMs {
-		if !(vm.Autostart || restart[vm.ID]) || suppressionFailed[vm.ID] {
+		if !vm.Autostart || suppressionFailed[vm.ID] {
 			continue
 		}
 		shared := poolVMOnSharedStorage(managed, vm)
@@ -3521,10 +3518,6 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 		} else if err == nil && observed == "shut off" {
 			_ = poolVMRequestPeerBound(ctx, s, vm.ID, "stopped", op, epoch, nil, false, nil, nil)
 		}
-	}
-	// Every recorded guest has now had its one attempt this boot, started or refused.
-	if restart != nil {
-		finishUpdateRestart(s)
 	}
 	return ""
 }

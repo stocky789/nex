@@ -28,7 +28,7 @@ def main():
     args = parser.parse_args()
     args.evidence.mkdir(parents=True, exist_ok=True)
     fx = resolve(FIXTURE, FIXTURE['hosts'])
-    data = {key: clone(fx[key]) for key in ('sites', 'pools', 'hosts', 'vms', 'storage', 'networks', 'media', 'operations', 'audit', 'updates')}
+    data = {key: clone(fx[key]) for key in ('sites', 'pools', 'hosts', 'vms', 'storage', 'networks', 'media', 'operations', 'audit')}
     data['operations'] = [operation for operation in data['operations'] if not (operation.get('host_id') == 'host-1' and operation.get('kind') == 'refresh-inventory')]
     members = clone(fx['members'])
     members['members'][1]['fence'] = {'provisioning_disabled': True}
@@ -40,7 +40,6 @@ def main():
         'network_posts': 0, 'network_reads_after_post': 0, 'fail_next_network': False,
         'bmc_posts': 0, 'members_reads_after_post': 0, 'cluster_reads': 0, 'cluster_complete': False, 'cluster_fail_next': False,
         'console_rename_vm': False, 'console_remove_vm': False, 'power_posts': 0,
-        'update_posts': 0, 'update_status_reads': 0,
     }
     errors, checks = [], []
     cluster_operation = {'request_id': 'fixture-cluster-request', 'membership_generation': 4,
@@ -65,15 +64,6 @@ def main():
                     return route.fulfill(json=data['operations'])
                 status = 'queued' if state['host_operation_reads'] < 2 else 'succeeded'
                 return route.fulfill(json=[{'id': 'fixture-refresh-op', 'host_id': 'host-1', 'kind': 'refresh-inventory', 'request_id': 'fixture-refresh-request', 'status': status}])
-            if path == 'updates':
-                if state['update_posts']:
-                    state['update_status_reads'] += 1
-                    if state['update_status_reads'] == 1:
-                        return route.fulfill(status=503, json={'error': 'fixture update service restarting'})
-                    status = clone(data['updates'])
-                    status.update(phase='done' if state['update_status_reads'] >= 3 else 'downloading', message='Update complete' if state['update_status_reads'] >= 3 else 'Downloading')
-                    return route.fulfill(json=status)
-                return route.fulfill(json=data['updates'])
             if path == 'storage/cluster':
                 state['cluster_reads'] += 1
                 if state['cluster_fail_next']:
@@ -155,9 +145,6 @@ def main():
         if req.method == 'POST' and re.fullmatch(r'vms/[^/]+/power', path):
             state['power_posts'] += 1
             return route.fulfill(status=202, json={'status': 'queued'})
-        if req.method == 'POST' and path == 'updates/apply':
-            state['update_posts'] += 1
-            return route.fulfill(status=502, json={'error': 'fixture accepted update but lost its response'})
         return route.fulfill(status=200, json={})
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(args.dist.resolve())))
@@ -292,19 +279,7 @@ def main():
             page.screenshot(path=str(args.evidence / 'console-confirmation-reconciled.png'), full_page=True)
             checks.append('console power confirmation follows the VM reported by inventory and closes when that VM disappears')
 
-            page.evaluate("location.hash = '#/settings/updates'")
-            page.get_by_role('button', name='Update', exact=True).click()
-            expect(page.get_by_text('Update complete. Reloading to load the new version…', exact=True)).to_be_visible(timeout=60000)
-            assert state['update_posts'] == 1 and state['update_status_reads'] >= 3, 'an uncertain update response was not followed by read-only status checks'
-            checks.append('uncertain update submission follows status through a temporary server error without resubmitting')
-            page.wait_for_function("Number(sessionStorage.getItem('refresh-check-loads')) === %d" % (loads + 1), timeout=60000)
-            expect(page.get_by_role('button', name='Update', exact=True)).to_be_visible()
-            page.get_by_role('button', name='Update', exact=True).click()
-            expect(page.get_by_text('this update could not be confirmed', exact=False)).to_be_visible(timeout=60000)
-            assert state['update_posts'] == 2, 'an old done status caused a duplicate update submission'
-            checks.append('a previous terminal update status does not falsely confirm a new uncertain request')
-
-            assert int(page.evaluate("sessionStorage.getItem('refresh-check-loads')")) == loads + 1, 'only the update restart reload may navigate the page; an action or background catch-up required full-page navigation'
+            assert int(page.evaluate("sessionStorage.getItem('refresh-check-loads')")) == loads, 'an action or background catch-up required full-page navigation'
             assert not errors, errors
             browser.close()
         (args.evidence / 'browser-results.json').write_text(json.dumps({'mode': 'real Chromium against built web/dist with fully mocked API; no live Controller or host', 'checks': checks, 'page_errors': errors}, indent=2) + '\n')

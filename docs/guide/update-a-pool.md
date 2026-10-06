@@ -2,7 +2,7 @@
 
 ## Status
 
-Development build, **unverified**. A pool of image-edition Nex Core hosts is updated by the pool master's Core as one durable
+Development build, **unverified**. A pool of Nex Core hosts is updated by the pool master's Core as one durable
 rollout: it stages the release on every host, swaps the Controller appliance first when the Controller runs on a pool host, then
 updates one host at a time, members first and the master last. The **Pool update** panel (**Settings** → **Updates**; formerly **Pool rollout**) shows what the master
 and the hosts report and sends your pause, resume, abort and roll-back requests. The rollout belongs to the master, so it carries on
@@ -14,7 +14,7 @@ image is never forced off (see [Deploy the Controller appliance](deploy-controll
 
 ## Prerequisites
 
-- Every host of the pool runs the image edition, is freshly connected and supports pool updates; otherwise the panel says to
+- Every host of the pool is freshly connected and supports pool updates; otherwise the panel says to
   update the hosts that lack it one by one first. A host that has not found the release (use **Check** under **Host images** first)
   blocks the readiness check.
 - A Controller administrator session. The pool master must be freshly connected.
@@ -22,7 +22,7 @@ image is never forced off (see [Deploy the Controller appliance](deploy-controll
 - Decide what happens to running guests. **Refuse** (the default) waits, up to six hours per host, for the guests on that host to be
   stopped by you, then pauses and names them. **Shut down gracefully** stops each guest through its guest agent, then starts the
   same guests again on the same host afterwards: that is real guest downtime.
-- If the Controller VM runs on a pool host in the two-disk profile and the release carries a Controller image, the Controller is
+- If the Controller VM runs on a pool host and the release carries a Controller image, the Controller is
   restarted during the rollout; keep that in mind for your own session.
 
 ## Steps

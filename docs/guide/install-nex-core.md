@@ -9,39 +9,36 @@ install the same host; only the presentation differs. Installed hosts
 include the host-local web UI, from which Nex Controller can be deployed. Not certified for
 production or physical hardware.
 
-Nex Core is a distribution, not a package set added to Debian: `nex-core-local` refuses to
-install on a system the installer did not create (recorded as `/etc/nex/core-release`).
-Later updates come from the signed Nex APT archive; see [software updates](software-updates.md).
+Nex Core is a distribution, not a package set added to Debian. The installer writes a signed, read-only system
+image whole, to two slots on every selected disk; settings, virtual machines and downloaded payloads live on a
+separate `nex-data` volume. A host is updated by replacing the image, not by installing packages; see
+[software updates](software-updates.md). The installer supports both UEFI and BIOS firmware.
 
-The full ISO includes packages and the complete Windows guest-driver media for offline
-installation. The development network variant, `nex-core-<version>-amd64-netinst.iso`,
-keeps the bootable installer and basic Debian installation media but downloads the
-additional packages and driver media. It needs internet access throughout installation;
-its completed installation provides the same Core software and driver ISO.
+The full ISO carries the signed system image, the Controller appliance and the complete Windows guest-driver media
+for offline installation. The development network variant, `nex-core-<version>-amd64-netinst.iso`, keeps the
+bootable installer but downloads the system image, the Controller appliance and the driver media by SHA-256 from the
+addresses set when the installer was built. It needs internet access throughout installation; its completed
+installation provides the same Core software and driver ISO.
 
-Unmodified Debian packages come directly from Debian's pinned snapshot service, and
-Windows VirtIO media comes directly from Fedora. Only the Nex Core package (including
-its Controller appliance) and Nex's rebuilt DLM package come from the Nex release host.
-APT selects only packages missing or outdated in the installed base, and the installer
-verifies the downloaded bytes against checksums pinned in the ISO.
-A Nex-hosted Debian mirror is not needed. Installation uses prebuilt packages; the
-existing ZFS DKMS package still builds its kernel module locally.
+The installer verifies the system image and every payload against checksums pinned in the media before it writes a
+disk (for netinst, the system image is checked before any disk is written; payloads are checked once `nex-data`
+exists, see below). A Nex-hosted Debian mirror is not needed: the image is already assembled.
 
-## Image edition (development, simulated install only)
+## Disk layout and boot (development, simulated install only)
 
-Media built with an image set carries two editions. The default boot entries install the **image edition**:
-a read-only, integrity-checked system image written to two slots on each selected disk, with `/etc` and `/var`
-kept on a separate `nex-data` volume. The **Classic edition** entries (BIOS or UEFI) install the package-based
-host described on this page and stay selectable.
-
-- **UEFI only.** The image edition refuses legacy BIOS firmware before any disk is written. Use the Classic
-  entry on BIOS-only hardware.
-- **24 GiB minimum** per disk (16 GiB for Classic): two slots, a boot partition, and a data volume that holds a
+- **Firmware.** The installer detects whether it was started under UEFI or BIOS and installs the matching boot
+  method; the system image, slots and update logic are the same. On UEFI, shim and systemd-boot start a signed boot
+  image. On BIOS, GRUB in the MBR of every selected disk reads a per-slot entry from the boot partition and starts the
+  same image. BIOS has no Secure Boot and GRUB cannot authenticate the kernel command line, so the root hash is not
+  signature-protected before the kernel runs there; dm-verity still checks every block of the root when it is read, and
+  the release signature still covers the image and every update. A 1 MiB BIOS boot partition on every disk makes the
+  same layout bootable under either firmware.
+- **24 GiB minimum** per disk: two slots, a boot partition, and a data volume that holds a
   staged update, the Controller appliance and VirtIO driver payloads, and the default VM store.
-- **Layout.** Every selected disk gets the same partition table: a 1 GiB boot partition, two system slots
-  with their integrity partitions, and `nex-data`. Two or more disks mirror only `nex-data` (md RAID1);
-  each disk can boot alone.
-- **Erase confirmation** is unchanged: the wizard lists every disk and an explicit yes erases it. On the offline ISO
+- **Layout.** Every selected disk gets the same partition table: a 1 MiB BIOS boot partition, a 1 GiB boot partition,
+  two system slots with their integrity partitions, and `nex-data`. Two or more disks mirror only `nex-data` (md RAID1);
+  each disk can boot alone. There is no swap partition.
+- **Erase confirmation:** the wizard lists every disk and an explicit yes erases it. On the offline ISO
   nothing is erased until the system image and the media payloads have passed their checksum checks; a damaged image
   or payload stops the install with no disk changed. The network installer checks the downloaded system image the same
   way, but can check its payloads only after the disks are written and `nex-data` exists; a payload that fails then
@@ -60,16 +57,16 @@ host described on this page and stay selectable.
   disk, not a separate target. A verified image that exceeds a system slot is refused before
   wiping or formatting.
 
-Secure Boot is supported but not required: with it off the host works, and its image checks are not
+Secure Boot is supported on UEFI but not required: with it off the host works, and its image checks are not
 tamper-proof against someone with disk access. Verification status: small lab ISOs of this layout were installed
 and booted **in virtual machines only** (virtual UEFI, on 2026-10-02): one disk and a two-disk mirror (the host
 boots with both disks and with either one alone), root's password opened a root shell on the serial console, over
 SSH and through the host's local web API, a third disk that was not selected was left byte-identical, an install onto
-a disk of a mounted array was refused before any disk byte changed, an install cut off at two points ran again to
-completion (twice), and a legacy-BIOS boot was refused before any disk byte changed; a virtual Secure Boot,
-virtual TPM and update run is recorded too. See [Phase I-6 lab 1](../qa/image/phase6-lab1.md) and
+a disk of a mounted array was refused before any disk byte changed, and an install cut off at two points ran again to
+completion (twice); a virtual Secure Boot, virtual TPM and update run is recorded too. See
+[Phase I-6 lab 1](../qa/image/phase6-lab1.md) and
 [lab 2](../qa/image/phase6-lab2.md) for exactly what ran, what did not (a full ISO build, the net installer, the real
-interactive wizards) and what is not established (any physical hardware, firmware, Secure Boot or TPM). The graphical
+interactive wizards, a BIOS boot) and what is not established (any physical hardware, firmware, Secure Boot or TPM). The graphical
 wizard now draws the Repair image choice (checked under a virtual display only).
 
 ## Prerequisites
@@ -84,8 +81,8 @@ wizard now draws the Repair image choice (checked under a virtual display only).
   configured Nex release host, `snapshot.debian.org` and `fedorapeople.org`, including
   their download redirects. Use a current matching ISO while its release payloads remain
   available; older netinst ISOs can stop working when hosted payloads are pruned.
-- VM console access. BIOS mode matches the tested installation path; UEFI menu display alone
-  does not establish a tested UEFI installation.
+- VM console access. The virtual-UEFI lab runs are recorded under Verification; installation and boot under BIOS
+  firmware have not been walked through for this page.
 
 ## Steps
 
@@ -104,10 +101,8 @@ wizard now draws the Repair image choice (checked under a virtual display only).
    **GUI install - Nex Core** (mouse and keyboard) or **Minimal install - Nex Core (text)**
    (keyboard only, for a machine whose graphics do not work). The menu waits for your choice.
    Both run the Nex wizard, collect the same settings and install the same headless hypervisor;
-   neither installs a desktop. The serial option uses `ttyS0` at 115200 baud and is the one mode
-   that still runs Debian's own installation questions rather than the Nex wizard. On media that carries the image
-   edition the serial entry is therefore labelled **Classic edition install (serial console ttyS0)**; the image edition
-   has no serial entry yet.
+   neither installs a desktop. The serial option uses `ttyS0` at 115200 baud and runs the same text wizard on the
+   serial console, for a machine you reach through a serial line or a BMC.
 3. For **GUI install**, wait for **Begin setup** on **Welcome to Nex Core**. The wizard
    introduces Nex Core and its local web UI; deploy Nex Controller from that UI or
    separately for central management. The wizard fills the available installer screen and follows display-resolution changes, including typical BMC/IPMI consoles at 1024×768 and 800×600. The left
@@ -166,16 +161,14 @@ wizard now draws the Repair image choice (checked under a virtual display only).
    preparation so it can check and fetch downloads. The installed host still uses the
    saved settings on first boot; its DHCP lease may differ.
 6. On **Choose the installation disks**, explicitly select the **blank disposable disk**, or
-   two or more of them for a mirrored system disk.
+   two or more of them for a mirrored data volume.
    The GUI supports writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disks of at
-   least 16 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`). Installation media and partitions are not eligible.
-   One disk erases that disk and installs a root file system, a separate `/var` file system and
-   swap, all ext4. Two or more disks are
-   erased and installed as two Linux software RAID1 mirrors (`md`), one for `/` and one for
-   `/var`: each selected disk holds an
-   identical copy of both (sizes are not combined), with a small boot partition and a
-   512 MiB EFI System Partition on each disk, so any of them can start the host on either UEFI
-   or legacy BIOS firmware. Every mirror disk must be within 10% of the smallest selected disk's
+   least 24 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`). Installation media and partitions are not eligible.
+   Every selected disk is erased and receives the same partition table (see
+   [Disk layout and boot](#disk-layout-and-boot-development-simulated-install-only)). One disk gets a single `nex-data`
+   volume. Two or more disks hold `nex-data` as a Linux software RAID1 mirror (`md`): each selected disk holds an
+   identical copy (sizes are not combined) and keeps its own boot partition and system slots, so any of them can
+   start the host on either UEFI or BIOS firmware. Every mirror disk must be within 10% of the smallest selected disk's
    capacity, because usable size is that of the smallest member; a mismatched selection is
    refused with that reason.
    The list is a tick list in both installers: click the **Use** box, or move to a disk and press
@@ -184,11 +177,10 @@ wizard now draws the Repair image choice (checked under a virtual display only).
    the list says what your ticks will produce - `What you get: one system disk, no redundancy` or
    `What you get: one 128.0 GiB system disk on all 2 drives (RAID1 copies — not pooled storage). Survives 1 disk failure` -
    and turns red with the reason if a ticked disk is too far from the smallest one. More disks
-   only add more copies of that same system disk; they do not combine capacity or change the RAID
-   level. Disks under 16 GiB are not listed.
+   only add more copies of that same data volume; they do not combine capacity or change the RAID
+   level. Disks under 24 GiB are not listed.
    If the machine has
-   only one eligible disk it is ticked for you; a mirror is never assumed. The mirrored layout has
-   no swap partition; the single-disk layout still has one.
+   only one eligible disk it is ticked for you; a mirror is never assumed.
    A disk that held a previous installation is cleared first, including its partitions, LVM
    volumes and software RAID membership. If it was one member of a RAID array, the array is
    stopped and only the selected disk is cleared; the other member disks are not written, and
@@ -212,9 +204,9 @@ wizard now draws the Repair image choice (checked under a virtual display only).
    **Network**, **Disk**, **Review**, then **Install** — so the position does not restart when
    installation begins. During installation the bullet follows the setting being applied: it
    marks **Network** while the network is configured and **Disk** while the disk is prepared,
-   then moves to **Install** for package and bootloader work. Only the steps before the bullet
+   then moves to **Install** while the system image and boot files are written. Only the steps before the bullet
    are ticked, so **Disk** and **Review** are not ticked while **Network** is current.
-   **Installing system software** is an automatic package step; it does not ask you to choose software.
+   **Installing system software** is the step that writes the system image; it does not ask you to choose software.
    The indicator describes the current step, not an estimated overall completion percentage.
    Under the progress bar, **Still working…** keeps moving and an **Installer activity** log
    scrolls the latest entries from `/var/log/syslog`, `/var/log/partman` and
@@ -222,10 +214,10 @@ wizard now draws the Repair image choice (checked under a virtual display only).
    shows that work is continuing. Scroll the log up to pause following new lines; leave it at
    the bottom to keep following.
    Error and recovery prompts appear when your input is needed.
-   With the full ISO, packages are bundled and a working network is not required.
-   With netinst, keep networking available while packages and driver media download.
+   With the full ISO, the system image and payloads are on the media and a working network is not required.
+   With netinst, keep networking available while the system image, Controller appliance and driver media download.
    Verified completed downloads can be reused on a retry within the current installation;
-   a failed or corrupt download does not become an installed package.
+   a failed or corrupt download is discarded.
    The installation engine can still show error or recovery questions; do not accept an
    installation error as a completed host. If a required backend step returns to Debian's
    component selection, the graphical installer stops on a Nex error screen with the
@@ -258,7 +250,7 @@ wizard now draws the Repair image choice (checked under a virtual display only).
    **static**; Disabled leaves that adapter unconfigured. The last screen reviews every setting, including an **Adapters:** line giving each adapter's
    mode, address, gateway and VLAN, names the disk and asks whether to erase it; it defaults to
    no and resets whenever you change the disk. The same rules apply as in the graphical wizard:
-   a nonempty root password, only writable nonremovable disks of at least 16 GiB,
+   a nonempty root password, only writable nonremovable disks of at least 24 GiB,
    never the installation media, and one VLAN per adapter with the gateway on the management
    adapter only. Answering yes checks the complete settings before anything is written: if they
    are rejected, the reason is shown, nothing is erased, and the questions return with every
@@ -269,7 +261,7 @@ wizard now draws the Repair image choice (checked under a virtual display only).
    The disk question is a tick list: press Space on each disk of the mirror, then Enter. Each
    choice names the device, capacity, type, model, serial and whether the disk already has partitions, in
    the same order as the graphical list, and the review names every selected disk with its
-   capacity, serial and the resulting layout (RAID1 copies of one volume when two or more
+   capacity, serial and the resulting layout (a mirrored `nex-data` volume when two or more
    disks are selected, and how many disk failures that selection can survive).
 10. In the GUI, wait for **Nex Core installation complete**, eject the ISO and choose **Restart now**
     to boot the installed disk. Apart from the installer's **Screenshot** button, **Restart now**
@@ -291,39 +283,25 @@ Offline mode creates no management bridge. Selecting a management adapter create
 either installation mode, with MAC-bound `nexN` interface names. The installer does not enable a firewall policy. Keep this alpha isolated until
 you have validated access controls.
 
-A mirrored system disk appears as two `md` arrays: one holds `/` and one holds `/var`. The installer installs GRUB on
-every selected disk and is meant to boot from whichever member survives; when a mirror disk
-fails, the host is meant to keep running on the remaining disk with its virtual machines
-uninterrupted until the array is repaired. The EFI partition each disk carries is not part of
-the mirror. Installs from this build mount `/boot/efi` with `nofail` and a short device timeout
-so a missing ESP does not hold up a healthy mirror; that mount behaviour has not yet been
-confirmed on a booted host. Older or hand-built mirrors may still need the
-[emergency-mode steps](replace-a-failed-system-disk.md#troubleshooting).
-Replace a failed mirror member from Nex Controller with
-[Replace a failed system disk](replace-a-failed-system-disk.md). With *n* mirror disks the host
-can survive *n*−1 disk failures; it is not a backup, and it does not protect the data on your
-virtual machines.
-Boot, disk-detach and leftover-array checks for the mirrored install remain outstanding — see
+A mirrored install keeps `nex-data` on a Linux software RAID1 array (`md`) across the selected disks, while every disk
+carries its own boot partition and both system slots. The host is meant to boot from whichever member survives; when
+a mirror disk fails, the host is meant to keep running on the remaining disk with its virtual machines
+uninterrupted until the array is repaired. The boot partition each disk carries is not part of the mirror. With *n*
+mirror disks the host can survive *n*−1 disk failures; it is not a backup, and it does not protect the data on your
+virtual machines. Boot, disk-detach and leftover-array checks for the mirrored install remain outstanding — see
 Verification.
 
-The installed root file system (`/`) is mounted read-only. Everything the host changes while
-it runs lives under `/var`, `/etc` and `/run`: `/etc` and `/root` are kept on `/var`
-(`/var/lib/nex/etc` and `/var/roothome`) and mounted over the read-only root at boot, so
-configuration, SSH host keys and root's files survive reboots as before. Installing or
-updating software opens a short writable window, which **Update** does for you; see
-[Software updates](software-updates.md). After installing a build with this layout, an existing
-classic host with a separate `/var` entry in `/etc/fstab` adopts it at the next boot too:
-the first boot copies `/etc` and `/root` to `/var` before mounting them there. A host without
-a separate `/var` keeps its writable root. Check `findmnt -no OPTIONS /` rather than using
-the original installation date to decide whether a writable update window is needed.
+The installed root file system (`/`) is the read-only, integrity-checked system image. Everything the host changes while
+it runs lives under `/var`, `/etc` and `/run`: `/etc` is an overlay whose changes are kept on `nex-data`
+(`/var/lib/nex/etc`), so configuration, SSH host keys and root's files survive reboots and updates.
+Software is replaced by updating the image, not by installing packages; see [Software updates](software-updates.md).
 
 Fresh installs allow root password SSH on the management network. Check the installed
 host key fingerprint at its trusted console with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`,
 then compare it with the key shown by your SSH client before entering the installer root password.
 For example, connect with `ssh root@192.0.2.5` from the private management network or VPN.
-Full-ISO installation can work offline; later package updates require access
-to configured Debian repositories. The installed Nex package configures its default Nex APT
-source; it may have no candidate until a compatible release is actually published.
+Full-ISO installation can work offline; later updates need the host's update source (see
+[software updates](software-updates.md)), which the installer does not set up.
 
 ## Troubleshooting
 
@@ -356,8 +334,8 @@ source; it may have no candidate until a compatible release is actually publishe
   Netinst requires an enabled management adapter. A displayed link state
   or saved address is not proof that the gateway or VLAN is reachable. Link unknown does
   not establish that the cable is unplugged; check the driver or virtual NIC attachment.
-- **No root file system:** partitioning did not create the installation layout. Open
-  **View log**, keep the `/var/log/partman` entries with the image checksum, and restart setup.
+- **The system image could not be written:** the installer stops with the reason. Open
+  **View log**, keep the entries with the ISO checksum, and restart setup on a disposable disk.
 - **No eligible disk or disk identity changed:** check the disposable disk attachment and size,
   then restart setup. Do not substitute another disk without reviewing its identity.
   On a server with a hardware RAID controller, only disks the controller presents are
@@ -371,8 +349,8 @@ source; it may have no candidate until a compatible release is actually publishe
   check switch VLAN configuration. Correct the installed settings locally; the installer
   does not offer remote rollback. Netinst download access does not prove the installed
   management bridge will be reachable after reboot.
-- **No bootable media:** check the attached ISO and VM boot order. BIOS and UEFI menu boots
-  passed on the final disposable ISO; physical hardware remains unverified.
+- **No bootable media:** check the attached ISO and VM boot order, and that the VM's firmware (UEFI or BIOS) is set to
+  boot it; physical hardware remains unverified.
 - **Netinst download unavailable or verification fails:** check gateway, DNS, VLAN,
   HTTPS access and the installer log. Preparation checks download availability before
   disk preparation, but an upstream outage can still occur later. Downloads retry up
@@ -382,9 +360,8 @@ source; it may have no candidate until a compatible release is actually publishe
   Correct the connection and use the installer's available retry controls, or restart
   on a disposable target. A restart after disk writing is not a rollback. Use the full
   ISO when internet access or release-payload availability cannot be guaranteed.
-- **Installation/package setup fails:** retain the installer error and logs with the image
-  checksum for diagnosis. Do not treat the base Debian installation alone as a successful
-  Nex installation. Retry on a new disposable disk after resolving the error.
+- **Installation fails:** retain the installer error and logs with the ISO
+  checksum for diagnosis. Retry on a new disposable disk after resolving the error.
 - **Netinst stops before partitioning:** check that the management network still has DNS
   and can reach the release sources. The partition check stops before disk writes if a
   source is unavailable. Restart setup after correcting the connection, or use the full
@@ -395,46 +372,15 @@ source; it may have no candidate until a compatible release is actually publishe
 
 ## Verification
 
-The published 0.4.12 netinst UEFI DNS failure, corrected-overlay full UEFI
-installation and first boot, and inspected graphical failure screen are recorded in
-[network-installer verification](../qa/iso/2026-09-24-net-installer.md).
-Rebuilt-release-ISO installation and forge checks remain open.
-Historical offline results below do not establish netinst acceptance.
-
-The packaging efficiency checks and disposable offline-installation results are
-tracked in [packaging verification](../qa/2026-09-18-iso-packaging-efficiency.md).
+Installation of the image layout was exercised only in virtual-machine labs, recorded in
+[Phase I-6 lab 1](../qa/image/phase6-lab1.md) and [lab 2](../qa/image/phase6-lab2.md) (virtual UEFI; the details are
+under Disk layout and boot above). BIOS firmware installs, a physical machine, and Secure Boot or TPM on
+hardware are not verified.
 
 BMC/IPMI-sized layout (Disk step wrap, no sideways page scroll, denser chrome at
 ≤1024×768) is covered by `tests/integration/installer-disk.py` and related installer
 harnesses in the working tree; a native QEMU capture at 800×600 / 1024×768 against a
 rebuilt ISO that includes this change remains outstanding.
-
-Mirrored system-disk installs (two or more disks): both wizards' Disk steps and two-disk
-installs have reached the base system in the lab, but no mirrored host has been booted,
-detached or checked for leftover arrays, and the current four-partition GPT layout (separate
-`/` and `/var` arrays) has not had a completed install+boot walkthrough. The separate `/var`
-and read-only root have been exercised only on a simulated disposable host, not by a real
-installer run: see [read-only classic root](../qa/2026-10-01-readonly-classic.md). Outstanding
-checks are listed in [installer mirror QA](../qa/iso/2026-09-22-installer-mirror.md).
-
-The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) verified
-its recorded ISO with BIOS/KVM and UEFI/TCG menu review, an automated offline
-BIOS installation, media-free first boot and reboot. This was serial automation,
-not a new walkthrough of the graphical steps. The NIC-less lab explicitly set
-loopback management for Core service checks; real management networking, UEFI
-installation, multiple-disk safety and failure recovery remain unverified on that
-snapshot. Later storage changes were not included.
-
-The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
-disposable nested-KVM lab with SeaBIOS, screen captured every 4 s) walked the graphical steps 1–8
-and 10: checksum, boot menu, host and network pages, the only target disk, the unconfirmed-erase
-refusal, progress, completion and the installed console, with the installed package, version and
-files checked against the build. Step 8 matched apart from one open defect: twice between backend
-steps, once for about 4 s and once for about 20–24 s, the step list showed "Preparing the next
-installation step…" with no current step and no ticks before returning to the right step (the
-gate4 run saw 4–8 s). UEFI host installation was not exercised in that run, and the minimal
-text installer predates its current wizard: that run walked the Debian questions this mode no
-longer asks.
 
 The text wizard's question order, **Go Back** navigation, device filtering and the settings
 handoff it writes are covered by `tests/integration/installer-text-wizard.py`, which drives the
@@ -449,28 +395,16 @@ stand-in for the installer's question system, with stand-ins for the keyboard an
 tools, so real console rendering, real keyboard loading, real disk hardware, a booted ISO
 installation through the text interface and its installed networking all remain unverified.
 
-The [fresh local installation](../qa/fresh-install/checks.md) covers a graphical BIOS
-installation onto a blank disk through Controller deployment. Installer details are recorded in
+Installer details are recorded in
 the [Nex wizard](../qa/iso/2026-09-08-nex-wizard.md), [usability](../qa/iso/2026-09-08-installer-qol.md),
 [timezone](../qa/iso/2026-09-08-timezone-dropdown.md), [hostname](../qa/iso/2026-09-08-installer-hostname.md),
 [link and erase confirmation](../qa/iso/2026-09-08-installer-link.md),
 [Xen disk](../qa/iso/2026-09-08-installer-xen-disk.md), [keyboard notice](../qa/iso/2026-09-08-keyboard-notice.md),
 [progress](../qa/iso/2026-09-08-installer-progress.md), [continuous progress](../qa/iso/2026-09-08-continuous-progress.md),
 [management bridge](../qa/iso/2026-09-08-management-bridge.md) and
-[DHCP preview](../qa/iso/2026-09-09-installer-dhcp.md) reports. Historical reports:
-[alpha1](../qa/iso/2026-09-08-alpha1.md), [root-only accounts](../qa/iso/2026-09-08-root-account.md),
-[installer modes](../qa/iso/2026-09-08-installer-modes.md) and
-[previous custom shell](../qa/iso/2026-09-08-custom-installer.md).
+[DHCP preview](../qa/iso/2026-09-09-installer-dhcp.md) reports.
 
-The final ISO passed BIOS/UEFI menu boots, offline installation, installed first boot and reboot
-in a disposable nested-KVM lab. Physical NICs, switch VLANs, Xen installation and physical
-hardware remain unverified.
-
-An earlier 0.2.8 build with unchanged installer code reached the final prompt, stayed open until
-**Restart now**, then rebooted naturally. The final SHA's unattended install, first boot and reboot
-passed; its completion screen was not visually inspected. See [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
-
-[Immutable review-fix checks](../qa/2026-10-03-immutable-review-fixes.md) exercised all-target
+[Review-fix checks](../qa/2026-10-03-immutable-review-fixes.md) exercised all-target
 offline preflight with controlled block observations, actual scratch-file alias refusal, gzip
 integrity rejection and text-wizard Erase/Repair navigation through a simulated debconf frontend.
 These checks do not replace a new booted ISO, physical disk/network or firmware walkthrough.

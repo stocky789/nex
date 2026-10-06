@@ -237,10 +237,10 @@ section still apply to external redistribution claims.
 
 ### Prebuilt `nex-zfs` layer — 2026-10-01 (internal lab use only)
 
-Decision: project owner, 2026-10-01 — the immutable image edition may build OpenZFS
+Decision: project owner, 2026-10-01 — the Nex Core image build may build OpenZFS
 kernel modules ahead of time for internal lab use. This is **not** clearance for external
-redistribution, and it does not change the statement above for the existing
-DKMS-based media: those still carry only `zfs-dkms` source and build on the host.
+redistribution, and it does not change the statement above: no prebuilt ZFS kernel module is
+redistributed outside internal lab use.
 
 What the image build does: `scripts/build-zfs-modules.sh` builds `zfs.ko` and `spl.ko` from
 Debian's `zfs-dkms` (source package `zfs-linux`, currently `2.3.9-0+deb13u1`; CDDL-1.0 with

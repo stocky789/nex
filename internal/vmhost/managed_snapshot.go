@@ -150,7 +150,7 @@ func validateManagedSnapshotRequest(c protocol.Command) error {
 		c.Snapshot.Valid() != nil || protocol.ValidateVMSpec(*c.VM) != nil ||
 		c.Storage != nil || c.Network != nil || c.Media != nil || c.Power != nil || c.Delete != nil ||
 		c.VMMedia != nil || c.StorageLifecycle != nil || c.ResourceLifecycle != nil || c.CredentialRetire != nil ||
-		c.ZFSProvision != nil || c.ZFSReplace != nil || c.Pool != nil || c.ManagementNetwork != nil || c.SystemDiskReplace != nil ||
+		c.ZFSProvision != nil || c.ZFSReplace != nil || c.Pool != nil || c.ManagementNetwork != nil ||
 		c.Backup != nil || c.Restore != nil || c.BackupRepository != nil {
 		return errors.New("invalid snapshot creation request")
 	}

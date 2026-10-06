@@ -58,27 +58,6 @@ func nfsRootSquash(err error) error {
 	return err
 }
 
-// allowBackupNFSHardeningRemount lets Prepare rewrite a pre-hardening NFS backup unit when the
-// only Options change is adding nosuid,nodev,noexec. Other mount changes still require the
-// dependency-safe remount path.
-func allowBackupNFSHardeningRemount(ctx context.Context, s protocol.StorageRegistration) context.Context {
-	if s.Source.NFS == nil {
-		return ctx
-	}
-	_, unitPath := remoteUnitPath(s)
-	old, err := os.ReadFile(unitPath)
-	if err != nil {
-		return ctx
-	}
-	source := s.Source.NFS.Server + ":" + s.Source.NFS.Export
-	path := remoteMountPath(s)
-	legacy := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev")
-	if string(old) != string(legacy) {
-		return ctx
-	}
-	return allowStorageRemount(ctx)
-}
-
 func backupStorageRegistration(repo protocol.BackupRepository) protocol.StorageRegistration {
 	sum := sha256.Sum256([]byte(repo.ID))
 	registration := protocol.StorageRegistration{
@@ -108,7 +87,6 @@ func PrepareBackupRepository(ctx context.Context, repo protocol.BackupRepository
 	var err error
 	switch repo.Kind {
 	case protocol.BackupRepoKindNFS:
-		ctx = allowBackupNFSHardeningRemount(ctx, registration)
 		access, err = prepareNFS(ctx, registration, backupNFSHardeningOpts)
 		err = nfsRootSquash(err)
 	case protocol.BackupRepoKindSMB3:

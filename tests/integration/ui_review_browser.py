@@ -97,8 +97,6 @@ def install(page, fx):
             route.fulfill(status=200, content_type='application/json', body=json.dumps(body))
         if path in lists:
             return send(lists[path])
-        if path == 'updates':
-            return send(fx['updates'])
         if path == 'storage/credentials':
             return send([])
         if path == 'storage/cluster':

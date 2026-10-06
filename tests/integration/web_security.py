@@ -18,12 +18,12 @@ def browser_security(page, response, cookie_name, protected_path):
     assert cookie_name not in page.evaluate('document.cookie'), 'session exposed to JavaScript'
     page.evaluate("window.__nexInlineExecuted = false; const s=document.createElement('script'); s.textContent='window.__nexInlineExecuted = true'; document.head.append(s)")
     assert page.evaluate('window.__nexInlineExecuted') is False, 'CSP allowed injected inline script'
-    # A real protected request must reject the legacy cookie even with its valid token.
+    # A real protected request must reject the unprefixed cookie even with its valid token.
     context = page.context.browser.new_context(ignore_https_errors=True)
     try:
         old = {**cookie, 'name': cookie_name.removeprefix('__Host-')}
         context.add_cookies([old])
-        assert context.request.get(protected_path).status == 401, 'legacy cookie authenticated'
+        assert context.request.get(protected_path).status == 401, 'unprefixed cookie authenticated'
     finally:
         context.close()
     return cookie

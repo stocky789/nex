@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Install-and-boot scenarios for the image-edition ISO in a local QEMU/KVM lab (development evidence only).
+"""Install-and-boot scenarios for the installation ISO in a local QEMU/KVM lab (development evidence only).
 
 Uses the ISO from image_iso_lab.py. Everything here is SIMULATION: virtual UEFI (OVMF) or SeaBIOS, virtio disks,
 user-mode networking; optional virtual Secure Boot (OVMF with enrolled keys) and a virtual TPM2 (swtpm). Nothing
 establishes physical-hardware behaviour.
 
-  image_install_lab.py --iso ISO --work DIR --payload-sha SHA single|bios|raid1|raid1-alone|held-array|repair|repair-boot|interrupted
+  image_install_lab.py --iso ISO --work DIR --payload-sha SHA single|bios|bios-raid1|bios-alone|raid1|raid1-alone|held-array|repair|repair-boot|interrupted
 
 One VM at a time, -smp 2 -m 2048, every wait has its own budget. The installer runs the product code; only the
 wizard is a lab stub (see image_iso_lab.py).
@@ -28,7 +28,7 @@ from image_iso_lab import LAB_PASSWORD  # noqa: E402
 
 REPO = lab.REPO
 GIB = 1 << 30
-DISK_GIB = 25  # the image edition floor is 24 GiB
+DISK_GIB = 25  # the floor is 24 GiB
 check = lab.check
 
 
@@ -145,7 +145,7 @@ def run_installer(work, iso, disks, ctl, vars_file, budget=480, kill_on=None, la
                 stop(proc)
                 state = "killed"
                 break
-            if re.search(r"LAB-VALIDATE-REFUSED|installs on UEFI firmware only|No disk has been changed|Could not stop .*which holds a selected disk", text):
+            if re.search(r"LAB-VALIDATE-REFUSED|No disk has been changed|Could not stop .*which holds a selected disk", text):
                 state = "refused"
                 break
             if proc.poll() is not None:
@@ -320,7 +320,7 @@ PROBE = {
     "core": "systemctl is-active nex-core-local",
     "health": "for i in $(seq 1 20); do r=$(python3 -c \"import ssl,urllib.request;c=ssl._create_unverified_context();print(urllib.request.urlopen('https://'+__import__('subprocess').check_output(['hostname','-I']).split()[0].decode()+':9443/healthz',context=c,timeout=10).status)\" 2>&1 | tail -1); case $r in *200) break;; esac; sleep 2; done; echo $r",
     "payload": "ls /var/lib/nex/payload/*/ | tr '\\n' ' '",
-    "payloadsum": "for d in /var/lib/nex/payload/*/; do for f in controller.qcow2; do [ -f $d$f ] && echo $(sha256sum $d$f | cut -d' ' -f1) $(basename $d); done; done",
+    "payloadsum": "for d in /var/lib/nex/payload/*/; do for f in controller-system.img; do [ -f $d$f ] && echo $(sha256sum $d$f | cut -d' ' -f1) $(basename $d); done; done",
     "failed": "systemctl --failed --no-legend | awk '{print $2}' | tr '\\n' ,",
     "shadow": "cut -d: -f1,2 /etc/shadow | cut -c1-16 | tr '\\n' ' '; passwd -S root 2>&1 | tr ' ' _",
     "cmdline": "tr ' ' '\\n' < /proc/cmdline | grep -E '^(roothash)=' | cut -c1-30",
@@ -422,20 +422,64 @@ def scatter(path):
             f.write(os.urandom(4 << 20))
 
 
+def bios_after(work, disks):
+    """After-boot checks of a BIOS host: started by GRUB from the MBR, entry blessed, GRUB on every attached disk."""
+    def run(sh, con):
+        rc, out = sh.sh("test -e /sys/firmware/efi && echo efi || echo bios", 30)
+        check(out.strip().endswith("bios"), "bios: the host was started by BIOS firmware, not UEFI", out)
+        rc, out = sh.sh("tr ' ' '\\n' < /proc/cmdline | grep -E '^nex\\.(bootfs|slot)=' | tr '\\n' ' '", 30)
+        check("nex.slot=a" in out and re.search(r"nex\.bootfs=\S+", out), "bios: GRUB booted slot a and told the host which boot partition it came from", out)
+        rc, out = sh.sh("nex-hostimage boot-tries; echo rc=$?", 60)
+        check(out.strip() == "rc=0", "bios: the running entry is blessed (no boot counter left)", out)
+        rc, out = sh.sh("n=0; for d in /dev/vd?; do dd if=$d bs=440 count=1 2>/dev/null | grep -qa 'GRUB ' && n=$((n + 1)); done; echo grub-disks=$n", 60)
+        check(out.strip().endswith(f"grub-disks={disks}"), f"bios: GRUB boot code is in the MBR of all {disks} selected disk(s)", out)
+        rc, out = sh.sh("for d in /dev/vd?; do sfdisk -l $d 2>/dev/null | grep -c 'BIOS boot'; done | tr '\\n' ' '", 60)
+        check(out.split().count("1") >= disks, "bios: every selected disk carries its BIOS boot partition", out)
+        root_access(work)(sh, con)
+    return run
+
+
 def scenario_bios(a):
-    work, vars_file = fresh_dir(a, "bios")
-    d = os.path.join(work, "d0.img"); new_disk(d); scatter(d)
+    """BIOS (SeaBIOS) end to end: the installer boots from the ISO's BIOS menu, writes GRUB and the image to one
+    disk, and the installed host boots from that disk's MBR."""
+    work, _ = fresh_dir(a, "bios")
+    d = os.path.join(work, "d0.img"); new_disk(d)
     ctl = os.path.join(work, "ctl.img"); ctl_disk(ctl, "install", ["NEXDISK0"])
-    before = (digest(d, True), digest(d))
-    state, text = run_installer(work, a.iso, [(d, "NEXDISK0")], ctl, None, uefi=False, budget=300, label="install-bios", kill_on=r"UEFI firmware only")
-    refused = "UEFI firmware only" in text
-    check(refused, "legacy BIOS (SeaBIOS) boot of the installer is refused with the UEFI-only message", state)
-    after = (digest(d, True), digest(d))
-    check(before[0] == after[0], "BIOS refusal: first and last MiB of the disk unchanged (SHA-256)")
-    check(before[1] == after[1], "BIOS refusal: the whole disk unchanged (SHA-256)")
-    for line in text.splitlines():
-        if "UEFI firmware only" in line:
-            info(line.strip()[:200]); break
+    state, text = run_installer(work, a.iso, [(d, "NEXDISK0")], ctl, None, uefi=False, label="install-bios")
+    check(state == "done", "bios: installer ran to its restart (virtual BIOS)", state)
+    installer_lines(text, "bios boot|Installing|complete")
+    if state != "done":
+        print(text[-1500:])
+        return
+    boot_and_probe(work, [(d, "NEXDISK0")], None, "bios boot", "single", a.payload_sha, uefi=False, after=bios_after(work, 1))
+
+
+def scenario_bios_raid1(a):
+    """A BIOS mirror: GRUB on both disks, a decoy untouched, both disks boot together."""
+    work, _ = fresh_dir(a, "bios-raid1")
+    disks = []
+    for i in range(2):
+        p = os.path.join(work, f"d{i}.img"); new_disk(p); disks.append((p, f"NEXDISK{i}"))
+    decoy = os.path.join(work, "decoy.img"); new_disk(decoy); scatter(decoy)
+    ctl = os.path.join(work, "ctl.img"); ctl_disk(ctl, "install", [s for _, s in disks])
+    before = digest(decoy)
+    state, text = run_installer(work, a.iso, disks + [(decoy, "NEXDECOY")], ctl, None, uefi=False, label="install-bios-raid1")
+    check(state == "done", "bios raid1: installer ran to its restart with an unselected disk attached (virtual BIOS)", state)
+    if state != "done":
+        print(text[-1500:])
+        return
+    check(digest(decoy) == before, "bios raid1: the unselected disk is byte-identical after the install (full SHA-256)")
+    boot_and_probe(work, disks, None, "bios raid1 boot", "raid1", a.payload_sha, degraded="0", uefi=False, after=bios_after(work, 2))
+
+
+def scenario_bios_alone(a):
+    """Each disk of the BIOS mirror booted by itself: each carries its own GRUB, boot partition and slots."""
+    work = os.path.join(a.work, "bios-raid1")
+    disks = [(os.path.join(work, f"d{i}.img"), f"NEXDISK{i}") for i in range(2)]
+    if not all(os.path.exists(p) for p, _ in disks):
+        sys.exit("this scenario needs the disks of the bios-raid1 scenario first")
+    for i in range(2):
+        boot_and_probe(work, [disks[i]], None, f"bios raid1 disk {i} alone", "raid1", a.payload_sha, degraded="1", uefi=False, after=bios_after(work, 1))
 
 
 def installer_lines(text, pattern):
@@ -581,6 +625,7 @@ def scenario_held_array(a):
 
 
 SCENARIOS = {"single": scenario_single, "raid1": scenario_raid1, "raid1-alone": scenario_alone, "bios": scenario_bios,
+             "bios-raid1": scenario_bios_raid1, "bios-alone": scenario_bios_alone,
              "interrupted": scenario_interrupted, "held-array": scenario_held_array, "repair": scenario_repair,
              "repair-boot": scenario_repair_boot}
 

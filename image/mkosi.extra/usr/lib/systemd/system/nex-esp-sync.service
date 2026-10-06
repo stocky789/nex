@@ -1,7 +1,6 @@
 [Unit]
 Description=Converge the boot partitions of all disks
-After=systemd-bless-boot.service
-ConditionPathExists=/sys/firmware/efi
+After=systemd-bless-boot.service nex-bless-boot-bios.service
 
 [Service]
 Type=oneshot

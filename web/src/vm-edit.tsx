@@ -122,7 +122,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (issue) { setError(issue); return; }
-    // An older Core drops tags; sending none lets hardware edits succeed when the capability is gone.
+    // A Core without the capability drops tags; sending none lets hardware edits succeed when the capability is gone.
     const payload = updateBody(vm, { ...draft, tags: host?.capabilities?.includes(tagsCapability) ? draft.tags : [] });
     const encoded = JSON.stringify(payload);
     ids.current[encoded] ??= crypto.randomUUID();
@@ -266,7 +266,7 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
 export function tagsSupported(host?: Host, master?: Host): boolean {
   return Boolean(master?.capabilities?.includes(tagsCapability) && host?.capabilities?.includes(tagsCapability));
 }
-// Both the VM's host and its pool master must keep tags: an older Core would drop them.
+// Both the VM's host and its pool master must keep tags: a Core without the capability would drop them.
 // Clearing every tag is still allowed when the capability is gone, so other edits are not stuck.
 export function tagsBlocker(vm: VM, host?: Host, master?: Host, clearing = false): string {
   if (!tagsSupported(host, master) && !(clearing && (vm.spec?.tags?.length ?? 0) > 0)) {

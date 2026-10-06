@@ -89,7 +89,7 @@ func (a *testClient) pools() []protocol.Pool {
 }
 
 // Identity is host-owned: the Controller adopts the host and pool identity a host presents,
-// a replacement Controller adopts the same one, older agents still get minted IDs, and a
+// a replacement Controller adopts the same one, agents that present none still get minted IDs, and a
 // token holder cannot claim an identity already on record.
 func TestHostOwnedIdentity(t *testing.T) {
 	const hostID, poolID = "6f1c2a3e-9b7d-4c5e-8a1b-0d2e3f4a5b6c", "0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d"
@@ -130,15 +130,15 @@ func TestHostOwnedIdentity(t *testing.T) {
 		t.Fatal("refused enrollments left records")
 	}
 
-	// Older agents present nothing and get minted IDs named after the hostname.
-	legacy := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), Hostname: "older"}, 200)
-	if len(legacy.HostID) != 64 || len(legacy.PoolID) != 64 || legacy.PoolName != "older" {
-		t.Fatalf("legacy enrollment: %+v", legacy)
+	// Agents that present nothing get minted IDs named after the hostname.
+	minted := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, ""), CSRPEM: csr(t), Hostname: "unnamed"}, 200)
+	if len(minted.HostID) != 64 || len(minted.PoolID) != 64 || minted.PoolName != "unnamed" {
+		t.Fatalf("minted enrollment: %+v", minted)
 	}
-	// A legacy host later presents its Controller-issued host ID with a minted pool.
-	a.call("POST", "/api/v1/hosts/"+legacy.HostID+"/revoke", nil, nil, 200)
-	kept := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, legacy.HostID), CSRPEM: csr(t), Hostname: "older", HostID: legacy.HostID, PoolID: legacy.PoolID}, 200)
-	if kept.HostID != legacy.HostID || kept.PoolID != legacy.PoolID || kept.PoolName != "older" {
+	// A host later presents its Controller-issued host ID with a minted pool.
+	a.call("POST", "/api/v1/hosts/"+minted.HostID+"/revoke", nil, nil, 200)
+	kept := a.enrollWith(protocol.EnrollRequest{Token: a.token(site, minted.HostID), CSRPEM: csr(t), Hostname: "unnamed", HostID: minted.HostID, PoolID: minted.PoolID}, 200)
+	if kept.HostID != minted.HostID || kept.PoolID != minted.PoolID || kept.PoolName != "unnamed" {
 		t.Fatalf("replacement token did not keep identity: %+v", kept)
 	}
 

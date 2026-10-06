@@ -132,7 +132,7 @@ func main() {
 }
 
 // stateGuard exits 1 when RequiredStateFormat exceeds the format this image reads, which os-release
-// records as NEX_STATE_FORMAT. An image without the key reads nothing and passes (a classic host).
+// records as NEX_STATE_FORMAT. An os-release without the key reads nothing and passes.
 func stateGuard() {
 	var supported int
 	if _, err := fmt.Sscan(nexupdate.OSReleaseValue("NEX_STATE_FORMAT"), &supported); err != nil {

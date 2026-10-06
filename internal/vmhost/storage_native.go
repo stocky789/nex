@@ -67,7 +67,7 @@ var (
 	// VM repositories must sit outside Core's 0700 state directory: libvirt-qemu needs to
 	// traverse them. Credentials and journals remain below the private agent state directory.
 	storageMountRoot      = "/var/lib/nex-storage"
-	storageCredentialRoot = "/var/lib/nex-core-agent/storage-credentials" // legacy direct-helper default
+	storageCredentialRoot = "/var/lib/nex-core-agent/storage-credentials" // default when the context names no root
 	storageUnitRoot       = "/etc/systemd/system"
 )
 

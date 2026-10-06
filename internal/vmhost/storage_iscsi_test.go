@@ -358,51 +358,6 @@ func TestNexISCSINodeConfigIsIdempotentForUnchangedCredentials(t *testing.T) {
 	}
 }
 
-func TestConfigureISCSICHAPActiveLegacyWhitespaceIsNotCredentialRotation(t *testing.T) {
-	oldRun, oldRoot, oldCredentials, oldOwner := nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot
-	t.Cleanup(func() {
-		nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot = oldRun, oldRoot, oldCredentials, oldOwner
-	})
-	root := t.TempDir()
-	iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot = filepath.Join(root, "nodes"), filepath.Join(root, "credentials"), filepath.Join(root, "owners")
-	if err := os.MkdirAll(storageCredentialRoot, 0700); err != nil {
-		t.Fatal(err)
-	}
-	v := &protocol.ISCSIStorageSource{Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:vm"}
-	path := iscsiNodePath(v)
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	canonical := nexISCSINodeConfig([]byte("node.startup = manual\n"), "user", "secret")
-	legacy := []byte(strings.Replace(string(canonical), nexISCSINodeMarker, "\n"+nexISCSINodeMarker, 1))
-	if err := os.WriteFile(path, legacy, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(storageCredentialRoot, "receipt"), []byte("username=user\npassword=secret\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "iscsiadm" && len(args) > 1 && args[1] == "session" {
-			return []byte("Target: " + v.TargetIQN + "\nCurrent Portal: storage.example:3260,1\n"), nil
-		}
-		return nil, nil
-	}
-	if change, err := configureISCSICHAP(context.Background(), protocol.StorageRegistration{CredentialReceipt: "receipt", CredentialPresent: true}, v); err != nil || change.reconnect || change.path != "" {
-		t.Fatalf("legacy whitespace became active credential rotation: change=%+v err=%v", change, err)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil || string(got) != string(legacy) {
-		t.Fatalf("legacy active config was rewritten: %q, %v", got, err)
-	}
-	if ownedISCSINodeAuthMatches(legacy, "user", "changed") {
-		t.Fatal("changed password was treated as harmless legacy whitespace")
-	}
-	mutual := append(append([]byte(nil), legacy...), []byte("node.session.auth.username_in = peer\n")...)
-	if ownedISCSINodeAuthMatches(mutual, "user", "secret") {
-		t.Fatal("mutual-auth configuration was treated as harmless legacy whitespace")
-	}
-}
-
 func TestConfigureISCSICHAPActiveSidecarOwnedMatchingAuthIsNoop(t *testing.T) {
 	oldRun, oldRoot, oldCredentials, oldOwner := nativeRun, iscsiNodeRoot, storageCredentialRoot, iscsiOwnerRoot
 	t.Cleanup(func() {
@@ -588,42 +543,6 @@ func TestISCSIConfigureAcceptsScopedOwnerAfterNodeRewrite(t *testing.T) {
 	}
 }
 
-func TestMigrateLegacyScopedISCSIOwnerRequiresExactLUN(t *testing.T) {
-	oldOwner := iscsiOwnerRoot
-	t.Cleanup(func() { iscsiOwnerRoot = oldOwner })
-	iscsiOwnerRoot = t.TempDir()
-	v := &protocol.ISCSIStorageSource{Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:vm", WWID: "3600508b400105e210000900000490000", LUN: 4, FilesystemUUID: "01234567-89ab-cdef-0123-456789abcdef"}
-	legacy := legacyScopedISCSIOwnerPath(context.Background(), v)
-	if err := os.WriteFile(legacy, []byte(iscsiOwnerRecord(v)), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateLegacyISCSIOwner(context.Background(), v); err != nil {
-		t.Fatal(err)
-	}
-	if !nexISCSIOwner(context.Background(), v) {
-		t.Fatal("legacy scoped owner was not migrated")
-	}
-	if _, err := os.Stat(legacy); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy scoped owner remained: %v", err)
-	}
-	other := *v
-	other.LUN++
-	legacy = legacyScopedISCSIOwnerPath(context.Background(), &other)
-	if err := os.WriteFile(legacy, []byte(iscsiOwnerRecord(v)), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateLegacyISCSIOwner(context.Background(), &other); err == nil {
-		t.Fatal("accepted a legacy owner for a different LUN")
-	}
-	got, err := os.ReadFile(legacy)
-	if err != nil || string(got) != iscsiOwnerRecord(v) {
-		t.Fatalf("mismatched legacy owner was changed: %q, %v", got, err)
-	}
-	if nexISCSIOwner(context.Background(), &other) {
-		t.Fatal("mismatched legacy owner was adopted")
-	}
-}
-
 func TestISCSISessionListedMatchesOnlyExactTargetAndPortal(t *testing.T) {
 	v := &protocol.ISCSIStorageSource{Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:vm"}
 	out := []byte("Target: iqn.2026-01.example:other (non-flash)\nCurrent Portal: storage.example:3260,9\n\nTarget: iqn.2026-01.example:vm (non-flash)\nCurrent Portal: storage.example:3260,9\n")
@@ -768,17 +687,13 @@ func TestStorageDetachAtUsesCustomEngineOwnerRoot(t *testing.T) {
 	v := &protocol.ISCSIStorageSource{Portal: "storage.example:3260", TargetIQN: "iqn.2026-01.example:vm", WWID: "3600508b400105e210000900000490000", LUN: 4, FilesystemUUID: "01234567-89ab-cdef-0123-456789abcdef", MountPath: filepath.Join(storageMountRoot, "repo"), ExclusiveTarget: true}
 	s := protocol.StorageRegistration{ID: "repo", Kind: protocol.StorageKindISCSI, Path: v.MountPath, Source: protocol.StorageSource{ISCSI: v}}
 	ctx := context.WithValue(context.Background(), storageOwnerRootKey{}, filepath.Join(filepath.Dir(credentialRoot), "iscsi-owners"))
-	legacyOwner := legacyScopedISCSIOwnerPath(ctx, v)
-	if err := os.MkdirAll(filepath.Dir(legacyOwner), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(legacyOwner, []byte(iscsiOwnerRecord(v)), 0600); err != nil {
+	if err := writeNexISCSIOwner(ctx, v); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Dir(iscsiNodePath(v)), 0700); err != nil {
 		t.Fatal(err)
 	}
-	// Model iscsiadm canonicalizing its node file and dropping the legacy comment.
+	// Model iscsiadm canonicalizing its node file and dropping the Nex marker.
 	if err := os.WriteFile(iscsiNodePath(v), []byte("node.startup = automatic\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -798,11 +713,8 @@ func TestStorageDetachAtUsesCustomEngineOwnerRoot(t *testing.T) {
 	if !deleted {
 		t.Fatal("custom-root owner was not used to clean the rewritten node")
 	}
-	if _, err := os.Stat(legacyOwner); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy scoped owner remained after detach: %v", err)
-	}
 	if _, err := os.Stat(iscsiOwnerPath(ctx, v)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("migrated scoped owner remained after detach: %v", err)
+		t.Fatalf("owner record remained after detach: %v", err)
 	}
 }
 

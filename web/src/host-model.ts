@@ -45,7 +45,7 @@ export function hostHealth(host: Host): HealthSummary {
 export function hostConsoleBlocker(host: Host): string {
   if (host.revoked || host.connection !== "fresh") return "The host is not freshly connected. Its console cannot be opened until it reports again.";
   // Must match the gate openHostConsole applies (protocol.HostConsoleCapability); the VM
-  // console uses console-v1, which an old Core advertises without a host console.
+  // console uses console-v1, which a Core advertises without a host console.
   if (!host.capabilities?.includes("host-console-v1")) return "The host agent does not support browser consoles. Upgrade Nex Core on this host.";
   return "";
 }

@@ -52,8 +52,6 @@ def acceptance(url, evidence):
         {'name': 'eno1', 'kind': 'physical', 'mac': '02:00:5e:00:53:01', 'addresses': [], 'state': 'up'},
         {'name': 'br0', 'addresses': ['fe80::1/64', '192.0.2.10/24']},
     ]}
-    update_status = {'package': 'nex-controller', 'installed_version': '1.0', 'available_version': '1.1',
-                     'update_available': True, 'repo_url': 'https://updates.example.invalid'}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width': 1440, 'height': 1000})
@@ -76,15 +74,10 @@ def acceptance(url, evidence):
                                     'subject': 'CN=simulated-host', 'not_after': '2030-01-01T00:00:00Z'})
             elif path == 'sites/site-created/hosts' and route.request.method == 'POST':
                 route.fulfill(status=409, json={'error': 'already enrolled', 'host_id': 'host-enrolled'})
-            elif path == 'updates' and route.request.method == 'GET':
-                route.fulfill(json=update_status)
             elif path == 'storage/cluster' and route.request.method == 'GET':
                 route.fulfill(json={'status': 'succeeded', 'pool_id': 'pool-000', 'operations': []})
             elif path == 'storage/credentials' and route.request.method == 'GET':
                 route.fulfill(json=[])
-            elif path == 'updates/apply' and route.request.method == 'POST':
-                update_status.update(phase='failed', error='fixture apt failure')
-                route.fulfill(status=202, json={})
             elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/join-candidates'):
                 route.fulfill(json={'candidates': list(join_candidates)})
             elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/members'):

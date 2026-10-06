@@ -2,7 +2,7 @@
 
 package nexupdate
 
-// The image-edition update engine: authenticated metadata, resumable downloads, slot staging on every
+// The update engine: authenticated metadata, resumable downloads, slot staging on every
 // disk, arming of the boot entry, rollback. Core owns all of it and keeps its record in the "update"
 // subtree of /var/lib/nex/image/state.json; the disks (slot GUIDs and UKI names on every ESP) remain
 // the truth, so a lost cache is rebuilt by Reconcile. See docs/plans/2026-10-01-immutable-nex-core.md,
@@ -247,7 +247,7 @@ type ActionRequest struct {
 	RunningVMs string `json:"running_vms,omitempty"` // refuse (default) or shutdown
 }
 
-// Engine is the image-edition update engine of one host.
+// Engine is the update engine of one host.
 type Engine struct {
 	cfg Config
 
@@ -1310,9 +1310,6 @@ func (e *Engine) startJob(ctx context.Context, kind string, req ApplyRequest) (o
 	if err = e.load(); err != nil {
 		return Operation{}, false, err
 	}
-	if e.cfg.Platform == nil {
-		return Operation{}, false, refuse(409, "unsupported_edition", "this host does not run the image edition")
-	}
 	if e.active == nil {
 		if err = e.reconcile(ctx); err != nil {
 			return Operation{}, false, err
@@ -1873,9 +1870,6 @@ func (e *Engine) action(ctx context.Context, req ActionRequest, kind string, fn 
 	defer e.mu.Unlock()
 	if err = e.load(); err != nil {
 		return Operation{}, false, err
-	}
-	if e.cfg.Platform == nil {
-		return Operation{}, false, refuse(409, "unsupported_edition", "this host does not run the image edition")
 	}
 	if e.active == nil {
 		if err = e.reconcile(ctx); err != nil {

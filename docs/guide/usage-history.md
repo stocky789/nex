@@ -85,10 +85,8 @@ Known limits:
 8. On a host, select the panel's **Hardware** tab. The host's model is also shown at the top of
    its **Overview** tab. Select a section — **System**, **CPU**, **Memory**, **Disks**,
    **PCI devices** or **Temperature sensors** — to expand its table; collapsed sections that
-   have rows show a count. **Read** shows when the report was read; select **Read again** to
-   reread it, for example if the host could not be reached. The **System disk** mirror, with
-   **Replace disk…** when a member has failed, is on the host panel's **Storage** tab
-   ([Replace a failed system disk](replace-a-failed-system-disk.md)).
+   **Read** shows when the report was read; select **Read again** to
+   reread it, for example if the host could not be reached.
 9. On a host's **Performance** tab with the **Last 10 minutes** range selected, read the gauges
    above the charts: CPU
    and memory as a percentage, then one gauge per temperature sensor showing its reading in °C.

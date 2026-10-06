@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Build the image-edition installation ISO for the local QEMU lab (development evidence only).
+"""Build the installation ISO for the local QEMU lab (development evidence only).
 
-The full release build (installer/build.sh) needs the classic package closure, the matched libvirt and dlm
-builds and the Controller appliance; none of that is under test here. This script assembles a small ISO
-with the same image-edition layout from the pinned Debian netinst ISO:
+The full release build (installer/build.sh) needs the Controller system image build and a release image;
+none of that is under test here. This script assembles a small ISO with the same layout from the pinned
+Debian netinst ISO:
 
-  /nex/edition, /nex/image/<release>, /nex/bin/nex-hostimage, /nex/nex-image-install.sh, /nex/root-account.sh,
-  /nex/payload/<sha256>/<file>      (small lab fixtures, NOT the Controller appliance or VirtIO ISO)
+  /nex/image/<release>, /nex/bin/nex-hostimage, /nex/nex-image-install.sh, /nex/root-account.sh,
+  /nex/payload/<sha256>/<file>      (small lab fixtures, NOT the Controller system image or VirtIO ISO)
 
 and appends one initrd overlay on the Nex GUI/text initrd of the netinst ISO with the real installer pieces
 (`nex-config` compiled from installer/gui, `00nex-recheck`, `prepare`, `S66nex-wizard`, the text templates).
@@ -206,18 +206,13 @@ def main():
     shutil.copyfile(a.hostimage, os.path.join(nex, "bin/nex-hostimage"))
     for src, dst in (("installer/nex-image-install.sh", "nex-image-install.sh"), ("installer/root-account.sh", "root-account.sh")):
         shutil.copyfile(os.path.join(REPO, src), os.path.join(nex, dst))
-    with open(os.path.join(nex, "edition"), "w") as f:
-        f.write("image\n")
-    fixture = os.path.join(work, "controller.qcow2")
+    fixture = os.path.join(work, "controller-system.img")
     with open(fixture, "wb") as f:
-        f.write(b"nex lab fixture, not a Controller appliance\n" * 4096)
+        f.write(b"nex lab fixture, not a Controller system image\n" * 4096)
     digest = sha256(fixture)
     pdir = os.path.join(nex, "payload", digest)
     os.makedirs(pdir)
-    shutil.copyfile(fixture, os.path.join(pdir, "controller.qcow2"))
-    for n in ("manifest.json", "manifest.sig"):
-        with open(os.path.join(pdir, n), "w") as f:
-            f.write("lab fixture\n")
+    shutil.copyfile(fixture, os.path.join(pdir, "controller-system.img"))
     print("INFO  lab payload fixture sha256", digest, flush=True)
 
     # 3. initrd overlay: real installer files, compiled nex-config, lab wizard stub
@@ -246,8 +241,7 @@ def main():
         f.write(TTY_LOG)
     with open(os.path.join(overlay, "usr/share/nex-installer/timezones"), "w") as f:
         f.write("UTC\n")
-    with open(os.path.join(REPO, "installer/preseed.cfg")) as src, open(os.path.join(overlay, "preseed.cfg"), "w") as dst:
-        dst.writelines(l for l in src if not l.startswith("d-i preseed/early_command "))
+    shutil.copyfile(os.path.join(REPO, "installer/preseed.cfg"), os.path.join(overlay, "preseed.cfg"))
     listing = subprocess.run(["find", ".", "-print0"], cwd=overlay, check=True, capture_output=True).stdout
     cpio = subprocess.run(["cpio", "--null", "-o", "-H", "newc", "--quiet", "-R", "0:0"], cwd=overlay, input=listing,
                           check=True, capture_output=True).stdout
@@ -260,7 +254,7 @@ def main():
     with open(os.path.join(stage, "isolinux/isolinux.cfg"), "w") as f:
         f.write(f"default nex\nprompt 0\ntimeout 10\nlabel nex\n  kernel /install.amd/vmlinuz\n  append initrd=/install.amd/gtk/initrd.gz {append}\n")
     with open(os.path.join(stage, "boot/grub/grub.cfg"), "w") as f:
-        f.write(f"set default=0\nset timeout=1\nmenuentry 'Nex Core image edition (lab)' {{\n"
+        f.write(f"set default=0\nset timeout=1\nmenuentry 'Nex Core (lab)' {{\n"
                 f"  linux /install.amd/vmlinuz {append}\n  initrd /install.amd/gtk/initrd.gz\n}}\n")
     for p in ("md5sum.txt",):
         if os.path.exists(os.path.join(stage, p)):

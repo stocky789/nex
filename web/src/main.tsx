@@ -13,7 +13,6 @@ import "./tokens.css";
 import "./style.css";
 import { powerActions, powerConfirmText, sentence, type VM, type Storage, type Network, type Media } from "./managed";
 import { Icon, type IconKind } from "./icons";
-import { followUpdate, type UpdateStatus } from "./updates";
 import { LoadError, LoadErrorAlert, Menu, ScreenBoundary, badgeTone, date } from "./ui";
 import { operationLabel, statusLabel } from "./labels";
 import { ActivityMenu } from "./activity";
@@ -77,7 +76,7 @@ function readScope(): Scope {
   try {
     const saved = JSON.parse(readPreference("nex.scope"));
     const pool = String(saved.pool ?? "");
-    // Older builds stored all-pools as ""; "*" is the explicit sentinel now.
+    // An empty stored pool means all pools; "*" is the explicit sentinel.
     return { site: String(saved.site || ""), pool: pool === "" ? allPools : pool };
   } catch { return { site: "", pool: "" }; }
 }
@@ -184,13 +183,7 @@ function App() {
   // A retryable enrollment conflict is a wait, not a failure: the entries stay so a retry is one
   // click, and the host's own words stay available in a fold.
   const [hostRetry, setHostRetry] = useState<{ message: string; hostError: string } | null>(null);
-  const [update, setUpdate] = useState<UpdateStatus | null>(null);
-  const [updateNote, setUpdateNote] = useState("");
-  const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "applying" | "done" | "error">("idle");
-  // The Controller restarts during its own update, so polls fail then by design; the Updates panel says so instead.
-  const applyingUpdate = useRef(false);
   const wasDown = useRef(false);
-  const restartSeen = useRef(false);
   const requestID = useRef<string | null>(null);
   const generation = useRef(0);
   const reloadOrdinal = useRef(0);
@@ -282,7 +275,6 @@ function App() {
       inventoryPainted.current = false;
       setData(empty);
       setToken(null);
-      setUpdate(null);
     }
     if (!response.ok) {
       let message = `Request failed (${response.status}).`;
@@ -514,7 +506,7 @@ function App() {
         setError("");
       }
     } catch (e) {
-      if (isCurrent() && !applyingUpdate.current) {
+      if (isCurrent()) {
         wasDown.current = true;
         setError(
           sentence((e as Error).message) +
@@ -561,11 +553,6 @@ function App() {
     const timer = setInterval(() => { if (document.visibilityState === "visible") void reload(); }, 5000);
     return () => clearInterval(timer);
   }, [session, error]);
-  // The update status feeds the Overview, Hosts, Members and Updates screens; it is read once per
-  // session and again on Check, not on every route.
-  useEffect(() => {
-    if (session) api<UpdateStatus>("updates").then(setUpdate, () => {});
-  }, [session]);
   // #/sites/{id} and #/pools/{id} set the scope and show its overview, and #/pools/{id}/{section}
   // opens that pool's settings section; #/updates moved to settings, and Storage, Networks and the
   // ISO library moved out of it.
@@ -871,7 +858,6 @@ function App() {
                   inventoryPainted.current = false;
                   setData(empty);
                   setToken(null);
-                  setUpdate(null);
                 })
               }
               disabled={busy}
@@ -900,18 +886,18 @@ function App() {
               {notice}
             </div>
           )}
-          <LazyScreen key={kind}>{kind === "" ? <LazyOverview data={data} site={site} pool={pool} hosts={scopedHosts} vms={scopedVMs} api={api} coreAvailable={update?.core_available_version} loading={loading} busy={busy} onCreateSite={() => open("site")} onAddHost={() => open("enroll")} />
+          <LazyScreen key={kind}>{kind === "" ? <LazyOverview data={data} site={site} pool={pool} hosts={scopedHosts} vms={scopedVMs} api={api} loading={loading} busy={busy} onCreateSite={() => open("site")} onAddHost={() => open("enroll")} />
             : kind === "vms" ? !creating && <LazyVMList data={data} vms={scopedVMs} pool={pool} network={new URLSearchParams(search).get("network") || undefined} selectedID={id} operationID={routeOperation} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} loading={loading} onNotice={setNotice}
               onCreateVM={newVM} mediaControls={vmMediaControls}
               installMedia={target => ({ busy: mediaBusy, note: vmMediaNote(target), onEject: () => void changeVMMedia(target.id, "eject", "install") })} />
-            : kind === "hosts" ? <LazyHostList data={data} hosts={scopedHosts} selectedID={id} api={api} busy={busy} unavailable={Boolean(error)} loading={loading} coreAvailable={update?.core_available_version}
+            : kind === "hosts" ? <LazyHostList data={data} hosts={scopedHosts} selectedID={id} api={api} busy={busy} unavailable={Boolean(error)} loading={loading}
               openHostConsole={openHostConsole} onRefreshInventory={refreshInventory} onReenroll={() => open("reenroll")} onRevoke={() => open("revoke")} />
             : kind === "storage" || kind === "networks" ? <><h1 className="sr-only">{kind === "storage" ? "Storage" : "Networks"}</h1>{!pool && <p className="empty">Choose a pool in the scope menu to see its {kind}.</p>}</>
             : section ? <SettingsHead section={section} pool={pool} master={masterHost} hostCount={scopedHosts.length} />
             : kind === "backups" ? <LazyBackups key={pool?.id} api={api} data={data} pool={pool} busy={busy} unavailable={Boolean(error)} reload={reload} onNotice={setNotice} vmFilter={new URLSearchParams(search).get("vm") || undefined} flow={new URLSearchParams(search).get("flow") || undefined} />
             : kind === "containers" ? <LazyContainers />
             : kind === "tasks" ? <LazyTasks data={data} upload={upload} onCancelUpload={cancelUpload} />
-            : kind === "events" ? <LazyEvents entries={data.audit} data={data} conditions={attentionItems(data, data.hosts, data.vms, data.storage.filter(s => !s.tombstone), update?.core_available_version)} />
+            : kind === "events" ? <LazyEvents entries={data.audit} data={data} conditions={attentionItems(data, data.hosts, data.vms, data.storage.filter(s => !s.tombstone))} />
             : scopeRedirect || loading ? <p role="status">Loading…</p> : notFound}</LazyScreen>
           {/* ManagedVMs owns the create wizard and the Storage / Networks tables for the scoped
               pool. List screens (VMList, HostList) own #/vms and #/hosts; when creating is true
@@ -919,63 +905,7 @@ function App() {
               render a heading above, and this mount supplies the real tables. */}
           {pool && <LazyScreen><LazyManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={kind === "vms" ? (creating ? "Virtual machines" : "") : kind === "storage" ? "Storage" : kind === "networks" ? "Networking" : ""} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={showPoolTab} unavailable={Boolean(error)} upload={upload} onCancelUpload={cancelUpload} startIsoUpload={startIsoUpload} creating={kind === "vms" && creating} onCloseCreate={() => setCreating(false)} onNotice={setNotice} /></LazyScreen>}
           {/* Settings sections that are not pool resources follow the resource sections, in the nav's order. */}
-          {section && <LazyScreen><LazySettings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} onNotice={setNotice} updates={{
-              update,
-              note: updateNote,
-              phase: updatePhase,
-              onCheck: () =>
-                void action(async () => {
-                  setUpdateNote("");
-                  setUpdatePhase("checking");
-                  try {
-                    setUpdate(await api<UpdateStatus>("updates"));
-                    setUpdatePhase("idle");
-                  } catch (e) {
-                    setUpdatePhase("error");
-                    throw e;
-                  }
-                }),
-              onApply: () =>
-                void (async () => {
-                  setBusy(true);
-                  setActionError("");
-                  setUpdateNote("");
-                  setUpdatePhase("applying");
-                  applyingUpdate.current = true;
-                  restartSeen.current = false;
-                  setError("");
-                  try {
-                    let uncertain = false;
-                    try {
-                      await api("updates/apply", "POST", {});
-                    } catch (e) {
-                      const status = (e as { status?: number }).status;
-                      if (status && status < 500 && status !== 408) throw e;
-                      uncertain = true;
-                    }
-                    const st = await followUpdate(api, setUpdate, undefined, uncertain, () => { restartSeen.current = true; setUpdate(u => u && { ...u, message: "Waiting for the Controller to restart" }); });
-                    if (st?.phase === "done") {
-                      // A restarted Controller serves new UI files; the old page's lazy chunks no longer exist, so load the new ones.
-                      if (restartSeen.current) window.setTimeout(() => location.reload(), 2500);
-                      setUpdateNote(restartSeen.current ? "Update complete. Reloading to load the new version…" : st.message || "Update complete");
-                      setUpdatePhase("done");
-                    } else if (st?.phase === "failed" || st?.phase === "attention") {
-                      setUpdatePhase("error");
-                      setActionError(st.error || st.message || "Update failed");
-                    } else {
-                      setUpdateNote(uncertain ? "The update request outcome is unknown; this update could not be confirmed. Select Check before trying again." : "Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
-                      setUpdatePhase("idle");
-                    }
-                  } catch (e) {
-                    setUpdatePhase("error");
-                    setActionError((e as Error).message);
-                  } finally {
-                    applyingUpdate.current = false;
-                    void reload();
-                    setBusy(false);
-                  }
-                })(),
-            }} /></LazyScreen>}
+          {section && <LazyScreen><LazySettings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} onNotice={setNotice} /></LazyScreen>}
         </div>
       </main>
       {powerConfirmDialog}

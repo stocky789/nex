@@ -116,7 +116,7 @@ def main():
             expect(page.get_by_label('Destination storage').locator(f'option[value="{storage["id"]}"]')).to_have_count(0)
             expect(page.get_by_text('wait for its assigned Core to report current ISO access', exact=False)).to_be_visible()
             expect(page.get_by_role('button', name='Download ISO', exact=True)).to_be_disabled()
-            checks.append('Old Core blocks URL download; stale owner host hides its storage and blocks download')
+            checks.append('A Core without URL download blocks it; stale owner host hides its storage and blocks download')
             host['connection'] = 'fresh'
             data['storage'] = []
             page.reload()

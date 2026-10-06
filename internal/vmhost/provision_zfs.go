@@ -65,7 +65,7 @@ type ZFSProvisioner struct {
 func NewZFSProvisioner(stateDir string) *ZFSProvisioner { return &ZFSProvisioner{stateDir: stateDir} }
 
 // withExclusiveDiskLock serializes destructive disk work on one host. Callers pass their
-// journal directory (zfs-provision, zfs-replace or system-disk-replace); the lock file sits
+// journal directory (zfs-provision or zfs-replace); the lock file sits
 // beside those siblings on the host state directory so concurrent lanes cannot wipe the same
 // disk. lockedErr is returned when the lock cannot be taken.
 func withExclusiveDiskLock(stateDir string, lockedErr error) (unlock func(), err error) {

@@ -306,7 +306,6 @@ func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 		"appliance-firstboot":           "#!/usr/bin/python3\nprint('firstboot')\n",
 		"nex-controller-update.path":    "[Path]\n",
 		"nex-controller-update.service": "[Service]\n",
-		"updates.conf":                  "repo_url=https://nexvirtualization.com/apt\n",
 	} {
 		if err := os.WriteFile(filepath.Join(updateDir, name), []byte(body), 0644); err != nil {
 			t.Fatal(err)
@@ -327,7 +326,7 @@ func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(b)
-	for _, want := range []string{"ssh_pwauth: true", "disable_root: false", "/usr/local/lib/nex/apply-update", "/usr/local/lib/nex/appliance-firstboot", "/etc/nex/updates.conf", "nex-controller-update.path", "systemctl, enable, --now, nex-controller-update.path"} {
+	for _, want := range []string{"ssh_pwauth: true", "disable_root: false", "/usr/local/lib/nex/apply-update", "/usr/local/lib/nex/appliance-firstboot", "nex-controller-update.path", "systemctl, enable, --now, nex-controller-update.path"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("seed missing %q in %s", want, text)
 		}
@@ -344,7 +343,7 @@ func TestProfileSeedCarriesNoUpdateHelper(t *testing.T) {
 	if err := os.MkdirAll(updateDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"apply-update", "appliance-firstboot", "nex-controller-update.path", "nex-controller-update.service", "updates.conf"} {
+	for _, name := range []string{"apply-update", "appliance-firstboot", "nex-controller-update.path", "nex-controller-update.service"} {
 		if err := os.WriteFile(filepath.Join(updateDir, name), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
 		}

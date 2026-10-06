@@ -44,21 +44,6 @@ class ImageLayoutTest(unittest.TestCase):
     def test_denylist_is_not_requested(self):
         self.assertEqual(names("image", "base.packages") & names("image", "denylist.txt"), set())
 
-    def test_classic_package_not_in_base_is_a_layer_or_dropped(self):
-        layer_dir = os.path.join(ROOT, "image", "mkosi.images")
-        layered = set()
-        for layer in os.listdir(layer_dir) if os.path.isdir(layer_dir) else []:
-            path = os.path.join(layer_dir, layer, "layer.packages")
-            if os.path.exists(path):
-                layered |= names("image", "mkosi.images", layer, "layer.packages")
-        classic = names("installer", "packages.txt")
-        missing = classic - names("image", "base.packages") - names("image", "denylist.txt") - layered
-        # The "smb" group is excluded from the base by the assignment, but no layer ships it yet: listed here so
-        # the gap is explicit; remove the entries once a layer ships them.
-        missing -= {"cifs-utils", "smbclient"}
-        # What neither the base, a layer nor the denylist covers must be an explicit decision, not an accident.
-        self.assertEqual(missing, set(), "installer/packages.txt entries the image silently loses")
-
     def test_data_label_agrees_across_sources(self):
         go = read("internal", "hostimage", "layout.go")
         label = re.search(r'DataLabel\s*=\s*"([^"]+)"', go).group(1)
@@ -183,7 +168,7 @@ class ImageLayoutTest(unittest.TestCase):
         index = go_const(go, "DataIndex")
         installer = read("installer", "nex-image-install.sh")
         self.assertEqual(set(re.findall(r'partition "\$disk" (\d+)', installer)), {index})
-        self.assertIn(f'Planned{{{index}, DataLabel,', read("internal", "hostimage", "layout.go"))
+        self.assertIn('Planned{DataIndex, DataLabel,', read("internal", "hostimage", "layout.go"))
 
     def test_installer_finds_the_data_volume_by_the_label_the_plan_writes(self):
         label = go_const(read("internal", "hostimage", "layout.go"), "DataLabel").strip('"')
@@ -194,8 +179,8 @@ class ImageLayoutTest(unittest.TestCase):
     def test_partition_names_in_the_installer_and_labs_exist_in_the_plan(self):
         layout = read("internal", "hostimage", "layout.go")
         planned = set(re.findall(r'\{"(nex-[a-z0-9-]+)", type', layout))
-        planned |= {go_const(layout, "ESPLabel").strip('"'), go_const(layout, "DataLabel").strip('"')}
-        self.assertEqual(len(planned), 6)
+        planned |= {go_const(layout, name).strip('"') for name in ("BIOSLabel", "ESPLabel", "DataLabel")}
+        self.assertEqual(len(planned), 7)
         used = set()
         for path in (("installer", "nex-image-install.sh"), ("tests", "integration", "image_install_lab.py"),
                      ("tests", "integration", "image_sb_lab.py")):
@@ -224,11 +209,6 @@ class ControllerProfileTest(unittest.TestCase):
         fstab = read("image", "controller", "mkosi.extra", "etc", "fstab")
         # Made on a blank disk only (x-systemd.makefs) and mounted in the initrd, where the /etc overlay needs it.
         self.assertRegex(fstab, r"(?m)^/dev/vdb /var ext4 [^ ]*x-initrd\.mount[^ ]*x-systemd\.makefs ")
-
-    def test_guest_has_every_package_the_single_disk_appliance_installs(self):
-        script = read("appliance", "build-inside.sh")
-        installed = set(re.search(r"package-service-policy install ([^']+)'", script).group(1).split())
-        self.assertLessEqual(installed, names("image", "controller", "controller.packages"))
 
     def test_guest_has_no_apt_update_helper(self):
         payload = read("appliance", "build-controller-payload.sh") + read("image", "controller", "mkosi.postinst.chroot")

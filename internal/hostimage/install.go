@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -261,7 +262,7 @@ func repairTable(d *Disk, layout string) (*Table, error) {
 	if t := mustGUID(want.Type); data.Type != t {
 		return nil, fmt.Errorf("%s: %s is not a %s partition for layout %s", d.Path, DataLabel, typeNames[want.Type], layout)
 	}
-	t := tableFor(plan[:DataIndex-1], d.SectorSize)
+	t := tableFor(slices.Concat(plan[:DataIndex-1], plan[DataIndex:]), d.SectorSize)
 	t.DiskID = old.DiskID
 	t.Parts = append(t.Parts, data)
 	return t, nil
@@ -317,10 +318,12 @@ func (w *Writer) makeData(ctx context.Context, disks []*Disk, layout string) err
 	return w.Runner.Run(ctx, "mkfs.ext4", "-F", "-q", "-L", DataLabel, dev)
 }
 
-// finishDisks formats the ESPs, writes slot A on every disk in S2 order and converges the ESPs.
+// finishDisks formats the boot partitions, writes slot A on every disk in S2 order, writes each boot partition
+// through the boot method and makes the disk start from it.
 func (w *Writer) finishDisks(ctx context.Context, disks []*Disk, rel *Release) error {
+	m := w.method()
 	for _, d := range disks {
-		if err := w.Runner.Run(ctx, "mkfs.fat", "-F", "32", "-n", "NEXESP", NodeName(d.Path, 1)); err != nil {
+		if err := w.Runner.Run(ctx, "mkfs.fat", "-F", "32", "-n", "NEXESP", NodeName(d.Path, ESPIndex)); err != nil {
 			return err
 		}
 	}
@@ -328,12 +331,16 @@ func (w *Writer) finishDisks(ctx context.Context, disks []*Disk, rel *Release) e
 		return err
 	}
 	for _, d := range disks {
-		node := NodeName(d.Path, 1)
-		w.logf("writing the boot partition %s", node)
-		if err := w.WithESP(ctx, node, func(root string) error { return ConvergeESP(root, rel.ESPFiles()) }); err != nil {
+		node := NodeName(d.Path, ESPIndex)
+		w.logf("writing the %s boot partition %s", m.Name(), node)
+		if err := w.WithESP(ctx, node, func(root string) error {
+			if err := m.place(root, rel, SlotA); err != nil {
+				return err
+			}
+			return m.install(ctx, w, d.Path, root)
+		}); err != nil {
 			return fmt.Errorf("%s: %w", node, err)
 		}
-		w.registerBootEntry(ctx, d.Path)
 	}
 	return nil
 }
@@ -341,7 +348,7 @@ func (w *Writer) finishDisks(ctx context.Context, disks []*Disk, rel *Release) e
 // registerBootEntry adds a firmware boot entry for the ESP of a disk. The removable-path loader still
 // boots without it, so a failure (no efivarfs in a chroot, a read-only variable store) is reported, not fatal.
 func (w *Writer) registerBootEntry(ctx context.Context, disk string) {
-	err := w.Runner.Run(ctx, "efibootmgr", "--create", "--disk", disk, "--part", "1",
+	err := w.Runner.Run(ctx, "efibootmgr", "--create", "--disk", disk, "--part", strconv.Itoa(ESPIndex),
 		"--label", "Nex Core "+filepath.Base(disk), "--loader", `\EFI\systemd\systemd-bootx64.efi`)
 	if err != nil {
 		w.logf("warning: no firmware boot entry for %s (the removable-path loader remains): %v", disk, err)

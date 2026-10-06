@@ -125,7 +125,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
   }, [focus]);
   // Resize is offered only where a guest has reported it can act on the request: a VirtIO
   // display and the running agent that applies the resolution. No report at all — a host
-  // console, an older Core, the moment before a VM's first report — is not evidence of the
+  // console, a Core that sends none, the moment before a VM's first report — is not evidence of the
   // capability, so it is not offered either. A remembered "remote" view falls back to fit.
   const resize = Boolean(guest && guest.resize);
   const effective = (p: Prefs): View => (p.view === "remote" && !resize ? "fit" : p.view);

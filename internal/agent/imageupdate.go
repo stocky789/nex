@@ -12,7 +12,7 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-// ImageUpdater is the image edition's update engine. The engine, not the Controller, runs every
+// ImageUpdater is the host's update engine. The engine, not the Controller, runs every
 // phase and keeps the record (/var/lib/nex/image/state.json); a command only asks for an action and
 // the result only says whether the host accepted it. Progress, slots and rollback state come back in
 // Inventory.image.
@@ -40,7 +40,7 @@ var (
 )
 
 // SetImageUpdater installs the host's update engine. nex-core-local calls it once, before the agent
-// runs, on an image-edition host; a host without an engine never advertises image-update-v1.
+// runs; a host without an engine never advertises image-update-v1.
 func SetImageUpdater(u ImageUpdater) {
 	imageUpdaterMu.Lock()
 	imageUpdater = u
@@ -78,14 +78,14 @@ func ExecuteImageUpdate(ctx context.Context, cmd protocol.Command) protocol.Resu
 	}
 	engine := currentImageUpdater()
 	if engine == nil {
-		result.Error = "unsupported_edition: this host does not run the image edition"
+		result.Error = "no_image_update_engine: this host has no image update engine"
 		return result
 	}
 	offline, hasOffline := engine.(OfflineUpdater)
 	switch req.Action {
 	case "settings", "media", "import", "fetch":
 		if !hasOffline {
-			result.Error = "unsupported_edition: this host does not run the image edition"
+			result.Error = "no_image_update_engine: this host has no image update engine"
 			return result
 		}
 	}

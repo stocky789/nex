@@ -38,9 +38,6 @@ func TestThePoolClusterIsEveryHostAndWaitsForThemAll(t *testing.T) {
 	if id := PoolClusterNodeID("host-a"); id > 65535 {
 		t.Fatalf("node ID %d exceeds Corosync's supported 16-bit range", id)
 	}
-	if id := PoolClusterNodeID("legacy-24623"); id != 5615 {
-		t.Fatalf("previously valid node ID changed: %d", id)
-	}
 	if PoolClusterNodeID("host-a") == PoolClusterNodeID("host-b") {
 		t.Fatal("two hosts derive the same Corosync node identifier")
 	}
@@ -94,7 +91,7 @@ func TestNeitherClusterTakesOverTheOthersCorosyncConfiguration(t *testing.T) {
 	if !PoolClusterOwnsCorosync() {
 		t.Fatal("the pool's own cluster configuration is not recognised as its own")
 	}
-	if err := PoolClusterCanOwnCorosync(dir); err != nil {
+	if err := PoolClusterCanOwnCorosync(); err != nil {
 		t.Fatalf("pool cluster refused its own configuration: %v", err)
 	}
 	storage, err := RenderStorageCluster(protocol.StorageClusterConfig{ClusterID: "sc1",
@@ -118,7 +115,7 @@ func TestNeitherClusterTakesOverTheOthersCorosyncConfiguration(t *testing.T) {
 	if PoolClusterOwnsCorosync() {
 		t.Fatal("clustered storage's configuration was read as the pool's own")
 	}
-	if err := PoolClusterCanOwnCorosync(dir); err == nil {
+	if err := PoolClusterCanOwnCorosync(); err == nil {
 		t.Fatal("pool cluster key could overwrite clustered storage's authentication")
 	}
 	if _, err = writeCorosyncConfig(dir, pool, poolClusterMarker); err == nil {
@@ -295,7 +292,7 @@ func TestThePoolClusterPolicyIsWrittenAndTheWatchdogBoundIsRemoved(t *testing.T)
 		t.Fatalf("the policy this cluster needs was not read back: %v %v", ready, err)
 	}
 
-	// A bound from an earlier Nex Core, or from an administrator, is removed.
+	// A bound set by anything else, such as an administrator, is removed.
 	lab.cib = wrap(base + `<nvpair name="stonith-watchdog-timeout" value="30s"/>`)
 	if ready, err = PoolClusterPropertiesReady(context.Background()); err != nil || ready {
 		t.Fatalf("a cluster carrying the bound was read as current: %v %v", ready, err)

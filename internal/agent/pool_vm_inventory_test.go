@@ -188,7 +188,7 @@ func TestPoolVMInventoryKeepsAmbiguousAutomaticStartAfterRestart(t *testing.T) {
 	}{
 		{name: "request outcome uncertain and shut off", start: "libvirt did not confirm the start request; inspect the VM on its host", outcome: "uncertain", observed: "shut off", wantState: "starting", pending: "create-auto"},
 		{name: "interrupted outcome and shut off", start: "interrupted before the automatic start completed", outcome: "uncertain", observed: "shut off", wantState: "starting", pending: "create-auto"},
-		{name: "legacy reason and shut off", start: "libvirt refused the start request; inspect the VM on its host", observed: "shut off", wantState: "starting", pending: "create-auto"},
+		{name: "reason without outcome and shut off", start: "libvirt refused the start request; inspect the VM on its host", observed: "shut off", wantState: "starting", pending: "create-auto"},
 		{name: "uncertain but currently running", start: "libvirt did not confirm the start request; inspect the VM on its host", outcome: "uncertain", observed: "running", wantState: "running"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

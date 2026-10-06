@@ -67,9 +67,9 @@ upstream notices. This rebuild still needs the tools listed above and does not p
 byte-identical output across toolchain versions. The dependency review is in
 [controller-dependencies.md](controller-dependencies.md).
 
-## Nex Core image (UEFI image edition)
+## Nex Core image
 
-The image edition is built in a pinned Debian trixie container, so any workstation distribution works. Docker (or a
+The image is built in a pinned Debian trixie container, so any workstation distribution works. Docker (or a
 compatible runtime) and Go are the host requirements; nothing is installed on the workstation. Outputs go to the
 gitignored `image/out/`.
 

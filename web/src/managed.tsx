@@ -593,7 +593,7 @@ export function ejectInstallOffer(vm: VM, host?: Host): boolean {
   if (media <= 0 || !disks.length || disks.some(order => order < media)) return false;
   if (vm.freshness !== "fresh" || vm.state !== "running") return false;
   // The guest opened its own tray, so the drive the firmware would boot from is already empty.
-  // An older Core reports no observation at all; the recorded media then stands on its own.
+  // A Core that reports no observation at all leaves the recorded media standing on its own.
   if (vm.guest?.media === "empty" || vm.guest?.media === "no-drive") return false;
   return Boolean(host && !host.revoked && host.connection === "fresh" && host.capabilities?.includes("vm-media-v1"));
 }

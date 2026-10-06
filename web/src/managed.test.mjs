@@ -172,7 +172,7 @@ assert.equal(ejectInstallOffer({ ...installed, spec: { ...installed.spec, boot: 
 assert.equal(ejectInstallOffer({ ...installed, spec: { ...installed.spec, disks: [{ ...installed.spec.disks[0], boot_order: 0 }] } }, mediaHost), false, "no disk is in the boot order to fall back to");
 assert.equal(ejectInstallOffer(installed, { ...mediaHost, capabilities: ["managed-vm-v1"] }), false, "the host cannot take a media request");
 assert.equal(ejectInstallOffer(installed, { ...mediaHost, connection: "stale" }), false, "the host is not freshly connected");
-// A guest observation is absent on older Core builds; the recorded media then stands on its own.
+// A guest observation can be absent; the recorded media then stands on its own.
 assert.equal(ejectInstallOffer({ ...installed, guest: null }, mediaHost), true);
 
 const detailProps = {

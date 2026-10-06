@@ -255,7 +255,7 @@ func TestVMDriversMediaIsValidatedLikeInstallMedia(t *testing.T) {
 			t.Fatalf("want %q in %s", want, w)
 		}
 	}
-	// Legacy host: the drivers drive is refused before anything is queued, blank stays allowed.
+	// Host without the drivers-drive capability: the drivers drive is refused before anything is queued, blank stays allowed.
 	expect(l.create("no-cap", spec("guest-nocap", drivers.ID), 409).Body.String(), "driver disc")
 	var created createdVM
 	read(t, l.create("create-plain", spec("guest-plain", ""), 202), &created)
@@ -300,7 +300,7 @@ func TestVMMediaDriversDrive(t *testing.T) {
 		t.Fatalf("invalid drive: %s", w)
 	}
 	if w := send(insert, 409); !strings.Contains(w, "does not support a driver disc drive") {
-		t.Fatalf("legacy host: %s", w)
+		t.Fatalf("host without drivers-drive capability: %s", w)
 	}
 	l.caps = append(l.caps, protocol.DriversDriveCapability)
 	l.report()

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -18,14 +19,25 @@ func TestPlanLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	labels := []string{ESPLabel, "nex-root-a", "nex-verity-a", "nex-root-b", "nex-verity-b", DataLabel}
+	labels := []string{ESPLabel, "nex-root-a", "nex-verity-a", "nex-root-b", "nex-verity-b", DataLabel, BIOSLabel}
 	if len(plan) != len(labels) {
 		t.Fatalf("got %d partitions", len(plan))
 	}
 	end := int64(0)
 	for i, p := range plan {
-		if p.Label != labels[i] || p.Index != i+1 || p.Offset%MiB != 0 || p.Size%MiB != 0 || p.Offset < end {
-			t.Errorf("partition %d bad: %+v (previous end %d)", i+1, p, end)
+		if p.Label != labels[i] || p.Index != i+1 || p.Offset%MiB != 0 || p.Size%MiB != 0 {
+			t.Errorf("partition %d bad: %+v", i+1, p)
+		}
+	}
+	// On the disk the BIOS boot partition is first, 1 MiB long, in front of the ESP; nothing overlaps.
+	byOffset := append([]Planned(nil), plan...)
+	sort.Slice(byOffset, func(i, j int) bool { return byOffset[i].Offset < byOffset[j].Offset })
+	if byOffset[0].Label != BIOSLabel || byOffset[0].Size != BIOSSize || byOffset[0].TypeName() != "bios-boot" || byOffset[1].Label != ESPLabel {
+		t.Errorf("the BIOS boot partition is not in front of the ESP: %+v", byOffset[:2])
+	}
+	for _, p := range byOffset {
+		if p.Offset < end {
+			t.Errorf("%s overlaps the partition before it", p.Label)
 		}
 		end = p.Offset + p.Size
 	}
@@ -97,7 +109,7 @@ func TestGPTRoundTripAndBackupFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	tb, err := d.ReadTable()
-	if err != nil || len(tb.Parts) != 6 {
+	if err != nil || len(tb.Parts) != 7 {
 		t.Fatalf("table: %v %v", tb, err)
 	}
 	seen := map[GUID]bool{}
@@ -138,8 +150,8 @@ func TestGPTIsReadableBySfdisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sfdisk: %v\n%s", err, out)
 	}
-	for _, want := range []string{`"label": "gpt"`, `"name": "nex-esp"`, `"name": "nex-root-a"`, `"name": "nex-verity-b"`, `"name": "nex-data"`,
-		"C12A7328-F81F-11D2-BA4B-00A0C93EC93B", "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709", "2C7357ED-EBD2-46D9-AEC1-23D437EC2BF5"} {
+	for _, want := range []string{`"label": "gpt"`, `"name": "nex-esp"`, `"name": "nex-bios"`, `"name": "nex-root-a"`, `"name": "nex-verity-b"`, `"name": "nex-data"`,
+		"21686148-6449-6E6F-744E-656564454649", "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709", "2C7357ED-EBD2-46D9-AEC1-23D437EC2BF5"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("sfdisk output lacks %s:\n%s", want, out)
 		}
@@ -294,7 +306,8 @@ func TestInstallSingleDisk(t *testing.T) {
 		t.Errorf("ESP not formatted: %v", rec.calls)
 	}
 	esp := filepath.Join(espMountBase, filepath.Base(disk+"1"))
-	for rel, want := range map[string]string{"EFI/BOOT/BOOTX64.EFI": "boot-loader", "loader/loader.conf": "timeout 0\n", "EFI/Linux/nex-core_r1_1.efi": "uki-r1-1-1"} {
+	wantUKI, _ := os.ReadFile(filepath.Join(rel, "nex-core_r1_1.efi"))
+	for rel, want := range map[string]string{"EFI/BOOT/BOOTX64.EFI": "boot-loader", "loader/loader.conf": "timeout 0\n", "EFI/Linux/nex-core_r1_1.efi": string(wantUKI)} {
 		if b, err := os.ReadFile(filepath.Join(esp, rel)); err != nil || string(b) != want {
 			t.Errorf("ESP %s: %q %v", rel, b, err)
 		}

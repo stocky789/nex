@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only
  * Validate the local wizard handoff and prepare existing Debian installer inputs.
  * Never partitions disks. Netinst activates the selected installer network.
- * The image edition also stages the /etc seed and layout for nex-image-install.sh.
+ * Stages the /etc seed and layout for nex-image-install.sh.
  */
 #define _GNU_SOURCE
 #include <glib.h>
@@ -39,14 +39,6 @@ static char **disk_list(GKeyFile *config, const char *key, gsize *count)
     if (!entries) { *count = 0; entries = g_new0(char *, 1); }
     return entries;
 }
-/* Media built with the image edition selects it unless the boot entry asked for the classic one. */
-static gboolean image_edition(void)
-{
-    char *cmdline = read_text("/proc/cmdline"), *edition = read_text("/cdrom/nex/edition");
-    gboolean image = !strcmp(edition, "image") && !strstr(cmdline, "nex.edition=classic");
-    g_free(cmdline); g_free(edition);
-    return image;
-}
 /* Repair rewrites the system image of an installed host and keeps its data volume. */
 static gboolean repair_mode(GKeyFile *config)
 {
@@ -55,10 +47,10 @@ static gboolean repair_mode(GKeyFile *config)
     g_free(mode);
     return repair;
 }
-/* Two slots, the ESP and a nex-data that holds a staged update, the payloads and the VM store. */
+/* Two slots, the boot partitions and a nex-data that holds a staged update, the payloads and the VM store. */
 static guint64 disk_floor(void)
 {
-    return (image_edition() ? 24ULL : 16ULL) * 1024 * 1024 * 1024;
+    return 24ULL * 1024 * 1024 * 1024;
 }
 /* Whole-disk erase safety and last-moment identity of one selected disk. */
 static guint64 validate_disk(const char *disk, const char *size, const char *serial, const char *dev)
@@ -119,9 +111,6 @@ static void validate(GKeyFile *config, gboolean password_required)
     char *needle = g_strdup_printf("\n%s\n", zone);
     char *haystack = g_strdup_printf("\n%s\n", zones);
     gboolean repair = repair_mode(config);
-    if (image_edition() && !g_file_test("/sys/firmware/efi",G_FILE_TEST_IS_DIR))
-        fail("The image edition installs on UEFI firmware only. Restart in UEFI mode, or choose the Classic edition in the boot menu. No disk has been changed.");
-    if (repair && !image_edition()) fail("Repair applies to the image edition only.");
     /* Repair keeps the host's own identity, account and clock on its data volume. */
     if (!repair) {
         char *normalized_hostname = nex_hostname_normalize(hostname);
@@ -192,8 +181,8 @@ static void write_image_env(const char *mode, char **disk, gsize disks)
     protected_write("/run/nex-installer/image.env",text);
     g_free(text);g_free(list);
 }
-/* The image edition has no installer-driven account, clock or console setup: the same
- * answers become overlay files, beside the hostname, hosts and network files staged above. */
+/* Account, clock and console setup are not installer-driven: the wizard's answers become overlay files,
+ * beside the hostname, hosts and network files staged above. */
 static void image_seed(const char *zone, const char *keymap, const char *hash, char **disk, gsize disks)
 {
     char *text=g_strdup_printf("../usr/share/zoneinfo/%s",zone);
@@ -241,7 +230,6 @@ int main(int argc,char **argv)
         for (int i = 1; i < 7; i++) g_free(args[i]);
         g_free(group);
         char *check[] = { "/bin/sh", "/cdrom/nex/netinst-fetch.sh", "--check", NULL };
-        if (image_edition()) g_setenv("NEX_NETINST_ROWS","image/ payload/",TRUE);
         if (!g_spawn_sync(NULL, check, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
                           NULL, NULL, NULL, NULL, &status, NULL) || !g_spawn_check_wait_status(status, NULL))
             fail("Net installer sources are unavailable. Check internet access, DNS and system time, then retry. No disk has been erased.");
@@ -294,26 +282,10 @@ int main(int argc,char **argv)
     protected_write("/run/nex-installer/target/etc/hosts",hosts);
     if (chmod("/run/nex-installer/target/etc/hostname",0644) || chmod("/run/nex-installer/target/etc/hosts",0644)) fail("Unable to set host configuration permissions.");
     g_free(hostfile);g_free(hosts);
-    /* Every layout has a read-only-at-runtime root and a separate /var that holds all
-     * host state (nex-root-ro.service remounts / read-only; packaging/core-local keeps
-     * /etc and /root on /var). One disk is two ext4 filesystems; two or more are two
-     * md RAID1 mirrors, / and /var. Every mirror disk gets the same GPT layout on either
-     * firmware - a 1 MiB BIOS boot partition, a 512 MiB ESP, then the / member and the
-     * /var member - so the members are always partitions 3 and 4 and either firmware can
-     * boot the host from any of the disks. */
-    gboolean uefi=g_file_test("/sys/firmware/efi",G_FILE_TEST_IS_DIR);
-    GString *targets=g_string_new(disk[0]), *members=g_string_new(""), *var_members=g_string_new("");
-    for (gsize i=0;i<disks;i++) {
-        const char *name=disk[i];
-        if (i) g_string_append_printf(targets," %s",name);
-        /* Partitions 3 and 4 on every member: the recipes below always lay down the
-         * BIOS boot partition and the ESP first, whichever firmware is running. */
-        const char *prefix=g_ascii_isdigit(name[strlen(name)-1]) ? "p" : "";
-        g_string_append_printf(members,"%s%s%s3",i ? "#" : "",name,prefix);
-        g_string_append_printf(var_members,"%s%s%s4",i ? "#" : "",name,prefix);
-    }
-    GString *seed=g_string_new("");
-    g_string_append_printf(seed,
+    /* Debian Installer runs its language, keyboard, user and clock steps before the hook that starts
+     * nex-image-install.sh. These answers keep it from stopping to ask the operator again what the wizard
+     * just asked. The disk work is nex-hostimage, driven by layout=single|raid1 and the disk list in image.env. */
+    char *answers=g_strdup_printf(
         "d-i debian-installer/locale string en_US.UTF-8\n"
         "d-i keyboard-configuration/xkb-keymap select %s\n"
         "d-i time/zone string %s\n"
@@ -325,77 +297,15 @@ int main(int argc,char **argv)
         "d-i passwd/root-login boolean true\n"
         "d-i passwd/make-user boolean false\n"
         "d-i passwd/root-password-crypted password %s\n",keymap,zone,shortname,domain,hash);
-    /* Debian Installer runs its language, keyboard, user and clock steps before partman's init hook, where the
-     * image edition takes over. Those answers are the same in both editions, or the installer stops to ask the
-     * operator again what the wizard just asked. The image edition keeps them and drops what follows. */
-    char *common=g_strdup(seed->str);
-    g_string_append_printf(seed,"d-i partman-auto/disk string %s\n",targets->str);
-    if (disks > 1)
-        g_string_append_printf(seed,
-            "d-i partman-auto/method string raid\n"
-            /* GPT on both firmwares: grub-install --target=i386-pc needs the BIOS boot
-             * partition, which only GPT has, and a fixed label keeps the member index
-             * constant instead of following partman's per-disk default. */
-            "d-i partman-partitioning/default_label string gpt\n"
-            "d-i partman-auto/expert_recipe string nex-mirror :: "
-            "1 1 1 free $iflabel{ gpt } method{ biosgrub } . "
-            "538 538 538 free $iflabel{ gpt } method{ efi } format{ } . "
-            "6000 8000 10000 raid $primary{ } method{ raid } . "
-            "4000 20000 1000000000 raid $primary{ } method{ raid } .\n"
-            "d-i partman-auto-raid/recipe string 1 %u 0 ext4 / %s . 1 %u 0 ext4 /var %s .\n"
-            "d-i partman-md/confirm boolean true\n"
-            "d-i partman-md/confirm_nooverwrite boolean true\n"
-            /* The mirror holds two ext4 filesystems and no swap; answer partman's warning
-             * rather than interrupt the operator with a partitioning question. */
-            "d-i partman-basicfilesystems/no_swap boolean false\n"
-            /* Every ESP also gets the removable boot path, so the firmware boots
-             * whichever disk survives without an NVRAM entry of its own. */
-            "d-i grub-installer/force-efi-extra-removable boolean true\n",
-            (unsigned)disks,members->str,(unsigned)disks,var_members->str);
-    else
-        /* The BIOS boot partition and ESP exist only on a GPT label (UEFI); a BIOS disk
-         * keeps its MBR label and the same root, /var and swap. */
-        g_string_append(seed,
-            "d-i partman-auto/method string regular\n"
-            "d-i partman-auto/expert_recipe string nex-single :: "
-            "1 1 1 free $iflabel{ gpt } method{ biosgrub } . "
-            "538 538 538 free $iflabel{ gpt } method{ efi } format{ } . "
-            "6000 8000 10000 ext4 $primary{ } method{ format } format{ } use_filesystem{ } filesystem{ ext4 } mountpoint{ / } . "
-            "4000 20000 1000000000 ext4 $primary{ } method{ format } format{ } use_filesystem{ } filesystem{ ext4 } mountpoint{ /var } . "
-            "64 512 300% linux-swap $primary{ } method{ swap } format{ } .\n");
-    g_string_append(seed,
-        "d-i partman-partitioning/confirm_write_new_label boolean true\n"
-        "d-i partman/choose_partition select finish\n"
-        "d-i partman/confirm boolean true\n"
-        "d-i partman/confirm_nooverwrite boolean true\n");
-    /* Legacy BIOS boots from whichever disk survives, so GRUB goes on every one of
-     * them. A UEFI install writes the ESP mounted by partman; late-install copies it
-     * to the other members' ESPs, which grub-efi-amd64 does not manage itself. */
-    if (!uefi || disks == 1)
-        g_string_append_printf(seed,"d-i grub-installer/bootdev string %s\n",targets->str);
-    g_string_append(seed,
-        "d-i grub-installer/only_debian boolean true\n"
-        "d-i finish-install/reboot_in_progress seen false\n");
-    /* The image edition has no partman, base-installer or GRUB step: the disk work is
-     * nex-hostimage, driven by layout=single|raid1 and the disk list in image.env. Keep
-     * no partman or GRUB answer in answers.cfg; the steps that run before the hook
-     * (language, keyboard, root account, clock, network name) keep theirs. */
-    if (image_edition()) {
-        explicit_bzero(seed->str,seed->len);
-        g_string_assign(seed,common);
-    }
-    explicit_bzero(common,strlen(common));
-    g_free(common);
-    protected_write("/run/nex-installer/answers.cfg",seed->str);
+    protected_write("/run/nex-installer/answers.cfg",answers);
+    explicit_bzero(answers,strlen(answers));
     /* Retain only non-secret selections for last-moment disk identity checking. */
     g_key_file_remove_key(config,"Host","password",NULL);
     char *safe=g_key_file_to_data(config,NULL,NULL);
     protected_write(path,safe);
-    if (image_edition()) image_seed(zone,keymap,hash,disk,disks);
+    image_seed(zone,keymap,hash,disk,disks);
     explicit_bzero(password,strlen(password)); explicit_bzero(hash,strlen(hash));
-    explicit_bzero(seed->str,seed->len);
-    g_free(safe);g_free(password);g_string_free(seed,TRUE);g_key_file_free(config);
-    g_string_free(targets,TRUE);g_string_free(members,TRUE);g_string_free(var_members,TRUE);
+    g_free(safe);g_free(password);g_free(answers);g_key_file_free(config);
     g_strfreev(name_parts);g_free(hostname);g_free(zone);g_free(keymap);g_strfreev(disk);
     return 0;
 }

@@ -32,11 +32,11 @@ func TestReplicaAckExclusionIsBackwardCompatibleAndSigned(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(encoded), "replica_ack_excluded") {
-		t.Fatalf("legacy false value changed canonical JSON: %s", encoded)
+		t.Fatalf("false value changed canonical JSON: %s", encoded)
 	}
 	var decoded PoolMember
 	if err = json.Unmarshal([]byte(`{"host_id":"member-1","status":"ready"}`), &decoded); err != nil || decoded.ReplicaAckExcluded {
-		t.Fatalf("legacy member did not default to mandatory ACK: %#v, %v", decoded, err)
+		t.Fatalf("member without the field did not default to mandatory ACK: %#v, %v", decoded, err)
 	}
 
 	base := PoolAuthorityReplica{Membership: PoolMembership{PoolID: "pool-1", MasterHostID: "member-2", Generation: 4,
@@ -194,7 +194,7 @@ func TestPoolStorageLeaseRequiresStableDistinctHostIDsAndExactNFSIdentity(t *tes
 }
 
 // A caller must be able to tell "this Core says the authority is not handed off" from "this
-// Core is too old to say", so handed_off is on the wire even when false, like cancellable.
+// Core does not say", so handed_off is on the wire even when false, like cancellable.
 func TestPoolTransferStatusAlwaysReportsHandedOff(t *testing.T) {
 	body, err := json.Marshal(PoolTransferStatus{OperationID: "op-1", Action: "promote", Role: "source"})
 	if err != nil {
@@ -212,7 +212,7 @@ func TestPoolTransferStatusAlwaysReportsHandedOff(t *testing.T) {
 	}
 }
 
-// A member running an older Core stamps no profile on its results. Refusing the whole report
+// A member whose Core stamps no profile on its results. Refusing the whole report
 // would lose every other host's result in it for the sake of one field the master would drop
 // anyway, so an unstamped result is accepted and dropped where stamps are compared.
 // (Reported by independent review.)

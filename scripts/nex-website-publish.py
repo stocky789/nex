@@ -4,7 +4,7 @@
 
 Runs as root. Reads the private health URL from /etc/nex-website/health.env and
 delegates to website-release.py so CI only needs passwordless sudo for this
-one command (same pattern as nex-apt-publish).
+one command.
 """
 from __future__ import annotations
 

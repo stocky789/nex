@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { API, Host, Pool } from "./types";
 import { PoolMembers } from "./pool-members";
-import type { UpdateStatus } from "./updates";
-import { relativeTime } from "./labels";
 import { Icon, type IconKind } from "./icons";
-import { Badge, Section, date } from "./ui";
+import { Section } from "./ui";
 import { Gated, gatedButtons } from "./gated";
 import { ImageUpdates } from "./image-updates";
 import { PoolRollout } from "./pool-rollout";
@@ -42,8 +40,6 @@ function HighAvailability() {
   </Section>;
 }
 
-type Updates = { update: UpdateStatus | null; note: string; phase: "idle" | "checking" | "applying" | "done" | "error"; onCheck: () => void; onApply: () => void };
-
 // The top of a settings screen: its heading and, on the overview, the pool's own summary, which
 // Settings then follows with every section in the nav's order.
 export function SettingsHead({ section, pool, master, hostCount }: { section: string; pool?: Pool; master?: Host; hostCount: number }) {
@@ -61,16 +57,16 @@ export function SettingsHead({ section, pool, master, hostCount }: { section: st
   </>;
 }
 
-export function Settings({ section, pool, hosts = [], api, busy, unavailable, updates, onEnrollHost, onNotice }: {
-  section: string; pool?: Pool; hosts?: Host[]; api: API; busy: boolean; unavailable: boolean; updates: Updates; onEnrollHost?: () => void;
+export function Settings({ section, pool, hosts = [], api, busy, unavailable, onEnrollHost, onNotice }: {
+  section: string; pool?: Pool; hosts?: Host[]; api: API; busy: boolean; unavailable: boolean; onEnrollHost?: () => void;
   onNotice?: (text: string, operationID?: string) => void;
 }) {
   const notice = onNotice || (() => {});
   const current = sections.find(s => s.key === section);
   if (!current) return <section className="panel empty"><h2>Object not found</h2><p>This link does not match a settings section.</p><a href="#/settings">Return to settings</a></section>;
   if (current.pool && !pool) return <><h1>{current.label}</h1><p className="empty">Choose a pool in the scope menu to see its {current.label.toLowerCase()}.</p></>;
-  const members = <PoolMembers key={pool?.id} poolID={pool?.id || ""} api={api} unavailable={unavailable} hosts={hosts} coreAvailable={updates.update?.core_available_version} onEnrollHost={onEnrollHost} />;
-  const updatesPanel = <><UpdatesPanel {...updates} busy={busy} /><ImageUpdates hosts={hosts} api={api} busy={busy} />{pool ? <PoolRollout key={pool.id} pool={pool} hosts={hosts} api={api} busy={busy} /> : null}</>;
+  const members = <PoolMembers key={pool?.id} poolID={pool?.id || ""} api={api} unavailable={unavailable} hosts={hosts} onEnrollHost={onEnrollHost} />;
+  const updatesPanel = <><ImageUpdates hosts={hosts} api={api} busy={busy} />{pool ? <PoolRollout key={pool.id} pool={pool} hosts={hosts} api={api} busy={busy} /> : null}</>;
   switch (section) {
     case "overview": return <>{members}<HighAvailability />{pool ? <BackupRepositories api={api} poolID={pool.id} masterHostID={pool.master_host_id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null}{updatesPanel}</>;
     case "backups": return pool ? <BackupRepositories api={api} poolID={pool.id} masterHostID={pool.master_host_id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null;
@@ -79,61 +75,6 @@ export function Settings({ section, pool, hosts = [], api, busy, unavailable, up
     case "updates": return updatesPanel;
     default: return null;
   }
-}
-
-function UpdatesPanel({
-  update,
-  note,
-  phase,
-  busy,
-  onCheck,
-  onApply,
-}: Updates & { busy: boolean }) {
-  const working = phase === "checking" || phase === "applying";
-  const pct = typeof update?.progress === "number" ? update.progress : undefined;
-  // Updates run through apt in fixed steps, so prefer the step the server reports
-  // over a percentage; "downloading" now covers refreshing the package index too.
-  const label =
-    phase === "checking" ? "Checking…"
-      : update?.message && update.phase && update.phase !== "done" ? `${update.message}…`
-        : update?.phase === "downloading" ? "Downloading…"
-          : update?.phase === "installing" ? "Installing…"
-            : update?.phase === "restarting" ? "Restarting…"
-              : phase === "applying" ? "Updating…"
-                : note || "Done";
-  // Every status object is a fresh read from the Controller, so its arrival is the check time.
-  const [checkedAt, setCheckedAt] = useState("");
-  useEffect(() => { if (update && !update.error) setCheckedAt(new Date().toISOString()); }, [update]);
-  return (
-    <Section icon="refresh" title="Updates" actions={<>
-      {update && !update.error && <Badge value={update.update_available ? "warning" : "ok"} label={update.update_available ? "Update available" : "Up to date"} />}
-      <button className="sm primary" disabled={busy || !update?.update_available} onClick={onApply}>Update</button>
-      <button className="sm" disabled={busy} onClick={onCheck}>Check</button>
-    </>}>
-      <dl className="details">
-        <dt>Nex Controller installed</dt>
-        <dd>{update?.installed_version || "—"}</dd>
-        <dt>Available</dt>
-        <dd>{!update ? "—" : update.update_available ? (update.available_version || "—") : update.error ? "—" : "Up to date"}</dd>
-        {update?.core_available_version && <><dt>Nex Core in the archive</dt><dd>{update.core_available_version}</dd></>}
-        {update?.repo_url && <><dt>Package archive</dt><dd className="mono">{update.repo_url}</dd></>}
-        <dt>Last checked</dt>
-        <dd>{checkedAt ? <time dateTime={checkedAt} title={date(checkedAt)}>{relativeTime(checkedAt)}</time> : "Not yet"}</dd>
-      </dl>
-      {(working || phase === "done") && <p className="small" role="status">{label}</p>}
-      {working && (
-        <progress
-          aria-label={phase === "checking" ? "Checking for updates" : "Applying update"}
-          max={100}
-          value={phase === "applying" && pct !== undefined ? pct : undefined}
-        />
-      )}
-      {update?.error && <p className="warning" role="status">{update.error}</p>}
-      {note && phase === "idle" && <p className="notice" role="status">{note}</p>}
-      <p className="note">After a successful update the Controller appliance reboots, so this page is unavailable for a short time. Workloads on the hosts are not affected.</p>
-      <p className="note">Each host's Nex Core version is listed under Members. Classic hosts update through their own package archive; image-edition hosts update themselves and are listed under Host images.</p>
-    </Section>
-  );
 }
 
 export { Backups, Containers, Tasks, Events, taskTimestamp, resubmitLink, UploadProgress, type Upload } from "./rail-screens";

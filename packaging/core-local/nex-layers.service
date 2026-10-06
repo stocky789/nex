@@ -4,7 +4,7 @@ Description=Verify and link the enabled Nex Core feature layers
 Documentation=file:///usr/share/doc/nex-core-local/copyright
 DefaultDependencies=no
 # Nothing to verify or merge until Core has enabled a layer (Core writes this record on first ensure); a host
-# that never enabled one, including every classic-edition host, does not run this unit.
+# that never enabled one does not run this unit.
 ConditionPathExists=/var/lib/nex/layers/enabled.json
 # /var/lib/nex/layers lives on nex-data, which is mounted after the stock systemd-sysext.service has run
 # (that one is ordered before local-fs.target). This unit therefore links the verified layers and merges them

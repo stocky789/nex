@@ -29,12 +29,12 @@ func PoolWitnessClusterName(poolID string) string {
 // host.  Nothing rewrites it afterwards, so it is the member's join time.
 type PoolMember struct {
 	HostID string `json:"host_id"`
-	// Hostname is reported by this Core when it initialises or joins a pool. Members of
-	// pools created before hostnames were reported omit it; nothing backfills it.
+	// Hostname is reported by this Core when it initialises or joins a pool; it is omitted
+	// when the host reported none, and nothing backfills it.
 	Hostname string `json:"hostname,omitempty"`
 	// SanlockHostID is assigned once by the pool master and remains stable for this
-	// membership identity. Sanlock host IDs are 1..2000; zero means this legacy member
-	// cannot participate in storage leases.
+	// membership identity. Sanlock host IDs are 1..2000; zero means this member has no
+	// assigned ID and cannot participate in storage leases.
 	SanlockHostID uint64 `json:"sanlock_host_id,omitempty"`
 	// SanlockHostGeneration is the last native sanlock generation this host itself
 	// observed while its exact lease ID was live. A later HOST_DEAD proof must match it.
@@ -85,7 +85,7 @@ type PoolMember struct {
 	// that the BMC it is talking to belongs to this machine and not to some other one that
 	// answers at the same address.  Like the fields above it is outside the generation
 	// equality rule: learning a host's UUID is an observation, not a membership change.  A
-	// member too old to report one stays empty and simply cannot get a BMC fence proof.
+	// member that reports none stays empty and simply cannot get a BMC fence proof.
 	SystemUUID string `json:"system_uuid,omitempty"`
 	// SystemUUIDConflictHostID names the member that already reported the identity this
 	// host reports, when the master refused this host's report because of it.  Without it
@@ -96,7 +96,7 @@ type PoolMember struct {
 	// BMC is what this host's own Core found and did about its own management controller,
 	// in-band, and reported to the master.  It is an observation and a result, never a
 	// credential: the account's password goes to the master's fence-credential store and
-	// nowhere else.  A member too old to report one stays empty.
+	// nowhere else.  A member that reports none stays empty.
 	BMC *PoolHostBMC `json:"bmc,omitempty"`
 	// BMCProvisioningDisabled is the operator's own decision, recorded by the master, that
 	// this host must not configure its management controller for fencing.  Clearing a fence
@@ -110,14 +110,14 @@ type PoolMember struct {
 	// a host that is gone.  Like SystemUUID it is a slow-changing capability rather than a
 	// running observation: it is written only when the finding changes, and it carries no
 	// timestamp because nothing decides anything from how long ago a host last said it.
-	// A member too old to report one stays nil, which is "not reported" and never counts.
+	// A member that reports none stays nil, which is "not reported" and never counts.
 	Watchdog *PoolHostWatchdog `json:"watchdog,omitempty"`
 	// WatchdogArmed is this host's own report that it has armed that device, kept durably
 	// and replicated because it is the first of the three conditions of a watchdog
 	// exclusion proof, and the host that needs to read it is a candidate whose master has
 	// gone.  It is separate from the capability above because it has different rules: it
 	// carries the pool's fencing generation, and a report from an older one is not
-	// evidence about the pool as it is now.  A member too old to report one stays nil.
+	// evidence about the pool as it is now.  A member that reports none stays nil.
 	WatchdogArmed *PoolWatchdogArmed `json:"watchdog_armed,omitempty"`
 	// FenceReadiness is the master's own answer to "could this host be shut out right
 	// now", per method, with the reason when it could not.  It is derived from the
@@ -126,7 +126,7 @@ type PoolMember struct {
 	// copy of this record and never part of the durable membership: a master that has just
 	// restarted reports "not checked yet" until the next pass, honestly, rather than
 	// keeping a durable store of something it can re-establish in one interval.  A master
-	// too old to report one leaves it nil, which is "not reported" and never ready.
+	// that reports none leaves it nil, which is "not reported" and never ready.
 	FenceReadiness *PoolFenceReadiness `json:"fence_readiness,omitempty"`
 	// FenceCredentialVersion is the master's counter for the private material behind that
 	// profile.  The material itself is never here, never in inventory and never in a
@@ -1256,7 +1256,7 @@ func (r PoolAuthorityReplica) SectionDigests() ([]PoolReplicaSection, error) {
 }
 
 // ErrPoolAuthorityReplicaSections is returned for a replica that declares fewer or more
-// sections than this build defines, as one written by an older build does.
+// sections than this build defines.
 var ErrPoolAuthorityReplicaSections = errors.New("pool authority replica does not declare every section")
 
 // VerifySections proves the stored sections are the ones the signature covers and that
@@ -1742,7 +1742,7 @@ func (r PoolFenceCheckRequest) Valid() error {
 		}
 		// An unstamped result is accepted and then dropped by the master, which keeps no
 		// result whose stamp is not the profile it records now.  Refusing the request
-		// instead would make one member running an older Core lose its whole pass — and
+		// instead would make one member that omits it lose its whole pass — and
 		// with it every other host's result in it — rather than only the field it omits.
 		if check.Profile == "" {
 			continue

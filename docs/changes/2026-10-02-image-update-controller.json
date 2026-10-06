@@ -1,5 +1,5 @@
 {
-  "summary": "Phase I-3c of the immutable Nex Core plan: updating a single image-edition host from the Controller. A host whose update engine runs (nex-core-local) offers image-update-v1; the Controller acknowledges it with ReportResponse.image_update and only then does the host report Inventory.image. The Controller relays check, apply, activate, rollback and cancel as one durable host-image-update command (GET/POST /api/v1/hosts/{id}/updates…); the host's embedded agent hands it to the host's own update engine, which does the work and keeps the record, and the Settings → Updates page lists Host images with the slots, phase, rollback floor and last operation the host reported. Host-local GET /api/local/v1/updates/operations/{id} reads one recorded operation. Pool rollout, settings, media, import and component fetch are not part of this slice, and the Controller's own APT routes stay for classic Controllers.",
+  "summary": "Phase I-3c of the immutable Nex Core plan: updating a single host from the Controller. A host whose update engine runs (nex-core-local) offers image-update-v1; the Controller acknowledges it with ReportResponse.image_update and only then does the host report Inventory.image. The Controller relays check, apply, activate, rollback and cancel as one durable host-image-update command (GET/POST /api/v1/hosts/{id}/updates…); the host's embedded agent hands it to the host's own update engine, which does the work and keeps the record, and the Settings → Updates page lists Host images with the slots, phase, rollback floor and last operation the host reported. Host-local GET /api/local/v1/updates/operations/{id} reads one recorded operation. Pool rollout, settings, media, import and component fetch are not part of this slice, and the Controller's own APT routes stay for the single-disk appliance.",
   "paths": [
     "CHANGELOG.md",
     "docs/API.md",
@@ -35,7 +35,7 @@
   ],
   "guide": {
     "impact": "updated",
-    "reason": "software-updates.md gains the image-edition update steps and roll-back-a-host-update.md is new, both marked unverified: no workflow was walked through on a running Controller or image host, only automated handler and component tests ran.",
+    "reason": "software-updates.md gains the image update steps and roll-back-a-host-update.md is new, both marked unverified: no workflow was walked through on a running Controller or image host, only automated handler and component tests ran.",
     "pages": [
       "docs/guide/README.md",
       "docs/guide/roll-back-a-host-update.md",
@@ -44,7 +44,7 @@
   },
   "api": {
     "impact": "new contract",
-    "reason": "New Controller routes GET /api/v1/hosts/{id}/updates and POST /api/v1/hosts/{id}/updates/{action}, the managed command host-image-update (ImageUpdateRequest), ReportResponse.image_update (the image-update-v1 acknowledgement; Inventory.image is now withheld until it arrives) and host-local GET /api/local/v1/updates/operations/{id}. The Controller's GET /api/v1/updates and POST /api/v1/updates/apply are kept for classic Controllers; their removal belongs to the appliance-swap slice. Pool rollout routes, PUT …/updates/settings, media, import and component fetch were not part of this slice; they are recorded in 2026-10-02-image-update-layers-settings.json and 2026-10-02-pool-rollout-coordinator.json.",
+    "reason": "New Controller routes GET /api/v1/hosts/{id}/updates and POST /api/v1/hosts/{id}/updates/{action}, the managed command host-image-update (ImageUpdateRequest), ReportResponse.image_update (the image-update-v1 acknowledgement; Inventory.image is now withheld until it arrives) and host-local GET /api/local/v1/updates/operations/{id}. The Controller's GET /api/v1/updates and POST /api/v1/updates/apply are kept for the single-disk appliance; their removal belongs to the appliance-swap slice. Pool rollout routes, PUT …/updates/settings, media, import and component fetch were not part of this slice; they are recorded in 2026-10-02-image-update-layers-settings.json and 2026-10-02-pool-rollout-coordinator.json.",
     "pages": [
       "docs/API.md",
       "docs/api/index.html",

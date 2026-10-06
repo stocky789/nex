@@ -2,16 +2,16 @@
 
 ## Status
 
-Development build, **unverified**. An image-edition Nex Core host keeps the release it ran before an update (its previous slot and
+Development build, **unverified**. A Nex Core host keeps the release it ran before an update (its previous slot and
 boot entry) until the next update is staged. **Roll back** from the **Host images** panel under **Settings** → **Updates** asks
 the host to boot that previous release again. The host also does this by itself when a new release fails its health check after
-the restart. This page covers the operator's roll-back; classic (package) hosts have no roll-back. Rolling a whole pool, and rolling back one finished host of a pool rollout,
+the restart. This page covers the operator's roll-back. Rolling a whole pool, and rolling back one finished host of a pool rollout,
 is described in [update a pool](update-a-pool.md) (also unverified). No part of this page has been walked through on a running Controller or host: see
 [Verification](#verification).
 
 ## Prerequisites
 
-- An image-edition host that is freshly connected, with a Controller administrator session. The host's panel must show a
+- A host that is freshly connected, with a Controller administrator session. The host's panel must show a
   **Previous** release and the phase **Committed** or **Booted**; otherwise **Roll back** is not offered.
 - Running guests: the host refuses to reboot while any guest runs unless you accept their graceful shutdown.
 - The target must be able to read the host's stored data. The host refuses a roll-back to a release whose state format is

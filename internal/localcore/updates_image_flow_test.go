@@ -143,10 +143,10 @@ func (p *flowPlatform) Entries(context.Context) ([]hostimage.UKIEntry, error) {
 	return append([]hostimage.UKIEntry(nil), p.entries...), nil
 }
 
-// TestImageEditionHostServesTheWholeUpdateFlow drives check, apply, activate and the operation lookup
-// through nex-core-local's HTTP routes on an image-edition host with a signed fake source, and runs the
+// TestHostServesTheWholeUpdateFlow drives check, apply, activate and the operation lookup
+// through nex-core-local's HTTP routes with a signed fake source, and runs the
 // Controller's relayed command through the embedded agent into the same engine.
-func TestImageEditionHostServesTheWholeUpdateFlow(t *testing.T) {
+func TestHostServesTheWholeUpdateFlow(t *testing.T) {
 	tree := signedRelease(t, "2026.10.2", 2)
 	platform := &flowPlatform{}
 	rebooted := make(chan struct{}, 1)

@@ -13,7 +13,7 @@ MemoryMax=4G -p MemorySwapMax=0` with `nice -n 19 ionice -c3`, `GOMAXPROCS=2`, `
 VM or container was started.
 
 - API impact: **changed contract** (change record `docs/changes/2026-10-02-controller-appliance-swap.json`,
-  [API.md](../../API.md#image-edition-controller-appliance-swap-and-controller_first-phase-i-4b)).
+  [API.md](../../API.md#controller-appliance-swap-and-controller_first-phase-i-4b)).
 - State owner: **core** (the swap journal beside the deployment journal; the rollout's controller step in the master's `pool-update.json`).
 - Guide impact: **updated**, all **unverified**: [Update a pool](../../guide/update-a-pool.md) is new and the
   [deploy guide](../../guide/deploy-controller-appliance.md) names the swap. No walkthrough was run.
@@ -132,7 +132,7 @@ VM or container was started.
   `appendUpdateBootstrap` (`internal/vmhost/engine.go`), the packaging and appliance-build copies of those helpers, and the Controller's own APT
   update routes and panel (`GET/POST /api/v1/updates`, `internal/controller/updates*.go`, `web/src/updates.ts`, `UpdatesPanel`). They remain the only way a
   single-disk appliance is updated. The guest image now exists, but the swap only covers the two-disk profile, so removing them would leave
-  single-disk appliances and the classic edition with no update path; only the profile's seed stopped carrying them. Tests that pin them (`tests/test_distribution_packaging.py`, `engine_test.go`'s bootstrap test) are unchanged.
+  single-disk appliances with no update path; only the profile's seed stopped carrying them. Tests that pin them (`tests/test_distribution_packaging.py`, `engine_test.go`'s bootstrap test) are unchanged.
 - Deploy wiring now exists (`nex-core-local --controller-system-image`, `core-local-setup configure --controller-image-sha256`; see
   [phase4-controller-image.md](phase4-controller-image.md)); the local deploy page itself still has no profile choice and no deployment ran. `Deploy`'s profile branch is not unit-tested end to end (its preflight needs KVM and a
   bridge); only the domain and ownership shapes are.

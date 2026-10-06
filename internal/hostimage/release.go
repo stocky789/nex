@@ -36,6 +36,7 @@ type Release struct {
 	Dir      string
 	Manifest Manifest
 	UKI      string // file name of the UKI, nex-core_<label>_<sequence>.efi
+	bios     biosCache
 }
 
 var (

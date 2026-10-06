@@ -2,10 +2,7 @@
 package vmhost
 
 import (
-	"context"
 	"encoding/xml"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,42 +53,5 @@ func TestManagedDedicatedMemoryReservation(t *testing.T) {
 	maximum, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk"}, "")
 	if err != nil || strings.Contains(string(maximum), "memoryBacking") {
 		t.Fatalf("maximum RAM must remain reclaimable: %s (%v)", maximum, err)
-	}
-}
-
-func TestManagedLegacyDedicatedLiveEditRequiresStop(t *testing.T) {
-	v := managedTestVM()
-	v.Memory.Mode = "dedicated"
-	old, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// This is a definition written before physical reservation was implemented.
-	legacy := string(old)
-	if start := strings.Index(legacy, "<memoryBacking>"); start >= 0 {
-		end := strings.Index(legacy, "</memoryBacking>") + len("</memoryBacking>")
-		legacy = legacy[:start] + legacy[end:]
-	}
-	dir := t.TempDir()
-	path, calls := filepath.Join(dir, "domain.xml"), filepath.Join(dir, "calls")
-	if err = os.WriteFile(path, []byte(legacy), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MEMORY_DOMAIN", path)
-	t.Setenv("MEMORY_CALLS", calls)
-	fakeCommand(t, "virsh", `echo "$3" >> "$MEMORY_CALLS"; case "$3" in domstate) echo running;; dumpxml) cat "$MEMORY_DOMAIN";; *) exit 1;; esac`)
-	e := managedTestEngine(dir)
-	cur := managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}, Result: protocol.Result{Status: "succeeded"}, Domain: []byte(legacy), Disks: []string{"/disk"}}
-	next := v
-	next.Revision++
-	next.Description = "Updated description"
-	j := managedJournal{Command: protocol.Command{OperationID: "edit", Kind: "vm-update", VM: &next}}
-	err = e.update(context.Background(), &j, []managedJournal{cur})
-	if err == nil || !strings.Contains(err.Error(), "stop the VM and save") {
-		t.Fatalf("legacy live edit must request stopped save before effects: %v", err)
-	}
-	got, _ := os.ReadFile(calls)
-	if string(got) != "domstate\ndumpxml\n" {
-		t.Fatalf("legacy live edit caused unexpected calls: %s", got)
 	}
 }
