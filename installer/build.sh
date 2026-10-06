@@ -206,7 +206,25 @@ stage_grub_bios() {
     done
     [[ -x $grub/usr/sbin/grub-install ]] || { echo 'GRUB for BIOS firmware was not staged' >&2; exit 1; }
     [[ -e $grub/lib64/ld-linux-x86-64.so.2 ]] || { echo 'the dynamic loader is missing from the staged GRUB' >&2; exit 1; }
+    stage_efibootmgr "$tree"
     rm -rf "$tree"
+}
+
+# UEFI firmware: Debian Installer has no efibootmgr, so no firmware boot entry could be made and a firmware that boots
+# only from explicit entries found no loader. nex-image-install.sh copies this root fragment to RAM and runs it through
+# its own loader; it carries efibootmgr and its shared library closure, taken from the system image's tree.
+stage_efibootmgr() {
+    local tree=$1 efi=$stage/nex/efi lib
+    rm -rf "$efi"
+    mkdir -p "$efi/usr/lib64" "$efi/usr/bin"
+    for link in bin sbin lib lib64; do ln -s "usr/$link" "$efi/$link"; done
+    [[ -f $tree/usr/bin/efibootmgr ]] || { echo 'the system image carries no efibootmgr; add it to image/base.packages' >&2; exit 1; }
+    install -D -m755 "$tree/usr/bin/efibootmgr" "$efi/usr/bin/efibootmgr"
+    chroot "$tree" ldd /usr/bin/efibootmgr | awk '/=> \// {print $3} $1 ~ /^\// {print $1}' | while read -r lib; do
+        mkdir -p "$(dirname "$efi/${lib#/}")"
+        cp -L --no-preserve=ownership "$tree/${lib#/}" "$efi/${lib#/}"
+    done
+    [[ -e $efi/lib64/ld-linux-x86-64.so.2 ]] || { echo 'the dynamic loader is missing from the staged efibootmgr' >&2; exit 1; }
 }
 
 if [[ ${1:-} != --inside ]]; then

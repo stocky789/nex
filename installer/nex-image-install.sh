@@ -90,6 +90,25 @@ release_grub() {
     GRUB_ROOT=
 }
 
+# Each disk's firmware boot entry is registered by efibootmgr, which the installer environment does not have. Without
+# it a firmware that boots only from explicit entries (Dell servers) finds no loader and a stale entry of a previous
+# OS fails the boot. The media carries one under $MEDIA/efi: a root-tree fragment with its libraries, run through its
+# own loader by a wrapper. An efibootmgr already in the environment is used as it is.
+prepare_efibootmgr() {
+    [ "$BOOT" = uefi ] || return 0
+    ! command -v efibootmgr >/dev/null 2>&1 || return 0
+    [ -x "$MEDIA/efi/usr/bin/efibootmgr" ] || die 'The installation media carries no efibootmgr for UEFI firmware; the media is incomplete. No disk has been changed.'
+    root=$WORK/efi-root
+    mkdir -p "$root"
+    cp -a "$MEDIA/efi/." "$root/" || die 'Could not copy efibootmgr from the installation media. No disk has been changed.'
+    cat > /usr/bin/efibootmgr <<WRAPPER
+#!/bin/sh
+exec $root/usr/lib64/ld-linux-x86-64.so.2 --library-path $root/usr/lib/x86_64-linux-gnu:$root/usr/lib64 $root/usr/bin/efibootmgr "\$@"
+WRAPPER
+    chmod 755 /usr/bin/efibootmgr
+    grep -q efivarfs /proc/mounts || mount -t efivarfs efivarfs "$SYS/firmware/efi/efivars" >/dev/null 2>&1 || true
+}
+
 # Take the static nex-hostimage from the media; ISO file modes are not trusted to be executable.
 install_binary() {
     mkdir -p "$WORK"
@@ -340,6 +359,7 @@ install)
     "$WORK/nex-hostimage" verify "$IMAGE" >/dev/null || die 'The system image failed verification; the media or download is damaged. No disk has been changed.'
     verify_media_payloads
     prepare_grub
+    prepare_efibootmgr
     release_disks
     say "Installing the system image on $disks ($layout, $BOOT boot)"
     status=0
@@ -366,6 +386,7 @@ repair)
     install_binary
     [ -z "$NETWORK" ] || download_image
     prepare_grub
+    prepare_efibootmgr
     # Repair re-lays the table, so an array holding a selected disk must stop first; refuse before any write.
     release_disks
     say "Repairing the system image on $disks ($layout, $BOOT boot); nex-data is kept"

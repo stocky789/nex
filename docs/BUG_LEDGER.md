@@ -12697,3 +12697,21 @@ of real storage or hardware certification.
 - Fix: `installer/gui/prepare.sh` creates `/var/lib/partman/loaded-extra`, the marker `load_extra` checks, so the step is skipped.
 - Regression: `installer/check.sh` fails if prepare.sh drops the marker. Patched initrd under QEMU (netinst ISO, BIOS, 2 GiB): "partman-base selected" at 11:49:24, image install started at 11:49:27 with no LVM/crypto retrieval. The stall itself needs the iDRAC virtual-media path and was not re-run there.
 - Avoid: leaving partman's extra-component loading active on media where the image installer replaces partitioning.
+
+## BUG-1931 — Installer stalled loading LVM/crypto components from slow media
+
+- Date: 2026-10-06.
+- Symptom: on a bare-metal server using iDRAC virtual media, setup stopped at "Starting up the partitioner" / "Load installer components from installation media" with "Failed to copy file from installation media. Retry?". The syslog stopped at `anna: retrieving partman-crypto`. The same ISO installed cleanly in QEMU (BIOS and UEFI).
+- Root cause: Debian's `/bin/partman` runs `load_extra` (anna-install of partman-auto-lvm, partman-auto-crypto and dependencies, about 230 small reads) before the init.d hooks, so before `00nex-recheck` hands over to the image installer. Nex uses none of it, and a slow or remote medium stalls on those reads.
+- Fix: `installer/gui/prepare.sh` creates `/var/lib/partman/loaded-extra`, the marker `load_extra` checks, so the step is skipped.
+- Regression: `installer/check.sh` fails if prepare.sh drops the marker. Patched initrd under QEMU (netinst ISO, BIOS, 2 GiB): "partman-base selected" at 11:49:24, image install started at 11:49:27 with no LVM/crypto retrieval. Build 0.4.31-dev.290 on the iDRAC server passed the same step (partman-base 13:59:24, image install 13:59:31) and wrote the image to five disks.
+- Avoid: leaving partman's extra-component loading active on media where the image installer replaces partitioning.
+
+## BUG-1932 — Installed host did not boot on Dell firmware: no firmware boot entry was created
+
+- Date: 2026-10-07.
+- Symptom: after a successful install on a Dell VxRail E560F (UEFI), the server restarted into POST over and over. The console showed `Booting from debian` / `Boot Failed: debian`, then rebooted. The installer log had said `warning: no firmware boot entry for /dev/sde (the removable-path loader remains): efibootmgr: executable file not found in $PATH`.
+- Root cause: Debian Installer carries no `efibootmgr`, so nex-hostimage could not register a "Nex Core" entry. The firmware boots only from explicit entries; the stale `debian` entry of the previous install pointed at a loader that was now gone, and the removable-path loader was never tried. QEMU/OVMF falls back to the removable path, so it passed.
+- Fix: the media carries `nex/efi/` (efibootmgr and its libraries from the system image); `nex-image-install.sh` copies it to RAM and installs a wrapper before writing the disks, and refuses to start (no disk changed) if it is missing.
+- Regression: `installer/check.sh` asserts the staging and the call. Under QEMU/OVMF in the installer environment the wrapper ran an efibootmgr built from a Ubuntu closure and listed the firmware entries (efivarfs mounted). The create step failed there only because the test disk had no partition; the new entry and a real boot on the Dell server were not verified.
+- Avoid: counting a QEMU install as proof of firmware boot; relying on the removable-path loader on firmware with explicit boot lists.

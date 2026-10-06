@@ -23,6 +23,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Bug Fixes
 
 - Installing Nex Core from slow installation media, such as a server's remote virtual media (iDRAC, iLO, IPMI), no longer stalls at "Starting up the partitioner" or stops with "Failed to copy file from installation media". The installer no longer loads disk-encryption and LVM components it never uses.
+- Installed hosts now boot on servers whose firmware only starts from registered boot entries (such as Dell): the installer registers a "Nex Core" boot entry for each system disk. Before, such a server restarted in a loop with "Boot Failed" after install.
 
 ## [0.4.30] — 2026-10-06
 

@@ -130,6 +130,11 @@ chroot-able root fragment (`grub-install`, `grub-probe`, `grub-mkimage`, the i38
 tree (`stage_grub_bios` in `installer/build.sh`; offline and network ISO alike). `nex-image-install.sh` copies it
 to RAM and `nex-hostimage` runs `grub-install --target=i386-pc` inside it for every selected disk.
 
+Likewise Debian Installer has no `efibootmgr`, so on UEFI firmware the media provides `nex/efi/` (efibootmgr and its
+libraries, staged by `stage_efibootmgr`). `nex-image-install.sh` copies it to RAM and installs a wrapper so
+`nex-hostimage` can register each disk's firmware boot entry; firmware that boots only from explicit entries
+(Dell servers) cannot find the host without it.
+
 ## Install in a disposable VM first
 
 Boot the ISO with at least 2 virtual CPUs, 4 GB RAM and a blank 24 GB virtual disk, or two

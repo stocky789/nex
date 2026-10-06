@@ -176,6 +176,8 @@ assert '"$grub/usr/lib64"' in build and 'fsck.erofs --extract="$tree"' in build,
     'the staged GRUB needs usr/lib64 for the loader (/lib64 is a link into usr) and is read from the erofs'
 assert '--parents' not in build.split('stage_grub_bios() {')[1].split('\n}\n')[0], \
     'library copies go through the same symlinked layout; no silent cp fallback'
+assert 'stage_efibootmgr "$tree"' in build and 'efi=$stage/nex/efi' in build and 'prepare_efibootmgr' in Path('installer/nex-image-install.sh').read_text(), \
+    'UEFI firmware needs an efibootmgr the installer environment lacks: it is staged at nex/efi and wrapped before the install'
 assert 'install -m755 installer/root-account.sh "$stage/nex/root-account.sh"' in build, \
     'the preparation step reads the account hook from the media'
 assert 'dist/nex-source.tar.gz' in build and 'appliance/build.py --version' in build, 'ISO builds must regenerate corresponding source'
