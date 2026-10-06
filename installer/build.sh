@@ -216,7 +216,7 @@ stage_grub_bios() {
 stage_efibootmgr() {
     local tree=$1 efi=$stage/nex/efi lib
     rm -rf "$efi"
-    mkdir -p "$efi/usr/lib64" "$efi/usr/bin"
+    mkdir -p "$efi"/usr/{bin,sbin,lib,lib64}
     for link in bin sbin lib lib64; do ln -s "usr/$link" "$efi/$link"; done
     [[ -f $tree/usr/bin/efibootmgr ]] || { echo 'the system image carries no efibootmgr; add it to image/base.packages' >&2; exit 1; }
     install -D -m755 "$tree/usr/bin/efibootmgr" "$efi/usr/bin/efibootmgr"
