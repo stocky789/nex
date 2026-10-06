@@ -147,6 +147,7 @@ jobs:
           out=$PWD/.cache/image-release
           # installer/build.sh builds the Controller guest image and the corresponding source itself;
           # the Core image is built first and handed to it.
+          python3 scripts/build-source.py
           python3 packaging/core-local/build.py \
             --source dist/nex-source.tar.gz --version "$NEX_VERSION" \
             --output "$packages/core-local" --docker "$NEX_DOCKER"
