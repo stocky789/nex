@@ -36,4 +36,8 @@ for interface in /sys/class/net/*; do
     fi
     /sbin/ip link set dev "$name" up || echo "Cannot enable $name; link probe unavailable"
 done
+# partman's load_extra would anna-install LVM and crypto support (about 230 small reads) from the media before
+# 00nex-recheck runs; the image installer uses neither, and a slow or remote medium (BMC virtual media) stalls on it.
+mkdir -p /var/lib/partman
+: > /var/lib/partman/loaded-extra
 touch /run/nex-installer/prepared

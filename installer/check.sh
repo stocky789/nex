@@ -10,6 +10,8 @@ python3 -m py_compile installer/netinst-manifest.py
 sh -n installer/gui/wizard-text.sh
 sh -n installer/root-account.sh
 sh -n installer/nex-image-install.sh
+sh -n installer/gui/prepare.sh
+grep -Fq ': > /var/lib/partman/loaded-extra' installer/gui/prepare.sh || { echo 'prepare.sh must stop partman loading LVM/crypto from the media' >&2; exit 1; }
 python3 - <<'PY'
 from pathlib import Path
 import re

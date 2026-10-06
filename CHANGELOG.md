@@ -18,6 +18,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+## [0.4.31] — 2026-10-06
+
+### Bug Fixes
+
+- Installing Nex Core from slow installation media, such as a server's remote virtual media (iDRAC, iLO, IPMI), no longer stalls at "Starting up the partitioner" or stops with "Failed to copy file from installation media". The installer no longer loads disk-encryption and LVM components it never uses.
+
 ## [0.4.30] — 2026-10-06
 
 ### Major Feature

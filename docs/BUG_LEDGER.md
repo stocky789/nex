@@ -12688,3 +12688,12 @@ of real storage or hardware certification.
 - Fix: removed `libblkid1` from the package list; the unversioned `Depends: libblkid1` is met by the base system.
 - Regression: reproduced in a Debian chroot built from the 13.6.0 release-date snapshot: `apt-get --print-uris install` exited 100 with the `util-linux PreDepends libblkid1 (= 2.41-5)` conflict; without `libblkid1` the plan, download and install succeeded. A full installer boot on hardware was not run.
 - Avoid: listing a library that ships in lockstep with a base-system package in an installer package list; a package closure resolved against an empty dpkg status is never the closure the real base needs.
+
+## BUG-1931 — Installer stalled loading LVM/crypto components from slow media
+
+- Date: 2026-10-06.
+- Symptom: on a bare-metal server using iDRAC virtual media, setup stopped at "Starting up the partitioner" / "Load installer components from installation media" with "Failed to copy file from installation media. Retry?". The syslog stopped at `anna: retrieving partman-crypto`. The same ISO installed cleanly in QEMU (BIOS and UEFI).
+- Root cause: Debian's `/bin/partman` runs `load_extra` (anna-install of partman-auto-lvm, partman-auto-crypto and dependencies, about 230 small reads) before the init.d hooks, so before `00nex-recheck` hands over to the image installer. Nex uses none of it, and a slow or remote medium stalls on those reads.
+- Fix: `installer/gui/prepare.sh` creates `/var/lib/partman/loaded-extra`, the marker `load_extra` checks, so the step is skipped.
+- Regression: `installer/check.sh` fails if prepare.sh drops the marker. Patched initrd under QEMU (netinst ISO, BIOS, 2 GiB): "partman-base selected" at 11:49:24, image install started at 11:49:27 with no LVM/crypto retrieval. The stall itself needs the iDRAC virtual-media path and was not re-run there.
+- Avoid: leaving partman's extra-component loading active on media where the image installer replaces partitioning.
