@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""scripts/image-lock.py: Nex-built debs are locked by origin and file hash."""
+"""scripts/image-lock.py: Nex-built debs are locked by origin, not by version or bytes."""
 import importlib.util
 import io
 from pathlib import Path
@@ -48,17 +48,14 @@ class NexOriginLockTest(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             image_lock.main([action, '--debs', str(self.debs), *flags, str(self.dpkg_list)])
 
-    def test_write_records_origin_and_hash_and_check_catches_a_changed_deb(self):
+    def test_a_release_builds_the_nex_debs_afresh_and_still_matches_the_lock(self):
         self.run_lock('write')
         lock = Path(image_lock.LOCK).read_text().splitlines()
-        self.assertEqual(lock[0], 'bash\t5.2')
-        origin = lock[1].split('\t')
-        self.assertEqual(origin[:3], ['nex-core-local', '1.0', 'origin=nex'])
-        self.assertRegex(origin[3], r'^sha256=[0-9a-f]{64}$')
+        self.assertEqual(lock, ['bash\t5.2', 'nex-core-local\t-\torigin=nex'])
         self.run_lock('check')
-        self.make_deb('1.0', payload='rebuilt with other content')
-        with self.assertRaisesRegex(SystemExit, 'nex-core-local: lock has'):
-            self.run_lock('check')
+        self.make_deb('2.0', payload='the next release')
+        self.dpkg_list.write_text('bash\t5.2\nnex-core-local\t2.0\n')
+        self.run_lock('check')
 
     def test_full_check_requires_every_locked_nex_artifact(self):
         self.run_lock('write')
@@ -86,10 +83,7 @@ class NexOriginLockTest(unittest.TestCase):
 
     def test_snapshot_only_ignores_nex_packages_but_still_catches_snapshot_drift(self):
         self.run_lock('write')
-        # A freshly built deb differs from the locked bytes: the full check fails, the snapshot gate does not.
         self.make_deb('1.0', payload='rebuilt with other content')
-        with self.assertRaisesRegex(SystemExit, 'nex-core-local: lock has'):
-            self.run_lock('check')
         self.run_lock('check', '--snapshot-only')
         self.dpkg_list.write_text('bash\t5.3\nnex-core-local\t1.0\n')
         with self.assertRaisesRegex(SystemExit, 'bash: lock has 5.2, build has 5.3'):
@@ -102,7 +96,7 @@ class NexOriginLockTest(unittest.TestCase):
         shutil.rmtree(self.debs)
         self.debs.mkdir()
         self.run_lock('check', '--snapshot-only')
-        with self.assertRaisesRegex(SystemExit, 'nex-core-local: lock has 1.0, build has None'):
+        with self.assertRaisesRegex(SystemExit, r'nex-core-local: the locked Nex \.deb is missing'):
             self.run_lock('check')
 
     def test_snapshot_only_refuses_a_deb_that_carries_a_snapshot_package_name(self):
