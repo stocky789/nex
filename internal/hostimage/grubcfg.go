@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-// The BIOS boot partition holds, besides what grub-install puts under grub/i386-pc:
+// The boot partition holds, besides the loader (grub-install's grub/i386-pc on BIOS, shim and GRUB under EFI/ on
+// UEFI):
 //
 //	grub/grub.cfg      the boot menu below; the same bytes on every disk and every release
 //	grub/grubenv       the boot counters (a GRUB environment block)

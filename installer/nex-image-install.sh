@@ -52,8 +52,8 @@ load_tools() {
     done
 }
 
-# The boot method follows the firmware that started this installer: UEFI starts shim, systemd-boot and the signed
-# UKI from each disk's ESP; BIOS starts GRUB from each disk's MBR. The same image and layout serve both.
+# The boot method follows the firmware that started this installer: UEFI starts shim and the signed GRUB from each
+# disk's ESP; BIOS starts GRUB from each disk's MBR. Both boot the same GRUB menu, image and layout.
 BOOT=
 need_boot() {
     if [ -d "$SYS/firmware/efi" ]; then BOOT=uefi; else BOOT=bios; fi

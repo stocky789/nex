@@ -75,10 +75,13 @@ func TestEngineOnFileBackedDisks(t *testing.T) {
 	bootInto("base", 1, r1.Manifest.RootHash)
 	espDefault := func(i int) hostimage.UKIEntry {
 		t.Helper()
-		files, _ := os.ReadDir(filepath.Join(hostimage.ESPRoot(hostimage.NodeName(disks[i], 1)), "EFI/Linux"))
+		all, err := host.Entries(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var us []hostimage.UKIEntry
-		for _, f := range files {
-			if u, ok := hostimage.ParseUKIName(f.Name()); ok {
+		for _, u := range all {
+			if u.Node == hostimage.NodeName(disks[i], 1) {
 				us = append(us, u)
 			}
 		}

@@ -345,11 +345,14 @@ func (w *Writer) finishDisks(ctx context.Context, disks []*Disk, rel *Release) e
 	return nil
 }
 
-// registerBootEntry adds a firmware boot entry for the ESP of a disk. The removable-path loader still
+// shimPath is the loader the firmware starts on a UEFI host: shim, at the removable-media path.
+const shimPath = "EFI/BOOT/BOOTX64.EFI"
+
+// registerBootEntry adds a firmware boot entry for the shim on the ESP of a disk. The removable-path loader still
 // boots without it, so a failure (no efivarfs in a chroot, a read-only variable store) is reported, not fatal.
 func (w *Writer) registerBootEntry(ctx context.Context, disk string) {
 	err := w.Runner.Run(ctx, "efibootmgr", "--create", "--disk", disk, "--part", strconv.Itoa(ESPIndex),
-		"--label", "Nex Core "+filepath.Base(disk), "--loader", `\EFI\systemd\systemd-bootx64.efi`)
+		"--label", "Nex Core "+filepath.Base(disk), "--loader", `\`+strings.ReplaceAll(shimPath, "/", `\`))
 	if err != nil {
 		w.logf("warning: no firmware boot entry for %s (the removable-path loader remains): %v", disk, err)
 	}

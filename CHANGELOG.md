@@ -18,6 +18,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+## [0.4.32] — 2026-10-07
+
+### Bug Fixes
+
+- Nex Core hosts on UEFI firmware now boot through shim and Debian's signed GRUB, with the same A/B boot menu BIOS hosts use. Before, some servers (seen on Dell) started the installed system without its initrd and restarted in a loop with "Unable to mount root fs on unknown-block(0,0)". Hosts installed with an earlier development build must be repaired (**Repair**) or reinstalled (**Erase and install**) from the new installer.
+- With Secure Boot on, an installed host now starts without enrolling a Nex key: shim checks Debian's signed GRUB and kernel.
+
 ## [0.4.31] — 2026-10-06
 
 ### Bug Fixes

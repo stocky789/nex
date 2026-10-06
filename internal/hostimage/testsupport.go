@@ -11,9 +11,11 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 )
 
-// This file is support for the tests of packages that drive the slot writer (internal/nexupdate).
+// This file is support for the tests of this package and of packages that drive the slot writer (internal/nexupdate).
 // Nothing in the product calls it.
 
 // verityImage is a dm-verity hash-tree image (superblock + tree) for data and its root hash: the one writer of
@@ -96,8 +98,9 @@ func SyntheticRelease(dir, label string, sequence int, seed int64, blocks int) e
 		"root.verity": verity,
 		"roothash":    []byte(rootHash + "\n"),
 		fmt.Sprintf("nex-core_%s_%d.efi", label, sequence): SyntheticUKI(label, sequence, seed, rootHash),
-		"esp/EFI/BOOT/BOOTX64.EFI":                         []byte("boot-loader"),
-		"esp/loader/loader.conf":                           []byte("timeout 0\n"),
+		"esp/EFI/BOOT/BOOTX64.EFI":                         []byte("shim"),
+		"esp/EFI/BOOT/grubx64.efi":                         []byte("grub"),
+		"esp/EFI/debian/grub.cfg":                          []byte("configfile /grub/grub.cfg\n"),
 	}
 	m := Manifest{Label: label, Sequence: sequence, BuildID: fmt.Sprintf("%s-%d", label, sequence), RootHash: rootHash, Files: map[string]ManifestFile{}}
 	for name, b := range files {
@@ -135,3 +138,44 @@ func SandboxMounts(base string) (restore func()) {
 
 // ESPRoot is where SandboxMounts puts the (not really mounted) ESP of a partition node.
 func ESPRoot(node string) string { return filepath.Join(espMountBase, filepath.Base(node)) }
+
+// BootOrder is the order the GRUB menu prefers the entries of one boot partition: entries with tries left (or no
+// counter) before exhausted ones, then the higher sequence first. The first element is the default entry.
+func BootOrder(entries []UKIEntry) []UKIEntry {
+	out := append([]UKIEntry(nil), entries...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Bad() != out[j].Bad() {
+			return !out[i].Bad()
+		}
+		return out[i].Sequence > out[j].Sequence
+	})
+	return out
+}
+
+// MarkTried is what the GRUB menu does when it boots the entry of seq once: one try fewer, saved.
+func MarkTried(root string, seq int) error {
+	slots, env, err := readSlots(root)
+	if err != nil {
+		return err
+	}
+	for _, s := range slots {
+		if s.Entry.Sequence == seq && s.Counted && s.Tries > 0 {
+			env[triesVar(s.Slot)] = strconv.Itoa(s.Tries - 1)
+		}
+	}
+	return writeGrubEnv(filepath.Join(root, filepath.FromSlash(biosEnv)), env)
+}
+
+// Bless is what the bless step does to the entry of seq: its counter goes.
+func Bless(root string, seq int) error {
+	slots, env, err := readSlots(root)
+	if err != nil {
+		return err
+	}
+	for _, s := range slots {
+		if s.Entry.Sequence == seq {
+			delete(env, triesVar(s.Slot))
+		}
+	}
+	return writeGrubEnv(filepath.Join(root, filepath.FromSlash(biosEnv)), env)
+}

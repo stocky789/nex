@@ -3,7 +3,7 @@
 # not running, the state format guard refusing, a layer check failing). Never looks at links, quorum,
 # peers, the clock or the Controller.
 # On failure of a counted boot (boot counter active) the host reboots: the entry is tried again while the
-# boot counter has tries left and marked bad on the last one, so the loader falls back to the previous image.
+# boot counter has tries left and marked bad on the last one, so the menu falls back to the previous image.
 # Nothing happens while /run/nex/maintenance-hold exists.
 #
 # NEX_BOOT_CHECK_TRIES (default 20), NEX_BOOT_CHECK_WAIT seconds (default 10) and NEX_BOOT_CHECK_BUDGET seconds
@@ -55,28 +55,16 @@ echo "nex-boot-check:$problems" >&2
 if [ -e /run/nex/maintenance-hold ]; then
     exit 1
 fi
-# A counted boot: the loader already decremented the entry's counter for this boot. While tries are left the
-# failure only costs this boot: reboot and let the loader try again. On the last try mark the entry bad
-# (nex-bless-boot bad) so the next boot is the previous image; the loader then falls back by itself.
-# UEFI: LoaderBootCountPath names the renamed file, "...+<left>-<done>.efi". BIOS: nex-hostimage boot-tries prints
-# the tries left (0 = exhausted) and nothing once the running entry is blessed.
-counted=
-left=
-if [ -d /sys/firmware/efi ]; then
-    var=$(ls /sys/firmware/efi/efivars/LoaderBootCountPath-* 2> /dev/null | head -n 1)
-    if [ -n "$var" ]; then
-        counted=yes
-        left=$(cat "$var" | tail -c +5 | tr -d '\000' | sed -n 's/.*+\([0-9][0-9]*\)\(-[0-9][0-9]*\)\{0,1\}\.efi.*/\1/p')
-    fi
-else
-    left=$(/usr/bin/nex-hostimage boot-tries 2> /dev/null || true)
-    [ -z "$left" ] || counted=yes
-fi
-if [ -n "$counted" ]; then
-    if [ -n "$left" ] && [ "$left" -gt 0 ]; then
+# A counted boot: the menu already decremented the entry's counter for this boot. While tries are left the
+# failure only costs this boot: reboot and let the menu try again. On the last try mark the entry bad so the next
+# boot is the previous image; the menu then falls back by itself. nex-hostimage boot-tries prints the tries left
+# (0 = exhausted) and nothing once the running entry is blessed.
+left=$(/usr/bin/nex-hostimage boot-tries 2> /dev/null || true)
+if [ -n "$left" ]; then
+    if [ "$left" -gt 0 ]; then
         echo "nex-boot-check: $left boot tries left, rebooting to try again" >&2
     else
-        timeout 60 /usr/libexec/nex/nex-bless-boot bad
+        timeout 60 /usr/bin/nex-hostimage bless bad
     fi
     systemctl --no-block reboot
 fi

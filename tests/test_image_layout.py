@@ -62,7 +62,7 @@ class ImageLayoutTest(unittest.TestCase):
         unit = read("image", "mkosi.extra", "usr", "lib", "systemd", "system", "nex-esp-sync.service")
         cmd = re.search(r"ExecStart=/usr/bin/nex-hostimage (\S+)", unit).group(1)
         self.assertIn(f'case "{cmd}"', read("cmd", "nex-hostimage", "main.go"))
-        self.assertIn("After=systemd-bless-boot.service", unit)
+        self.assertIn("After=nex-bless-boot.service", unit)
 
     def test_no_host_keys_or_machine_id_in_sources(self):
         for base, _, files in os.walk(os.path.join(ROOT, "image", "mkosi.extra")):
@@ -80,23 +80,16 @@ class ImageLayoutTest(unittest.TestCase):
 
     def test_initrd_failure_ends_in_a_reboot_never_a_locked_shell(self):
         # The initrd root account is locked and SYSTEMD_SULOGIN_FORCE is not set, so emergency/rescue would end at a
-        # console that refuses the login. A counted boot (sd-boot sets LoaderBootCountPath) reboots at once so the
-        # counter advances; a blessed one (and the Controller guest) reboots after a pause. Exactly one unit runs.
+        # console that refuses the login. Every failure reboots after a pause; an armed entry spent its try in the menu.
         d = os.path.join("image", "initrd", "usr", "lib", "systemd", "system")
-        var = "/sys/firmware/efi/efivars/LoaderBootCountPath-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
-        counted = read(d, "nex-initrd-reboot.service")
         paced = read(d, "nex-initrd-reboot-paced.service")
-        self.assertIn("ConditionPathExists=" + var, counted)
-        self.assertIn("ConditionPathExists=!" + var, paced)
-        self.assertIn("ExecStart=/usr/bin/systemctl --force reboot", counted)
         self.assertIn("ExecStart=/usr/bin/systemctl --force reboot", paced)
         self.assertRegex(paced, r"(?m)^ExecStartPre=/usr/bin/sleep [1-9]\d*$")
-        self.assertNotIn("ExecStartPre", counted)
+        self.assertNotIn("Condition", paced)
         for target in ("emergency.service.d", "rescue.service.d"):
             drop = read(d, target, "10-nex-reboot.conf")
-            for name in ("nex-initrd-reboot.service", "nex-initrd-reboot-paced.service"):
-                self.assertRegex(drop, r"(?m)^Wants=.*\b" + re.escape(name))
-                self.assertRegex(drop, r"(?m)^After=.*\b" + re.escape(name))
+            self.assertRegex(drop, r"(?m)^Wants=nex-initrd-reboot-paced\.service$")
+            self.assertRegex(drop, r"(?m)^After=nex-initrd-reboot-paced\.service$")
             self.assertNotIn("ExecStart", drop)
 
     def test_boot_check_ends_before_its_unit_timeout(self):
@@ -140,7 +133,6 @@ class ImageLayoutTest(unittest.TestCase):
         py, go = read("image", "release.py"), read("internal", "hostimage", "release.go")
         self.assertIn('uki = f"nex-core_{LABEL}_{SEQ}.efi"', py)
         self.assertIn("nex-core_[A-Za-z0-9.~_-]+_[0-9]+", go)
-        self.assertIn('"nex-core_%s_%d%s.efi"', read("internal", "hostimage", "update.go"))
 
     def test_release_label_is_one_the_go_reader_accepts(self):
         rel = load_release()

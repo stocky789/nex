@@ -1,0 +1,84 @@
+{
+  "summary": "UEFI hosts boot through shim and Debian's signed GRUB instead of systemd-boot and the UKI (project owner decision 2026-10-07, plan D2 amended). On a Dell server with Secure Boot off the installed host's UKI started its kernel without the initrd and rebooted in a loop; the shim, signed GRUB, kernel and initrd chain is the one that booted there before the image. internal/hostimage's UEFI boot method is now the GRUB method (same menu, per-slot entries, grubenv counters, bless, rollback, convergence) plus the loader files on the ESP (EFI/BOOT/BOOTX64.EFI shim, grubx64.efi signed GRUB, mmx64.efi, EFI/debian/grub.cfg hand-over) and a firmware boot entry that names the shim; the UKI-on-ESP code (file-name counters, LoaderDevicePartUUID, ConvergeESP and the rest) is deleted. image/release.py builds the new ESP tree, image/base.packages and packages.lock add grub-efi-amd64-signed, nex-bless-boot.service (nex-hostimage bless good) replaces nex-bless-boot-bios.service, the nex-bless-boot wrapper and the systemd-bless-boot drop-in on both firmwares, nex-boot-check reads nex-hostimage boot-tries on both, and the initrd's counted-reboot unit, which only sd-boot's LoaderBootCountPath could trigger, is removed. API impact: existing contract (the nex-hostimage CLI and the local update and system-disk routes keep their shapes; the reference text names the new boot files).",
+  "paths": [
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "cmd/nex-hostimage/main.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/changes/2026-10-07-uefi-grub-boot.json",
+    "docs/guide/install-nex-core.md",
+    "docs/plans/2026-10-01-immutable-nex-core.md",
+    "image/base.packages",
+    "image/initrd/usr/lib/systemd/system/emergency.service.d/10-nex-reboot.conf",
+    "image/initrd/usr/lib/systemd/system/nex-initrd-reboot-paced.service",
+    "image/initrd/usr/lib/systemd/system/nex-initrd-reboot.service",
+    "image/initrd/usr/lib/systemd/system/rescue.service.d/10-nex-reboot.conf",
+    "image/mkosi.extra/usr/lib/systemd/system-preset/10-nex.preset",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-bless-boot-bios.service",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-bless-boot.service",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-boot-check.service",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-esp-sync.service",
+    "image/mkosi.extra/usr/lib/systemd/system/nex-update-reconcile.service",
+    "image/mkosi.extra/usr/lib/systemd/system/systemd-bless-boot.service.d/10-nex-esp.conf",
+    "image/mkosi.extra/usr/libexec/nex/nex-bless-boot",
+    "image/mkosi.extra/usr/libexec/nex/nex-boot-check",
+    "image/packages.lock",
+    "image/release.py",
+    "installer/README.md",
+    "installer/nex-image-install.sh",
+    "internal/hostimage/bios.go",
+    "internal/hostimage/bios_test.go",
+    "internal/hostimage/boot.go",
+    "internal/hostimage/esp.go",
+    "internal/hostimage/esp_test.go",
+    "internal/hostimage/grubcfg.go",
+    "internal/hostimage/hostimage_test.go",
+    "internal/hostimage/install.go",
+    "internal/hostimage/release.go",
+    "internal/hostimage/replace_test.go",
+    "internal/hostimage/testsupport.go",
+    "internal/hostimage/uefi.go",
+    "internal/hostimage/uki.go",
+    "internal/hostimage/update.go",
+    "internal/hostimage/update_test.go",
+    "internal/nexupdate/image_disks_test.go",
+    "tests/test_image_composition.py",
+    "tests/test_image_layout.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The install guide's firmware paragraph now says a UEFI host boots shim and Debian's signed GRUB from a firmware boot entry on every disk, and what Secure Boot checks.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No Controller-Core call changes: nex-hostimage keeps its commands (install, repair, esp-sync, bless, boot-tries) and the local update and host-system-disk-replace contracts keep their requests and results. The reference text for activate, update status and system-disk replacement now describes GRUB entries and the signed GRUB instead of UKI counters and systemd-boot.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Amends decision D2 of the immutable Nex Core plan; no milestone or acceptance gate changes status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Boot entries and counters stay host-side on every disk's boot partition (grub/grub.cfg, grub/grubenv, nex/a.cfg, nex/b.cfg, nex/<sequence>/), as on BIOS hosts; the UEFI firmware boot entry is in the host's NVRAM. Nothing is stored by the Controller; a fresh Controller reads the result through Inventory.image as before.",
+    "record": "grub/grubenv and nex/<slot>.cfg on each disk's nex-esp partition; recovered by nex-update status (Inventory.image)."
+  },
+  "verification": {
+    "method": "go build ./...; go test ./... (all packages pass, hostimage under both boot methods, including the new TestUEFIBootPartitionCarriesTheLoaderAndTheMenu and the updated TestInstallSingleDisk that checks the shim, signed GRUB, menu and the efibootmgr call); python3 -m unittest discover -s tests (passes except test_website_hosting, which needs nginx on this workstation); scripts/generate_api.py --check. QEMU/OVMF, labelled simulation: an ESP built from the published 0.4.31-dev.292 release (its shim and UKI kernel and initrd), the Debian grub-efi-amd64-signed 2.12-9+deb13u2 binary, and the menu and entry generated by nex-hostimage booted to systemd in the initrd with Secure Boot off and with Secure Boot on (Microsoft keys, no MOK), and the menu counted nex_tries_a from 3 to 2 under Secure Boot. Not run: an image or ISO build, the package-lock check against a fresh build, a boot on the Dell server, an A/B update or rollback on a UEFI GRUB host, and the VM lab drivers tests/integration/image_update.py, image_sb_lab.py and image_install_lab.py, which still expect UKI file names, systemd-boot and systemd-bless-boot on the ESP and must be rewritten before the next lab run. No upgrade path: a UEFI host installed with an earlier development build boots systemd-boot and has no nex.bootfs= on its command line, so the new release's esp-sync, bless and boot-tries do nothing there; such a host is reinstalled or repaired from a new installer (CHANGELOG says so).",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "docs/plans/2026-10-01-immutable-nex-core.md"
+    ]
+  }
+}

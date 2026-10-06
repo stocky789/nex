@@ -137,28 +137,30 @@ def lf_meta_busy(spec):
 class BootChainTest(unittest.TestCase):
     def tree(self, tmp, missing=None):
         files = {"usr/lib/shim/shimx64.efi.signed": "shim", "usr/lib/shim/mmx64.efi.signed": "mok",
-                 "usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed": "sdboot",
-                 "usr/lib/systemd/boot/efi/systemd-bootx64.efi": "unsigned-sdboot"}
+                 "usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed": "grub",
+                 "usr/lib/grub/x86_64-efi/monolithic/grubx64.efi": "unsigned-grub"}
         for rel, text in files.items():
             if rel != missing:
                 p = Path(tmp, "tree", rel)
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(text)
         esp = Path(tmp, "esp")
-        for d in ("EFI/BOOT", "EFI/systemd"):
+        for d in ("EFI/BOOT", "EFI/debian"):
             (esp / d).mkdir(parents=True)
         return Path(tmp, "tree"), esp
 
-    def test_removable_path_starts_shim_which_chains_to_the_signed_systemd_boot(self):
+    def test_removable_path_starts_shim_which_chains_to_the_signed_grub_and_the_menu(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree, esp = self.tree(tmp)
             image_release.boot_files(str(tree), str(esp))
             got = {str(p.relative_to(esp)): p.read_text() for p in esp.rglob("*") if p.is_file()}
-        self.assertEqual(got, {"EFI/BOOT/BOOTX64.EFI": "shim", "EFI/BOOT/grubx64.efi": "sdboot",
-                               "EFI/BOOT/mmx64.efi": "mok", "EFI/systemd/systemd-bootx64.efi": "sdboot"})
+        self.assertEqual(got, {"EFI/BOOT/BOOTX64.EFI": "shim", "EFI/BOOT/grubx64.efi": "grub", "EFI/BOOT/mmx64.efi": "mok",
+                               "EFI/debian/grub.cfg": "configfile /grub/grub.cfg\n"})
+        # nex-hostimage writes the menu where the hand-over looks for it.
+        self.assertIn('biosCfg     = "grub/grub.cfg"', (ROOT / "internal/hostimage/grubcfg.go").read_text())
 
     def test_an_unsigned_loader_is_never_substituted(self):
-        for missing in ("usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed", "usr/lib/shim/shimx64.efi.signed"):
+        for missing in ("usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed", "usr/lib/shim/shimx64.efi.signed"):
             with tempfile.TemporaryDirectory() as tmp:
                 tree, esp = self.tree(tmp, missing)
                 with self.assertRaises(FileNotFoundError):

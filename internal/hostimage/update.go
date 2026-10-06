@@ -6,16 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
-	"strings"
 )
 
-// ArmTries is the boot-assessment counter an armed UKI starts with (+3): three failed boots and
-// systemd-boot stops preferring it.
+// ArmTries is the boot-assessment counter an armed entry starts with: after three failed boots the menu
+// stops preferring it.
 const ArmTries = 3
 
 // crashPoint is nil in production. Tests set it to stop an operation at a named point, which stands
@@ -46,15 +41,13 @@ var ErrArmNotUndone = errors.New("arm failed and could not be undone on every ES
 // ESP as it was.
 var ErrRollbackPartial = errors.New("rollback failed after it changed an ESP")
 
-var ukiNameParseRE = regexp.MustCompile(`^nex-core_(.+)_([0-9]+)(?:\+([0-9]+)(?:-([0-9]+))?)?\.efi$`)
-
-// UKIEntry is one boot entry on an ESP: nex-core_<label>_<sequence>[+tries[-done]].efi.
+// UKIEntry is one boot entry on a boot partition: a slot's entry and its counter.
 type UKIEntry struct {
 	Node     string // ESP partition node, empty for a bare name
 	Name     string
 	Label    string
 	Sequence int
-	Counted  bool // the name carries a boot counter: not blessed
+	Counted  bool // the entry has a boot counter: not blessed
 	Tries    int  // tries left
 	Done     int  // tries already used
 }
@@ -64,44 +57,6 @@ func (e UKIEntry) Bad() bool { return e.Counted && e.Tries == 0 }
 
 // Blessed is an entry without a counter.
 func (e UKIEntry) Blessed() bool { return !e.Counted }
-
-// ParseUKIName decodes a UKI file name.
-func ParseUKIName(name string) (UKIEntry, bool) {
-	m := ukiNameParseRE.FindStringSubmatch(name)
-	if m == nil {
-		return UKIEntry{}, false
-	}
-	e := UKIEntry{Name: name, Label: m[1]}
-	e.Sequence, _ = strconv.Atoi(m[2])
-	if m[3] != "" {
-		e.Counted = true
-		e.Tries, _ = strconv.Atoi(m[3])
-		if m[4] != "" {
-			e.Done, _ = strconv.Atoi(m[4])
-		}
-	}
-	return e, true
-}
-
-func ukiName(label string, sequence int, suffix string) string {
-	return fmt.Sprintf("nex-core_%s_%d%s.efi", label, sequence, suffix)
-}
-
-// BootOrder is the order systemd-boot tries the entries of one ESP: entries with tries left (or no
-// counter) before exhausted ones, then the higher sequence first. sd-boot compares the UKI's os-release
-// IMAGE_VERSION (VERSION when that is absent) as a version string, so image/release.py makes both the
-// zero-padded sequence and nothing else: only then is that comparison the numeric sequence order modelled
-// here, whatever the label looks like. The first element is the default entry.
-func BootOrder(entries []UKIEntry) []UKIEntry {
-	out := append([]UKIEntry(nil), entries...)
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Bad() != out[j].Bad() {
-			return !out[i].Bad()
-		}
-		return out[i].Sequence > out[j].Sequence
-	})
-	return out
-}
 
 // Host is this machine's disks and boot partitions for update operations. Nil functions use the
 // sysfs discovery of the running system.
@@ -215,8 +170,8 @@ func slotSelected(d *Disk, rootHash string) (string, bool, error) {
 }
 
 // StageSlot makes room for the release and writes it into the slot the running system does not use,
-// on every disk (WriteSlot's S2 order). Before the slot is touched, every UKI on every ESP that does
-// not belong to keepSequence (the running version) is removed: the UKI is the commit point and a
+// on every disk (WriteSlot's S2 order). Before the slot is touched, every entry on every ESP that does
+// not belong to keepSequence (the running version) is removed: the entry is the commit point and a
 // stale one would name a slot that is about to be torn. It returns the slot written. Nothing is armed.
 func (h *Host) StageSlot(ctx context.Context, rel *Release, bootedRootHash string, keepSequence int) (string, error) {
 	unlock, err := lockDisks(ctx, diskLockWait)
@@ -262,51 +217,7 @@ func (h *Host) StageSlot(ctx context.Context, rel *Release, bootedRootHash strin
 	return target, nil
 }
 
-// pruneOtherUKIs removes every UKI that is not the keepSequence one, and half-written files.
-func pruneOtherUKIs(root string, keepSequence int) error {
-	if err := removeTemps(root); err != nil {
-		return err
-	}
-	dir := filepath.Join(root, ukiDir)
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		u, ok := ParseUKIName(e.Name())
-		if !ok || u.Sequence == keepSequence {
-			continue
-		}
-		if err = os.Remove(filepath.Join(dir, e.Name())); err != nil {
-			return err
-		}
-	}
-	return syncDir(dir)
-}
-
-// readUKIs lists the UKIs of an ESP root.
-func readUKIs(root, node string) ([]UKIEntry, error) {
-	entries, err := os.ReadDir(filepath.Join(root, ukiDir))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []UKIEntry
-	for _, e := range entries {
-		if u, ok := ParseUKIName(e.Name()); ok {
-			u.Node = node
-			out = append(out, u)
-		}
-	}
-	return out, nil
-}
-
-// Entries lists the UKIs of every ESP.
+// Entries lists the boot entries of every ESP.
 func (h *Host) Entries(ctx context.Context) ([]UKIEntry, error) {
 	nodes, err := h.espNodes()
 	if err != nil {
@@ -344,11 +255,11 @@ func requireSlot(disks []*Disk, rootHash string) (string, error) {
 	return slot, nil
 }
 
-// Arm puts the release's UKI on every ESP as nex-core_<label>_<sequence>+3.efi and refreshes the
-// loader files. The running version's UKI stays beside it as the fallback. Per ESP the UKI is
-// written to a .new name (which the boot loader ignores), flushed, and renamed: the rename is the
-// only moment the entry appears. The slot must already be staged on every disk; ESPs are armed one
-// after the other, and an ESP that has not been reached boots its old, self-consistent slot.
+// Arm puts the release's entry on every ESP with ArmTries boot tries (on UEFI it refreshes the loader files
+// first). The running version's entry stays beside it as the fallback. Per ESP the entry is written to a
+// .new name (which the menu ignores), flushed, and renamed: the rename is the only moment the entry appears.
+// The slot must already be staged on every disk; ESPs are armed one after the other, and an ESP that has not
+// been reached boots its old, self-consistent slot.
 //
 // Arm is all or nothing as far as the disks allow: when an ESP fails, the entry is taken back from
 // every ESP reached so far (the failed one included), so a failed Arm leaves the release staged. If
@@ -406,117 +317,10 @@ func (h *Host) undoArm(ctx context.Context, sequence int, nodes []string, cause 
 	return fmt.Errorf("%w: %w; %w", ErrArmNotUndone, cause, errors.Join(failed...))
 }
 
-// disarmESP is armESP's inverse for the boot entry: every UKI of the sequence (under whatever counter)
-// and every half-written file goes, so the ESP boots what it booted before the Arm. The loader files
-// armESP refreshed stay: they are the release's own and boot the old UKI as well.
-func disarmESP(root string, sequence int) error {
-	dir := filepath.Join(root, ukiDir)
-	us, err := readUKIs(root, "")
-	if err != nil {
-		return err
-	}
-	for _, u := range us {
-		if u.Sequence == sequence {
-			if err = os.Remove(filepath.Join(dir, u.Name)); err != nil {
-				return err
-			}
-		}
-	}
-	if err = removeTemps(root); err != nil {
-		return err
-	}
-	if _, err = os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return syncDir(dir)
-}
-
-func armESP(root string, rel *Release, tries int) error {
-	for _, f := range rel.ESPFiles() {
-		if isUKI(f.Rel) {
-			continue
-		}
-		dst := filepath.Join(root, filepath.FromSlash(f.Rel))
-		want, err := sha256File(f.Path)
-		if err != nil {
-			return err
-		}
-		if got, err := sha256File(dst); err == nil && got == want {
-			continue
-		}
-		if err = copyAtomic(f.Path, dst); err != nil {
-			return fmt.Errorf("write %s: %w", f.Rel, err)
-		}
-	}
-	dir := filepath.Join(root, ukiDir)
-	dst := filepath.Join(dir, ukiName(rel.Manifest.Label, rel.Manifest.Sequence, fmt.Sprintf("+%d", tries)))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	if err := copyUKI(rel.UKIPath(), dst); err != nil {
-		return err
-	}
-	// Any older copy of the same sequence under another counter (a bad entry of an earlier try)
-	// is gone once the new entry exists.
-	us, err := readUKIs(root, "")
-	if err != nil {
-		return err
-	}
-	for _, u := range us {
-		if u.Sequence == rel.Manifest.Sequence && filepath.Join(dir, u.Name) != dst {
-			if err = os.Remove(filepath.Join(dir, u.Name)); err != nil {
-				return err
-			}
-		}
-	}
-	want, err := sha256File(rel.UKIPath())
-	if err != nil {
-		return err
-	}
-	if got, err := sha256File(dst); err != nil || got != want {
-		return fmt.Errorf("verify %s after writing: not the expected bytes (%v)", path.Base(dst), err)
-	}
-	return syncDir(dir)
-}
-
-// copyUKI is copyAtomic with a crash point between the flushed temp file and the rename.
-func copyUKI(src, dst string) error {
-	tmp := dst + tempSuffix
-	if err := copyFile(src, tmp); err != nil {
-		return err
-	}
-	if err := crash("arm.temp"); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(dst))
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err = out.ReadFrom(in); err == nil {
-		err = out.Sync()
-	}
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	return err
-}
-
-// Rollback makes the retained previous version the next boot: on every ESP its UKI gets a fresh
-// +3 counter first (the running version, with a higher sequence, still sorts first and boots if
-// the host is interrupted here), and only then is the running version's UKI marked exhausted
-// (+0-3) so the previous one sorts first. The previous slot must still be selected on every disk.
+// Rollback makes the retained previous version the next boot: on every ESP its entry gets a fresh
+// counter first (the running version, with a higher sequence, still wins and boots if the host is
+// interrupted here), and only then are the running version's tries set to 0 so the previous one wins. The
+// previous slot must still be selected on every disk.
 // A failure before any ESP changed leaves every disk as it was; one after it wraps ErrRollbackPartial.
 // Repeating the call finishes the ESPs that are left.
 func (h *Host) Rollback(ctx context.Context, fromSequence, toSequence int, toRootHash string) error {
@@ -596,86 +400,4 @@ func (h *Host) Disarm(ctx context.Context, sequence int) error {
 		}
 	}
 	return errors.Join(failed...)
-}
-
-// rollbackESP reports whether it renamed anything: an error with changed false left the ESP as it was.
-func rollbackESP(root string, from, to int) (changed bool, err error) {
-	dir := filepath.Join(root, ukiDir)
-	us, err := readUKIs(root, "")
-	if err != nil {
-		return false, err
-	}
-	for _, u := range us {
-		if u.Sequence != to {
-			continue
-		}
-		dst := ukiName(u.Label, u.Sequence, fmt.Sprintf("+%d", ArmTries))
-		if u.Name != dst {
-			if err = os.Rename(filepath.Join(dir, u.Name), filepath.Join(dir, dst)); err != nil {
-				return changed, err
-			}
-			changed = true
-		}
-	}
-	if err = crash("rollback.armed"); err != nil {
-		return changed, err
-	}
-	for _, u := range us {
-		if u.Sequence != from {
-			continue
-		}
-		dst := ukiName(u.Label, u.Sequence, fmt.Sprintf("+0-%d", ArmTries))
-		if u.Name != dst {
-			if err = os.Rename(filepath.Join(dir, u.Name), filepath.Join(dir, dst)); err != nil {
-				return changed, err
-			}
-			changed = true
-		}
-	}
-	return changed, syncDir(dir)
-}
-
-// Bless drops the boot counter of the UKI with the sequence, as systemd-bless-boot does once the
-// running system has proved itself. It is used by the lab harness and by tests; on a host the
-// service does it.
-func Bless(root string, sequence int) error {
-	dir := filepath.Join(root, ukiDir)
-	us, err := readUKIs(root, "")
-	if err != nil {
-		return err
-	}
-	for _, u := range us {
-		if u.Sequence == sequence && u.Counted {
-			if err = os.Rename(filepath.Join(dir, u.Name), filepath.Join(dir, ukiName(u.Label, u.Sequence, ""))); err != nil {
-				return err
-			}
-		}
-	}
-	return syncDir(dir)
-}
-
-// MarkTried decrements the boot counter of a UKI as the boot loader does when it boots the entry
-// (+3 -> +2-1 ...). Lab harness and tests only.
-func MarkTried(root string, sequence int) error {
-	dir := filepath.Join(root, ukiDir)
-	us, err := readUKIs(root, "")
-	if err != nil {
-		return err
-	}
-	for _, u := range us {
-		if u.Sequence == sequence && u.Counted && u.Tries > 0 {
-			suffix := fmt.Sprintf("+%d-%d", u.Tries-1, u.Done+1)
-			if err = os.Rename(filepath.Join(dir, u.Name), filepath.Join(dir, ukiName(u.Label, u.Sequence, suffix))); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// isBadUKI reports whether an ESP-relative path is a UKI with no tries left; the ESP sync ignores
-// those when it decides whether the running entry is blessed.
-func isBadUKI(rel string) bool {
-	u, ok := ParseUKIName(path.Base(rel))
-	return ok && u.Bad() && strings.HasSuffix(rel, ".efi")
 }
