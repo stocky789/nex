@@ -120,6 +120,16 @@ class CoreLocalPackageTests(unittest.TestCase):
                 setup.configure('192.0.2.5', directory, '', controller_image_sha256='')
                 self.assertNotIn('controller_image_sha256', json.loads(config.read_text()))
 
+    def test_controller_image_placed_by_the_installer_is_used_without_configuration(self):
+        digest = 'cd' * 32
+        with tempfile.TemporaryDirectory() as directory:
+            payload = Path(directory) / 'payload'
+            with patch.object(setup, 'PAYLOAD', payload):
+                self.assertIsNone(setup.controller_system_image({}))
+                (payload / digest).mkdir(parents=True)
+                (payload / digest / 'controller-system.img').write_bytes(b'image')
+                self.assertEqual(setup.controller_system_image({}), (payload / digest / 'controller-system.img', digest))
+
     def test_recovery_command_reuses_configured_paths_and_forwards_private_request(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)

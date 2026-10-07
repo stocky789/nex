@@ -12733,3 +12733,12 @@ of real storage or hardware certification.
 - Fix: `finish()` loads a `finish-install/reboot_in_progress` note and asks it through debconf before it restarts; without a frontend (a test run) it keeps the pause.
 - Regression: `installer/check.sh` fails unless `finish()` asks that question before `reboot` (seen failing with the reboot moved). `tests/integration/image_install_lab.py single` (QEMU/OVMF, text frontend, lab ISO from `image_iso_lab.py` with the dev.293 release): the install stopped on "Installation complete … Nex Core is installed on /dev/vda", the lab answered Continue, the host restarted and booted (erofs root, dm-verity, `/etc` overlay, API sign-in). The GTK page itself was not driven in the lab.
 - Avoid: restarting from the image installer without the completion question; reading the X error at shutdown as an install failure.
+
+## BUG-1935 — Controller could not be deployed on an installed image host
+
+- Date: 2026-10-07.
+- Symptom: Overview showed **Deployment needs attention: appliance manifest unavailable** and Deploy Controller stayed disabled on a host installed from the image.
+- Root cause: `core-local-setup` only selected the two-disk Controller profile when `controller_image_sha256` was configured, and nothing on an installed host sets it. Without it Core fell back to the retired single-disk appliance manifest, which image hosts do not carry, although the installer had placed `controller-system.img` under `/var/lib/nex/payload/<sha256>/`.
+- Fix: with no configured digest, `controller_system_image` uses the newest `payload/<sha256>/controller-system.img`; the engine still checks that digest against the bytes while it copies the image.
+- Regression: `python3 -m unittest tests.test_core_local_package` (`test_controller_image_placed_by_the_installer_is_used_without_configuration`; it fails without the fix), run by the forge's `tests/` job. On the affected lab host, configuring the same digest by hand turned the preflight to ready with no blockers; a Controller deployment itself was not run.
+- Avoid: reading a missing digest as "no Controller image"; leaving the retired single-disk fallback as the only route on a host that has the system image.

@@ -102,7 +102,7 @@ export function LocalUpdates({ api, busy }: { api: API; busy: boolean }) {
   return <section>
     <dl className="defaults">
       <div><dt>Running</dt><dd>{release(booted)}</dd></div>
-      <div><dt>Available</dt><dd>{!status ? "—" : status.available ? release(status.available) : "Nothing newer is known"}</dd></div>
+      <div><dt>Available</dt><dd>{!status ? "—" : status.available ? release(status.available) : "No newer release"}</dd></div>
       <div><dt>State</dt><dd>{status ? localPhaseLabel(status.phase) : "—"}</dd></div>
     </dl>
     {status && <dl className="defaults">
