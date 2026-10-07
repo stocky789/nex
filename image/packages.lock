@@ -1,4 +1,5 @@
 adduser	3.152
+amd64-microcode	3.20250311.1
 base-files	13.8+deb13u7
 base-passwd	3.6.7
 bash	5.2.37-2+b10
@@ -30,6 +31,16 @@ erofs-utils	1.8.6-1
 ethtool	1:6.14.2-1
 fdisk	2.41.5-0+deb13u1
 findutils	4.10.0-3
+firmware-bnx2	20250410-2
+firmware-bnx2x	20250410-2
+firmware-cavium	20250410-2
+firmware-intel-misc	20250410-2
+firmware-linux-free	20241210-2
+firmware-misc-nonfree	20250410-2
+firmware-myricom	20250410-2
+firmware-netxen	20250410-2
+firmware-qlogic	20250410-2
+firmware-realtek	20250410-2
 freeipmi-common	1.6.15-1
 gcc-14-base	14.2.0-19
 genisoimage	9:1.1.11-4
@@ -47,11 +58,13 @@ init-system-helpers	1.69~deb13u1
 initramfs-tools	0.148.4
 initramfs-tools-bin	0.148.4
 initramfs-tools-core	0.148.4
+intel-microcode	3.20251111.1~deb13u1
 iperf3	3.18-2+deb13u2
 ipmitool	1.8.19-9
 iproute2	6.15.0-1
 iptables	1.8.11-2
 ipxe-qemu	1.21.1+git20250501.dad20602+dfsg-1
+iucode-tool	2.3.1-3
 keyutils	1.6.3-6
 klibc-utils	2.0.14-1
 kmod	34.2-2

@@ -12695,15 +12695,6 @@ of real storage or hardware certification.
 - Symptom: on a bare-metal server using iDRAC virtual media, setup stopped at "Starting up the partitioner" / "Load installer components from installation media" with "Failed to copy file from installation media. Retry?". The syslog stopped at `anna: retrieving partman-crypto`. The same ISO installed cleanly in QEMU (BIOS and UEFI).
 - Root cause: Debian's `/bin/partman` runs `load_extra` (anna-install of partman-auto-lvm, partman-auto-crypto and dependencies, about 230 small reads) before the init.d hooks, so before `00nex-recheck` hands over to the image installer. Nex uses none of it, and a slow or remote medium stalls on those reads.
 - Fix: `installer/gui/prepare.sh` creates `/var/lib/partman/loaded-extra`, the marker `load_extra` checks, so the step is skipped.
-- Regression: `installer/check.sh` fails if prepare.sh drops the marker. Patched initrd under QEMU (netinst ISO, BIOS, 2 GiB): "partman-base selected" at 11:49:24, image install started at 11:49:27 with no LVM/crypto retrieval. The stall itself needs the iDRAC virtual-media path and was not re-run there.
-- Avoid: leaving partman's extra-component loading active on media where the image installer replaces partitioning.
-
-## BUG-1931 — Installer stalled loading LVM/crypto components from slow media
-
-- Date: 2026-10-06.
-- Symptom: on a bare-metal server using iDRAC virtual media, setup stopped at "Starting up the partitioner" / "Load installer components from installation media" with "Failed to copy file from installation media. Retry?". The syslog stopped at `anna: retrieving partman-crypto`. The same ISO installed cleanly in QEMU (BIOS and UEFI).
-- Root cause: Debian's `/bin/partman` runs `load_extra` (anna-install of partman-auto-lvm, partman-auto-crypto and dependencies, about 230 small reads) before the init.d hooks, so before `00nex-recheck` hands over to the image installer. Nex uses none of it, and a slow or remote medium stalls on those reads.
-- Fix: `installer/gui/prepare.sh` creates `/var/lib/partman/loaded-extra`, the marker `load_extra` checks, so the step is skipped.
 - Regression: `installer/check.sh` fails if prepare.sh drops the marker. Patched initrd under QEMU (netinst ISO, BIOS, 2 GiB): "partman-base selected" at 11:49:24, image install started at 11:49:27 with no LVM/crypto retrieval. Build 0.4.31-dev.290 on the iDRAC server passed the same step (partman-base 13:59:24, image install 13:59:31) and wrote the image to five disks.
 - Avoid: leaving partman's extra-component loading active on media where the image installer replaces partitioning.
 
