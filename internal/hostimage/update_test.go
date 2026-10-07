@@ -13,21 +13,7 @@ import (
 	"testing"
 )
 
-func TestParseUKINameAndBootOrder(t *testing.T) {
-	for name, want := range map[string]UKIEntry{
-		"nex-core_dev_7.efi":       {Name: "nex-core_dev_7.efi", Label: "dev", Sequence: 7},
-		"nex-core_1.2_rc_9+3.efi":  {Name: "nex-core_1.2_rc_9+3.efi", Label: "1.2_rc", Sequence: 9, Counted: true, Tries: 3},
-		"nex-core_dev_8+1-2.efi":   {Name: "nex-core_dev_8+1-2.efi", Label: "dev", Sequence: 8, Counted: true, Tries: 1, Done: 2},
-		"nex-core_dev_8+0-3.efi":   {Name: "nex-core_dev_8+0-3.efi", Label: "dev", Sequence: 8, Counted: true, Done: 3},
-		"nex-core_dev_8+3.efi.new": {},
-		"linux-nex-core_dev_8.efi": {},
-		"nex-core_dev_x.efi":       {},
-	} {
-		got, ok := ParseUKIName(name)
-		if ok != (want.Name != "") || got != want {
-			t.Errorf("%s: %+v %v, want %+v", name, got, ok, want)
-		}
-	}
+func TestBootOrder(t *testing.T) {
 	order := BootOrder([]UKIEntry{{Sequence: 9, Counted: true, Tries: 3}, {Sequence: 8}, {Sequence: 7}})
 	if order[0].Sequence != 9 || order[1].Sequence != 8 {
 		t.Fatalf("a fresh counted entry did not sort first: %+v", order)
@@ -141,16 +127,10 @@ func (r *updateRig) defaultSequence(i int) int {
 	return e.Sequence
 }
 
-// markTried is what the boot loader does when it boots the entry of seq once.
+// markTried is what the menu does when it boots the entry of seq once.
 func (r *updateRig) markTried(i, seq int) {
 	r.t.Helper()
-	var err error
-	if r.boot == BIOS {
-		err = biosMarkTried(r.esp(i), seq)
-	} else {
-		err = MarkTried(r.esp(i), seq)
-	}
-	if err != nil {
+	if err := MarkTried(r.esp(i), seq); err != nil {
 		r.t.Fatal(err)
 	}
 }
@@ -158,13 +138,7 @@ func (r *updateRig) markTried(i, seq int) {
 // bless is what the bless step does to the entry of seq on disk i.
 func (r *updateRig) bless(i, seq int) {
 	r.t.Helper()
-	var err error
-	if r.boot == BIOS {
-		err = biosBless(r.esp(i), seq)
-	} else {
-		err = Bless(r.esp(i), seq)
-	}
-	if err != nil {
+	if err := Bless(r.esp(i), seq); err != nil {
 		r.t.Fatal(err)
 	}
 }

@@ -74,7 +74,8 @@ cat > /seed/nex-test.sh <<'EOT'
 # A serial getty on ttyS0 hangs up other openers of the tty, so markers go through the kernel log, which
 # reaches the serial console (console=ttyS0) and is not rate limited once printk_devkmsg is on.
 echo on > /proc/sys/kernel/printk_devkmsg
-p() { printf '<6>NEXTEST %s=%s\n' "$1" "$(printf %s "$2" | tr '\n ' ';_')" > /dev/kmsg; }
+# <3> (error): the images boot with loglevel=4, so only that and more urgent levels reach the console.
+p() { printf '<3>NEXTEST %s=%s\n' "$1" "$(printf %s "$2" | tr '\n ' ';_')" > /dev/kmsg; }
 sleep 8
 p root "$(findmnt -no FSTYPE,OPTIONS / | tr ' ' ,)"
 p verity "$(dmsetup status root 2>&1 | tr ' ' '_')"

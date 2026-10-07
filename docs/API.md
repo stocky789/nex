@@ -5993,7 +5993,7 @@ writes, so a step that already happened is skipped and none is ever repeated des
    then are the GUIDs derived from the root hash set), so a replacement never selects a slot that is not complete. A previous slot that
    does not verify is left empty rather than copied.
 4. **Boot.** The boot partition is formatted once, then written from the surviving disk's through the host's boot method with SHA-256
-   verification: UEFI copies the signed boot files and the boot entries and registers a firmware boot entry; BIOS copies the GRUB
+   verification: UEFI copies shim, the signed GRUB and the boot entries and registers a firmware boot entry; BIOS copies the GRUB
    files and entries and runs `grub-install --target=i386-pc` on the new disk (MBR boot code and the `nex-bios` partition). Either way
    the new disk can start the host on its own.
 5. **Data.** `mdadm --add /dev/md/nex-data <replacement>6`. The kernel resyncs in the background; the host and its VMs keep running and
@@ -6104,8 +6104,8 @@ Schemas `ImageUpdateStatus`, `ImageUpdateOperation`, `ImageUpdateApplyRequest`, 
 `UpdateRefusal` are in the generated host-local reference.
 
 Core fetches and verifies everything itself; installed hosts never run `apt`. The update base URL and channel are
-configuration only: `NEX_UPDATE_BASE_URL` / `NEX_UPDATE_CHANNEL`, else `base_url=` / `channel=` in `/etc/nex/updates.conf`; there is
-no built-in URL, and an unset one is `503 source_unconfigured`. The default channel is `stable`. Plain HTTP mirrors are fine:
+configuration only: `NEX_UPDATE_BASE_URL` / `NEX_UPDATE_CHANNEL`, else `base_url=` / `channel=` in `/etc/nex/updates.conf`; an unset
+base URL is `https://nexvirtualization.com/updates`. The default channel is `stable`. Plain HTTP mirrors are fine:
 signatures carry integrity.
 
 Metadata, all Ed25519 with raw 64-byte signatures over the exact bytes and raw 32-byte keys (base64 inside `trust.json`):
@@ -6130,7 +6130,7 @@ manifest's `verity_root_hash` (`roothash_mismatch`, `image_invalid`).
 with label, sequence and root hash), `channel`, `available` (only when newer than the booted version), `phase`
 (`idle`, `checking`, `downloading`, `writing`, `staged`, `armed`, `booted`, `committed`, `rolled_back`), `rollback_floor`,
 `channel_serial`, `state_format` and the latest `operation` and `failure`. It reconciles the record with the boot entries on the disks:
-an armed release whose UKI lost its counter is `committed` (the old version becomes `previous`); one whose entries all ran out of
+an armed release whose boot entry lost its counter is `committed` (the old version becomes `previous`); one whose entries all ran out of
 tries is `rolled_back` with `failure.code` `boot_failed`. While the phase is `armed`, `failure.code` can also be `reboot_failed` (the restart after arming failed), `arm_incomplete` (arming failed on a later disk and could not be undone, so the release is treated as armed) or `rollback_incomplete` (a rollback changed some disks and failed on another); each clears when the release boots, when the call is repeated successfully, or when the next reconcile finds the boot entry gone (the phase then returns to `staged`, or `idle` if no stage is recorded, with the running release's layers restored). State is `/var/lib/nex/image/state.json`, `update` subtree, Core-owned; the
 disks stay the truth and a lost file is rebuilt from them (the previous-version record is not: rollback then reports
 `nothing_to_roll_back`).
@@ -6139,7 +6139,7 @@ disks stay the truth and a lost file is rebuilt from them (the previous-version 
 |---|---|
 | `POST /api/local/v1/updates/check` | refresh and verify metadata → `200` `ImageUpdateStatus`; `429 check_throttled` within 60 s of the last successful check (`Retry-After: 60`); `503 source_unreachable` / `source_unconfigured`; `502` for refused metadata |
 | `POST /api/local/v1/updates/apply` | `{request_id, sequence?, scope, activate, running_vms}` → `202` `ImageUpdateOperation`, background: check, download, write the inactive slot on every disk. `activate: stage_only` (default) never changes the next boot; `reboot` also arms and reboots. `scope: controller` swaps the Controller appliance's system image instead (see [Controller appliance swap](#controller-appliance-swap-and-controller_first-phase-i-4b)); it is `409 scope_unavailable` on a host with no appliance engine |
-| `POST /api/local/v1/updates/activate` | `{request_id, running_vms?}` → `202`; arms the staged release (its UKI `nex-core_<label>_<sequence>+3.efi` is written to a `.new` file, flushed and renamed on each ESP, beside the running version's) and reboots. The only call that arms. A failed arm on a later disk is undone on every disk reached and leaves the release `staged`; if the undo fails too, the call is `500 arm_incomplete`, the record stays `armed` and no reboot is scheduled. On an `armed` release that has not booted, activate no longer answers `409 nothing_staged`: it re-issues the reboot (a new `request_id`, or a replay whose reboot failed; reconcile never reboots on its own, so the running-VMs policy always applies), except after `arm_incomplete`, where it first tries to take the boot entry back from every disk (`500 arm_incomplete` if a disk cannot be cleaned) and then arms again |
+| `POST /api/local/v1/updates/activate` | `{request_id, running_vms?}` → `202`; arms the staged release (its kernel, initrd and slot entry are written to each boot partition with three boot tries in `grub/grubenv`, the entry last through a `.new` file that is flushed and renamed, beside the running version's) and reboots. The only call that arms. A failed arm on a later disk is undone on every disk reached and leaves the release `staged`; if the undo fails too, the call is `500 arm_incomplete`, the record stays `armed` and no reboot is scheduled. On an `armed` release that has not booted, activate no longer answers `409 nothing_staged`: it re-issues the reboot (a new `request_id`, or a replay whose reboot failed; reconcile never reboots on its own, so the running-VMs policy always applies), except after `arm_incomplete`, where it first tries to take the boot entry back from every disk (`500 arm_incomplete` if a disk cannot be cleaned) and then arms again |
 | `POST /api/local/v1/updates/rollback` | `{request_id, running_vms?}` → `202`; arms the retained previous version and reboots. During the trial boot of an update (phase `booted`) it arms the release that update replaced (the running one is marked exhausted, and once the replaced release is blessed the abandoned update is the retained previous); while an update is armed but has not booted yet it is `409 already_armed`. After a partial failure (`500 rollback_incomplete`) the record is `armed` on the previous release with its layers; repeating the call finishes the remaining disks. A rollback that failed before any disk changed stays `409 previous_unavailable` |
 | `POST /api/local/v1/updates/cancel` | `{request_id}` → `200`; stops a running apply or discards a staged release; `409 already_armed`, `409 write_in_progress`, `409 nothing_to_cancel`; `409 update_in_progress` while an activate or rollback is the running operation; in the `arm_incomplete` state cancel first tries to disarm every disk and then discards the stage as usual (`500 arm_incomplete` if a disk cannot be cleaned, `409 already_armed` if the release booted) |
 
@@ -6232,8 +6232,8 @@ until then), cancelling a staged release prunes the staged release's layers, and
 read. A release that carries layers on a host without a layer store is `409 layers_unavailable`.
 
 **Settings.** `PUT /api/local/v1/updates/settings` `{channel, base_url}` → `200` `{channel, base_url}`. `channel` is 1–32 lower-case
-letters, digits or `-`, starting with a letter (`400 invalid_channel`); `base_url` is empty (clears the source: there is no built-in
-default) or an `https` or explicit `http` URL without credentials, query or fragment, at most 2048 characters (`400 invalid_base_url`).
+letters, digits or `-`, starting with a letter (`400 invalid_channel`); `base_url` is empty (returns to the default,
+`https://nexvirtualization.com/updates`) or an `https` or explicit `http` URL without credentials, query or fragment, at most 2048 characters (`400 invalid_base_url`).
 Plain `http` is allowed because signatures and blob hashes carry integrity. The values are written to `/etc/nex/updates.conf` (other
 lines are kept) and take effect for the next check; the pointer history (`channel_serial`) belongs to the update server and channel it came
 from, so a changed source starts empty, an earlier source keeps its own and a bundle's other channels never share the configured one's,

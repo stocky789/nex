@@ -1,7 +1,7 @@
 [Unit]
 Description=Nex Core boot assessment
 # Gates boot-complete.target (a static boot-complete.target.requires link, not a preset), so
-# systemd-bless-boot only commits an image that passed. It is ordered after the services it
+# nex-bless-boot.service only commits an image that passed. It is ordered after the services it
 # judges and nothing else: never after chrony-wait, time-sync.target or network-online.target, whose
 # stalls (no clock source, no link) are not image faults and would burn the boot tries.
 DefaultDependencies=no

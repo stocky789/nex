@@ -21,6 +21,9 @@ import (
 	"nex.local/nex/internal/vmhost"
 )
 
+// DefaultBaseURL is the project's update tree: <base>/<channel>/channel.json.
+const DefaultBaseURL = "https://nexvirtualization.com/updates"
+
 // Paths of the host image. Tests replace them; a host never does.
 var (
 	OSReleasePath   = "/usr/lib/os-release"
@@ -95,8 +98,8 @@ func HostRunningVMs(ctx context.Context) ([]string, error) {
 }
 
 // ImageSettings reads the update base URL and channel: NEX_UPDATE_BASE_URL and NEX_UPDATE_CHANNEL,
-// else base_url= and channel= in /etc/nex/updates.conf. There is no built-in base URL: it is
-// configuration only. The channel defaults to stable.
+// else base_url= and channel= in /etc/nex/updates.conf. The base URL defaults to DefaultBaseURL and the
+// channel to stable.
 func ImageSettings() (baseURL, channel string) {
 	baseURL, channel = strings.TrimSpace(os.Getenv("NEX_UPDATE_BASE_URL")), strings.TrimSpace(os.Getenv("NEX_UPDATE_CHANNEL"))
 	if b, err := os.ReadFile(UpdatesConfig); err == nil {
@@ -109,6 +112,9 @@ func ImageSettings() (baseURL, channel string) {
 				channel = strings.TrimSpace(v)
 			}
 		}
+	}
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
 	}
 	if channel == "" {
 		channel = "stable"

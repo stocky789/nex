@@ -467,7 +467,7 @@ func (biosBoot) disarm(root string, sequence int) error {
 	return syncDir(filepath.Join(root, biosDir))
 }
 
-// rollback follows rollbackESP: the previous entry gets a fresh counter first (the running one, with the higher
+// rollback: the previous entry gets a fresh counter first (the running one, with the higher
 // sequence, still wins and boots if the host is interrupted here), then the running one is marked exhausted.
 func (biosBoot) rollback(root string, from, to int) (changed bool, err error) {
 	envPath := filepath.Join(root, filepath.FromSlash(biosEnv))

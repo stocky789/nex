@@ -1,0 +1,28 @@
+{
+  "summary": "Start version 0.4.32: move the unreleased UEFI boot fix under a numbered changelog heading.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-10-07-version-0.4.32.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only the changelog-derived version heading changes; the install guide was updated with the UEFI boot change itself."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Version numbering changes no client, Controller/Core or observed-result contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Version numbering changes no milestone or acceptance gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Version labels and release notes create no durable product state."
+  },
+  "verification": {
+    "method": "Changelog-derived version resolution and documentation structure checks.",
+    "evidence": ["CHANGELOG.md", "scripts/release-version.py", "tests/test_release_version.py"]
+  }
+}

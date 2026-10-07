@@ -16,34 +16,6 @@ import (
 	"testing"
 )
 
-// biosMarkTried is what the GRUB menu does when it boots the entry of seq once: one try fewer, saved.
-func biosMarkTried(root string, seq int) error {
-	slots, env, err := readSlots(root)
-	if err != nil {
-		return err
-	}
-	for _, s := range slots {
-		if s.Entry.Sequence == seq && s.Counted && s.Tries > 0 {
-			env[triesVar(s.Slot)] = strconv.Itoa(s.Tries - 1)
-		}
-	}
-	return writeGrubEnv(filepath.Join(root, filepath.FromSlash(biosEnv)), env)
-}
-
-// biosBless is what the bless step does to the entry of seq: its counter goes.
-func biosBless(root string, seq int) error {
-	slots, env, err := readSlots(root)
-	if err != nil {
-		return err
-	}
-	for _, s := range slots {
-		if s.Entry.Sequence == seq {
-			delete(env, triesVar(s.Slot))
-		}
-	}
-	return writeGrubEnv(filepath.Join(root, filepath.FromSlash(biosEnv)), env)
-}
-
 // assertBootable checks what the menu relies on: every entry names a kernel directory whose kernel and initrd are
 // there. A boot partition for which this fails could be left unbootable by a power cut.
 func assertBootable(t *testing.T, root string) {
@@ -663,7 +635,7 @@ func twoReleasePartition(t *testing.T) (root string, rel1, rel2 *Release) {
 	if err := BIOS.arm(root, rel2, "b", ArmTries); err != nil {
 		t.Fatal(err)
 	}
-	if err := biosBless(root, 2); err != nil {
+	if err := Bless(root, 2); err != nil {
 		t.Fatal(err)
 	}
 	return root, rel1, rel2
@@ -815,7 +787,7 @@ func TestBIOSRollbackAndDisarmOnTheEntries(t *testing.T) {
 // sysfs, mounts, the by-uuid links and the kernel command line of the booted one.
 func fakeBIOSSystem(t *testing.T, booted, cmdlineExtra string, parts map[string]string) {
 	t.Helper()
-	fakeSystem(t, "", parts)
+	fakeSystem(t, parts)
 	oldCmd, oldUUID := procCmdline, devByUUID
 	dir := t.TempDir()
 	procCmdline, devByUUID = filepath.Join(dir, "cmdline"), filepath.Join(dir, "by-uuid")
@@ -920,7 +892,7 @@ func TestBlessBootAndTriesOnBIOS(t *testing.T) {
 	if err := BIOS.arm(root, rel2, "b", ArmTries); err != nil {
 		t.Fatal(err)
 	}
-	if err := biosMarkTried(root, 2); err != nil {
+	if err := MarkTried(root, 2); err != nil {
 		t.Fatal(err)
 	}
 	fakeBIOSSystem(t, "vda1", "roothash="+rel2.Manifest.RootHash+" nex.slot=b", map[string]string{"vda1": root})
@@ -957,9 +929,6 @@ func TestBlessBootAndTriesOnBIOS(t *testing.T) {
 	os.WriteFile(procCmdline, []byte("ro\n"), 0o644)
 	if err := w.BlessBoot(ctx, true); !errors.Is(err, errNotBIOSBooted) {
 		t.Errorf("bless without the menu's marker: %v", err)
-	}
-	if err := (&Writer{Runner: &recorder{}, Boot: UEFI}).BlessBoot(ctx, true); !errors.Is(err, errUEFIBless) {
-		t.Errorf("UEFI bless: %v", err)
 	}
 }
 

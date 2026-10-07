@@ -154,9 +154,9 @@ option as approval. These instructions cannot enable a question UI the client la
   means: do not fork, patch or re-package Debian software for the image, and do not replace Debian's init, kernel
   or libvirt stack; compose the image from Debian packages and configure it through Debian's supported mechanisms
   (units, drop-ins, presets, `/etc`).
-  **Decision: project owner, 2026-10-06.** A Nex Core host is a signed read-only image with A/B slot updates, on UEFI
-  (systemd-boot and a signed UKI) and on BIOS (GRUB) alike (plan decision D2); Debian Installer writes it and there is no
-  other host form. Do not market immutability: it is the baseline, so write docs and UI as "Nex Core" without a label.
+  **Decision: project owner, 2026-10-06, amended 2026-10-07.** A Nex Core host is a signed read-only image with A/B slot
+  updates, booted by GRUB on UEFI (shim and Debian-signed GRUB) and on BIOS alike (plan decision D2); Debian Installer
+  writes it and there is no other host form. Do not market immutability: it is the baseline, so write docs and UI as "Nex Core" without a label.
   Releases carry one root signature (the update trust chain of `docs/plans/2026-10-01-immutable-nex-core.md`); there is
   no remote publishing from agents.
 - Product hierarchy: **Sites → Pools (one master host + members) → Hosts → VMs**. Pool is the

@@ -17,10 +17,11 @@ var efiFirmwareDir = "/sys/firmware/efi"
 // is shared. Each method works on a mounted boot partition (the partition labelled nex-esp, which BIOS hosts also
 // use for their GRUB files):
 //
-//   - UEFI: shim and systemd-boot load a signed UKI named nex-core_<label>_<sequence>[+tries[-done]].efi; the
-//     boot loader counts the tries by renaming the file and systemd-bless-boot drops the counter.
-//   - BIOS: GRUB, installed in the MBR of every disk, reads one entry per slot (nex/a.cfg, nex/b.cfg) and counts
-//     nex_tries_<slot> in grub/grubenv; Core clears it (bless).
+// Both run the same GRUB menu: it reads one entry per slot (nex/a.cfg, nex/b.cfg) and counts nex_tries_<slot> in
+// grub/grubenv; Core clears it (bless). They differ in how the firmware reaches GRUB:
+//
+//   - UEFI: shim and the Debian-signed GRUB on the ESP, started by a firmware boot entry (uefi.go).
+//   - BIOS: GRUB installed in the MBR of every disk (bios.go).
 //
 // In both, the entry of a release appearing is the commit point and is written last.
 type BootMethod interface {
@@ -152,8 +153,7 @@ func (w *Writer) ESPSync(ctx context.Context) error {
 
 var errNotBlessed = errors.New("boot entry not blessed")
 
-// BlessBoot marks the running entry good or bad on the boot partition it started from. UEFI hosts do this with
-// systemd-bless-boot.
+// BlessBoot marks the running entry good or bad on the boot partition it started from.
 func (w *Writer) BlessBoot(ctx context.Context, good bool) error {
 	return w.method().bless(ctx, w, good)
 }

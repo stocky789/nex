@@ -131,6 +131,7 @@ def run_installer(work, iso, disks, ctl, vars_file, budget=480, kill_on=None, la
     proc, con = qemu(work, disks, iso=iso, ctl=ctl, vars_file=vars_file, log=f"{label}.log", **kw)
     start = time.time()
     state = "timeout"
+    answered = False
     try:
         while time.time() - start < budget:
             try:
@@ -151,6 +152,11 @@ def run_installer(work, iso, disks, ctl, vars_file, budget=480, kill_on=None, la
             if proc.poll() is not None:
                 state = "done"
                 break
+            # The installer waits on its "Installation complete" screen; Continue restarts the host.
+            if "Installation complete" in text and not answered:
+                proc.stdin.write(b"\r")
+                proc.stdin.flush()
+                answered = True
     finally:
         text = con.log_text()
         stop(proc)

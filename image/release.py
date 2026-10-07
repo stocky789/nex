@@ -33,7 +33,10 @@ VERITY_UUID = "5e1ec7ed-0000-4000-8000-0000000000e2"
 VERITY_SALT = "5e1ec7ed000040008000000000000e3a5e1ec7ed000040008000000000000e3a"
 # /var is the data volume at run time; the dpkg database was saved by mkosi.finalize for the layer builds.
 EXCLUDES = ["var/lib/dpkg", "var/lib/apt", "var/cache", "var/log", "boot", "efi", "dev", "proc", "sys", "run", "tmp"]  # contents only; the directories stay as mount points
-CMDLINE = "ro console=tty0 console=ttyS0,115200n8 panic=10 systemd.firstboot=off systemd.ssh_auto=no"
+# quiet: the console shows kernel warnings and errors and systemd's status only on errors or a slow boot. Without it
+# the kernel prints every audit record (each unit start and stop) there, as no audit daemon runs; the journal keeps
+# everything.
+CMDLINE = "ro console=tty0 console=ttyS0,115200n8 quiet panic=10 systemd.firstboot=off systemd.ssh_auto=no"
 
 
 def run(*args, **kw):
@@ -50,7 +53,7 @@ def sha256(path):
 
 
 def uki_os_release(name, image_id):
-    """os-release embedded in a UKI. sd-boot orders the entries of one IMAGE_ID by IMAGE_VERSION (VERSION only
+    """os-release embedded in a UKI. sd-boot (the Controller guest's loader) orders the entries of one IMAGE_ID by IMAGE_VERSION (VERSION only
     when that is absent), compared as version strings, newest first. Both carry the zero-padded sequence alone,
     so that order is the numeric sequence order nex-hostimage assumes whatever the label looks like."""
     return (f'NAME="{name}"\nID={image_id}\nPRETTY_NAME="{name} {LABEL} ({SEQ})"\nVERSION_ID="{LABEL}"\n'
@@ -128,26 +131,27 @@ def microcode_cpio(tree, dst):
                        cwd=stage, input=names, stdout=f, check=True)
 
 def boot_files(tree, esp):
-    """Firmware -> Microsoft-signed shim -> Debian-signed sd-boot -> Nex-signed UKI (trusted through the MOK).
+    """Firmware -> Microsoft-signed shim -> Debian-signed GRUB -> Debian-signed kernel, the boot chain of a Debian install.
 
-    shim starts the loader named grubx64.efi in its own directory, so the removable path holds shim as
-    BOOTX64.EFI and sd-boot as grubx64.efi, with MokManager beside them for enrolment. With Secure Boot off
-    shim starts sd-boot the same way. The sd-boot copy under EFI/systemd is the firmware boot entry's target.
-    Signed binaries only: an unsigned loader would not start on a Secure Boot host.
+    shim starts the loader named grubx64.efi in its own directory, so the removable path holds shim as BOOTX64.EFI and
+    GRUB as grubx64.efi, with MokManager beside them; the firmware boot entry names the same shim. Debian's signed GRUB
+    reads EFI/debian/grub.cfg (its built-in prefix), which hands over to the A/B menu nex-hostimage writes at
+    grub/grub.cfg; the menu boots the kernel and initrd nex-hostimage takes out of the UKI. Signed binaries only: an
+    unsigned loader would not start on a Secure Boot host.
     """
-    shim, boot = f"{tree}/usr/lib/shim", f"{tree}/usr/lib/systemd/boot/efi"
-    sdboot = f"{boot}/systemd-bootx64.efi.signed"
-    for src, dst in ((f"{shim}/shimx64.efi.signed", "EFI/BOOT/BOOTX64.EFI"), (sdboot, "EFI/BOOT/grubx64.efi"),
-                     (f"{shim}/mmx64.efi.signed", "EFI/BOOT/mmx64.efi"), (sdboot, "EFI/systemd/systemd-bootx64.efi")):
+    shim = f"{tree}/usr/lib/shim"
+    for src, dst in ((f"{shim}/shimx64.efi.signed", "EFI/BOOT/BOOTX64.EFI"), (f"{shim}/mmx64.efi.signed", "EFI/BOOT/mmx64.efi"),
+                     (f"{tree}/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed", "EFI/BOOT/grubx64.efi")):
         shutil.copy(src, f"{esp}/{dst}")
+    with open(f"{esp}/EFI/debian/grub.cfg", "w") as f:
+        f.write("configfile /grub/grub.cfg\n")
 
 
 def release():
     rel = f"{OUT}/release"
     shutil.rmtree(rel, ignore_errors=True)
     os.makedirs(f"{rel}/esp/EFI/BOOT")
-    os.makedirs(f"{rel}/esp/EFI/systemd")
-    os.makedirs(f"{rel}/esp/loader")
+    os.makedirs(f"{rel}/esp/EFI/debian")
     for name in ("root.erofs", "root.verity", "roothash"):
         shutil.copy(f"{OUT}/{name}", f"{rel}/{name}")
     roothash = open(f"{OUT}/roothash").read().strip()
@@ -173,8 +177,6 @@ def release():
     run(*ukify, env=env)
 
     boot_files(TREE, f"{rel}/esp")
-    with open(f"{rel}/esp/loader/loader.conf", "w") as f:
-        f.write("timeout 3\nconsole-mode keep\neditor no\n")
 
     files = {}
     for root, _, names in os.walk(rel):
@@ -200,7 +202,7 @@ def release():
 CTREE = f"{OUT}/controller"
 CREL = f"{OUT}/controller-release"
 CESP_SIZE = 128 << 20
-CMDLINE_CONTROLLER = "ro console=tty0 console=ttyS0,115200n8 panic=10 systemd.firstboot=off"
+CMDLINE_CONTROLLER = "ro console=tty0 console=ttyS0,115200n8 quiet panic=10 systemd.firstboot=off"
 GPT_LABEL_ID = "5e1ec7ed-0000-4000-8000-0000000000c0"
 GPT_ESP_ID = "5e1ec7ed-0000-4000-8000-0000000000c1"
 GPT_ESP, GPT_ROOT, GPT_VERITY = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b", "4f68bce3-e8cd-4db1-96e7-fbcaf984b709", "2c7357ed-ebd2-46d9-aec1-23d437ec2bf5"
@@ -228,11 +230,9 @@ def controller():
     with open(osrel, "w") as f:
         f.write(uki_os_release("Nex Controller", "nex-controller"))
     overlay = "/tmp/nex-controller-initrd.cpio"
-    # The guest's UKI has no boot counter: a failed initrd step reboots after a pause (nex-initrd-reboot-paced.service),
-    # never to a locked shell. The counted-reboot unit is skipped there (no counter) but the shared drop-ins name it.
+    # A failed initrd step reboots after a pause (nex-initrd-reboot-paced.service), never to a locked shell.
     initrd_overlay(overlay, only=["usr/lib/systemd/system/nex-etc-overlay.service",
                                   "usr/lib/systemd/system/initrd-fs.target.wants/nex-etc-overlay.service",
-                                  "usr/lib/systemd/system/nex-initrd-reboot.service",
                                   "usr/lib/systemd/system/nex-initrd-reboot-paced.service",
                                   "usr/lib/systemd/system/emergency.service.d/10-nex-reboot.conf",
                                   "usr/lib/systemd/system/rescue.service.d/10-nex-reboot.conf"])

@@ -18,6 +18,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Minor Feature
+
+- Releases now publish a signed update tree to the project's update server for the stable and development channels, so hosts built from this release on can check for and install updates.
+
 ### Bug Fixes
 
 - The installer no longer stops with "The new data volume … is missing." on virtual machines whose disks appear slowly or whose mirror is assembled under another name, such as Xen, and it now shows the reason when the mirror cannot be assembled.
@@ -26,6 +30,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - eMMC and SD cards can now be chosen as installation disks.
 - Nex Core now ships Debian's device firmware for common server network and storage adapters (Broadcom, QLogic, Realtek, Intel, Chelsio and others) and loads Intel/AMD CPU microcode at boot, as a normal Debian install does. The installer environment itself does not carry device firmware yet.
 - **Discover targets** for iSCSI storage now works on an installed Nex Core. Before, it always reported "storage discovery is unavailable" for a reachable portal, because the host never loaded the iSCSI TCP transport its sandboxed agent needs. The fix takes effect after the host updates and restarts; until then, running `modprobe iscsi_tcp` on the host as root makes discovery work until the next reboot.
+- Deploy Controller works again on a host installed from the image: it uses the Controller image the installer placed, instead of reporting "appliance manifest unavailable".
+- A new Nex Core host checks the project's update server by default, so Settings → Updates no longer reports "no update base URL is configured" on a fresh install.
+- The installer shows its "Installation complete" page again when it finishes, and restarts the host only after you choose **Restart now** (or **Continue** in the text installer). Before, it restarted the server on its own and flashed an X server error on the way down.
+- The local console of a Nex Core host is quiet: kernel audit messages for every service start and stop no longer scroll over the login prompt. Warnings and errors still show, and the system journal keeps everything.
+
+### Miscellaneous
+
+- The Software updates page says "No newer release" instead of "Nothing newer is known" when nothing newer is available.
+
+## [0.4.32] — 2026-10-07
+
+### Bug Fixes
+
+- Nex Core hosts on UEFI firmware now boot through shim and Debian's signed GRUB, with the same A/B boot menu BIOS hosts use. Before, some servers (seen on Dell) started the installed system without its initrd and restarted in a loop with "Unable to mount root fs on unknown-block(0,0)". Hosts installed with an earlier development build must be repaired (**Repair**) or reinstalled (**Erase and install**) from the new installer.
+- With Secure Boot on, an installed host now starts without enrolling a Nex key: shim checks Debian's signed GRUB and kernel.
 
 ## [0.4.31] — 2026-10-06
 

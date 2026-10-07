@@ -13,9 +13,9 @@ import (
 	"sync"
 )
 
-// A BIOS host cannot start a UKI, so its boot entry carries the kernel, the initrd and the command line that the
-// release's signed UKI is made of. They are taken out of the UKI itself, never from a second copy: the release
-// signature covers the UKI, and one file means the UEFI and the BIOS entry of a release cannot disagree.
+// GRUB starts the kernel and initrd as files, so a boot entry carries the kernel, the initrd and the command line
+// that the release's UKI is made of. They are taken out of the UKI itself, never from a second copy: the release
+// signature covers the UKI, and one file means the boot entry cannot disagree with the release.
 
 // Section names of a UKI (systemd's UKI specification). The first profile's sections are the ones used.
 const (
@@ -31,7 +31,7 @@ type blob struct {
 	sha  string
 }
 
-// ukiParts is what a BIOS boot entry takes from a UKI.
+// ukiParts is what a boot entry takes from a UKI.
 type ukiParts struct {
 	cmdline        string
 	kernel, initrd blob

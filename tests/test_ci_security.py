@@ -146,8 +146,8 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
                 text = (ROOT / provider / 'workflows/release.yml').read_text()
                 # Publishing and its reachability check must share one gate; verifying
                 # behind a different condition would let an unpublished release pass.
-                # Node setup, website build, APT/downloads/site publish, and reachability.
-                self.assertEqual(text.count("if: steps.deploy.outputs.enabled == 'true'"), 4)
+                # Node setup, website build, downloads/site publish, update tree publish, and reachability.
+                self.assertEqual(text.count("if: steps.deploy.outputs.enabled == 'true'"), 5)
                 self.assertIn('scripts/website-ci-deploy.sh', text)
                 self.assertIn('npm --prefix website run build', text)
                 self.assertIn('NEX_VERSION: ${{ steps.version.outputs.version }}', text)

@@ -12733,3 +12733,30 @@ of real storage or hardware certification.
 - Fix: wait for every member node, assemble once they exist, follow an array under any name, keep mdadm's output and stop the resolved device; load `raid1`/`ext4`/`vfat` through the module udebs when absent; include every storage driver directory in the initrd; `core-local-setup init` leaves `/run/nex/waiting-for-address` while it waits and `nex-boot-check` accepts it; `mmcblk*` is an eligible disk.
 - Regression: `tests/test_core_local_package.py::test_failed_discovery_and_stop_clear_previous_console_url` (marker) passes under Linux. The RAID logic was exercised with a shell harness (stubbed mdadm and sysfs: array already as md127, late nodes, failing assemble) and gave the intended result in each. Not done: an ISO build, an install on Xen/Hyper-V/VMware/eMMC, a boot of the widened initrd (the mkosi include patterns were not run through mkosi), and a real unplugged-cable boot.
 - Avoid: hand-picking initrd drivers, treating "no address yet" as an image fault, hiding a tool's error behind `|| true`, and trusting a device name over the device's members.
+
+## BUG-1935 — Controller could not be deployed on an installed image host
+
+- Date: 2026-10-07.
+- Symptom: Overview showed **Deployment needs attention: appliance manifest unavailable** and Deploy Controller stayed disabled on a host installed from the image.
+- Root cause: `core-local-setup` only selected the two-disk Controller profile when `controller_image_sha256` was configured, and nothing on an installed host sets it. Without it Core fell back to the retired single-disk appliance manifest, which image hosts do not carry, although the installer had placed `controller-system.img` under `/var/lib/nex/payload/<sha256>/`.
+- Fix: with no configured digest, `controller_system_image` uses the newest `payload/<sha256>/controller-system.img`; the engine still checks that digest against the bytes while it copies the image.
+- Regression: `python3 -m unittest tests.test_core_local_package` (`test_controller_image_placed_by_the_installer_is_used_without_configuration`; it fails without the fix), run by the forge's `tests/` job. On the affected lab host, configuring the same digest by hand turned the preflight to ready with no blockers; a Controller deployment itself was not run.
+- Avoid: reading a missing digest as "no Controller image"; leaving the retired single-disk fallback as the only route on a host that has the system image.
+
+## BUG-1936 — Installed UEFI host panicked without its initrd on Dell firmware
+
+- Date: 2026-10-07.
+- Symptom: on the Dell server of BUG-1932 (UEFI, Secure Boot off), the installed host started its kernel from the new boot entry and panicked with `VFS: Cannot open root device "" or unknown-block(0,0)`, listing no partitions and only `fuseblk`, then rebooted after 10 seconds (`panic=10`, so the kernel and command line of the Nex UKI) in a loop. The same release's shim, systemd-boot and UKI booted in QEMU/OVMF, through shim and with systemd-boot started directly.
+- Root cause: not established. The kernel ran without the initrd that systemd-stub hands over from the UKI; the console lines that would say why were not captured. The pre-image Debian install, booted by shim, Debian-signed GRUB and a separate kernel and initrd, booted on the same server.
+- Fix: UEFI hosts boot that chain (project owner decision, plan D2 amended): shim, the Debian-signed GRUB and the same A/B GRUB menu as BIOS hosts, with the kernel and initrd taken out of the release's UKI; systemd-boot, systemd-bless-boot and UKI file-name counters are no longer used on hosts.
+- Regression: `go test ./internal/hostimage` (TestInstallSingleDisk checks the shim, signed GRUB, `EFI/debian/grub.cfg`, the menu and an `efibootmgr` entry for `\EFI\BOOT\BOOTX64.EFI`; TestUEFIBootPartitionCarriesTheLoaderAndTheMenu checks arm and convergence) and `python3 -m unittest tests.test_image_composition` (BootChainTest), both in the forge's Go and `tests/` jobs. QEMU/OVMF with the dev.292 kernel and initrd under signed GRUB: booted with Secure Boot off and on. The Dell boot itself is outstanding until the next development build is installed there.
+- Avoid: taking a QEMU/OVMF boot as proof that a firmware hands the UKI's initrd to the kernel; changing the boot chain without a boot on the hardware that failed.
+
+## BUG-1937 — Installer restarted without a completion page
+
+- Date: 2026-10-07.
+- Symptom: at the end of an install the server restarted by itself; the console showed `Fatal server error: Server is already active for display 0` and `The system is going down NOW!`, which looked like a crash. The GUI's "Nex Core installation complete" page with **Restart now** never appeared.
+- Root cause: the image install runs from the partitioner hook and never returns, so Debian Installer's finish-install, whose `finish-install/reboot_in_progress` question the Nex GTK frontend draws as the completion page, never ran. `nex-image-install.sh` called `reboot` after a 10 s pause; the X error is the installer's wrapper restarting X while the reboot kills it.
+- Fix: `finish()` loads a `finish-install/reboot_in_progress` note and asks it through debconf before it restarts; without a frontend (a test run) it keeps the pause.
+- Regression: `installer/check.sh` fails unless `finish()` asks that question before `reboot` (seen failing with the reboot moved). `tests/integration/image_install_lab.py single` (QEMU/OVMF, text frontend, lab ISO from `image_iso_lab.py` with the dev.293 release): the install stopped on "Installation complete … Nex Core is installed on /dev/vda", the lab answered Continue, the host restarted and booted (erofs root, dm-verity, `/etc` overlay, API sign-in). The GTK page itself was not driven in the lab.
+- Avoid: restarting from the image installer without the completion question; reading the X error at shutdown as an install failure.

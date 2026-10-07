@@ -27,10 +27,11 @@ exists, see below). A Nex-hosted Debian mirror is not needed: the image is alrea
 ## Disk layout and boot (development, simulated install only)
 
 - **Firmware.** The installer detects whether it was started under UEFI or BIOS and installs the matching boot
-  method; the system image, slots and update logic are the same. On UEFI, shim and systemd-boot start a signed boot
-  image. On BIOS, GRUB in the MBR of every selected disk reads a per-slot entry from the boot partition and starts the
-  same image. BIOS has no Secure Boot and GRUB cannot authenticate the kernel command line, so the root hash is not
-  signature-protected before the kernel runs there; dm-verity still checks every block of the root when it is read, and
+  method; the system image, slots, boot menu and update logic are the same. On UEFI, a firmware boot entry on every
+  selected disk starts shim and Debian's signed GRUB from the boot partition; on BIOS, GRUB starts from the MBR of every
+  selected disk. Either way GRUB reads a per-slot entry from the boot partition and starts the image. GRUB cannot
+  authenticate the kernel command line, and BIOS has no Secure Boot, so the root hash is not signature-protected
+  before the kernel runs (with Secure Boot on, shim still checks GRUB and the kernel); dm-verity still checks every block of the root when it is read, and
   the release signature still covers the image and every update. A 1 MiB BIOS boot partition on every disk makes the
   same layout bootable under either firmware.
 - **24 GiB minimum** per disk: two slots, a boot partition, and a data volume that holds a

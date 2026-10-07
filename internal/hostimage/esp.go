@@ -11,19 +11,15 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf16"
 )
 
 const (
-	ukiDir     = "EFI/Linux"
-	tempSuffix = ".new" // never ends in .efi, so the boot loader ignores a half-written file
+	tempSuffix = ".new" // the menu and the firmware ignore a half-written file
 	// espLockWait bounds the wait for the ESP lock; nex-bless-boot holds it for one short mount, so this is
 	// far above any healthy hold and only a stuck holder reaches it.
 	espLockWait = 2 * time.Minute
@@ -31,26 +27,11 @@ const (
 
 // Paths the ESP code reads, replaced by tests.
 var (
-	loaderDevicePartUUID = "/sys/firmware/efi/efivars/LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
-	sysClassBlock        = "/sys/class/block"
-	devByPartUUID        = "/dev/disk/by-partuuid"
-	procMounts           = "/proc/self/mounts"
-	devDir               = "/dev"
-	espMountBase         = "/run/nex/esp"
+	sysClassBlock = "/sys/class/block"
+	procMounts    = "/proc/self/mounts"
+	devDir        = "/dev"
+	espMountBase  = "/run/nex/esp"
 )
-
-// ESPFile is one file an ESP must hold: Rel is the slash path below the ESP root, Path the source.
-type ESPFile struct {
-	Rel, Path string
-}
-
-// counterRE matches the boot-assessment counter in a UKI name: +tries or +tries-done.
-var counterRE = regexp.MustCompile(`\+\d+(-\d+)?\.efi$`)
-
-func isUKI(rel string) bool { return path.Dir(rel) == ukiDir && strings.HasSuffix(rel, ".efi") }
-
-// ukiStem is the UKI name without its counter: nex-core_x_3+2-1.efi -> nex-core_x_3.efi.
-func ukiStem(name string) string { return counterRE.ReplaceAllString(name, ".efi") }
 
 func sha256File(p string) (string, error) {
 	f, err := os.Open(p)
@@ -102,97 +83,6 @@ func syncDir(dir string) error {
 	return d.Sync()
 }
 
-// ConvergeESP makes the ESP mounted at root hold every desired file with the desired bytes.
-// Files outside EFI/Linux that are not desired are left alone. Under EFI/Linux the UKIs end up
-// exactly as desired (names include the boot counter). Order: everything but UKIs first, then the
-// UKIs, then the removal of UKIs that are no longer desired, so an interrupted run never leaves
-// the ESP without a bootable entry; every desired file is verified by SHA-256 at the end.
-func ConvergeESP(root string, desired []ESPFile) error {
-	var plain, ukis []ESPFile
-	want := map[string]string{}
-	for _, f := range desired {
-		sum, err := sha256File(f.Path)
-		if err != nil {
-			return err
-		}
-		want[f.Rel] = sum
-		if isUKI(f.Rel) {
-			ukis = append(ukis, f)
-		} else {
-			plain = append(plain, f)
-		}
-	}
-	if err := removeTemps(root); err != nil {
-		return err
-	}
-	for _, f := range plain {
-		dst := filepath.Join(root, filepath.FromSlash(f.Rel))
-		if sum, err := sha256File(dst); err == nil && sum == want[f.Rel] {
-			continue
-		}
-		if err := copyAtomic(f.Path, dst); err != nil {
-			return fmt.Errorf("write %s: %w", f.Rel, err)
-		}
-	}
-	for _, f := range ukis {
-		if err := placeUKI(root, f, want[f.Rel]); err != nil {
-			return fmt.Errorf("write %s: %w", f.Rel, err)
-		}
-	}
-	if err := pruneUKIs(root, want); err != nil {
-		return err
-	}
-	for rel, sum := range want {
-		got, err := sha256File(filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil || got != sum {
-			return fmt.Errorf("verify %s after writing: not the expected bytes (%v)", rel, err)
-		}
-	}
-	return syncTree(root)
-}
-
-// placeUKI installs one UKI. A file with the same stem and the same bytes under a different
-// counter (a blessed copy) is renamed instead of copied again.
-func placeUKI(root string, f ESPFile, sum string) error {
-	dir := filepath.Join(root, ukiDir)
-	dst := filepath.Join(root, filepath.FromSlash(f.Rel))
-	if got, err := sha256File(dst); err == nil && got == sum {
-		return nil
-	}
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		name := e.Name()
-		if name == path.Base(f.Rel) || !strings.HasSuffix(name, ".efi") || ukiStem(name) != ukiStem(path.Base(f.Rel)) {
-			continue
-		}
-		if got, err := sha256File(filepath.Join(dir, name)); err == nil && got == sum {
-			return os.Rename(filepath.Join(dir, name), dst)
-		}
-	}
-	return copyAtomic(f.Path, dst)
-}
-
-// pruneUKIs removes UKIs under EFI/Linux that are not desired.
-func pruneUKIs(root string, want map[string]string) error {
-	dir := filepath.Join(root, ukiDir)
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		rel := path.Join(ukiDir, e.Name())
-		if _, ok := want[rel]; !ok && strings.HasSuffix(e.Name(), ".efi") {
-			if err = os.Remove(filepath.Join(dir, e.Name())); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func removeTemps(root string) error {
 	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() && strings.HasSuffix(p, tempSuffix) {
@@ -209,21 +99,6 @@ func syncTree(root string) error {
 		}
 		return syncDir(p)
 	})
-}
-
-// ScanESP lists every file below an ESP root as desired state for another ESP.
-func ScanESP(root string) ([]ESPFile, error) {
-	var out []ESPFile
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || strings.HasSuffix(p, tempSuffix) {
-			return err
-		}
-		rel, err := filepath.Rel(root, p)
-		out = append(out, ESPFile{Rel: filepath.ToSlash(rel), Path: p})
-		return err
-	})
-	sort.Slice(out, func(i, j int) bool { return out[i].Rel < out[j].Rel })
-	return out, err
 }
 
 // mountedAt returns the mount point of a device node, if it is mounted anywhere.
@@ -331,43 +206,4 @@ func ESPNodes() ([]string, error) {
 	}
 	sort.Strings(nodes)
 	return nodes, nil
-}
-
-// BootedESP is the partition node of the ESP the running system was loaded from, as the boot
-// loader recorded it (LoaderDevicePartUUID). It is empty when the firmware did not boot us via
-// systemd-boot.
-func BootedESP() (string, error) {
-	b, err := os.ReadFile(loaderDevicePartUUID)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	uuid, err := parseEFIString(b)
-	if err != nil {
-		return "", err
-	}
-	node, err := filepath.EvalSymlinks(filepath.Join(devByPartUUID, strings.ToLower(uuid)))
-	if err != nil {
-		return "", fmt.Errorf("boot partition %s: %w", uuid, err)
-	}
-	return node, nil
-}
-
-// parseEFIString decodes an efivarfs file: 4 attribute bytes, then a NUL-terminated UTF-16LE string.
-func parseEFIString(b []byte) (string, error) {
-	if len(b) < 6 {
-		return "", errors.New("EFI variable too short")
-	}
-	b = b[4:]
-	u := make([]uint16, 0, len(b)/2)
-	for i := 0; i+1 < len(b); i += 2 {
-		c := le.Uint16(b[i:])
-		if c == 0 {
-			break
-		}
-		u = append(u, c)
-	}
-	return string(utf16.Decode(u)), nil
 }

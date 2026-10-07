@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -48,17 +47,6 @@ var (
 func (r *Release) Erofs() string   { return filepath.Join(r.Dir, "root.erofs") }
 func (r *Release) Verity() string  { return filepath.Join(r.Dir, "root.verity") }
 func (r *Release) UKIPath() string { return filepath.Join(r.Dir, r.UKI) }
-
-// ESPFiles is what an ESP carries for this release: the esp/ tree plus the UKI under EFI/Linux.
-func (r *Release) ESPFiles() []ESPFile {
-	var out []ESPFile
-	for name := range r.Manifest.Files {
-		if rel, ok := strings.CutPrefix(name, "esp/"); ok {
-			out = append(out, ESPFile{Rel: rel, Path: filepath.Join(r.Dir, filepath.FromSlash(name))})
-		}
-	}
-	return append(out, ESPFile{Rel: path.Join(ukiDir, r.UKI), Path: r.UKIPath()})
-}
 
 // ReadRelease loads a release directory and verifies every listed file by size and SHA-256, the
 // roothash file against the manifest, and root.verity against root.erofs. Nothing in the directory

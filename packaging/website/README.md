@@ -60,6 +60,6 @@ the publish wrapper and passwordless sudo for the publishing account:
 sudo NEX_PUBLISH_USER=<publishing-user> packaging/website/bootstrap-publish.sh
 ```
 
-That creates `/srv/nex-downloads` owned by the publishing account (served at `/downloads/`),
+That creates `/srv/nex-downloads` owned by the publishing account (served at `/downloads/`) and `/srv/nex-updates` (the signed update tree, served at `/updates/`),
 installs `website-release.py`, `nex-website-publish`, and a sudoers rule so the
 account may run only `sudo -n /usr/local/sbin/nex-website-publish`. Re-running is safe.

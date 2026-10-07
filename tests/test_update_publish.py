@@ -123,6 +123,20 @@ class UpdatePublishTests(unittest.TestCase):
             self.assertEqual(sorted(archive.getnames()), ["esp/EFI/loader.efi", "manifest.json", "nex-core_1.1_2.efi", "root.erofs",
                                                           "root.verity", "roothash"])
 
+    def test_a_development_label_sorts_below_its_release(self):
+        self.assertEqual(self.publish("0.4.33-dev.294", 294)[0], 0)
+        self.assertEqual(self.publish("0.4.33", 300)[0], 0)
+        self.assertEqual(self.publish("0.4.34-dev.310", 310)[0], 0)
+        self.assertEqual(self.publish("0.4.33-dev.311", 311)[0], 1)
+
+    def test_prune_keeps_the_newest_releases_and_what_they_use(self):
+        for sequence in (1, 2, 3):
+            self.assertEqual(self.publish(f"1.{sequence}", sequence)[0], 0)
+        self.assertEqual(run("prune", "--base", str(self.base), "--keep", "1")[0], 0)
+        self.assertEqual(sorted(p.name for p in (self.base / "releases").iterdir()), ["3"])
+        wanted = {c["url"] for c in json.loads((self.base / "releases/3/manifest.json").read_text())["components"]}
+        self.assertEqual({f"blobs/{p.name}" for p in (self.base / "blobs").iterdir()}, wanted)
+
     def test_a_published_sequence_is_immutable(self):
         key = ["--release-key", str(self.keys / "release.key")]
         release = fake_release(self.tmp / "rel", "1.0", 1)

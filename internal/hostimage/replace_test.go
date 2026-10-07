@@ -512,15 +512,7 @@ func TestReplaceDiskRefusesBeforeWriting(t *testing.T) {
 		}, "running root hash"},
 		"a boot entry that is not blessed yet": {func(t *testing.T, r *replaceRig, req *ReplaceRequest) {
 			root := ESPRoot(NodeName(r.disks[0], ESPIndex))
-			if r.boot == BIOS {
-				if err := writeGrubEnv(filepath.Join(root, filepath.FromSlash(biosEnv)), grubEnv{triesVar("a"): "3"}); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			dir := filepath.Join(root, ukiDir)
-			name := ukiName("r1", 1, "")
-			if err := os.Rename(filepath.Join(dir, name), filepath.Join(dir, ukiName("r1", 1, "+3"))); err != nil {
+			if err := writeGrubEnv(filepath.Join(root, filepath.FromSlash(biosEnv)), grubEnv{triesVar("a"): "3"}); err != nil {
 				t.Fatal(err)
 			}
 		}, "not blessed"},
@@ -667,7 +659,7 @@ func TestESPSyncLeavesTheOtherBootPartitionsToARunningDiskOperation(t *testing.T
 	diskLockWait = 50 * time.Millisecond
 	sandbox(t)
 	booted, other := t.TempDir(), t.TempDir()
-	fakeSystem(t, "vda1", map[string]string{"vda1": booted, "vdb1": other})
+	fakeBIOSSystem(t, "vda1", "", map[string]string{"vda1": booted, "vdb1": other})
 	rec := &recorder{}
 	unlock, err := lockDisks(context.Background(), time.Second)
 	if err != nil {

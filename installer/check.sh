@@ -178,6 +178,10 @@ assert '--parents' not in build.split('stage_grub_bios() {')[1].split('\n}\n')[0
     'library copies go through the same symlinked layout; no silent cp fallback'
 assert 'stage_efibootmgr "$tree"' in build and 'efi=$stage/nex/efi' in build and 'prepare_efibootmgr' in Path('installer/nex-image-install.sh').read_text(), \
     'UEFI firmware needs an efibootmgr the installer environment lacks: it is staged at nex/efi and wrapped before the install'
+image_install = Path('installer/nex-image-install.sh').read_text()
+finish = image_install.split('finish() {')[1].split('\n}\n')[0]
+assert 'db_input critical finish-install/reboot_in_progress' in finish and finish.index('db_go') < finish.rindex('reboot'), \
+    'finish-install never runs after the image install: it must ask the completion question (the GUI completion page) before it restarts'
 assert 'install -m755 installer/root-account.sh "$stage/nex/root-account.sh"' in build, \
     'the preparation step reads the account hook from the media'
 assert 'dist/nex-source.tar.gz' in build and 'appliance/build.py --version' in build, 'ISO builds must regenerate corresponding source'

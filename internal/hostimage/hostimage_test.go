@@ -306,11 +306,17 @@ func TestInstallSingleDisk(t *testing.T) {
 		t.Errorf("ESP not formatted: %v", rec.calls)
 	}
 	esp := filepath.Join(espMountBase, filepath.Base(disk+"1"))
-	wantUKI, _ := os.ReadFile(filepath.Join(rel, "nex-core_r1_1.efi"))
-	for rel, want := range map[string]string{"EFI/BOOT/BOOTX64.EFI": "boot-loader", "loader/loader.conf": "timeout 0\n", "EFI/Linux/nex-core_r1_1.efi": string(wantUKI)} {
+	for rel, want := range map[string]string{"EFI/BOOT/BOOTX64.EFI": "shim", "EFI/BOOT/grubx64.efi": "grub", "EFI/debian/grub.cfg": "configfile /grub/grub.cfg\n"} {
 		if b, err := os.ReadFile(filepath.Join(esp, rel)); err != nil || string(b) != want {
 			t.Errorf("ESP %s: %q %v", rel, b, err)
 		}
+	}
+	assertBootable(t, esp)
+	if b, err := os.ReadFile(filepath.Join(esp, "grub/grub.cfg")); err != nil || !bytes.Equal(b, grubConfig()) {
+		t.Errorf("ESP has no boot menu: %v", err)
+	}
+	if want := "efibootmgr --create --disk " + disk + " --part 1 --label Nex Core " + filepath.Base(disk) + ` --loader \EFI\BOOT\BOOTX64.EFI`; rec.index(want) < 0 {
+		t.Errorf("no firmware boot entry for the shim: %v", rec.calls)
 	}
 	data := filepath.Join(mountBase, "data")
 	if b, err := os.ReadFile(filepath.Join(data, etcUpper, "hostname")); err != nil || string(b) != "host1\n" {
@@ -364,7 +370,7 @@ func TestInstallRAID1(t *testing.T) {
 		t.Error("empty slot B carries the same GUID on both disks")
 	}
 	for _, d := range []string{d1, d2} {
-		if _, err := os.Stat(filepath.Join(espMountBase, filepath.Base(d+"1"), "EFI/Linux/nex-core_r1_1.efi")); err != nil {
+		if _, err := os.Stat(filepath.Join(espMountBase, filepath.Base(d+"1"), "nex/a.cfg")); err != nil {
 			t.Errorf("ESP of %s: %v", d, err)
 		}
 	}

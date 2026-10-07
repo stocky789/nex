@@ -71,14 +71,13 @@ func run(args []string, stdout io.Writer) error {
 		}
 		return w.ESPSync(ctx)
 	case "bless":
-		// A BIOS host's counterpart of systemd-bless-boot: good drops the running entry's boot counter, bad
-		// exhausts its tries. UEFI hosts use systemd-bless-boot itself.
+		// good drops the running entry's boot counter, bad exhausts its tries.
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 1 || (fs.Arg(0) != "good" && fs.Arg(0) != "bad") {
 			return fmt.Errorf("usage: nex-hostimage bless good|bad")
 		}
 		return w.BlessBoot(ctx, fs.Arg(0) == "good")
 	case "boot-tries":
-		// Prints the boot tries the running entry has left; nothing when it is blessed. BIOS hosts only.
+		// Prints the boot tries the running entry has left; nothing when it is blessed.
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 			return fmt.Errorf("usage: nex-hostimage boot-tries")
 		}

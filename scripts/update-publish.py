@@ -19,6 +19,7 @@ environment) and refuses to run without one.
     update-publish.py publish --base B --release-dir D --source F --compliance F --channel dev
                               [--layer F]... [--on-demand-layer F]... [--payload vm-image:ID=F]...
                               [--no-mixed-pool] [--controller-first] [--min-controller-api-epoch N]
+    update-publish.py prune --base B [--keep 5]                 delete old releases and the blobs only they use
     update-publish.py promote --base B --channel stable --sequence N --release-key K
 
 Trust rotation: run `trust` again in the same base. The previous document's keys are carried over (an old
@@ -254,8 +255,16 @@ def trust(args):
     print(f"trust.json version {version} written to {args.base}")
 
 
+def debian_label(label):
+    """The Debian form of a tag-style label: 0.4.19-dev.7 is 0.4.19~~dev.7 and 0.4.19-rc1 is 0.4.19~rc1, both below 0.4.19."""
+    match = re.fullmatch(r"([0-9][0-9.]*)-(.+)", label)
+    if not match:
+        return label
+    return f"{match[1]}{'~~' if match[2].startswith('dev.') else '~'}{match[2]}"
+
+
 def dpkg_gt(left, right):
-    result = subprocess.run(["dpkg", "--compare-versions", left, "gt", right], capture_output=True)
+    result = subprocess.run(["dpkg", "--compare-versions", debian_label(left), "gt", debian_label(right)], capture_output=True)
     if result.returncode not in (0, 1):
         raise PublishError(f"dpkg --compare-versions could not compare {left!r} and {right!r}")
     return result.returncode == 0
@@ -538,6 +547,24 @@ def promote(args):
     write_channel(args, key, args.sequence, manifest.read_bytes())
 
 
+def prune(args):
+    """Drop every release except the newest --keep and the ones a channel points at, then the blobs none of them uses."""
+    base = Path(args.base)
+    sequences = sorted(int(p.name) for p in (base / "releases").glob("*") if p.name.isdigit())
+    keep = set(sequences[-args.keep:]) | {json.loads(p.read_text())["sequence"] for p in base.glob("*/channel.json")}
+    live = set()
+    for sequence in sequences:
+        release = base / "releases" / str(sequence)
+        if sequence in keep:
+            live |= {c["url"] for c in json.loads((release / "manifest.json").read_text())["components"]}
+        else:
+            shutil.rmtree(release)
+    for blob in (base / "blobs").glob("*"):
+        if f"blobs/{blob.name}" not in live:
+            blob.unlink()
+    print(f"kept releases {sorted(keep)}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -593,6 +620,11 @@ def main(argv=None):
     release_options(p)
     p.add_argument("--sequence", type=int, required=True)
     p.set_defaults(run=promote)
+
+    p = sub.add_parser("prune", help="delete old releases and the blobs only they use")
+    p.add_argument("--base", required=True)
+    p.add_argument("--keep", type=int, default=5, help="newest releases to keep besides those a channel points at")
+    p.set_defaults(run=prune)
 
     args = parser.parse_args(argv)
     try:

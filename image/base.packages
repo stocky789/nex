@@ -55,7 +55,8 @@ ethtool
 smartmontools
 iperf3
 
-# Boot chain (UKI, systemd-boot, shim) and kernel; no initramfs tooling is used on the host
+# Boot chain (shim, signed GRUB, kernel) and the UKI the release carries the kernel and initrd in (systemd-boot-efi is
+# its stub); no initramfs tooling is used on the host
 systemd
 systemd-sysv
 systemd-container
@@ -63,6 +64,7 @@ systemd-boot
 systemd-boot-efi
 systemd-boot-efi-amd64-signed
 shim-signed
+grub-efi-amd64-signed
 # BIOS boot: grub-install --target=i386-pc runs on the host (nex-hostimage esp-sync) when a replaced disk lacks boot code
 grub2-common
 grub-common

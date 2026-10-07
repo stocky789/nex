@@ -39,10 +39,15 @@ def controller_system_image(config):
 
     `configure --controller-image-sha256` names the vm-image release component by the digest in the signed release
     manifest; the image itself is the on-demand payload Core fetched, under /var/lib/nex/payload/<sha256>/.
+    Without it the newest such image is used: the installer places it under its own digest and the engine checks
+    the digest again when it copies the image.
     """
     digest = config.get('controller_image_sha256', '')
     if not digest:
-        return None
+        images = sorted(PAYLOAD.glob('*/controller-system.img'), key=lambda path: path.stat().st_mtime)
+        if not images:
+            return None
+        digest = images[-1].parent.name
     if not re.fullmatch(r'[0-9a-f]{64}', digest):
         raise ValueError('controller_image_sha256 is not a SHA-256 digest')
     return PAYLOAD / digest / 'controller-system.img', digest

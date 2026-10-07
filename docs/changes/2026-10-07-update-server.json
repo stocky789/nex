@@ -1,0 +1,56 @@
+{
+  "summary": "Update server: DefaultBaseURL (https://nexvirtualization.com/updates) is the built-in update source; the Release workflow (both forge copies) signs and publishes the system image to /srv/nex-updates on the website host with update-publish.py, pins the signed trust.json into the image, builds the image label in Debian form, and checks channel.json is reachable; update-publish.py gains prune; the website nginx template serves /updates/.",
+  "paths": [
+    ".gitea/workflows/release.yml",
+    ".github/workflows/release.yml",
+    "scripts/update-publish.py",
+    "tests/test_update_publish.py",
+    "tests/test_ci_security.py",
+    "internal/nexupdate/platform.go",
+    "internal/nexupdate/image_test.go",
+    "internal/nexupdate/offline_test.go",
+    "packaging/website/nginx.conf.template",
+    "packaging/website/bootstrap-publish.sh",
+    "packaging/website/README.md",
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/guide/software-updates.md",
+    "docs/guide/publish-a-release.md",
+    "docs/plans/2026-10-02-release-channels.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The default update server replaces the 'no built-in server' instruction and the publishing page describes the update tree and its secrets.",
+    "pages": [
+      "docs/guide/software-updates.md",
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The settings and status contracts are unchanged; an unset base_url now reads as the default URL instead of empty, documented in docs/API.md and the local OpenAPI.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Delivery plumbing for item 6 of the immutable Nex Core plan; no milestone status changed."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The update source is host-local Core configuration and the published tree lives on the website host; the Controller keeps nothing.",
+    "record": "Host /etc/nex/updates.conf (base_url=, channel=; default built in) and the website host's /srv/nex-updates tree. A fresh Controller reads both from Inventory.image."
+  },
+  "verification": {
+    "method": "go test ./internal/nexupdate/... ./internal/localcore/...; python3 -m unittest tests.test_update_publish and the test_ci_security and test_release_version suites; scripts/generate_api.py --check; scripts/check_docs.py --worktree. On the website host: nginx -t, reload, and /updates/trust.json fetched through the public site. Not run: a full Release workflow, an update installed on a host, or a host built with the pinned trust.",
+    "evidence": [
+      "tests/test_update_publish.py",
+      "tests/test_ci_security.py"
+    ]
+  }
+}

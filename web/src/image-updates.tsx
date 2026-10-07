@@ -202,7 +202,7 @@ function ImageHost({ host, api, busy }: { host: Host; api: API; busy: boolean })
       <dt>Running</dt><dd>{release(image.booted)}</dd>
       <dt>Staged</dt><dd>{release(image.staged)}</dd>
       <dt>Previous</dt><dd>{release(image.previous)}</dd>
-      <dt>Available</dt><dd>{image.available ? release(image.available) : "Nothing newer is known"}</dd>
+      <dt>Available</dt><dd>{image.available ? release(image.available) : "No newer release"}</dd>
       <dt>Channel</dt><dd>{channelLabel(image.channel)}</dd>
       <dt>Rollback floor</dt><dd>Sequence {image.rollback_floor}</dd>
       <dt>State format</dt><dd>{image.state_format}</dd>

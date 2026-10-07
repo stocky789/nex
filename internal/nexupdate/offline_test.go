@@ -388,12 +388,13 @@ func TestUpdateSettingsPersistsAndStartsANewPointerHistory(t *testing.T) {
 		t.Fatalf("settings did not survive a restart: %+v", st)
 	}
 
-	// Clearing the base URL leaves the host with no online source: there is no default to fall back to.
+	// Clearing the base URL returns the host to the project's update server.
 	if _, err = r.eng.UpdateSettings(context.Background(), Settings{Channel: "dev"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = r.eng.Check(context.Background())
-	wantCode(t, err, "source_unconfigured")
+	if base, _ := ImageSettings(); base != DefaultBaseURL {
+		t.Fatalf("a cleared base URL must fall back to the default: %q", base)
+	}
 }
 
 func TestUpdateSettingsRefusals(t *testing.T) {

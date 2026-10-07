@@ -1,0 +1,34 @@
+{
+  "summary": "The image installer asks Debian Installer's completion question (finish-install/reboot_in_progress) before it restarts, so the GUI shows its \"Nex Core installation complete\" page with Restart now and the text installer a Continue note; before, it rebooted on its own after 10 s. The host and Controller guest kernel command lines gain quiet, so kernel audit records stop scrolling over the local console. The installer lab can stage nex/efi (--efi) and answers the completion screen.",
+  "paths": [
+    "installer/nex-image-install.sh",
+    "installer/check.sh",
+    "image/release.py",
+    "tests/integration/image_iso_lab.py",
+    "tests/integration/image_install_lab.py",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-10-07-installer-completion-quiet-console.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "docs/guide/install-nex-core.md already tells the operator to wait for \"Nex Core installation complete\" and choose Restart now (minimal mode: its native restart prompt); the installer now matches it again."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installer screen and kernel console level only; no Controller, Core or client contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone or acceptance gate changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Adds no durable state."
+  },
+  "verification": {
+    "method": "installer/check.sh (passes; the new completion assertion was seen failing with the restart ordering removed). tests/integration/image_install_lab.py single under QEMU/OVMF (simulation) with a lab ISO from image_iso_lab.py, this tree's nex-image-install.sh and nex-hostimage, and the 0.4.32-dev.293 release: install stopped on the Installation complete note, continued, restarted and the installed host booted and passed the lab's root, SSH and API checks. Not run: the GTK completion page (the lab drives the text frontend), a real server, and an image build with quiet on the command line (the lab used the dev.293 release, built before it).",
+    "evidence": ["docs/BUG_LEDGER.md"]
+  }
+}

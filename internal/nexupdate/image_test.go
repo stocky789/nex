@@ -1340,8 +1340,8 @@ func TestImageSettings(t *testing.T) {
 	OSReleasePath, UpdatesConfig = filepath.Join(dir, "os-release"), filepath.Join(dir, "updates.conf")
 	t.Setenv("NEX_UPDATE_BASE_URL", "")
 	t.Setenv("NEX_UPDATE_CHANNEL", "")
-	if base, ch := ImageSettings(); base != "" || ch != "stable" {
-		t.Fatalf("there is no built-in base URL: %q %q", base, ch)
+	if base, ch := ImageSettings(); base != DefaultBaseURL || ch != "stable" {
+		t.Fatalf("defaults: %q %q", base, ch)
 	}
 	os.WriteFile(UpdatesConfig, []byte("base_url=http://mirror.example.test/nex\nchannel=testing\n"), 0o644)
 	if base, ch := ImageSettings(); base != "http://mirror.example.test/nex" || ch != "testing" {

@@ -135,9 +135,15 @@ jobs:
           NEX_DOWNLOADS_PATH: ${{ steps.version.outputs.downloads_path }}
           NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
           NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
+          NEX_UPDATE_TRUST_B64: ${{ secrets.NEX_UPDATE_TRUST_B64 }}
         run: |
           set -euo pipefail
           export NEX_DOCKER=$PWD/scripts/ci-docker.sh
+          # The signed trust.json is pinned into the image: without it the host could not verify any update.
+          [ -n "${NEX_UPDATE_TRUST_B64:-}" ] || { echo 'NEX_UPDATE_TRUST_B64 is required: the image must carry its update trust' >&2; exit 1; }
+          mkdir -p .cache
+          printf '%s' "$NEX_UPDATE_TRUST_B64" | base64 -d > .cache/update-trust.json
+          export NEX_UPDATE_TRUST=$PWD/.cache/update-trust.json
           # Builder containers can only mount paths under the workspace, so the
           # temporary build inputs must live there too.
           export TMPDIR=$PWD/.cache/tmp
@@ -333,11 +339,56 @@ jobs:
             scripts/website-ci-deploy.sh
           fi
 
+      # The signed update tree hosts fetch from <site>/updates/<channel>/channel.json. The release key signs on the
+      # website host for the length of the command and never stays on disk; the trust document is already there.
+      - name: Publish the signed update tree
+        if: steps.deploy.outputs.enabled == 'true'
+        env:
+          NEX_CHANNEL: ${{ steps.version.outputs.channel }}
+          NEX_VERSION: ${{ steps.version.outputs.version }}
+          NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
+          NEX_UPDATE_RELEASE_KEY_B64: ${{ secrets.NEX_UPDATE_RELEASE_KEY_B64 }}
+          NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
+          NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
+          NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
+          NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          # Base64, one line: the forge masks a single-line secret in the log, not a multi-line key.
+          [ -n "${NEX_UPDATE_RELEASE_KEY_B64:-}" ] || { echo 'NEX_UPDATE_RELEASE_KEY_B64 is required to publish updates' >&2; exit 1; }
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          printf '%s\n' "$NEX_DEPLOY_KEY" > "$keydir/id"
+          printf '%s\n' "$NEX_DEPLOY_KNOWN_HOSTS" > "$keydir/known_hosts"
+          ssh_opts="-i $keydir/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$keydir/known_hosts -o StrictHostKeyChecking=yes"
+          target="$NEX_DEPLOY_USER@$NEX_DEPLOY_HOST"
+          staging="/tmp/nex-update-$NEX_VERSION"
+          # shellcheck disable=SC2086
+          ssh $ssh_opts "$target" "rm -rf '$staging' && mkdir -m 700 '$staging'"
+          # shellcheck disable=SC2086
+          scp -r $ssh_opts .cache/image-release/release "$target:$staging/release"
+          # shellcheck disable=SC2086
+          scp $ssh_opts \
+            "dist/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz" \
+            "dist/nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json" \
+            scripts/update-publish.py \
+            "$target:$staging/"
+          # shellcheck disable=SC2086
+          printf '%s' "$NEX_UPDATE_RELEASE_KEY_B64" | base64 -d | ssh $ssh_opts "$target" "set -eu
+            trap 'rm -rf $staging' EXIT
+            (umask 077; cat > '$staging/release.key')
+            umask 022
+            cd '$staging'
+            python3 update-publish.py publish --base /srv/nex-updates --release-dir release --release-key release.key --channel '$NEX_CHANNEL' --source 'nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz' --compliance 'nex-core-${NEX_PUBLIC_VERSION}-compliance-manifest.json'
+            python3 update-publish.py prune --base /srv/nex-updates --keep 5"
+
       - name: Confirm the release is actually reachable
         if: steps.deploy.outputs.enabled == 'true'
         env:
           NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
           NEX_DOWNLOADS_PATH: ${{ steps.version.outputs.downloads_path }}
+          NEX_CHANNEL: ${{ steps.version.outputs.channel }}
           NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
         run: |
           set -euo pipefail
@@ -351,6 +402,8 @@ jobs:
           done
           for path in \
             "/" \
+            "/updates/trust.json" \
+            "/updates/${NEX_CHANNEL}/channel.json" \
             "/${NEX_DOWNLOADS_PATH}/latest.json" \
             "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-amd64.iso.sha256" \
             "/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}/nex-core-${NEX_PUBLIC_VERSION}-source.tar.gz" \

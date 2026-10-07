@@ -9732,7 +9732,7 @@
       },
       "ImageUpdateSettings": {
         "type": "object",
-        "description": "The host's update source. There is no built-in base URL: an empty base_url means no online source. Persisted in /etc/nex/updates.conf on the host and reported in Inventory.image.",
+        "description": "The host's update source. An empty base_url means the default, https://nexvirtualization.com/updates. Persisted in /etc/nex/updates.conf on the host and reported in Inventory.image.",
         "properties": {
           "channel": {
             "type": "string",

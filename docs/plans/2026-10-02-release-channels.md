@@ -117,4 +117,11 @@ State owner: `core`.
   channels (`check_order`).
 - Promotion of one built release between channels without a rebuild (the immutable plan's `promote`) is unchanged and
   unused by this branch model: each branch builds its own release.
-- A website host directory for the update tree. Nothing serves `<base>/<channel>/` yet.
+- **Update tree publishing (decision: project owner, 2026-10-07, authorizing CI to hold the release key).** The Release
+  workflow publishes the signed tree to `/srv/nex-updates` on the website host, served at `<site>/updates/`, and
+  `DefaultBaseURL` points every host there. The root key stays offline with the project owner; the release key is the CI
+  secret `NEX_UPDATE_RELEASE_KEY_B64`, used on the website host for one command; the signed `trust.json` is the secret
+  `NEX_UPDATE_TRUST_B64` and is pinned into every image. The publisher compares labels in their Debian form
+  (`0.4.33-dev.294` is `0.4.33~~dev.294`), so its label-order check holds across channels. Published: the slot image, source and compliance manifest.
+  Not published: optional layers (redistribution review open) and the Controller guest image, so a pool-wide
+  Controller-first rollout is not yet available. `update-publish.py prune` keeps the newest five releases.

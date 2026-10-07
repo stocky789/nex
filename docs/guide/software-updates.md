@@ -15,8 +15,8 @@ See also [Roll back a host update](roll-back-a-host-update.md).
 - Administrator session on Controller, or root on the host-local UI.
 - A host that is freshly connected and whose Nex Core and Controller are the same development build (the host offers
   `image-update-v1` and the Controller acknowledges it; until then the host is not listed).
-- An update source: the host's base URL and channel, set under [Update channels](#update-channels). There is no built-in
-  server: until an operator sets a base URL, a check fails with `source_unconfigured`.
+- An update source: the host's base URL and channel, set under [Update channels](#update-channels). A host checks the
+  project's update server (`https://nexvirtualization.com/updates`) unless the operator sets another base URL.
 - Free space on the host's data volume for the downloaded release (an update that would not fit is refused with
   `insufficient_space` before anything is downloaded).
 
@@ -92,8 +92,8 @@ the channel selectors have not been walked through in a browser or on a running 
 - **An update task failed or needs attention:** the host card shows its recorded error
   beside the task link. Open the task for details and check the running/staged image state
   before retrying; a failed check does not mean the host has no newer release.
-- **`source_unconfigured` or `source_unreachable`:** the host has no update base URL, or cannot reach it. Set the source under
-  [Update channels](#update-channels) and check again.
+- **`source_unconfigured` or `source_unreachable`:** the host cannot reach its update server. Check the network (or the
+  base URL under [Update channels](#update-channels)) and check again.
 - **`insufficient_space`:** the data volume cannot hold the release; free space and start again.
 - **A virtual machine did not start again after the reboot:** a machine starts again after an
   update only if it was running before it, and only after the host is back in service, so a host

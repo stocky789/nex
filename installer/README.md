@@ -115,9 +115,9 @@ The media boots on BIOS and UEFI firmware from the same four entries: isolinux
 | **Debian rescue mode** | Debian's plain initrd with `rescue/enable=true`; nothing is seeded |
 
 The menu waits for a selection in BIOS and UEFI. The target boots under the firmware the
-installer was started under (`/sys/firmware/efi`): shim and systemd-boot starting a signed
-boot image on UEFI, GRUB in the MBR of every selected disk reading per-slot entries from the
-boot partition on BIOS. Every disk carries a 1 MiB `nex-bios` partition in front of the ESP
+installer was started under (`/sys/firmware/efi`): on UEFI a firmware boot entry on every
+selected disk starts shim and Debian's signed GRUB from its boot partition, on BIOS GRUB starts
+from the MBR of every selected disk; both read per-slot entries from the boot partition. Every disk carries a 1 MiB `nex-bios` partition in front of the ESP
 so the same layout boots under either firmware. The BIOS path counts as verified only after
 the QEMU BIOS-mode tests in the
 [host image plan](../docs/plans/2026-10-01-immutable-nex-core.md) (D2) have run; that
