@@ -296,6 +296,17 @@ class StoragePackagingTests(unittest.TestCase):
         package = (ROOT / "packaging/core-local/build-inside.sh").read_text()
         self.assertTrue(all(client in package for client in HOST_CLIENTS))
 
+    def test_iscsi_tcp_is_loaded_at_boot_because_the_sandboxed_agent_cannot_load_it(self):
+        # BUG-1933: iscsiadm under ProtectKernelModules=yes fails target discovery unless iscsi_tcp is already loaded.
+        unit = (ROOT / "packaging/core-local/nex-core-local.service").read_text()
+        self.assertIn("ProtectKernelModules=yes", unit)
+        modules = [line.strip() for line in (ROOT / "packaging/core-local/nex-iscsi.conf").read_text().splitlines()
+                   if line.strip() and not line.startswith("#")]
+        self.assertEqual(modules, ["iscsi_tcp"])
+        build = (ROOT / "packaging/core-local/build-inside.sh").read_text()
+        self.assertIn('install -m644 packaging/core-local/nex-iscsi.conf "$pkg/etc/modules-load.d/nex-iscsi.conf"', build)
+        self.assertIn("/etc/modules-load.d/nex-iscsi.conf\\n' > \"$pkg/DEBIAN/conffiles\"", build)
+
     def test_lab_pristine_corosync_marker_never_adopts_a_modified_conffile(self):
         helper = ROOT / "tests/integration/fixtures/corosync-pristine"
         with tempfile.TemporaryDirectory(prefix="nex-corosync-pristine-") as directory:

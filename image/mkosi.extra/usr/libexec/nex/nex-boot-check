@@ -32,7 +32,7 @@ check_once() {
         timeout 30 virsh -q -c qemu:///system version > /dev/null 2>&1 || note "libvirtd does not answer"
     fi
     if systemctl is-enabled --quiet nex-core-local.service 2> /dev/null; then
-        systemctl is-active --quiet nex-core-local.service || note "nex-core-local is not running"
+        systemctl is-active --quiet nex-core-local.service || [ -e /run/nex/waiting-for-address ] || note "nex-core-local is not running"
     fi
     for check in /usr/lib/nex/boot-check.d/*; do
         [ -x "$check" ] || continue

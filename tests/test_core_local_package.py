@@ -65,6 +65,7 @@ class CoreLocalPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(setup, 'ISSUE', Path(directory) / 'issue/50-nex-local.issue'), \
                 patch.object(setup, 'CONFIG', Path(directory) / 'missing-config'), \
+                patch.object(setup, 'WAITING', Path(directory) / 'run-nex/waiting-for-address'), \
                 patch.object(setup.subprocess, 'run'), \
                 patch.object(setup.os, 'geteuid', return_value=0), \
                 patch.object(setup.os, 'umask'), \
@@ -74,6 +75,8 @@ class CoreLocalPackageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'offline'):
                     setup.main()
             self.assertNotIn('https://', setup.ISSUE.read_text())
+            # No management address yet is a host still starting: nex-boot-check must not roll the image back for it.
+            self.assertTrue(setup.WAITING.exists())
             with patch.object(sys, 'argv', ['core-local-setup', 'offline']):
                 setup.main()
             self.assertIn('unavailable', setup.ISSUE.read_text())

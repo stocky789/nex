@@ -14,6 +14,9 @@ STATE = Path('/var/lib/nex/core-local')
 # The Controller system image is an on-demand payload outside the verified slot, one directory per digest.
 PAYLOAD = Path('/var/lib/nex/payload')
 ISSUE = Path('/run/issue.d/50-nex-local.issue')
+# Present while init waits for a management address. nex-boot-check treats it as a host still starting,
+# not an image fault: a cable that is unplugged or a DHCP server that is down must not roll the image back.
+WAITING = Path('/run/nex/waiting-for-address')
 
 
 def console_notice(text):
@@ -139,7 +142,13 @@ def main():
         console_notice('Local web UI: starting (waiting for management address)\n')
     config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
     if args.action == 'init' and (not config or config.get('automatic')):
-        address, bridge = discover()
+        try:
+            address, bridge = discover()
+        except ValueError:
+            WAITING.parent.mkdir(parents=True, exist_ok=True)
+            WAITING.touch()
+            raise
+        WAITING.unlink(missing_ok=True)
         storage = Path('/var/lib/libvirt/images')
         storage.mkdir(mode=0o711, parents=True, exist_ok=True)
         configure(address, str(storage), bridge, automatic=True)

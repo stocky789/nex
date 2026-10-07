@@ -25,7 +25,8 @@ install -m644 packaging/core-local/nex-sensors.conf "$pkg/etc/modules-load.d/nex
 # /dev/ipmi0 exists only once the IPMI driver is loaded. It is what lets a host configure
 # its own management controller for fencing without an operator typing an address.
 install -m644 packaging/core-local/nex-ipmi.conf "$pkg/etc/modules-load.d/nex-ipmi.conf"
-printf '/etc/pam.d/nex-core-local\n/etc/modules-load.d/nex-sensors.conf\n/etc/modules-load.d/nex-ipmi.conf\n' > "$pkg/DEBIAN/conffiles"
+install -m644 packaging/core-local/nex-iscsi.conf "$pkg/etc/modules-load.d/nex-iscsi.conf"
+printf '/etc/pam.d/nex-core-local\n/etc/modules-load.d/nex-sensors.conf\n/etc/modules-load.d/nex-ipmi.conf\n/etc/modules-load.d/nex-iscsi.conf\n' > "$pkg/DEBIAN/conffiles"
 install -m755 /build/nex-root-auth "$pkg/usr/lib/nex/"
 install -m755 /build/nex-iscsi-inspect "$pkg/usr/lib/nex/"
 install -m755 /build/nex-core-local "$pkg/usr/lib/nex/"

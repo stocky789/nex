@@ -166,7 +166,7 @@ resolution changes. It offers five named keyboard layouts, area/timezone dropdow
 password visibility toggle that resets when leaving the host page. Timezone selection
 requires no typing; UTC is the default.
 
-Both modes require explicitly selected writable, nonremovable whole sd/vd/xvd/nvme disks of
+Both modes require explicitly selected writable, nonremovable whole sd/vd/xvd/nvme/mmcblk disks of
 at least 24 GiB, plus a confirmation that defaults to no and names every selected disk at review
 before installation. Returning to Review resets the confirmation.
 Both offer the same tick list, in the same sorted order, with the same facts about each disk:

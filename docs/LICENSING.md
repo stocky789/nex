@@ -660,3 +660,22 @@ an incompatible metadata library instead of weakening read-only probing.
 This license/source review is not external-release certification. The existing
 complete-component manifest, matching-source retention and tested source-delivery
 gate still applies to both Core editions and their final release artifacts.
+
+## Device firmware and CPU microcode in the Core image — 2026-10-07
+
+The Core image installs Debian's `firmware-linux-free` (main) and, from the `non-free-firmware`
+component of the same pinned snapshot, `firmware-misc-nonfree`, `firmware-bnx2`,
+`firmware-bnx2x`, `firmware-qlogic`, `firmware-realtek`, `firmware-intel-misc`,
+`firmware-myricom`, `firmware-cavium`, `firmware-netxen`, `intel-microcode` and
+`amd64-microcode`. Nex does not modify them. The kernel loads device firmware from
+`/usr/lib/firmware` by name; `image/release.py` concatenates the two vendors' microcode files
+into an early-microcode cpio placed first in the UKI's initrd. This is the same separate-program
+aggregation as the other Debian packages above, but these are redistributable proprietary binaries
+with their own licences, not free software.
+
+Outstanding before any external ISO or release: record each package's exact version and licence
+files in the component manifest (the per-package `copyright` files ship in the image), confirm that
+the redistribution terms of every included blob permit shipping it in a signed read-only image, and
+confirm the tested source/notice delivery path covers non-free-firmware. Graphics, wireless, audio
+and Bluetooth firmware stay out (`image/denylist.txt`). The installer environment still carries no
+device firmware; that is a separate decision.

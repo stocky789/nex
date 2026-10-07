@@ -14,7 +14,7 @@ gboolean nex_install_disk_name_supported(const char *name)
         if (!g_ascii_isalnum(*p)) return FALSE;
     /* Partition and device safety checks use sysfs, not spelling alone. */
     return g_str_has_prefix(name, "sd") || g_str_has_prefix(name, "vd") ||
-        g_str_has_prefix(name, "xvd") || g_str_has_prefix(name, "nvme");
+        g_str_has_prefix(name, "xvd") || g_str_has_prefix(name, "nvme") || g_str_has_prefix(name, "mmcblk");
 }
 
 /* NVMe reports device/serial and virtio-blk serial. SATA, SAS and SCSI disks only

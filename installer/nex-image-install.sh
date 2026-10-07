@@ -47,8 +47,15 @@ load_tools() {
     for tool in mkfs.fat mkfs.ext4 mdadm udevadm; do
         command -v "$tool" >/dev/null 2>&1 || die "The installer environment lacks $tool; the installation media is incomplete."
     done
+    # The tools can be present while their kernel modules are not (a path that skipped partman's component loading),
+    # and a missing raid1 only shows up later as an array that cannot be assembled.
     for module in vfat ext4 raid1; do
-        modprobe "$module" 2>/dev/null || true
+        modprobe "$module" 2>/dev/null && continue
+        if command -v anna-install >/dev/null 2>&1; then
+            anna-install ext4-modules md-modules >/dev/null 2>&1 || true
+            depmod -a 2>/dev/null || true
+            modprobe "$module" 2>/dev/null || say "Kernel module $module could not be loaded"
+        fi
     done
 }
 
@@ -252,26 +259,51 @@ verify_media_payloads() {
     done
 }
 
+# udev may have assembled the members already, under a name other than nex-data (md127): follow the members' holder.
+assembled_md() {
+    for part in $parts; do
+        for holder in "$SYS"/class/block/"${part##*/}"/holders/md*; do
+            [ -e "$holder" ] || continue
+            printf '%s/%s\n' "$DEV" "${holder##*/}"
+            return 0
+        done
+    done
+    return 1
+}
+
 # The net installer places the payloads on the new nex-data, which is mounted as /var on
 # the host: /var/lib/nex/payload is <data>/lib/nex/payload.
 mount_data() {
+    # The kernel re-reads the partition table when nex-hostimage closes the disk and the nodes can be
+    # absent for a while (found in the first QEMU run of the image ISO; slow on virtual disks).
+    udevadm settle >/dev/null 2>&1 || true
+    waited=0
     if [ "$layout" = raid1 ]; then
         # Only this install's members: --scan would assemble every array on every attached disk.
         parts=
         for disk in $(printf '%s' "$disks" | tr ',' ' '); do parts="$parts $(partition "$disk" 6)"; done
-        [ -e "$DEV/md/nex-data" ] || mdadm --assemble "$DEV/md/nex-data" --run $parts >/dev/null 2>&1 || true
-        data=$DEV/md/nex-data
+        data=
+        while [ -z "$data" ] && [ "$waited" -lt "${NEX_NODE_WAIT:-30}" ]; do
+            present=yes
+            for part in $parts; do [ -e "$part" ] || present=; done
+            if [ -e "$DEV/md/nex-data" ]; then
+                data=$DEV/md/nex-data
+            elif data=$(assembled_md); then
+                :
+            elif [ -n "$present" ]; then
+                mdadm --assemble "$DEV/md/nex-data" --run $parts || true
+                [ ! -e "$DEV/md/nex-data" ] || data=$DEV/md/nex-data
+            fi
+            [ -n "$data" ] || { sleep 1; waited=$((waited + 1)); }
+        done
+        [ -n "$data" ] || data=$DEV/md/nex-data
     else
         data=$(partition "${disks%%,*}" 6)
+        while [ ! -e "$data" ] && [ "$waited" -lt "${NEX_NODE_WAIT:-30}" ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
     fi
-    # The kernel re-reads the partition table when nex-hostimage closes the disk and the node can be
-    # absent for a moment (found in the first QEMU run of the image ISO).
-    udevadm settle >/dev/null 2>&1 || true
-    waited=0
-    while [ ! -e "$data" ] && [ "$waited" -lt "${NEX_NODE_WAIT:-30}" ]; do
-        sleep 1
-        waited=$((waited + 1))
-    done
     [ -e "$data" ] || die "The new data volume $data is missing."
     mkdir -p "$WORK/data"
     mount -t ext4 "$data" "$WORK/data"
@@ -312,7 +344,7 @@ verify_payloads() {
 # session is not refused by release_disks.
 cleanup_data() {
     umount "$WORK/data" >/dev/null 2>&1 || true
-    [ "$layout" != raid1 ] || mdadm --stop "$DEV/md/nex-data" >/dev/null 2>&1 || true
+    [ "$layout" != raid1 ] || mdadm --stop "${data:-$DEV/md/nex-data}" >/dev/null 2>&1 || true
 }
 
 place_payloads() {
@@ -330,7 +362,7 @@ place_payloads() {
     sync
     umount "$WORK/data"
     trap - EXIT
-    [ "$layout" != raid1 ] || mdadm --stop "$DEV/md/nex-data" >/dev/null 2>&1 || true
+    [ "$layout" != raid1 ] || mdadm --stop "${data:-$DEV/md/nex-data}" >/dev/null 2>&1 || true
 }
 
 finish() {

@@ -153,7 +153,7 @@ disks=
 for path in "$SYS"/class/block/*; do
     name=${path##*/}
     case $name in
-        sd*|vd*|xvd*|nvme*) ;;
+        sd*|vd*|xvd*|nvme*|mmcblk*) ;;
         *) continue ;;
     esac
     case $name in *[!A-Za-z0-9]*) continue ;; esac

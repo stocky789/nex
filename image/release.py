@@ -101,6 +101,32 @@ def initrd_overlay(dst, only=None):
                        cwd=stage, input=names, stdout=f, check=True)
 
 
+def microcode_cpio(tree, dst):
+    """Early CPU microcode in the form the kernel loads before anything else: a newc cpio holding
+    kernel/x86/microcode/GenuineIntel.bin and AuthenticAMD.bin, each the concatenation of the vendor package's
+    files (what Debian's initramfs hook does). ukify embeds it as the UKI's .ucode section. Fails the build when
+    a vendor's files are missing, so a host never ships without the microcode the image is supposed to carry."""
+    stage = "/tmp/nex-microcode"
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(f"{stage}/kernel/x86/microcode")
+    for vendor, directory in (("GenuineIntel", "intel-ucode"), ("AuthenticAMD", "amd-ucode")):
+        parts = sorted(p for p in os.listdir(f"{tree}/usr/lib/firmware/{directory}") if not p.startswith("."))
+        if not parts:
+            sys.exit(f"no microcode files in {directory}: the image must carry intel-microcode and amd64-microcode")
+        with open(f"{stage}/kernel/x86/microcode/{vendor}.bin", "wb") as out:
+            for part in parts:
+                with open(f"{tree}/usr/lib/firmware/{directory}/{part}", "rb") as f:
+                    out.write(f.read())
+    for root, dirs, files in os.walk(stage):
+        for n in dirs + files:
+            os.utime(os.path.join(root, n), (int(SDE), int(SDE)), follow_symlinks=False)
+    os.utime(stage, (int(SDE), int(SDE)))
+    names = b"\0".join(sorted([b"./kernel", b"./kernel/x86", b"./kernel/x86/microcode",
+                               b"./kernel/x86/microcode/AuthenticAMD.bin", b"./kernel/x86/microcode/GenuineIntel.bin"])) + b"\0"
+    with open(dst, "wb") as f:
+        subprocess.run(["cpio", "--null", "-o", "-H", "newc", "--reproducible", "--owner=0:0", "--quiet"],
+                       cwd=stage, input=names, stdout=f, check=True)
+
 def boot_files(tree, esp):
     """Firmware -> Microsoft-signed shim -> Debian-signed sd-boot -> Nex-signed UKI (trusted through the MOK).
 
@@ -133,7 +159,11 @@ def release():
         f.write(uki_os_release("Nex Core", "nex-core"))
     overlay = "/tmp/nex-initrd.cpio"
     initrd_overlay(overlay)
-    ukify = ["ukify", "build", f"--linux={OUT}/base.vmlinuz", f"--initrd={OUT}/base.initrd", f"--initrd={overlay}",
+    microcode = "/tmp/nex-microcode.cpio"
+    microcode_cpio(TREE, microcode)
+    # The microcode cpio goes first: the kernel only finds early microcode at the start of the initrd, and BIOS hosts
+    # take their initrd out of this UKI's .initrd section, so UEFI and BIOS both get it.
+    ukify = ["ukify", "build", f"--linux={OUT}/base.vmlinuz", f"--initrd={microcode}", f"--initrd={OUT}/base.initrd", f"--initrd={overlay}",
              f"--cmdline=roothash={roothash} {CMDLINE}", f"--os-release=@{osrel}", f"--uname={kver}",
              f"--output={rel}/{uki}"]
     key, cert = os.environ.get("NEX_UKI_KEY"), os.environ.get("NEX_UKI_CERT")

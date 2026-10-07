@@ -18,6 +18,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Bug Fixes
+
+- The installer no longer stops with "The new data volume … is missing." on virtual machines whose disks appear slowly or whose mirror is assembled under another name, such as Xen, and it now shows the reason when the mirror cannot be assembled.
+- Hosts now start from virtual and physical disks that the installer's boot environment previously could not see, including Xen, Hyper-V, VMware, IDE/legacy SATA, Fibre Channel and eMMC/SD storage.
+- A host with no management address yet (offline install, no gateway, cable unplugged) now finishes starting and waits for the address instead of rebooting and rolling back to the previous image.
+- eMMC and SD cards can now be chosen as installation disks.
+- Nex Core now ships Debian's device firmware for common server network and storage adapters (Broadcom, QLogic, Realtek, Intel, Chelsio and others) and loads Intel/AMD CPU microcode at boot, as a normal Debian install does. The installer environment itself does not carry device firmware yet.
+- **Discover targets** for iSCSI storage now works on an installed Nex Core. Before, it always reported "storage discovery is unavailable" for a reachable portal, because the host never loaded the iSCSI TCP transport its sandboxed agent needs. The fix takes effect after the host updates and restarts; until then, running `modprobe iscsi_tcp` on the host as root makes discovery work until the next reboot.
+
 ## [0.4.31] — 2026-10-06
 
 ### Bug Fixes

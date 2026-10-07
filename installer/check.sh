@@ -94,7 +94,7 @@ assert 'g_ptr_array_sort(names, compare_names)' in Path('installer/gui/nex-wizar
     'The graphical wizard must sort /sys/class/net, like the text wizard glob'
 # The text frontend must not weaken the disk, account or network contract.
 assert 'MIN_SECTORS=50331648' in wizard, 'text wizard needs the 24 GiB floor'
-assert 'sd*|vd*|xvd*|nvme*' in wizard
+assert 'sd*|vd*|xvd*|nvme*|mmcblk*' in wizard
 assert '[ -e "$path/partition" ] && continue' in wizard
 assert '"$(read_attr "$path/removable")" = 0' in wizard
 assert '/cdrom' in wizard, 'Installation media is never offered as a target'

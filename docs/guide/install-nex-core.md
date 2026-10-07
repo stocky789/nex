@@ -162,8 +162,8 @@ wizard now draws the Repair image choice (checked under a virtual display only).
    saved settings on first boot; its DHCP lease may differ.
 6. On **Choose the installation disks**, explicitly select the **blank disposable disk**, or
    two or more of them for a mirrored data volume.
-   The GUI supports writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disks of at
-   least 24 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`). Installation media and partitions are not eligible.
+   The GUI supports writable, nonremovable whole SATA/SCSI, virtio, Xen, NVMe or eMMC/SD disks of at
+   least 24 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`, `mmcblk…`). Installation media and partitions are not eligible.
    Every selected disk is erased and receives the same partition table (see
    [Disk layout and boot](#disk-layout-and-boot-development-simulated-install-only)). One disk gets a single `nex-data`
    volume. Two or more disks hold `nex-data` as a Linux software RAID1 mirror (`md`): each selected disk holds an

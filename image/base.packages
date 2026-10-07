@@ -75,3 +75,19 @@ linux-image-amd64
 # Console sign-in: agetty executes login(1), which Debian marks Priority required but not Essential, so mkosi
 # installs it only when it is listed. Without it neither the serial nor the VGA console can log anyone in.
 login
+
+# Firmware and CPU microcode, so hardware Debian itself drives works here too (Debian's non-free-firmware component).
+# Server NIC/HBA blobs and the CPU microcode early-loaded by image/release.py; graphics, wireless, audio and Bluetooth
+# firmware stay out (image/denylist.txt, console graphics work without them).
+firmware-linux-free
+firmware-misc-nonfree
+firmware-bnx2
+firmware-bnx2x
+firmware-qlogic
+firmware-realtek
+firmware-intel-misc
+firmware-myricom
+firmware-cavium
+firmware-netxen
+intel-microcode
+amd64-microcode

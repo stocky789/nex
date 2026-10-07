@@ -61,7 +61,7 @@ cat > "$sandbox/etc/apt/sources.list.d/nex-security.sources" <<EOT
 Types: deb
 URIs: https://snapshot.debian.org/archive/debian-security/$snapshot/
 Suites: trixie-security
-Components: main
+Components: main non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOT
 cp "$sandbox/etc/apt/sources.list.d/nex-security.sources" "$out/apt-sources.list"
