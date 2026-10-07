@@ -6104,8 +6104,8 @@ Schemas `ImageUpdateStatus`, `ImageUpdateOperation`, `ImageUpdateApplyRequest`, 
 `UpdateRefusal` are in the generated host-local reference.
 
 Core fetches and verifies everything itself; installed hosts never run `apt`. The update base URL and channel are
-configuration only: `NEX_UPDATE_BASE_URL` / `NEX_UPDATE_CHANNEL`, else `base_url=` / `channel=` in `/etc/nex/updates.conf`; there is
-no built-in URL, and an unset one is `503 source_unconfigured`. The default channel is `stable`. Plain HTTP mirrors are fine:
+configuration only: `NEX_UPDATE_BASE_URL` / `NEX_UPDATE_CHANNEL`, else `base_url=` / `channel=` in `/etc/nex/updates.conf`; an unset
+base URL is `https://nexvirtualization.com/updates`. The default channel is `stable`. Plain HTTP mirrors are fine:
 signatures carry integrity.
 
 Metadata, all Ed25519 with raw 64-byte signatures over the exact bytes and raw 32-byte keys (base64 inside `trust.json`):
@@ -6232,8 +6232,8 @@ until then), cancelling a staged release prunes the staged release's layers, and
 read. A release that carries layers on a host without a layer store is `409 layers_unavailable`.
 
 **Settings.** `PUT /api/local/v1/updates/settings` `{channel, base_url}` → `200` `{channel, base_url}`. `channel` is 1–32 lower-case
-letters, digits or `-`, starting with a letter (`400 invalid_channel`); `base_url` is empty (clears the source: there is no built-in
-default) or an `https` or explicit `http` URL without credentials, query or fragment, at most 2048 characters (`400 invalid_base_url`).
+letters, digits or `-`, starting with a letter (`400 invalid_channel`); `base_url` is empty (returns to the default,
+`https://nexvirtualization.com/updates`) or an `https` or explicit `http` URL without credentials, query or fragment, at most 2048 characters (`400 invalid_base_url`).
 Plain `http` is allowed because signatures and blob hashes carry integrity. The values are written to `/etc/nex/updates.conf` (other
 lines are kept) and take effect for the next check; the pointer history (`channel_serial`) belongs to the update server and channel it came
 from, so a changed source starts empty, an earlier source keeps its own and a bundle's other channels never share the configured one's,

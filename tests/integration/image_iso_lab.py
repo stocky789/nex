@@ -18,7 +18,7 @@ NEXLABCTL (mode, disk serials, hostname). Everything after the handoff (nex-conf
 partman hook, nex-image-install.sh, nex-hostimage) is the product code. The real text wizard is covered by
 installer-text-wizard.py against a fixture, and the graphical one by the Xvfb run; neither is driven here.
 
-  tests/integration/image_iso_lab.py --release DIR --hostimage BIN --out ISO [--cc-image IMAGE]
+  tests/integration/image_iso_lab.py --release DIR --hostimage BIN --out ISO [--efi DIR] [--cc-image IMAGE]
 
 Needs docker (images nex-iso-builder for xorriso and a gcc/glib image for nex-config) and
 .cache/installer-lab/debian-13.6.0-amd64-netinst.iso.
@@ -168,6 +168,7 @@ def main():
     ap.add_argument("--release", required=True)
     ap.add_argument("--hostimage", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--efi", help="nex/efi of a product ISO (efibootmgr and its libraries), which UEFI installs need")
     ap.add_argument("--cc-image", default="nex-lab-gtk:phase6")
     ap.add_argument("--work", default=os.path.join(REPO, ".cache/phase6/iso-work"))
     a = ap.parse_args()
@@ -204,6 +205,8 @@ def main():
     os.makedirs(os.path.join(nex, "bin"))
     shutil.copytree(rel, os.path.join(nex, "image"), copy_function=shutil.copyfile)
     shutil.copyfile(a.hostimage, os.path.join(nex, "bin/nex-hostimage"))
+    if a.efi:
+        shutil.copytree(a.efi, os.path.join(nex, "efi"), symlinks=True)
     for src, dst in (("installer/nex-image-install.sh", "nex-image-install.sh"), ("installer/root-account.sh", "root-account.sh")):
         shutil.copyfile(os.path.join(REPO, src), os.path.join(nex, dst))
     fixture = os.path.join(work, "controller-system.img")

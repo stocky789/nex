@@ -33,7 +33,10 @@ VERITY_UUID = "5e1ec7ed-0000-4000-8000-0000000000e2"
 VERITY_SALT = "5e1ec7ed000040008000000000000e3a5e1ec7ed000040008000000000000e3a"
 # /var is the data volume at run time; the dpkg database was saved by mkosi.finalize for the layer builds.
 EXCLUDES = ["var/lib/dpkg", "var/lib/apt", "var/cache", "var/log", "boot", "efi", "dev", "proc", "sys", "run", "tmp"]  # contents only; the directories stay as mount points
-CMDLINE = "ro console=tty0 console=ttyS0,115200n8 panic=10 systemd.firstboot=off systemd.ssh_auto=no"
+# quiet: the console shows kernel warnings and errors and systemd's status only on errors or a slow boot. Without it
+# the kernel prints every audit record (each unit start and stop) there, as no audit daemon runs; the journal keeps
+# everything.
+CMDLINE = "ro console=tty0 console=ttyS0,115200n8 quiet panic=10 systemd.firstboot=off systemd.ssh_auto=no"
 
 
 def run(*args, **kw):
@@ -169,7 +172,7 @@ def release():
 CTREE = f"{OUT}/controller"
 CREL = f"{OUT}/controller-release"
 CESP_SIZE = 128 << 20
-CMDLINE_CONTROLLER = "ro console=tty0 console=ttyS0,115200n8 panic=10 systemd.firstboot=off"
+CMDLINE_CONTROLLER = "ro console=tty0 console=ttyS0,115200n8 quiet panic=10 systemd.firstboot=off"
 GPT_LABEL_ID = "5e1ec7ed-0000-4000-8000-0000000000c0"
 GPT_ESP_ID = "5e1ec7ed-0000-4000-8000-0000000000c1"
 GPT_ESP, GPT_ROOT, GPT_VERITY = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b", "4f68bce3-e8cd-4db1-96e7-fbcaf984b709", "2c7357ed-ebd2-46d9-aec1-23d437ec2bf5"

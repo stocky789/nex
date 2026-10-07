@@ -33,6 +33,7 @@ fi
 # The release workflow publishes ISOs and image payloads as this user over SSH. It owns the download tree
 # outright, so publishing them needs no sudo at all.
 install -d -o "$PUBLISH_USER" -g "$PUBLISH_USER" -m 0755 /srv/nex-downloads
+install -d -o "$PUBLISH_USER" -g "$PUBLISH_USER" -m 0755 /srv/nex-updates
 
 install -d -o root -g root -m 0755 "$RELEASE_LIB"
 install -D -m 0755 "$ROOT/scripts/website-release.py" "$RELEASE_LIB/website-release.py"

@@ -333,10 +333,28 @@ place_payloads() {
     [ "$layout" != raid1 ] || mdadm --stop "$DEV/md/nex-data" >/dev/null 2>&1 || true
 }
 
+# The image install replaces Debian Installer's later steps, so finish-install never runs: this asks its completion
+# question itself, which the Nex GTK frontend shows as the "installation complete" page with Restart now, and
+# restarts once the operator continues (preseeding finish-install/reboot_in_progress skips it, as in Debian).
+# Without a frontend (a test run) it restarts after a pause.
 finish() {
     sync
-    say 'Installation complete. Remove the installation media; the host restarts now.'
-    sleep "${NEX_RESTART_DELAY:-10}"
+    say 'Installation complete. Remove the installation media; the host restarts when the operator continues.'
+    if [ -n "${DEBIAN_HAS_FRONTEND:-}" ]; then
+        . /usr/share/debconf/confmodule
+        cat > "$WORK/complete.templates" <<'TEMPLATE'
+Template: finish-install/reboot_in_progress
+Type: note
+Description: Installation complete
+ Nex Core is installed on ${DISKS}. Remove the installation media, then continue to restart the host.
+TEMPLATE
+        db_x_loadtemplatefile "$WORK/complete.templates" finish-install || true
+        db_subst finish-install/reboot_in_progress DISKS "$disks" || true
+        db_input critical finish-install/reboot_in_progress || true
+        db_go || true
+    else
+        sleep "${NEX_RESTART_DELAY:-10}"
+    fi
     reboot
 }
 

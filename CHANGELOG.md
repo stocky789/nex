@@ -18,6 +18,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > working. Numbered headings are created only when project owner cuts a release: move these
 > entries under that heading, leave `[Unreleased]` empty, then tag.
 
+### Minor Feature
+
+- Releases now publish a signed update tree to the project's update server for the stable and development channels, so hosts built from this release on can check for and install updates.
+
+### Bug Fixes
+
+- A new Nex Core host checks the project's update server by default, so Settings → Updates no longer reports "no update base URL is configured" on a fresh install.
+- The installer shows its "Installation complete" page again when it finishes, and restarts the host only after you choose **Restart now** (or **Continue** in the text installer). Before, it restarted the server on its own and flashed an X server error on the way down.
+- The local console of a Nex Core host is quiet: kernel audit messages for every service start and stop no longer scroll over the login prompt. Warnings and errors still show, and the system journal keeps everything.
+
 ## [0.4.32] — 2026-10-07
 
 ### Bug Fixes

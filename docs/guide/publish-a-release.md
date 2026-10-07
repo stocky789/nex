@@ -26,6 +26,16 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
 [operate the website](operate-website.md).
 [Return to the guide](README.md).
 
+## Update server
+
+The same run signs the release and publishes it to the update server (`<site>/updates/<channel>/`), which every host
+checks by default; see [software updates](software-updates.md). The release workflow needs the secrets
+`NEX_UPDATE_RELEASE_KEY` (the release signing key, used on the website host for one command) and `NEX_UPDATE_TRUST_B64`
+(the base64 of the signed `trust.json` pinned into the image). Make both with `scripts/update-publish.py keygen` and
+`trust`; keep the root key offline, because only a new image can change what hosts trust. Only the system image, source
+and compliance manifest are published; the newest five releases stay. A host installed from an image built without the
+trust document cannot verify updates.
+
 ## Release channels
 
 Nex publishes on two channels. **Stable** follows `main`. **Development** follows `dev`, the
