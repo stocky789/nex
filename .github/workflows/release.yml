@@ -347,14 +347,15 @@ jobs:
           NEX_CHANNEL: ${{ steps.version.outputs.channel }}
           NEX_VERSION: ${{ steps.version.outputs.version }}
           NEX_PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
-          NEX_UPDATE_RELEASE_KEY: ${{ secrets.NEX_UPDATE_RELEASE_KEY }}
+          NEX_UPDATE_RELEASE_KEY_B64: ${{ secrets.NEX_UPDATE_RELEASE_KEY_B64 }}
           NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
           NEX_DEPLOY_KEY: ${{ secrets.NEX_DEPLOY_KEY }}
           NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
           NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
         run: |
           set -euo pipefail
-          [ -n "${NEX_UPDATE_RELEASE_KEY:-}" ] || { echo 'NEX_UPDATE_RELEASE_KEY is required to publish updates' >&2; exit 1; }
+          # Base64, one line: the forge masks a single-line secret in the log, not a multi-line key.
+          [ -n "${NEX_UPDATE_RELEASE_KEY_B64:-}" ] || { echo 'NEX_UPDATE_RELEASE_KEY_B64 is required to publish updates' >&2; exit 1; }
           umask 077
           keydir=$(mktemp -d)
           trap 'rm -rf "$keydir"' EXIT
@@ -374,7 +375,7 @@ jobs:
             scripts/update-publish.py \
             "$target:$staging/"
           # shellcheck disable=SC2086
-          printf '%s\n' "$NEX_UPDATE_RELEASE_KEY" | ssh $ssh_opts "$target" "set -eu
+          printf '%s' "$NEX_UPDATE_RELEASE_KEY_B64" | base64 -d | ssh $ssh_opts "$target" "set -eu
             trap 'rm -rf $staging' EXIT
             (umask 077; cat > '$staging/release.key')
             umask 022
