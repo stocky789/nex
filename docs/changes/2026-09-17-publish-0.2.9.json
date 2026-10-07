@@ -1,7 +1,6 @@
 {
   "summary": "Publish Nex Core 0.2.9 to the public website and signed APT archive, then independently verify the full ISO, corresponding-source bundle, compliance manifest, both Debian package payloads, release aliases and signed repository metadata. API impact: none.",
   "paths": [
-    "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
     "docs/LICENSING.md",
     "docs/guide/publish-a-release.md",
     "docs/plans/2026-09-08-nex-platform.md",
@@ -34,7 +33,6 @@
   "verification": {
     "method": "On 2026-09-17, published both 0.2.9 Debian packages through the existing signed APT publisher and published the ISO, source bundle, compliance manifest and SHA-256 sidecars through the existing atomic download publisher. Full independent HTTPS downloads of all five binary/source/manifest/package payloads matched their recorded SHA-256 values. Both versioned and latest sidecars matched; the manifest bound the ISO and source hashes; gpgv reported a good InRelease signature from the published archive key; Packages contained both 0.2.9 entries and hashes; updates.json advertised 0.2.9; the website service remained active; staging was removed.",
     "evidence": [
-      "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
       "docs/LICENSING.md",
       "docs/guide/publish-a-release.md"
     ]

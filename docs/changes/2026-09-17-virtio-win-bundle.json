@@ -14,7 +14,6 @@
     "CHANGELOG.md",
     "docs/changes/2026-09-17-virtio-win-bundle.json",
     "docs/qa/2026-09-17-phase2-focused-lab.md",
-    "docs/qa/iso/2026-09-17-core-0.3.2-build.md",
     "docs/BUG_LEDGER.md",
     "website/src/routes/roadmap/+page.svelte",
     "docs/changes/2026-09-17-roadmap-0.3.1-status.json"
@@ -46,10 +45,7 @@
     "method": "installer/check.sh passed. Phase 2 focused probes passed on 0.3.1 nested lab. 0.3.2 ISO rebuilt; xorriso listed /nex/media/virtio-win.iso (877373440 bytes, SHA-256 303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d) and third-party tree; source bundle retains provided-sources/third-party/virtio-win and perl-exact-source.",
     "evidence": [
       "installer/check.sh",
-      "docs/qa/2026-09-17-phase2-focused-lab.md",
-      "docs/qa/iso/2026-09-17-core-0.3.2-build.md",
-      "dist/nex-core-0.3.2-amd64.iso.sha256",
-      "dist/nex-core-0.3.2-compliance-manifest.json"
+      "docs/qa/2026-09-17-phase2-focused-lab.md"
     ]
   }
 }

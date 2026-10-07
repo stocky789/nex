@@ -11,7 +11,6 @@
     "installer/README.md",
     "docs/plans/2026-09-08-nex-platform.md",
     "docs/BUG_LEDGER.md",
-    "docs/qa/iso/2026-09-08-installer-link.md",
     "docs/qa/iso/link/nic-link-detected.png",
     "docs/qa/iso/link/nic-no-link.png",
     "docs/qa/iso/link/nic-link-recovered.png",
@@ -37,7 +36,6 @@
   "verification": {
     "method": "Focused probe/status checks and native cable toggles preserving edits, unchecked erase rejection and reset, with actual results in QA report.",
     "evidence": [
-      "docs/qa/iso/2026-09-08-installer-link.md",
       "tests/integration/installer-link.py",
       "tests/integration/wizard-review.py"
     ]

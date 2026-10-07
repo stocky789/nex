@@ -2,7 +2,6 @@
   "summary": "Resolve the main branch merge and repair the managed VM browser gate.",
   "paths": [
     "docs/BUG_LEDGER.md",
-    "docs/qa/iso/2026-09-24-net-installer.md",
     "tests/integration/managed_vm_browser.py"
   ],
   "guide": {
@@ -28,8 +27,7 @@
     "method": "Inspected PR #8 forge run 4449 and ran the full simulated managed VM browser suite locally after fixing its activity selector and chart assertion; all 19 reported checks passed. Hosted rerun of the merged branch remains pending.",
     "evidence": [
       "tests/integration/managed_vm_browser.py",
-      "docs/BUG_LEDGER.md",
-      "docs/qa/iso/2026-09-24-net-installer.md"
+      "docs/BUG_LEDGER.md"
     ]
   }
 }

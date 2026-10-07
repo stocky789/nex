@@ -3,8 +3,7 @@
   "paths": [
     "CHANGELOG.md",
     "tests/test_release_version.py",
-    "docs/changes/2026-09-15-version-0.2.4.json",
-    "docs/qa/iso/2026-09-15-core-0.2.4-build.md"
+    "docs/changes/2026-09-15-version-0.2.4.json"
   ],
   "guide": {
     "impact": "none",
@@ -28,7 +27,6 @@
   "verification": {
     "method": "scripts/release-version.py --current --format both resolves '0.2.4 0.2.4'; release-version unit tests pass. The release was then built and published: both packages carry the corrected downgrade guard and their storage-format-v2 markers, the guard as shipped in 0.2.3 refuses the real 0.2.4 package while the corrected one accepts it, and the package downloaded back from the public archive matches the built digest and contains the fix. No live host was upgraded and no ISO boot test was run for this version.",
     "evidence": [
-      "docs/qa/iso/2026-09-15-core-0.2.4-build.md",
       "scripts/release-version.py",
       "tests/test_release_version.py",
       "CHANGELOG.md"

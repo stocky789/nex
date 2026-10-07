@@ -3,9 +3,8 @@
 ## Status
 
 This page covers authentication, sessions and browser responses for Nex Controller and the
-Nex Core host-local interface. Host-local builds use the OS **root** password; older security
-packages used a separate local account. Install matching service, web assets and
-authentication components before following the root-login instructions.
+Nex Core host-local interface. Host-local builds use the OS **root** password. Use matching service,
+web assets and authentication components before following the root-login instructions.
 
 Use a private management network or an established VPN. Direct Internet exposure is not
 supported by this development slice. The assessment uses

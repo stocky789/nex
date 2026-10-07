@@ -45,7 +45,6 @@
     "evidence": [
       "CHANGELOG.md",
       "docs/qa/2026-09-24-automatic-vm-io.md",
-      "docs/qa/iso/2026-09-24-net-installer.md",
       "scripts/release-version.py",
       "tests/test_release_version.py"
     ]

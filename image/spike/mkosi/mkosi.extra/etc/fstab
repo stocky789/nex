@@ -1,1 +1,0 @@
-LABEL=nex-data /var ext4 defaults,x-initrd.mount 0 2

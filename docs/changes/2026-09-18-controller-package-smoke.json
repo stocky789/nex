@@ -12,8 +12,7 @@
     "CHANGELOG.md",
     "docs/development.md",
     "docs/BUG_LEDGER.md",
-    "docs/plans/2026-09-14-production-readiness-handoff.md",
-    "docs/qa/2026-09-18-controller-package-smoke.md"
+    "docs/plans/2026-09-14-production-readiness-handoff.md"
   ],
   "guide": {
     "impact": "none",
@@ -34,11 +33,7 @@
   "verification": {
     "method": "python3 tests/integration/controller_package_smoke.py passed locally and inside a disposable Debian 13 container with real CGO-enabled and CGO-disabled Controller binaries in synthetic packages: the working package initialized SQLite, served UI/source and authenticated; the broken one was rejected with the original SQLite stub diagnostic. Focused package smoke wiring, distribution packaging, CI security, documentation-gate and privacy unit checks passed. API generation and worktree documentation checks passed. Independent review found no remaining substantive defects. New release artifact and hosted workflow execution are not claimed; see QA for limits.",
     "evidence": [
-      "docs/qa/2026-09-18-controller-package-smoke.md",
-      "tests/integration/controller_package_smoke.py",
-      "tests/test_controller_package_smoke.py",
-      "docs/qa/2026-09-17-phase2-gate/CLOSED.md",
-      "docs/qa/2026-09-17-nex-core-0.3.1-release.md"
+      "docs/qa/2026-09-17-phase2-gate/CLOSED.md"
     ]
   }
 }

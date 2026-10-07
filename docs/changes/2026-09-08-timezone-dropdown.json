@@ -7,7 +7,6 @@
     "docs/guide/install-nex-core.md",
     "installer/README.md",
     "docs/plans/2026-09-08-nex-platform.md",
-    "docs/qa/iso/2026-09-08-timezone-dropdown.md",
     "docs/qa/iso/timezone/timezone-dropdown.png",
     "docs/qa/iso/timezone/timezone-selected.png",
     "docs/qa/iso/timezone/review.png"
@@ -31,7 +30,6 @@
   "verification": {
     "method": "Compiled checks and native VM walkthrough; results and limits in QA report.",
     "evidence": [
-      "docs/qa/iso/2026-09-08-timezone-dropdown.md",
       "tests/integration/installer-qol.py",
       "tests/integration/wizard-review.py"
     ]

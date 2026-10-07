@@ -28,7 +28,6 @@
   "verification": {
     "method": "Compared CHANGELOG.md at release commit 76a28b6 and HEAD with the working tree, checked BUG-0218 to BUG-0257 against the 0.2.9 release QA record and git history (commit 4fb8570 lacks the Controller media drive field), and ran scripts/release-version.py --current --format both, which printed 0.3.0 0.3.0.",
     "evidence": [
-      "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
       "docs/BUG_LEDGER.md"
     ]
   }

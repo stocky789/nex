@@ -1,7 +1,6 @@
 {
   "summary": "Build and publish Nex Core/Controller 0.3.1 to the existing signed website APT archive and publish the exact ISO, corresponding sources, manifest and checksums to versioned/latest downloads. Record artifact verification and update publication status without closing feature acceptance gates.",
   "paths": [
-    "docs/qa/2026-09-17-nex-core-0.3.1-release.md",
     "docs/guide/publish-a-release.md",
     "docs/plans/2026-09-17-cpu-baseline.md",
     "docs/plans/2026-09-08-nex-platform.md",
@@ -30,8 +29,6 @@
   },
   "verification": {
     "method": "93 focused release/source/package/APT tests, installer checks, exact artifact/source/notice verification and Controller package runtime smoke passed. Final ISO BIOS/KVM install, first boot/reboot and BIOS/KVM+UEFI/TCG menus passed. Existing remote publishers completed, latest points to 0.3.1, retained versions preserved, staging removed and website active. Full public ISO/source/manifest/package downloads matched local hashes and sizes; versioned/latest sidecars and manifest bindings passed. InRelease verified against published and shipped archive keys; its Packages hash, both package payload entries and updates.json agreed. Independent review and documentation/privacy/diff checks passed. No hosted CI, Git-forge publication or live-host upgrade claimed.",
-    "evidence": [
-      "docs/qa/2026-09-17-nex-core-0.3.1-release.md"
-    ]
+    "evidence": ["CHANGELOG.md"]
   }
 }

@@ -39,8 +39,7 @@
     "evidence": [
       "docs/qa/2026-09-17-phase2-gate/CLOSED.md",
       "docs/qa/2026-09-17-phase2-gate/checks.md",
-      "docs/qa/2026-09-17-phase2-focused-lab.md",
-      "docs/qa/iso/2026-09-17-core-0.3.2-build.md"
+      "docs/qa/2026-09-17-phase2-focused-lab.md"
     ]
   }
 }

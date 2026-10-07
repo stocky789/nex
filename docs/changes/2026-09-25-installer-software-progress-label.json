@@ -3,8 +3,7 @@
   "paths": [
     "installer/gui/nex-shell.c",
     "tests/integration/installer-shell.py",
-    "docs/guide/install-nex-core.md",
-    "docs/qa/iso/2026-09-24-net-installer.md"
+    "docs/guide/install-nex-core.md"
   ],
   "guide": {
     "impact": "updated",
@@ -27,6 +26,6 @@
   },
   "verification": {
     "method": "Compile and run the installer-shell C check, rebuild the GTK frontend, and verify the remastered local ISO and network-source preflight. A new visual walkthrough remains outstanding.",
-    "evidence": ["docs/qa/iso/2026-09-24-net-installer.md"]
+    "evidence": ["CHANGELOG.md"]
   }
 }

@@ -166,7 +166,7 @@ Status 2026-09-22 (installer): implemented in the working tree, lab acceptance O
 the multiple-disk Disk step in both frontends, per-disk validation with the 10 % rule, the partman
 RAID recipe, GRUB on every member, `mdadm` in the image, `installer/check.sh` assertions, the
 [install guide](../guide/install-nex-core.md) and the
-[ISO QA record](../qa/iso/2026-09-22-installer-mirror.md). Source checks and the wizard screens
+ISO QA record (removed; see git history). Source checks and the wizard screens
 passed and two-disk installs reached the base system, but no mirrored host was booted: the boot,
 disk-detach, leftover-array and single-disk end-to-end checks are listed as outstanding in that
 record, so this slice is not complete. Three findings changed the design above: partman-md's

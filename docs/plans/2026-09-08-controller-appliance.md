@@ -82,7 +82,7 @@ Keep development and simulation limits explicit. No invented successful walkthro
 - [x] Host Debian package installation and automatic appliance deployment verified end to end.
 - [x] Exact 0.3.2 local snapshot: rebuilt ISO/package/appliance identity and signature,
   offline BIOS/KVM install/reboot, installed Core service and standalone appliance
-  boot/authentication/secret cleanup passed in the [artifact lab](../qa/2026-09-18-release-artifact-lab.md).
+  boot/authentication/secret cleanup passed in the artifact lab (removed; see git history).
   The NIC-less ISO service test used explicit loopback recovery configuration.
 - [x] ISO local deployment → enrollment/adoption → first managed VM, and
   installation/bootstrap failure recovery, on the 0.4.5 development ISO in a disposable
@@ -92,7 +92,7 @@ Keep development and simulation limits explicit. No invented successful walkthro
   real firmware remain separate gates.
 
 Evidence: [clean deployment and recovery](../qa/appliance/lab.md),
-[package installation](../qa/appliance/package.md), [browser states](../qa/appliance/browser.md),
+[browser states](../qa/appliance/browser.md),
 and [checks/review](../qa/appliance/checks.md). Simulated lost-response/error checks
 are distinguished from real KVM boot, power and service-restart results.
 
@@ -131,7 +131,7 @@ Apply only to staged fresh-install configuration; do not migrate live hosts remo
 API impact: existing contract — local service discovery already recognizes the default-route
 Linux bridge and reports it through existing preflight/deployment contracts. No Controller
 operation or agent command changes. Guide impact: updated — automatic bridge availability
-and host IP placement. Native validation: [bridge QA](../qa/iso/2026-09-08-management-bridge.md).
+and host IP placement. Native validation: bridge QA (removed; see git history).
 
 ## Deployment usability — 2026-09-08
 

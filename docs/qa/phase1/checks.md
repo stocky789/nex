@@ -35,8 +35,8 @@ systemd unit syntax checked against temporary paths; no units installed.
 
 ## Documentation and CI
 
-- `check_docs.py --all` on the full working tree failed on the installer-owned link to the then
-  missing `docs/qa/iso/2026-09-08-nex-wizard.md` (not fabricated or removed).
+- `check_docs.py --all` on the full working tree failed on the installer-owned link to a then
+  missing installer QA page (not fabricated or removed; that page has since been removed, see git history).
 - Isolated Git snapshot (baseline + exact Phase 1 paths): `check_docs.py --base … --head …` passed
   for 69 changed paths. Not a green combined tree or hosted CI.
 - GitHub and Gitea Phase 1 workflows configure Go race, API/source/tool, UI, browser/process and

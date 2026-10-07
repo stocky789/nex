@@ -343,7 +343,7 @@ build 0.4.8); the walkthrough is recorded in the
 [console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
 captured on the earlier layout and still applies to the behaviour it describes.
 
-The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) booted
+The 0.3.2 local artifact lab (removed; see git history) booted
 the exact bundled appliance separately in a disposable VM and verified DHCP,
 pinned TLS, bootstrap login and secret cleanup. It did not repeat this guide's
 host-local deployment, enrollment or adoption workflow on the new ISO; that
@@ -370,7 +370,7 @@ Recorded checks and their limits:
   [restored inventory](../qa/appliance/final/restored-inventory.json) and
   [replacement-host reboot](../qa/appliance/final/replacement-host-reboot.txt) (historical
   `0.1.0+lab6.1` artifacts).
-- Security build: [package](../qa/security/package.md), [nested-KVM lab](../qa/security/lab.md) and
+- Security build: [nested-KVM lab](../qa/security/lab.md) and
   [browser](../qa/security/browser.md) checks; separate-host restore was not rerun.
 - [Desktop rebuild](../qa/controller-desktop-rebuild/checks.md),
   [deployment usability](../qa/appliance/deployment-usability.md),

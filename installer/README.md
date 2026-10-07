@@ -229,9 +229,7 @@ Container Services remain later milestones.
 Either mode configures the selected management adapter on `br0` for the installed host;
 neither configures a firewall policy. Use an isolated lab network and only disposable
 disks. If graphics fail, choose minimal installation before
-accepting disk writes; it asks the same questions and installs the same host. [Wizard QA](../docs/qa/iso/2026-09-08-nex-wizard.md) records actual
-checks and limits; [installer usability QA](../docs/qa/iso/2026-09-08-installer-qol.md)
-tracks the fullscreen and input-control checks separately. Earlier custom-shell evidence
+accepting disk writes; it asks the same questions and installs the same host. The earlier wizard and installer usability QA reports were removed (see git history). Earlier custom-shell evidence
 does not verify the new workflow.
 
 ## Check the installed host

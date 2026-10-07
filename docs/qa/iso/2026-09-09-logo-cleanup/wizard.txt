@@ -1,1 +1,0 @@
-PASS: native fullscreen, timezone dropdowns, password reset, shared hostname and disk rejection (800x600, 0 NICs, kvm); evidence: /tmp/nex-logo-wizard-final

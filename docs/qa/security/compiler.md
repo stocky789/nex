@@ -9,7 +9,7 @@ Controller image. Disposable development artifacts; not release certification.
 Scanner `govulncheck v1.7.0`, database `https://vuln.go.dev` updated `2026-09-02 19:12:04 UTC`,
 from `.cache/security-tools/`, plus `go version -m`. Binary mode can match unreachable symbols
 ([scanner limitations](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck#hdr-Limitations)).
-Host package results: [package checks](package.md).
+Host package results page removed; see git history.
 
 ## Before the change
 

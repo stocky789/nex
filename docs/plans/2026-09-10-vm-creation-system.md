@@ -63,7 +63,7 @@ milestone; each item below is either in this slice or listed under follow-ups wi
   **API impact: changed contract**, including new authenticated Core peer discovery routes;
   **guide impact: updated** in the creation/edit guides. See the
   [CPU plan](2026-09-17-cpu-baseline.md) and [checks and limits](../qa/2026-09-17-cpu-baseline.md).
-  This is included in the [0.3.1 website/APT release](../qa/2026-09-17-nex-core-0.3.1-release.md);
+  This is included in the 0.3.1 website/APT release (removed; see git history);
   existing operator hosts were not upgraded, and migration acceptance remains open.
 - **Start after creation is Core-owned.** `StartAfterCreate` is carried in `vm-create`; after
   disks exist and the definition is verified, Core records its one start attempt in the creation

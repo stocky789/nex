@@ -24,7 +24,6 @@
   "verification": {
     "method": "Read the current build script, platform and appliance acceptance records, both September 18 QA reports and implemented-change assessments; review local links and scope. Run worktree docs/privacy/diff checks and independent roadmap review. No new application, hosted CI or native lab execution is claimed.",
     "evidence": [
-      "docs/qa/2026-09-18-controller-package-smoke.md",
       "docs/qa/2026-09-18-master-vm-placement.md",
       "docs/plans/2026-09-08-controller-appliance.md",
       "installer/build.sh"

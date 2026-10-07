@@ -33,8 +33,7 @@
     "method": "Listed the checksum-verified candidate ISO and recorded its embedded licenses. The installer regression check now rejects any virtio-win staging in the public build, and final 0.2.9 ISO inspection confirms it is absent. The Fedora src.rpm and exact SPICE source/license versions remain unverified, so automatic bundling remains open.",
     "evidence": [
       "tests/test_distribution_packaging.py",
-      "docs/LICENSING.md",
-      "docs/qa/2026-09-16-nex-core-0.2.9-release.md"
+      "docs/LICENSING.md"
     ]
   }
 }

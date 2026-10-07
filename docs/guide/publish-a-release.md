@@ -297,15 +297,15 @@ pruning/index regeneration (`test_prune_iso_packages.py`).
 
 For 0.2.9, the exact final-artifact hashes, final-media inspection, boot/install results and public
 website downloads are recorded in the
-[release QA evidence](../qa/2026-09-16-nex-core-0.2.9-release.md). Hosted CI remains pending.
+release QA evidence (removed; see git history). Hosted CI remains pending.
 Do not substitute an earlier image, a staging tree, or a successful unit test for those checks.
 
-For 0.3.1, see the [exact-artifact release report](../qa/2026-09-17-nex-core-0.3.1-release.md)
+For 0.3.1, see the exact-artifact release report (removed; see git history)
 for rebuilt packages, matching sources/notices, BIOS installation and reboot, both firmware
 boot menus and public delivery checks. This was direct website publication;
 no Git-forge release or hosted CI completion is implied.
 
-For the development 0.4.12 netinst changes, see [network-installer verification](../qa/iso/2026-09-24-net-installer.md). Local publication fixtures do not establish a hosted release run.
+For the development 0.4.12 netinst changes, see network-installer verification (removed; see git history). Local publication fixtures do not establish a hosted release run.
 
 The download-page regression checks cover generated installer/source
 links, hidden payload names, retained-version backfill, and nginx HTML delivery while

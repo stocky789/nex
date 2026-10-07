@@ -5,7 +5,6 @@
     "docs/LICENSING.md",
     "docs/guide/install-nex-core.md",
     "docs/plans/2026-09-08-nex-platform.md",
-    "docs/qa/iso/2026-09-08-custom-installer.md",
     "docs/qa/iso/custom/blank.png",
     "docs/qa/iso/custom/cancel.png",
     "docs/qa/iso/custom/complete.png",
@@ -44,7 +43,6 @@
   "verification": {
     "method": "Build ISO and actual GTK module; compile classifier checks; interact with BIOS/UEFI modes, 800x600 keyboard, password errors and disk-confirmation workflow in disposable QEMU. Inspect screenshots and source archive; limits in QA.",
     "evidence": [
-      "docs/qa/iso/2026-09-08-custom-installer.md",
       "tests/integration/installer-shell.py",
       "installer/build-gui.sh"
     ]

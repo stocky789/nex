@@ -396,14 +396,9 @@ stand-in for the installer's question system, with stand-ins for the keyboard an
 tools, so real console rendering, real keyboard loading, real disk hardware, a booted ISO
 installation through the text interface and its installed networking all remain unverified.
 
-Installer details are recorded in
-the [Nex wizard](../qa/iso/2026-09-08-nex-wizard.md), [usability](../qa/iso/2026-09-08-installer-qol.md),
-[timezone](../qa/iso/2026-09-08-timezone-dropdown.md), [hostname](../qa/iso/2026-09-08-installer-hostname.md),
-[link and erase confirmation](../qa/iso/2026-09-08-installer-link.md),
-[Xen disk](../qa/iso/2026-09-08-installer-xen-disk.md), [keyboard notice](../qa/iso/2026-09-08-keyboard-notice.md),
-[progress](../qa/iso/2026-09-08-installer-progress.md), [continuous progress](../qa/iso/2026-09-08-continuous-progress.md),
-[management bridge](../qa/iso/2026-09-08-management-bridge.md) and
-[DHCP preview](../qa/iso/2026-09-09-installer-dhcp.md) reports.
+The [DHCP preview](../qa/iso/2026-09-09-installer-dhcp.md) report records installer details; the earlier
+per-feature installer reports (wizard, usability, timezone, hostname, link, Xen disk, keyboard notice,
+progress and management bridge) were removed; see git history.
 
 [Review-fix checks](../qa/2026-10-03-immutable-review-fixes.md) exercised all-target
 offline preflight with controlled block observations, actual scratch-file alias refusal, gzip

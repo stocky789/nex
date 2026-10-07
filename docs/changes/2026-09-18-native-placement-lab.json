@@ -6,7 +6,6 @@
     "docs/plans/2026-09-14-production-readiness-handoff.md",
     "docs/plans/2026-09-18-master-vm-placement.md",
     "docs/qa/2026-09-18-master-vm-placement.md",
-    "docs/qa/2026-09-18-controller-package-smoke.md",
     "docs/qa/2026-09-18-native-placement-lab.md",
     "internal/controller/storage.go",
     "internal/controller/storage_test.go",

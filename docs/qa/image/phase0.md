@@ -8,20 +8,20 @@ establishes physical-hardware behavior. The run was cut short at the owner's req
 **not run** were not run; nothing is reported as passed that was not observed.
 
 - API impact: none. Guide impact: none. State owner: none (no product code; lab scripts only).
-- Lab sources (throwaway, not product code): `image/spike/` (`tools/Dockerfile`, `mkosi/`, `build.sh`, `vm.py`,
-  `lab.py`, `scripts/`). The per-spike orchestration was driven interactively through those helpers and is
+- Lab sources (throwaway, not product code; a Dockerfile, mkosi tree, `build.sh`, `vm.py`, `lab.py` and
+  helper scripts, called `<spike>` below) were removed from the tree after this run; Git history has them. The per-spike orchestration was driven interactively through those helpers and is
   reproduced as commands below, not as a scripted suite.
 
 ## Tooling and inputs
 
 | Item | Value |
 |---|---|
-| Tools | Debian 13 container `nex-spike-tools` (`image/spike/tools/Dockerfile`): mkosi 25.3, systemd/ukify/repart 257.13, erofs-utils 1.8.6, cryptsetup (veritysetup), sbsigntool, python3-virt-firmware 24.11, diffoscope 297, shim-signed. Workstation distribution was not Debian; no host package was installed. |
+| Tools | Debian 13 container `nex-spike-tools` (from the removed lab Dockerfile): mkosi 25.3, systemd/ukify/repart 257.13, erofs-utils 1.8.6, cryptsetup (veritysetup), sbsigntool, python3-virt-firmware 24.11, diffoscope 297, shim-signed. Workstation distribution was not Debian; no host package was installed. |
 | Package source | `snapshot.debian.org` archive `20260929T000000Z` (trixie), set as `Mirror=` (mkosi 25.3 has no `Snapshot=` option) |
 | Kernel | 6.12.111+deb13-amd64 (`erofs`, `dm-verity`, `overlay` are modules; `OVERLAY_FS_INDEX`, `METACOPY`, `REDIRECT_DIR` are all off in this config) |
 | VM | QEMU 11.1 + KVM, OVMF 4M (`OVMF_CODE.4m` / `.secboot.4m`), virtio-blk, control shell on a second serial port |
 | Image | `mkosi` `Format=disk`, `Bootloader=systemd-boot`, UKI; repart: ESP 512 MiB, `nex-root-a` 2 GiB erofs + `nex-verity-a` 64 MiB (`Verity=data/hash`), empty `nex-root-b`/`nex-verity-b` of the same sizes, `nex-data` 1 GiB ext4 |
-| Build | `image/spike/build.sh <outdir> -f build` (about 2.5 min with a warm package cache, about 5.5 min cold) |
+| Build | `<spike>/build.sh <outdir> -f build` (about 2.5 min with a warm package cache, about 5.5 min cold) |
 
 ## Result table
 
@@ -54,8 +54,8 @@ The package set is the spike set, not `installer/packages.txt`, so the root size
 ## Commands used (reproduction sketch)
 
 ```
-docker build -t nex-spike-tools image/spike/tools
-image/spike/build.sh .cache/spike/build1 -f build          # S9: second run to .cache/spike/build2
+docker build -t nex-spike-tools <spike>/tools
+<spike>/build.sh .cache/spike/build1 -f build          # S9: second run to .cache/spike/build2
 # release set from the extracted tree (fixed -T/-U, fixed verity salt):
 scripts/mkrelease.sh <label> '<shell edit of the tree>'      # mkfs.erofs + veritysetup format -> roothash
 scripts/mkuki.sh <out.efi> <label> <roothash> [cmdline...]   # ukify build; SIGN=1 uses a lab key

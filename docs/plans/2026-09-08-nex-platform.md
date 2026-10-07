@@ -34,7 +34,7 @@ Core peer routes; **guide impact: updated**. See the [CPU plan](2026-09-17-cpu-b
 and [native/runtime, browser and regression evidence](../qa/2026-09-17-cpu-baseline.md).
 Phase 2 is closed separately ([close record](../qa/2026-09-17-phase2-gate/CLOSED.md)); this
 CPU note does not establish migration/heterogeneous physical-pool acceptance. Upgrade
-Controller before Core. The [0.3.1 release report](../qa/2026-09-17-nex-core-0.3.1-release.md)
+Controller before Core. The 0.3.1 release report (removed; see git history)
 records website/APT publication; no upgrade of existing operator hosts is claimed.
 
 **Core project priority, 2026-09-09:** project owner confirmed successful installation and
@@ -218,7 +218,7 @@ project owner selected AGPL for original Nex code on 2026-09-08; apply AGPL-3.0-
 
 **API impact of the standalone ISO slice: none** — installer packaging, release identity, and repository configuration introduce no Controller/Core or client-facing API; enrollment remains deferred.
 
-**Installer account decision, 2026-09-08:** ask only for a root password and its confirmation; skip ordinary user creation using Debian Installer’s native account policy. An installer hook rejects blank root passwords instead of Debian’s ordinary-user fallback; mismatched confirmation retains Debian’s retry. Keep system/service accounts and local root recovery access; root SSH remains disabled. **API impact: none** — boot menu → preseed → Debian account setup affects local OS credentials only; there is no Controller operation, Core agent command/result, or client-facing API in this flow. See the [root-only installer verification](../qa/iso/2026-09-08-root-account.md) for the exact rebuilt image, password-dialog checks, and installation results.
+**Installer account decision, 2026-09-08:** ask only for a root password and its confirmation; skip ordinary user creation using Debian Installer’s native account policy. An installer hook rejects blank root passwords instead of Debian’s ordinary-user fallback; mismatched confirmation retains Debian’s retry. Keep system/service accounts and local root recovery access; root SSH remains disabled. **API impact: none** — boot menu → preseed → Debian account setup affects local OS credentials only; there is no Controller operation, Core agent command/result, or client-facing API in this flow. See the root-only installer verification (removed; see git history) for the exact rebuilt image, password-dialog checks, and installation results.
 
 **Root SSH decision, 2026-09-28 (supersedes the SSH portion of the 2026-09-08 account decision):** fresh Nex Core installs and newly built Controller appliances deployed from Core enable root password SSH on their management networks. The Core installer accepts any nonempty root password up to its existing 512-byte limit; the prior eight-character minimum is removed. Controller deployment keeps its existing nonempty password rule and 1024-byte limit. Core uses its installer root password; the appliance uses the Controller administrator password set during deployment after first boot unlocks the guest account. Existing installations and appliances are not changed by rebuilding these artifacts. Keep access on a private management network or VPN and verify the SSH host key before entering a password. The Controller still enrolls hosts through the authenticated Core HTTPS API, not SSH. **API impact: none** — installer and appliance SSH policy and the existing deployment seed change no Controller/Core or client-facing API contract; the deployment password validation remains unchanged. **Guide impact: updated** — installation, host verification and appliance access instructions describe the new defaults. No new pool setting or durable product state is added.
 
@@ -246,7 +246,7 @@ question/answer and installer operations → installed host; no Controller opera
 Core agent command/result or client-facing Nex API. The existing upstream frontend ABI
 is pinned and checked during the build, rather than introducing a new local service.
 **Guide impact: updated** — custom interface, navigation, limits and matching QA evidence.
-See [custom GUI verification](../qa/iso/2026-09-08-custom-installer.md).
+See custom GUI verification (removed; see git history).
 
 **Installer logo correction, 2026-09-08:** replace the placeholder typed n tile and
 system-font product heading with the approved Nex Core lockup from the existing brand board.
@@ -254,7 +254,7 @@ Render the raster through native GTK image support and retain it with the fronte
 No new logo design or dependency is needed; production vector masters remain outstanding.
 **API impact: none** — local header rendering only; Controller/Core and client APIs are absent.
 **Guide impact: none** — installation choices, controls and recovery steps are unchanged.
-See [logo verification](../qa/iso/2026-09-08-installer-logo.md).
+See logo verification (removed; see git history).
 
 **Installer workflow correction, 2026-09-08:** project owner rejected the earlier custom shell as
 still following Debian's question-by-question workflow. Replace the primary GUI flow with
@@ -282,7 +282,7 @@ or client-facing Nex API exists in this flow. Local handoff validation is implem
 same slice; no service endpoint is introduced.
 **Guide impact: updated** — replace obsolete GUI question-flow instructions with the actual
 pages, NIC/VLAN constraints, disk confirmation and local recovery. Acceptance remains subject
-to actual evidence in [Nex wizard QA](../qa/iso/2026-09-08-nex-wizard.md), including independent
+to actual evidence in Nex wizard QA (removed; see git history), including independent
 review; earlier installer checks cannot establish the new workflow's completion.
 
 **Installer usability correction, 2026-09-08:** project owner reported unused screen space and
@@ -309,10 +309,10 @@ client-facing API changes.
 **Guide impact: updated** — document timezone dropdowns, keyboard selection, password visibility
 and the revised screen/navigation structure in the installation guide. Actual artifact,
 visual checks, regression
-results and outstanding limits belong in [installer usability QA](../qa/iso/2026-09-08-installer-qol.md);
+results and outstanding limits belong in installer usability QA (removed; see git history);
 this scope decision does not establish those checks passed.
 
-**Standalone alpha result, 2026-09-08:** branded BIOS/UEFI menus, offline BIOS installation, installed services, a nested libvirt KVM guest boot, host reboot persistence, and Nex identity preservation across a `base-files` reinstall passed on the final image. See the [exact artifact and QA evidence](../qa/iso/2026-09-08-alpha1.md). This completed the first ISO lab slice, not the full Phase 0/3 gates. **Final 0.2.9 lab result, 2026-09-17:** the exact release ISO (`4c44133a…2f2b9`) passed BIOS/UEFI menu boots, unattended offline UEFI installation, first boot and reboot under TCG; Secure Boot installation on a host, full guest networking/data persistence, physical hardware and controller enrollment remain outstanding.
+**Standalone alpha result, 2026-09-08:** branded BIOS/UEFI menus, offline BIOS installation, installed services, a nested libvirt KVM guest boot, host reboot persistence, and Nex identity preservation across a `base-files` reinstall passed on the final image. See the exact artifact and QA evidence (removed; see git history). This completed the first ISO lab slice, not the full Phase 0/3 gates. **Final 0.2.9 lab result, 2026-09-17:** the exact release ISO (`4c44133a…2f2b9`) passed BIOS/UEFI menu boots, unattended offline UEFI installation, first boot and reboot under TCG; Secure Boot installation on a host, full guest networking/data persistence, physical hardware and controller enrollment remain outstanding.
 
 **Debian licensing review, 2026-09-08:** retain AGPL-3.0-only for original Nex code. The current installer aggregates separate Debian components under their own licenses; this does not make the whole ISO AGPL. Copying upstream code, linking libraries, or adding plugins requires a separate compatibility review, especially for GPL-2.0-only code. See the [licensing review and release evidence](../LICENSING.md).
 
@@ -542,7 +542,7 @@ later defects are bugs, not a reopened phase.
    **Host hardware and sensors, 2026-09-22:** Core discovers its own hardware and records hwmon temperatures in host usage history; the host **Stats** tab gains a hardware panel, gauges and a temperature chart. State owner: Core. Implemented in the working tree with simulated evidence only; the real-hardware walkthrough belongs to the project owner and is outstanding. See the [hardware and sensors plan](2026-09-22-host-hardware-and-sensors.md).
    **VirtIO driver media, 2026-09-17:** the second driver disc is complete. **0.3.2** ships
    Fedora virtio-win 0.1.302 on the Core ISO with retained Fedora corresponding source
-   ([ISO build](../qa/iso/2026-09-17-core-0.3.2-build.md)); hosts seed `/usr/share/nex/media/virtio-win.iso`
+   (ISO build (removed; see git history)); hosts seed `/usr/share/nex/media/virtio-win.iso`
    and the create wizard can use it. API impact: existing contract; no schema change.
 
 **UX acceptance for Phases 1–2:** follow the [phase-fit criteria](2026-09-08-feature-and-ux-review.md#ux-opportunity-and-phase-fit) for enrollment, useful pool health, staged VM creation, safe homelab defaults, ISO drag/drop with a file-picker alternative, and read-only observed network relationships. Review real desktop/narrow-screen and keyboard operation, including empty, unauthorized, stale, failed, and interrupted states. Prepare semantic theme tokens while retaining the approved light default; a dark theme remains a follow-on candidate.
@@ -552,7 +552,7 @@ later defects are bugs, not a reopened phase.
 **Phase 2 status — CLOSED 2026-09-17** (project owner). Gate5 functional evidence
 (`[gate report](../qa/2026-09-17-phase2-gate/checks.md)`), BUG-0256 + admission on published
 0.3.1 (`[focused lab](../qa/2026-09-17-phase2-focused-lab.md)`), VirtIO on 0.3.2
-(`[ISO build](../qa/iso/2026-09-17-core-0.3.2-build.md)`). Owner decisions and accepted
+(`ISO build (removed; see git history)`). Owner decisions and accepted
 residuals: `[close record](../qa/2026-09-17-phase2-gate/CLOSED.md)`.
 
 - [x] Item 1: host-local storage registered and adopted with host accessibility (gate5 row 2).
@@ -589,7 +589,7 @@ Preseed supports package/repository and installation configuration. Offline oper
 
 #### Artifact lab sign-off — 2026-09-18
 
-The [0.3.2 artifact lab](../qa/2026-09-18-release-artifact-lab.md) signs off these
+The 0.3.2 artifact lab (removed; see git history) signs off these
 bounded Phase 3 checks for its recorded source/archive hashes, excluding later
 storage edits. This is an unpublished local build, not full phase acceptance.
 
@@ -1778,7 +1778,7 @@ Use shared validation in the GUI and protected backend. Store the first label as
 Debian short hostname, the remaining suffix as domain, and retain full/short aliases.
 API impact: none; local installer settings remain private, with no Controller/Core or
 client API operation changes. Guide impact: updated. Research and executed verification
-belong in [hostname QA](../qa/iso/2026-09-08-installer-hostname.md).
+belong in hostname QA (removed; see git history).
 
 ### Installer live link indication — 2026-09-08
 
@@ -1787,7 +1787,7 @@ read administrative/carrier state, and refresh the selected NIC while Network is
 A failed or unavailable probe must not be reported as a disconnected cable. Preserve
 in-progress form edits and distinguish link from IP/VLAN/gateway connectivity.
 API impact: none; local observation only, no Controller/Core or client API changes.
-Guide impact: updated; record results in [link-status QA](../qa/iso/2026-09-08-installer-link.md).
+Guide impact: updated; record results in link-status QA (removed; see git history).
 
 ### Installer erase-confirmation clarification — 2026-09-08
 
@@ -1806,7 +1806,7 @@ A green light accompanies detected carrier; other states retain neutral lights a
 Verbose hostname hover explanations are removed; validation and errors remain.
 API impact: none; local installer discovery/validation and display use no Controller operation,
 agent command/result or client-facing API. Guide impact: updated.
-See [paravirtual disk QA](../qa/iso/2026-09-08-installer-xen-disk.md) for evidence and paravirtual runtime limits.
+See paravirtual disk QA (removed; see git history) for evidence and paravirtual runtime limits.
 
 Keyboard startup feedback correction: successful layout application is silent; genuine
 errors still block credentials and layout changes still clear both password fields.

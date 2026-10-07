@@ -108,6 +108,6 @@ from optional IOMMU and secure-guest warnings, on `0.2.10~gate3`. The gate5 run 
 and confirmed its identity and VMs with its own harness, but Step 4 was not repeated from the
 local console. The Step 1–3 commands were also rehearsed earlier on a disposable host. See the
 [guide command rehearsal](../qa/guide-host-checks.md), the
-[alpha1 QA report](../qa/iso/2026-09-08-alpha1.md) and the
+alpha1 QA report (removed; see git history) and the
 [single Nex Core version checks](../qa/single-nex-core-version.md). These checks do not establish
 guest OS installation, guest networking, SSH login, time synchronization or upgrades.

@@ -66,9 +66,8 @@ be authenticated or checked against trusted release checksums before use.
    disposable BIOS/UEFI network installation, first boot and interrupted-download
    recovery before claiming installation acceptance. Inspect actual forge runs after
    an owner-authorized push; workflow definitions alone do not prove CI success.
-6. Keep the [installation guide](../guide/install-nex-core.md) and
-   [QA report](../qa/iso/2026-09-24-net-installer.md) aligned with actual behavior and
-   executed evidence. Outstanding hardware, artifact and publication gates remain open.
+6. Keep the [installation guide](../guide/install-nex-core.md) aligned with actual behavior and
+   executed evidence (the earlier QA report was removed; see git history). Outstanding hardware, artifact and publication gates remain open.
 
 Network delivery changes where packages are fetched, not redistribution obligations.
 Follow [licensing requirements](../LICENSING.md): inventory embedded components and

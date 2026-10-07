@@ -11,7 +11,7 @@
    "result": "pass 12/12"
   },
   {
-   "command": "browser walkthrough upgraded appliance + core local (browser-results.json)",
+   "command": "browser walkthrough upgraded appliance + core local (fresh/browser-results.json)",
    "result": "pass 15/15"
   },
   {

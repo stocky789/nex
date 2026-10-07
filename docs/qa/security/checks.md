@@ -4,7 +4,7 @@ Date: 2026-09-08. Scope: Controller and host-local web platforms, agent trust an
 delivery. API impact **changed contract** (client session/cookie/lifetime/admission, bootstrap
 password; no agent protocol change). Guide impact **updated** (reauthentication, deployment).
 
-Evidence: [browser](browser.md), [native lab](lab.md), [compiler](compiler.md), [package](package.md).
+Evidence: [browser](browser.md), [native lab](lab.md), [compiler](compiler.md).
 
 ## Assessment
 

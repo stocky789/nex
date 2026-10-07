@@ -59,8 +59,7 @@
     "evidence": [
       "internal/vmhost/bundled_media_test.go",
       "web/src/vm-create.test.mjs",
-      "tests/test_distribution_packaging.py",
-      "docs/qa/2026-09-16-nex-core-0.2.9-release.md"
+      "tests/test_distribution_packaging.py"
     ]
   }
 }

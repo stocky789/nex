@@ -18,7 +18,6 @@
     ".github/workflows/installer.yml",
     ".gitea/workflows/installer.yml",
     "docs/guide/install-nex-core.md",
-    "docs/plans/2026-09-21-minimal-install-parity.md",
     "docs/changes/2026-09-21-minimal-install-parity.json"
   ],
   "guide": {
@@ -35,7 +34,7 @@
   },
   "roadmap": {
     "impact": "none",
-    "reason": "No published roadmap milestone changes: this brings an existing installer mode up to the behaviour the guide already described, and the review round fixes defects in that unreleased work. The decision, rejected alternatives, review-round scope decisions and held-back scope are recorded in docs/plans/2026-09-21-minimal-install-parity.md.",
+    "reason": "No published roadmap milestone changes: this brings an existing installer mode up to the behaviour the guide already described, and the review round fixes defects in that unreleased work.",
     "pages": []
   },
   "state": {
@@ -47,8 +46,7 @@
     "evidence": [
       "tests/integration/installer-text-wizard.py",
       "installer/check.sh",
-      "docs/BUG_LEDGER.md",
-      "docs/plans/2026-09-21-minimal-install-parity.md"
+      "docs/BUG_LEDGER.md"
     ]
   }
 }

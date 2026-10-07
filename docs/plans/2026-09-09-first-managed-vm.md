@@ -19,7 +19,7 @@ inventing the installation environment, artifact digest or a fresh agent-run
 walkthrough. A separate worker owns the logo correction. Website, repositories
 and release/download work remain with their existing owners.
 
-The [logo correction](../qa/iso/2026-09-09-logo-cleanup.md) now has native
+The logo correction (its QA record was removed; see git history) had native
 before/after evidence: replace the textured reference-board crop with a dedicated
 transparent lockup while preserving header allocation. API impact: **none** for
 this local GTK presentation change; guide impact: **none** because installation

@@ -13,7 +13,6 @@
     "docs/guide/install-nex-core.md",
     "docs/plans/2026-09-08-nex-platform.md",
     "docs/BUG_LEDGER.md",
-    "docs/qa/iso/2026-09-08-installer-hostname.md",
     "docs/qa/iso/hostname/network-hostname.png",
     "docs/qa/iso/hostname/host-after-network-edit.png",
     "docs/qa/iso/hostname/review.png"
@@ -37,7 +36,6 @@
   "verification": {
     "method": "Standards review, compiled boundary tests, backend generated configuration checks and native GUI walkthrough; exact results in QA report.",
     "evidence": [
-      "docs/qa/iso/2026-09-08-installer-hostname.md",
       "tests/integration/installer-hostname.py",
       "tests/integration/installer-network.c"
     ]

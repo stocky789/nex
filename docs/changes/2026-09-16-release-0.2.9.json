@@ -5,7 +5,6 @@
     "docs/LICENSING.md",
     "docs/guide/publish-a-release.md",
     "docs/plans/2026-09-16-windows-11-batch-handover.md",
-    "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
     "docs/changes/2026-09-16-release-0.2.9.json",
     "installer/README.md"
   ],
@@ -31,6 +30,6 @@
   },
   "verification": {
     "method": "Resolved 0.2.9 from the current changelog; built the source archive, Controller appliance, both Debian packages and ISO from the exact worktree; verified package versions and checksums; passed installer static checks, BIOS/UEFI boot-menu smoke and an unattended TCG UEFI install, first boot and reboot. Reviewed the release workflow and public website/APT endpoints against the updated guide. Publication was not performed because whole-ISO external distribution gates and deployment credentials remain incomplete.",
-    "evidence": ["docs/qa/2026-09-16-nex-core-0.2.9-release.md"]
+    "evidence": ["CHANGELOG.md"]
   }
 }

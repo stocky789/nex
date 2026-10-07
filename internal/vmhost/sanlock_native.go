@@ -41,8 +41,6 @@ type SanlockResourceConfig struct {
 	MasterAuthorized bool
 }
 
-var sanlockJoinLockspace = joinSanlockLockspace
-
 const joinSanlockLockspace = `
 import json, sys, sanlock
 r=json.load(sys.stdin)

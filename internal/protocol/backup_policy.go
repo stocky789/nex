@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"sort"
 	"time"
 )
@@ -482,12 +481,4 @@ func (p BackupPolicy) EffectiveCaptureMode(vmID string) string {
 		}
 	}
 	return p.CaptureMode
-}
-
-func FormatBackupOccurrence(t time.Time) string {
-	return t.UTC().Format(time.RFC3339)
-}
-
-func BackupPolicySummary(p BackupPolicy) string {
-	return fmt.Sprintf("%s rev=%d paused=%v next=%s", p.Name, p.Revision, p.Paused, FormatBackupOccurrence(p.NextDispatchAt))
 }

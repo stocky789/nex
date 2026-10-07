@@ -10,7 +10,6 @@
     "docs/guide/install-nex-core.md",
     "docs/guide/publish-a-release.md",
     "docs/plans/2026-09-24-net-installer.md",
-    "docs/qa/iso/2026-09-24-net-installer.md",
     "installer/README.md",
     "installer/build-gui.sh",
     "installer/build.sh",
@@ -59,8 +58,6 @@
   },
   "verification": {
     "method": "Local automated checks, independent review and clean final-artifact BIOS installation/first boot/reboot for both ISO variants passed; UEFI installation, hardware and hosted forge/publication limits are recorded in the QA report.",
-    "evidence": [
-      "docs/qa/iso/2026-09-24-net-installer.md"
-    ]
+    "evidence": ["CHANGELOG.md"]
   }
 }

@@ -20,7 +20,7 @@ not keep the phase open.
 | Create / install / console / reboot / persist / outage / reconnect | [gate5 report](checks.md) rows 3, 4, 6, 8, 9, 10, 14 |
 | Row 11 / BUG-0256 (probe c2, no duplicate MAC) | [focused lab on 0.3.1](../2026-09-17-phase2-focused-lab.md); [BUG-0256](../../BUG_LEDGER.md) lab-verified |
 | Storage + dedicated-memory admission | Same focused lab |
-| VirtIO media on Core ISO | [0.3.2 ISO build](../iso/2026-09-17-core-0.3.2-build.md) |
+| VirtIO media on Core ISO | 0.3.2 ISO build (removed; see git history) |
 | G6 external Controller replacement | gate5 report (partial: same-host redeploy deferred) |
 
 ## Owner decisions resolved (Phase 2)

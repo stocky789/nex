@@ -2300,19 +2300,6 @@ func normalizeStorageCapabilities(s *protocol.StorageRegistration) {
 	}
 }
 
-func poolSharedVMStorage(s protocol.StorageRegistration) bool {
-	return protocol.IsPoolSharedStorage(s)
-}
-func managedUsesPoolSharedStorage(js []managedJournal, v protocol.VMCreateSpec) bool {
-	for _, disk := range v.Disks {
-		storage, err := managedStorage(js, disk.StorageID)
-		if err == nil && poolSharedVMStorage(storage) {
-			return true
-		}
-	}
-	return false
-}
-
 func managedStorageByID(ctx context.Context, js []managedJournal, id string, required uint64) (protocol.StorageRegistration, storageAccess, error) {
 	s, err := managedStorage(js, id)
 	if err != nil {

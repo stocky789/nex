@@ -28,14 +28,12 @@
     "installer/README.md",
     "docs/LICENSING.md",
     "docs/BUG_LEDGER.md",
-    "docs/qa/iso/2026-09-08-nex-wizard.md",
     "docs/qa/iso/wizard/keyboard-layout.png",
     "docs/qa/iso/wizard/disk-required.png",
     "docs/qa/iso/wizard/review.png",
     "docs/qa/iso/wizard/welcome.png",
     "docs/qa/iso/wizard/network-invalid.png",
-    "docs/qa/iso/wizard/confirmation-recovery.png",
-    "docs/qa/iso/wizard/installed-check.txt"
+    "docs/qa/iso/wizard/confirmation-recovery.png"
   ],
   "guide": {
     "impact": "updated",
@@ -57,7 +55,6 @@
   "verification": {
     "method": "Actual BIOS ISO native GTK walkthrough with two NICs, invalid input and disk confirmation, disposable installation and root login/network observation; final native GUI regression, source/compiled checks and documentation checks. Exact artifact separation and untested limits are recorded.",
     "evidence": [
-      "docs/qa/iso/2026-09-08-nex-wizard.md",
       "tests/integration/wizard-review.py",
       "tests/integration/wizard-installed.sh",
       "tests/integration/installer-network.c",

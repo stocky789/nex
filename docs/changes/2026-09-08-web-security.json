@@ -34,7 +34,7 @@
     "docs/qa/security/checks.md",
     "docs/qa/security/compiler.md",
     "docs/qa/security/lab.md",
-    "docs/qa/security/lab/controller-baseline.txt",
+    "docs/qa/appliance/final/controller-baseline.txt",
     "docs/qa/security/lab/controller-cold-start.txt",
     "docs/qa/security/lab/controller-inventory.json",
     "docs/qa/security/lab/controller-outage-local-access.png",
@@ -45,7 +45,7 @@
     "docs/qa/security/lab/deployment-review.png",
     "docs/qa/security/lab/deployment.json",
     "docs/qa/security/lab/guest-artifacts.txt",
-    "docs/qa/security/lab/host-preflight.json",
+    "docs/qa/appliance/final/host-preflight.json",
     "docs/qa/security/lab/host-reboot-controller.png",
     "docs/qa/security/lab/host-reboot-inventory.json",
     "docs/qa/security/lab/host-reboot-results.json",
@@ -59,8 +59,7 @@
     "docs/qa/security/lab/security.json",
     "docs/qa/security/lab/shutdown-confirmation.png",
     "docs/qa/security/lab/shutdown.json",
-    "docs/qa/security/lab/signature-rejection.json",
-    "docs/qa/security/package.md",
+    "docs/qa/appliance/final/signature-rejection.json",
     "internal/agent/lock_test.go",
     "internal/agent/state.go",
     "internal/controller/controller.go",
@@ -120,7 +119,6 @@
       "docs/qa/security/checks.md",
       "docs/qa/security/browser.md",
       "docs/qa/security/compiler.md",
-      "docs/qa/security/package.md",
       "docs/qa/security/lab.md"
     ]
   }

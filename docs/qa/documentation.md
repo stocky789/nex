@@ -11,7 +11,7 @@ Date: 2026-09-08. Scope: documentation/guide/checker slice. API impact: none.
 | Range validation in isolated temp repo (baseline + slice files; shared tree untouched) | Without assessments failed as expected (`changed paths missing documentation assessment`); with records, push range, PR merge-base range and empty-tree first push passed. First attempt could not write its log into the Docker-owned cache; rerun log `/tmp/nex-documentation-validation-6shzkosv.log` (ephemeral) |
 
 Walkthrough evidence: [host command walkthrough](guide-host-checks.md) and
-[original ISO QA](iso/2026-09-08-alpha1.md).
+original ISO QA (removed; see git history).
 
 ## Limits
 

@@ -2,7 +2,7 @@
 
 Date: 2026-09-08. Host-local appliance implementation only; separate installer changes in the
 working tree are not part of this slice. Walkthrough results: [lab](lab.md),
-[package](package.md), [local browser](browser.md).
+[local browser](browser.md).
 
 ## Executed checks
 

@@ -15,7 +15,6 @@
     "tests/integration/fresh_install_lab.py",
     "tests/integration/fresh_install_gui.py",
     "docs/guide/install-nex-core.md",
-    "docs/qa/iso/2026-09-22-installer-mirror.md",
     "docs/plans/2026-09-22-software-raid.md"
   ],
   "guide": {
@@ -41,8 +40,6 @@
   },
   "verification": {
     "method": "bash installer/check.sh (new assertions for the RAID recipe, the per-disk validation, the 10% rule, the swap answer, the multiselect Disk step in both frontends, mdadm, the mdadm.conf/initramfs regeneration and the ESP copy, alongside BUG-0413's existing guard). python3 tests/integration/installer-disk.py (the real validator compiled against a simulated device boundary: a two-disk mirror, a mismatched pair, a disk selected twice, an empty selection, an unsupported second disk and a changed serial on the second member). python3 tests/integration/installer-text-wizard.py (the shipping text wizard against a fixture machine: a two-disk selection writes both disks to the handoff, a mismatched pair is refused and asked again, single-disk answers unchanged). python3 -m unittest tests.test_fresh_install_lab. Both frontends' compiles are clean, the GTK wizard inside the pinned ISO builder image. Two development ISOs were built and installed in disposable QEMU labs as far as partitioning and the base system, which established the partman-md marker, multi-ESP and swap findings; the lab run was stopped before any installed host booted, so the boot, disk-detach, leftover-array and single-disk end-to-end checks are recorded as OUTSTANDING in the QA record and the plan. This slice is not complete until they run. The generated fstab rewrite was exercised against a sample Debian fstab: only the /boot/efi line gains nofail. Booted-host behaviour of the ESP mount, the copy and the hook remains OUTSTANDING in the QA record. After review: the member index no longer depends on the firmware (constant partition 3 with a seeded GPT label and a BIOS boot partition), nex-sync-esp reports failure when it copies to no ESP while the installer and the APT hook tolerate that status, and the erase confirmation names the capacity again. These are source-level changes only; the lab installs predate them. The Disk step rework is covered by installer/check.sh (the toggle column, the keyboard toggle, the columns, rotational/partition facts, the summary wording and one sorted order for both frontends), by installer-disk.py (the same wizard assertions) and by installer-text-wizard.py, whose fixture now carries rotational flags and a leftover partition so the choice lines are checked against real sysfs facts. A headless capture of the rebuilt GTK wizard was attempted and abandoned: the builder image has no Xvfb, the workstation has no GTK 2 runtime, and the wizard reads absolute /sys paths that a container cannot have a fixture bind-mounted over without privileged remounting. The new screens have therefore been compiled and asserted, not seen.",
-    "evidence": [
-      "docs/qa/iso/2026-09-22-installer-mirror.md"
-    ]
+    "evidence": ["CHANGELOG.md"]
   }
 }

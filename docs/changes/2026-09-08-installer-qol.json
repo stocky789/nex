@@ -10,7 +10,6 @@
     "installer/README.md",
     "docs/plans/2026-09-08-nex-platform.md",
     "docs/BUG_LEDGER.md",
-    "docs/qa/iso/2026-09-08-installer-qol.md",
     "docs/qa/iso/qol/before-fullscreen.png",
     "installer/gui/nex-shell.c",
     "docs/qa/iso/qol/welcome-1024.png",
@@ -40,7 +39,6 @@
   "verification": {
     "method": "Native GUI walkthrough and focused regression checks; actual results and limits recorded in the linked QA report.",
     "evidence": [
-      "docs/qa/iso/2026-09-08-installer-qol.md",
       "tests/integration/wizard-review.py",
       "tests/integration/installer-qol.py"
     ]

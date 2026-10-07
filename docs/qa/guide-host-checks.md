@@ -5,7 +5,7 @@ Date: 2026-09-08. Scope: root-console commands in [`verify-nex-core.md`](../guid
 ## Environment
 
 - Nex Core `0.1.0-alpha1`, Debian `13.6`, kernel `6.12.94+deb13-amd64`.
-- Disposable reflink clone of the installed disk from [ISO QA run 3](iso/2026-09-08-alpha1.md) (ISO
+- Disposable reflink clone of the installed disk from ISO QA run 3 (removed; see git history) (ISO
   SHA-256 `b02044bcac4205af247d52a30ff158ad4d73e7580382f666b37baf394538015f`); originals preserved.
 - QEMU KVM, Intel nested, 2 vCPU, 4 GiB; no NIC, ISO or physical disks.
 - One-boot GRUB `systemd.mask=nex-smoke.service` suppressed the fixture's auto checks/poweroff.

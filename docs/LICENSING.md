@@ -508,7 +508,7 @@ The package installs that notice as `/usr/share/doc/nex-core-local/go-LICENSE` a
 the compiled binary's Go version. The appliance retains `/usr/local/share/nex/go-LICENSE`;
 the corresponding source snapshot also records its toolchain notice/version.
 
-Review exact artifacts and their retained notices in the [security package evidence](qa/security/package.md).
+Review exact artifacts and their retained notices for each release (the earlier host-package evidence page was removed; see git history).
 A clean advisory scan is not license certification or complete appliance source-delivery
 evidence. The Debian component/source and external-distribution gates above
 remain applicable to the security rebuild.

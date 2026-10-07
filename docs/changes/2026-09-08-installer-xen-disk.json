@@ -13,7 +13,6 @@
     "installer/README.md",
     "docs/plans/2026-09-08-nex-platform.md",
     "docs/BUG_LEDGER.md",
-    "docs/qa/iso/2026-09-08-installer-xen-disk.md",
     "docs/qa/iso/xen-disk/nic-link-detected.png",
     "docs/qa/iso/xen-disk/nic-no-link.png",
     "docs/qa/iso/xen-disk/nic-link-recovered.png",
@@ -38,7 +37,6 @@
   "verification": {
     "method": "Run actual validator with simulated device boundaries and native QEMU GUI walkthrough; see QA for results and limits.",
     "evidence": [
-      "docs/qa/iso/2026-09-08-installer-xen-disk.md",
       "tests/integration/installer-disk.py",
       "tests/integration/installer-link.py",
       "tests/integration/wizard-review.py"

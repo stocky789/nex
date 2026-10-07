@@ -394,10 +394,6 @@ def boot_and_probe(work, disks, vars_file, label, layout, payload_sha, poweroff=
         stop(proc)
 
 
-def payload_sha_of(iso_work):
-    return open(os.path.join(iso_work, "payload.sha256")).read().strip()
-
-
 def scenario_single(a):
     work, vars_file = fresh_dir(a, "single")
     d = os.path.join(work, "d0.img"); new_disk(d)

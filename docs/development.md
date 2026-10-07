@@ -6,7 +6,7 @@ Operator setup is described in the [user guide](guide/README.md).
 ## Branches and release channels
 
 Open pull requests against `dev`, the integration branch; `main` is promoted from it by the project
-owner. A merge to `dev` publishes a development pre-release (tag `vX.Y.Z-dev.N`, APT archive at `/apt/dev`,
+owner. A merge to `dev` publishes a development pre-release (tag `vX.Y.Z-dev.N`,
 downloads at `/downloads/dev`) and a merge to `main` publishes the stable release. Preview the version a
 development build would get:
 
@@ -125,25 +125,6 @@ does not prove a service starts or that libvirt access works under the sandbox.
 
 ## Controller appliance and host-local package
 
-Before publication, both release workflows run `scripts/check-controller-package.py`
-against the exact Controller `.deb` inside the existing Debian 13 Controller builder.
-The check extracts without installing, uses temporary credentials/state and loopback
-HTTPS, and requires SQLite startup, the packaged UI, matching source download, and an
-authenticated administrator session. A startup failure or timeout blocks publication
-and prints the Controller log. This does not test package maintainer scripts or systemd.
-
-Run its regression locally with Go, a C compiler, dpkg-deb, OpenSSL and Python:
-
-```sh
-python3 tests/integration/controller_package_smoke.py
-```
-
-This builds temporary test packages from real CGO-enabled and CGO-disabled Controller
-binaries, requiring the first to pass and the second to fail for the SQLite stub error.
-Both `phase1` workflows run it on pushes and pull requests. See the
-[package-gate evidence](qa/2026-09-18-controller-package-smoke.md) for executed checks
-and release-environment limits.
-
 The appliance is a prepared Debian 13 amd64 qcow2, delivered with a separate
 `nex-core-local` Debian package. See the [appliance builder](../appliance/README.md)
 for base-image provenance, signing-key handling and the build command. Debian
@@ -185,7 +166,7 @@ Controller and host-local authentication use `__Host-` session cookies, 30-minut
 and an eight-hour absolute lifetime, capped at 64 active sessions per service; login admission
 is rate-limited per network peer. The contract is in the [API reference](API.md) and the
 operator workflow in [Secure web access](guide/secure-web-access.md). Evidence:
-[package](qa/security/package.md), [compiler](qa/security/compiler.md),
+[compiler](qa/security/compiler.md),
 [browser](qa/security/browser.md) and [lab](qa/security/lab.md).
 
 The Controller adds `sessions.idle_expires` to an existing database; old sessions expire and

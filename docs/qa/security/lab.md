@@ -12,7 +12,7 @@ verification passed. Disposable VMs shut down.
   storage `/var/lib/nex/appliances`, bridge `virbr0`. Service retained `UMask=0077`. Browser via
   loopback QEMU/SSH forwards; certificate fingerprints compared after reboot.
 - Package, local binary, signed appliance, Controller binary and source hashes are in
-  [package checks](package.md#frozen-inputs-and-artifact) and [compiler checks](compiler.md#final-controller-artifact);
+  [compiler checks](compiler.md#final-controller-artifact) (package checks page removed; see git history);
   [installed artifact output](lab/installed-artifacts.txt) and [guest hashes](lab/guest-artifacts.txt)
   match them.
 

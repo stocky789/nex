@@ -3,8 +3,7 @@
   "paths": [
     "packaging/cluster-storage/Dockerfile",
     "tests/test_storage_packaging.py",
-    "docs/BUG_LEDGER.md",
-    "docs/qa/iso/2026-09-15-core-0.2.3-build.md"
+    "docs/BUG_LEDGER.md"
   ],
   "guide": {
     "impact": "none",
@@ -27,7 +26,6 @@
   "verification": {
     "method": "Reproduced by building the 0.2.3 ISO locally: the first run failed with 'the --chmod option requires BuildKit' after the appliance and Core package rebuild; with the fix, bash installer/build.sh completed and produced dist/nex-core-0.2.3-amd64.iso. The new check failed on the old Dockerfile and passes with the fix. Disposable QEMU boot-menu smoke and installer/check.sh passed; no installation, hardware, Secure Boot or hosted CI run is claimed.",
     "evidence": [
-      "docs/qa/iso/2026-09-15-core-0.2.3-build.md",
       "tests/test_storage_packaging.py",
       "packaging/cluster-storage/Dockerfile"
     ]

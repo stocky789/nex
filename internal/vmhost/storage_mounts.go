@@ -474,14 +474,6 @@ func validNFSFSID(raw string) bool {
 	return len(parts) == 2 && validNFSHex(parts[0], 16) && validNFSHex(parts[1], 16)
 }
 
-func smbAccess(s protocol.StorageRegistration, v *protocol.SMBStorageSource, path, source string) (storageAccess, error) {
-	a, err := smbPathAccess(path, source)
-	if err != nil {
-		return storageAccess{}, err
-	}
-	return smbIdentity(s, v, path, source, a)
-}
-
 var smbPathAccess = func(path, source string) (storageAccess, error) {
 	return storagePathAccess(path, "smb:"+source, false)
 }

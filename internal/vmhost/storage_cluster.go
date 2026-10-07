@@ -1041,14 +1041,6 @@ func storageClusterTransportFor(s protocol.StorageRegistration, c protocol.Stora
 	return storageClusterTransport{resource: resource, portal: portal, target: s.Source.ISCSI.TargetIQN}, nil
 }
 
-func storageTransportResourceSpec(t storageClusterTransport) []string {
-	return []string{"resource", "create", t.resource, "ocf:nex:cluster-iscsi-session", "portal=" + t.portal, "target=" + t.target, "session_id=" + t.resource,
-		"op", "start", "id=" + t.resource + "-start-interval-0s", "interval=0s", "timeout=10s", "on-fail=fence",
-		"op", "stop", "id=" + t.resource + "-stop-interval-0s", "interval=0s", "timeout=10s",
-		"op", "monitor", "id=" + t.resource + "-monitor-interval-5s", "interval=5s", "timeout=10s", "on-fail=fence",
-		"clone", "interleave=true", "ordered=true"}
-}
-
 func storageTransportOrderID(t storageClusterTransport, c protocol.StorageClusterConfig) string {
 	return t.resource + "-before-" + c.RepositoryID
 }

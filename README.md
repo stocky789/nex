@@ -13,9 +13,9 @@ update, so a host is not an `apt` system (project owner decision, 2026-10-02; se
 
 Nex is in early development. Current builds provide the Core installer, Controller
 appliance deployment, administrator login, host enrollment, inventory and health
-reporting, VM creation/editing/power/consoles, guest information and usage history.
-The project owner has closed Phases 0–4. Phase 5, VM snapshots and rollback, is
-next; independent backups and restores follow in Phase 6. New problems in the
+reporting, VM creation/editing/power/consoles, guest information, usage history, VM
+snapshots, and independent backups and restores. The project owner has closed Phases
+0–6 for disposable virtual-lab scope. New problems in the
 closed phases are bugs, including the published 0.4.12 network installer's UEFI
 failure and joins with differently named VLAN uplinks. The historical tests remain
 bounded to their recorded environments. Fencing is the exception: its native and

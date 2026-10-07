@@ -1,3 +1,0 @@
-/workspace/Nex/tests/integration/installer-progress.py:222: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
-  assert sum(pixel != (0, 0, 0) for pixel in difference.getdata()) < 100, 'Log did not initially display its latest entries'
-Native diskless progress transitions and error acknowledgement passed: /tmp/nex-logo-progress-final

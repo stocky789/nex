@@ -1,7 +1,6 @@
 {
   "summary": "Record a fresh local root-only installer verification; API impact: none, local account setup only.",
   "paths": [
-    "docs/qa/iso/2026-09-08-root-local-recheck.md",
     "docs/qa/iso/root-local-recheck/blank-error.png",
     "docs/qa/iso/root-local-recheck/mismatch-error.png",
     "docs/qa/iso/root-local-recheck/partition.png",
@@ -24,8 +23,6 @@
   },
   "verification": {
     "method": "Run frozen-source build, bundled account regression, interactive QEMU account flow, and uninterrupted offline installation/boot smoke; inspect captures and serial results. Complete interactive installation, authenticate root using its installer-entered password, inspect account inventory, and run documentation structure checks.",
-    "evidence": [
-      "docs/qa/iso/2026-09-08-root-local-recheck.md"
-    ]
+    "evidence": ["CHANGELOG.md"]
   }
 }

@@ -108,7 +108,6 @@
     "evidence": [
       "docs/qa/managed-vm/checks.md",
       "docs/qa/managed-vm/results.json",
-      "docs/qa/iso/2026-09-09-logo-cleanup.md",
       "docs/qa/managed-vm/documentation.json"
     ]
   }

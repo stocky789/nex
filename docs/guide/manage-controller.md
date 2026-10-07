@@ -392,7 +392,7 @@ captured on the earlier layout and still applies to the behaviour it describes.
 
 The [Controller UI modernization checks](../qa/controller-ui-modernization/checks.md) (2026-09-23) walked the earlier chrome (header menu, task strip, off-canvas tree and narrow toolbar) in headless Chromium against simulated inventory and the phase 1 browser lab; no real host was involved.
 
-The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) checked
+The 0.3.2 local artifact lab (removed; see git history) checked
 the exact Controller package in a disposable Debian VM: authenticated HTTPS,
 service restart/crash recovery, same-version reinstall and reboot preserved a
 site's identity. It used the packaged wrapper's configuration paths and API

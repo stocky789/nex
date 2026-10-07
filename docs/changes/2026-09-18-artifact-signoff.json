@@ -7,8 +7,6 @@
     "docs/guide/install-nex-core.md",
     "docs/guide/manage-controller.md",
     "docs/guide/deploy-controller-appliance.md",
-    "docs/qa/2026-09-18-controller-package-smoke.md",
-    "docs/qa/2026-09-18-release-artifact-lab.md",
     "docs/BUG_LEDGER.md",
     "website/src/routes/roadmap/+page.svelte"
   ],
@@ -29,6 +27,6 @@
   "state": {"owner": "none", "reason": "Evidence and acceptance status introduce no durable product resource or setting."},
   "verification": {
     "method": "Map the existing executed artifact lab to phase acceptance clauses; run website check/build and focused desktop/mobile/keyboard browser review; inspect screenshots, documentation links, privacy and independent semantic review. Results are recorded in the QA report.",
-    "evidence": ["docs/qa/2026-09-18-release-artifact-lab.md"]
+    "evidence": ["CHANGELOG.md"]
   }
 }

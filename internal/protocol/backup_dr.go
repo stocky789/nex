@@ -211,14 +211,6 @@ func (r TestRestoreRequest) Valid() error {
 	}).Valid()
 }
 
-func (r TestRestoreRequest) AsNew() RestoreAsNewRequest {
-	return RestoreAsNewRequest{
-		HostID:       r.HostID,
-		RepositoryID: r.RepositoryID, RecoveryPointID: r.RecoveryPointID,
-		NewVMID: r.NewVMID, NewVMName: r.NewVMName, StorageID: r.StorageID,
-	}
-}
-
 // TestRestoreVerifyRequest records the operator verification result in Core.
 type TestRestoreVerifyRequest struct {
 	RepositoryID    string `json:"repository_id"`

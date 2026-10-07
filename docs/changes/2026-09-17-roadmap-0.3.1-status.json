@@ -25,10 +25,9 @@
     "reason": "Website and changelog text only; no setting, record or table is added."
   },
   "verification": {
-    "method": "Statements compared against docs/qa/2026-09-17-phase2-gate/checks.md, docs/BUG_LEDGER.md BUG-0256, docs/qa/2026-09-17-nex-core-0.3.1-release.md, CHANGELOG.md and docs/LICENSING.md. No new lab walkthrough; nothing newly claimed verified.",
+    "method": "Statements compared against docs/qa/2026-09-17-phase2-gate/checks.md, docs/BUG_LEDGER.md BUG-0256, CHANGELOG.md and docs/LICENSING.md. No new lab walkthrough; nothing newly claimed verified.",
     "evidence": [
       "docs/qa/2026-09-17-phase2-gate/checks.md",
-      "docs/qa/2026-09-17-nex-core-0.3.1-release.md",
       "docs/BUG_LEDGER.md",
       "CHANGELOG.md"
     ]

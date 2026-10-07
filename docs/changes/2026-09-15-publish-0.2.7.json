@@ -1,7 +1,6 @@
 {
   "summary": "Record the Nex Core 0.2.7 ISO and package build (carrying BUG-0195) and its publication to the signed APT archive and the website download tree, with the public HTTPS verification. API impact: none \u2014 release evidence only.",
   "paths": [
-    "docs/qa/iso/2026-09-15-core-0.2.7-build.md",
     "docs/changes/2026-09-15-publish-0.2.7.json"
   ],
   "guide": {
@@ -24,8 +23,6 @@
   },
   "verification": {
     "method": "Local build exit 0 and package versions checked with dpkg-deb; tracked source identical to commit d597e8f; BUG-0195 start-time memory refusal present in the Core executable; publication verified over public HTTPS (InRelease, Packages listing both 0.2.7 packages with matching sizes, ISO sha256 equal to the build, latest serving 0.2.7) and both published packages re-downloaded with SHA-256 equal to the build.",
-    "evidence": [
-      "docs/qa/iso/2026-09-15-core-0.2.7-build.md"
-    ]
+    "evidence": ["CHANGELOG.md"]
   }
 }

@@ -40,7 +40,7 @@ succeeded; anonymous inventory, missing Origin, missing CSRF and invalid deploym
 unavailable` blocker with deployment disabled (historical; later reruns replaced overview captures).
 No JavaScript errors. 1440 px and 390 px captures inspected: readable, no horizontal overflow.
 Did not verify the wizard or appliance creation. Results: [results.json](results.json),
-[host-preflight.json](host-preflight.json).
+[host-preflight.json](final/host-preflight.json).
 
 `local-overview.png` (not committed)
 `local-invalid-login.png` (not committed)
@@ -75,10 +75,10 @@ Not valid for restore to the final source version. Guest and outer host shut dow
 
 Third fresh outer host (own disk copy, new 80 GiB storage file, internal bridge). The second
 host's package attempt failed on `UMask=0077` directory mode ([BUG-AP-0010](../../BUG_LEDGER.md));
-preserved and stopped. [Retained package failure](package-umask/libvirt-failure.txt).
+preserved and stopped (retained failure log removed; see git history).
 
-Installed `nex-core-local_0.1.0+lab6.1_amd64.deb` via APT (artifact hashes in
-[package evidence](package.md)), then `core-local-setup configure` with management address
+Installed `nex-core-local_0.1.0+lab6.1_amd64.deb` via APT (package evidence page removed; see
+git history), then `core-local-setup configure` with management address
 `10.0.2.15`, `/var/lib/nex/appliances`, `virbr0`. Service kept `UMask=0077`. No executable,
 guest file, XML or permission fix injected. [Installed artifact checks](final/installed-artifacts.txt),
 [package hash](final/artifact.json).

@@ -318,7 +318,7 @@ ZFS redistribution vs `docs/LICENSING.md:222-223` (blocks a Phase 2 release). Se
 2. QEMU+OVMF, Secure Boot on: `findmnt -no FSTYPE,OPTIONS /` is erofs `ro`; `dmsetup status` shows verity `V`; `touch /usr/x` fails; an `/etc` edit and `/var` data survive reboot.
 3. Flip one byte in the active root slot: after three tries boot falls to the other slot; `bootctl list` shows `+0-3`; the host reports rolled back.
 4. Power-cut at each update step (slot write, before UKI, half-written `.new`, after arm, before bless): the previous version boots every time.
-5. Two-disk mirror, UEFI and BIOS: detach each disk in turn and boot; both boot partitions hold identical SHA-256 sets and both slots verify. Closes `docs/qa/iso/2026-09-22-installer-mirror.md:72-76`.
+5. Two-disk mirror, UEFI and BIOS: detach each disk in turn and boot; both boot partitions hold identical SHA-256 sets and both slots verify. Closes the outstanding boot/detach checks of the removed mirrored-installer QA record (see git history).
 6. Controller deleted and quorum lost during a trial boot: `nex-boot-check` still passes and blesses; a failing libvirtd blocks the bless and the host reverts.
 7. ZFS: module loads under Secure Boot lockdown after a kernel-changing update and an existing pool imports; an unsigned module is refused.
 8. SSH fingerprints, machine-id, root login and hostname are unchanged across update and rollback.
@@ -664,7 +664,7 @@ exist only in the build container. Sign modules with a persistent Nex module key
 With Secure Boot, Linux lockdown refuses unsigned out-of-tree modules; Debian's documented path is a
 Machine Owner Key ([Debian SecureBoot wiki](https://wiki.debian.org/SecureBoot)). Plan: installer enrolls
 the Nex module certificate via `mokutil --import` only when firmware Secure Boot is on, with a console MOK
-step; with Secure Boot off nothing happens. Host Secure Boot is unverified today (`docs/ACTIVITY_LOG.md:86-87`),
+step; with Secure Boot off nothing happens. Host Secure Boot is unverified today,
 so this is a lab gate, not a claim. Obligations: exact `zfs-linux` source, build recipe, kernel source,
 notices in the source bundle and compliance manifest.
 

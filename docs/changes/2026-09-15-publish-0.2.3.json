@@ -1,8 +1,6 @@
 {
   "summary": "Record the 0.2.3 publication: the ISO and both Debian packages were published by hand from the build workstation to the website host with the same commands the release workflow runs, and the served APT index, pool files, ISO checksum and latest link were verified over public HTTPS. API impact: none.",
-  "paths": [
-    "docs/qa/iso/2026-09-15-core-0.2.3-build.md"
-  ],
+  "paths": ["docs/changes/2026-09-15-publish-0.2.3.json"],
   "guide": {
     "impact": "none",
     "reason": "No operator workflow changed: publishing used the documented commands from docs/guide/publish-a-release.md, including its existing note that a release can be published to the website by hand from the built assets.",
@@ -23,8 +21,6 @@
   },
   "verification": {
     "method": "Published over SSH as the publishing account, then verified over public HTTPS: /apt/dists/nex/InRelease returned a signed index, the Packages index listed nex-core-local 0.2.3 and nex-controller 0.2.3, both pool files returned 200 with byte sizes equal to the built packages, the published ISO checksum equalled the built digest, and /downloads/latest served the 0.2.3 ISO. Retention used --keep 4, so no earlier release was pruned. No enrolled host was upgraded from the archive and no forge release or tag was created.",
-    "evidence": [
-      "docs/qa/iso/2026-09-15-core-0.2.3-build.md"
-    ]
+    "evidence": ["CHANGELOG.md"]
   }
 }

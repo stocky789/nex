@@ -6,7 +6,6 @@
     ".github/workflows/installer.yml",
     ".github/workflows/release.yml",
     "AGENTS.md",
-    "docs/ACTIVITY_LOG.md",
     "docs/API.md",
     "docs/BUG_LEDGER.md",
     "docs/LICENSING.md",
@@ -64,8 +63,6 @@
     "docs/qa/appliance/initial-start-libvirt.txt",
     "docs/qa/appliance/lab.md",
     "docs/qa/appliance/local-service-restart.json",
-    "docs/qa/appliance/package-umask/deployment.json",
-    "docs/qa/appliance/package-umask/libvirt-failure.txt",
     "docs/qa/appliance/usability-dhcp-boot/results.json",
     "docs/qa/appliance/usability-rebuild.md",
     "docs/qa/console-features/checks.md",
@@ -88,12 +85,6 @@
     "docs/qa/fresh-install/enrollment-identity.json",
     "docs/qa/fresh-install/guest-domain.xml",
     "docs/qa/fresh-install/recovery-before.json",
-    "docs/qa/iso/2026-09-08-custom-installer.md",
-    "docs/qa/iso/2026-09-08-installer-hostname.md",
-    "docs/qa/iso/2026-09-08-installer-qol.md",
-    "docs/qa/iso/2026-09-09-logo-cleanup.md",
-    "docs/qa/iso/2026-09-09-logo-cleanup/progress.txt",
-    "docs/qa/iso/2026-09-09-logo-cleanup/regression-before.txt",
     "docs/qa/managed-vm/browser-native-results.json",
     "docs/qa/managed-vm/browser-regression-results.json",
     "docs/qa/managed-vm/browser-simulated-results.json",
@@ -159,7 +150,6 @@
     "method": "Repository privacy regression rejects old personal paths and observed QA IDs and passes after sanitization; mandatory manual review covers arbitrary names without retaining a personal-name or hashed-identity list. Focused Python checks: 36 passed. Safe temporary/stubbed bootstrap checks reject missing/invalid accounts and render the configured sudoers account, and detect the old behavior. Installer hostname/disk/network checks, Bash syntax and paired workflow comparisons passed. Full local discovery: 135 tests, one setup error because nginx is unavailable; no full-suite or hosted-CI success claimed. See privacy QA for independent review, documentation gate results and history/artifact limits.",
     "evidence": [
       "tests/test_repository_privacy.py",
-      "tests/test_apt_bootstrap_privacy.py",
       "docs/qa/2026-09-11-public-repository-privacy.md"
     ]
   }

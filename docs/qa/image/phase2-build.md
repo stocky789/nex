@@ -179,6 +179,6 @@ the initrd and boot-check behaviour is unverified on a real boot.
   or panics when an earlier entry is empty); `zeroHead` (unused) was deleted; the two copies of the verity fixture writer are
   one; `TestRepairKeepsData` asserts the `nex-data` entry and disk GUID on every disk.
 - `tests/test_image_layout.py` now also pins the data partition number and label, and the partition names used by the installer
-  script and the image labs, against `internal/hostimage/layout.go`. The sizes in `image/spike/mkosi/mkosi.repart` (512 MiB ESP, 2 GiB
-  roots, 1 GiB data) are **not** the product layout (1 GiB / 4 GiB / rest): that directory is the Phase 0 spike record referenced by
-  `phase0.md` and is not used by the product, so it is left as it is and not tested.
+  script and the image labs, against `internal/hostimage/layout.go`. The sizes in the Phase 0 spike's mkosi repart definition (512 MiB ESP, 2 GiB
+  roots, 1 GiB data) were **not** the product layout (1 GiB / 4 GiB / rest); that lab directory (see `phase0.md`) was never used by
+  the product and has since been removed, so nothing remains to test.

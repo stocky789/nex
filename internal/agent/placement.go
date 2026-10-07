@@ -55,10 +55,6 @@ func placementCommandError(cmd protocol.Command) error {
 	return vmhost.ValidateManagedCommand(cmd)
 }
 
-func placementCommand(cmd protocol.Command) bool {
-	return placementCommandError(cmd) == nil
-}
-
 func localPoolVMPlacement(ctx context.Context, s *Store, generation uint64, operationID string, cmd protocol.Command) (poolPlacementReply, error) {
 	membership, err := Membership(s)
 	if err != nil || membership.Generation != generation {

@@ -11,7 +11,6 @@
     "docs/plans/2026-09-16-windows-11-lab-fixes.md",
     "docs/qa/vm-creation/checks.md",
     "website/src/routes/roadmap/+page.svelte",
-    "docs/qa/2026-09-16-nex-core-0.2.9-release.md",
     "docs/changes/2026-09-17-roadmap-reconcile.json"
   ],
   "guide": {
@@ -38,7 +37,7 @@
     "reason": "Documentation only; no setting, record or table is added."
   },
   "verification": {
-    "method": "Statements compared against docs/qa/2026-09-17-phase2-gate/checks.md, docs/BUG_LEDGER.md (BUG-0219, BUG-0221, BUG-0235, BUG-0246, BUG-0254, BUG-0256) and docs/qa/2026-09-16-nex-core-0.2.9-release.md. No lab walkthrough; nothing new is claimed verified. Documentation, privacy and website checks run as reported in the handoff.",
+    "method": "Statements compared against docs/qa/2026-09-17-phase2-gate/checks.md, docs/BUG_LEDGER.md (BUG-0219, BUG-0221, BUG-0235, BUG-0246, BUG-0254, BUG-0256). No lab walkthrough; nothing new is claimed verified. Documentation, privacy and website checks run as reported in the handoff.",
     "evidence": [
       "docs/qa/2026-09-17-phase2-gate/checks.md",
       "docs/BUG_LEDGER.md"

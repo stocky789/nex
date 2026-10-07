@@ -37,7 +37,3 @@ export function VirtualPad({ height, colSpan }: { height: number; colSpan: numbe
   if (height <= 0) return null;
   return <tr aria-hidden="true" className="virtual-pad"><td colSpan={colSpan} style={{ height, padding: 0, border: 0 }} /></tr>;
 }
-
-export function bindScroller(ref: { current: HTMLElement | null }, node: HTMLElement | null) {
-  ref.current = node;
-}
