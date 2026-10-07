@@ -123,6 +123,12 @@ class UpdatePublishTests(unittest.TestCase):
             self.assertEqual(sorted(archive.getnames()), ["esp/EFI/loader.efi", "manifest.json", "nex-core_1.1_2.efi", "root.erofs",
                                                           "root.verity", "roothash"])
 
+    def test_a_development_label_sorts_below_its_release(self):
+        self.assertEqual(self.publish("0.4.33-dev.294", 294)[0], 0)
+        self.assertEqual(self.publish("0.4.33", 300)[0], 0)
+        self.assertEqual(self.publish("0.4.34-dev.310", 310)[0], 0)
+        self.assertEqual(self.publish("0.4.33-dev.311", 311)[0], 1)
+
     def test_prune_keeps_the_newest_releases_and_what_they_use(self):
         for sequence in (1, 2, 3):
             self.assertEqual(self.publish(f"1.{sequence}", sequence)[0], 0)

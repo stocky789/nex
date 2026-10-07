@@ -121,7 +121,7 @@ State owner: `core`.
   workflow publishes the signed tree to `/srv/nex-updates` on the website host, served at `<site>/updates/`, and
   `DefaultBaseURL` points every host there. The root key stays offline with the project owner; the release key is the CI
   secret `NEX_UPDATE_RELEASE_KEY`, used on the website host for one command; the signed `trust.json` is the secret
-  `NEX_UPDATE_TRUST_B64` and is pinned into every image. The image label is the Debian form (`0.4.33~~dev.294`) so the
-  publisher's label-order check holds across channels. Published: the slot image, source and compliance manifest.
+  `NEX_UPDATE_TRUST_B64` and is pinned into every image. The publisher compares labels in their Debian form
+  (`0.4.33-dev.294` is `0.4.33~~dev.294`), so its label-order check holds across channels. Published: the slot image, source and compliance manifest.
   Not published: optional layers (redistribution review open) and the Controller guest image, so a pool-wide
   Controller-first rollout is not yet available. `update-publish.py prune` keeps the newest five releases.

@@ -157,7 +157,7 @@ jobs:
             --source dist/nex-source.tar.gz --version "$NEX_VERSION" \
             --output "$packages/core-local" --docker "$NEX_DOCKER"
           bash scripts/build-release-packages.sh "${packages#"$PWD"/}"
-          NEX_LABEL="$NEX_VERSION" NEX_SEQUENCE="$sequence" NEX_IMAGE_OUT="$out" \
+          NEX_LABEL="$NEX_PUBLIC_VERSION" NEX_SEQUENCE="$sequence" NEX_IMAGE_OUT="$out" \
             NEX_PACKAGE_DIRS="$packages/core-local:$packages/dlm:$packages/libvirt" sh image/build.sh all
           export NEX_NETINST_BASE_URL="${NEX_PUBLIC_URL%/}/${NEX_DOWNLOADS_PATH}/${NEX_PUBLIC_VERSION}"
           export NEX_IMAGE_DIR=.cache/image-release/release NEX_HOSTIMAGE_BIN=.cache/image-release/nex-hostimage

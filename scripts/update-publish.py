@@ -255,8 +255,16 @@ def trust(args):
     print(f"trust.json version {version} written to {args.base}")
 
 
+def debian_label(label):
+    """The Debian form of a tag-style label: 0.4.19-dev.7 is 0.4.19~~dev.7 and 0.4.19-rc1 is 0.4.19~rc1, both below 0.4.19."""
+    match = re.fullmatch(r"([0-9][0-9.]*)-(.+)", label)
+    if not match:
+        return label
+    return f"{match[1]}{'~~' if match[2].startswith('dev.') else '~'}{match[2]}"
+
+
 def dpkg_gt(left, right):
-    result = subprocess.run(["dpkg", "--compare-versions", left, "gt", right], capture_output=True)
+    result = subprocess.run(["dpkg", "--compare-versions", debian_label(left), "gt", debian_label(right)], capture_output=True)
     if result.returncode not in (0, 1):
         raise PublishError(f"dpkg --compare-versions could not compare {left!r} and {right!r}")
     return result.returncode == 0
