@@ -472,5 +472,32 @@ class ZfsModuleBuildTest(unittest.TestCase):
         self.assertNotIn("20300101T000000Z", text)
 
 
+class InitrdModulesTest(unittest.TestCase):
+    """image/mkosi.conf: the initrd include list must select the drivers that find the disk."""
+
+    def patterns(self):
+        text = (IMAGE / "mkosi.conf").read_text()
+        block = re.search(r"(?m)^KernelModulesInitrdInclude=\n((?:[ \t]+\S+\n)+)", text.replace("\r\n", "\n")).group(1)
+        return [line.strip() for line in block.splitlines()]
+
+    def test_every_disk_driver_matches_the_way_mkosi_matches(self):
+        # mkosi 25.3 (kmod.filter_kernel_modules) searches "|".join(patterns) in the module path below kernel/,
+        # e.g. "drivers/block/virtio_blk.ko.xz". A pattern that starts with "/" cannot match a directory there.
+        regex = re.compile("|".join(self.patterns()))
+        for module in ("drivers/block/virtio_blk.ko.xz", "drivers/virtio/virtio_pci.ko.xz", "drivers/virtio/virtio_scsi.ko.xz",
+                       "drivers/scsi/sd_mod.ko.xz", "drivers/scsi/mpt3sas/mpt3sas.ko.xz", "drivers/ata/ahci.ko.xz",
+                       "drivers/nvme/host/nvme.ko.xz", "drivers/md/raid1.ko.xz", "drivers/md/md-mod.ko.xz",
+                       "drivers/usb/host/xhci-pci.ko.xz", "drivers/usb/storage/usb-storage.ko.xz", "drivers/hv/hv_vmbus.ko.xz",
+                       "drivers/xen/xen-blkback/xen-blkback.ko.xz", "fs/erofs/erofs.ko.xz", "fs/overlayfs/overlay.ko.xz",
+                       "fs/nls/nls_cp437.ko.xz", "drivers/md/dm-verity.ko.xz"):
+            self.assertIsNotNone(regex.search(module), f"the initrd would not carry {module}")
+
+    def test_network_and_graphics_drivers_stay_out(self):
+        regex = re.compile("|".join(self.patterns()))
+        for module in ("drivers/net/ethernet/intel/i40e/i40e.ko.xz", "drivers/gpu/drm/drm.ko.xz", "sound/core/snd.ko.xz",
+                       "net/netfilter/x_tables.ko.xz"):
+            self.assertIsNone(regex.search(module), f"{module} belongs to the verity root, not the initrd")
+
+
 if __name__ == "__main__":
     unittest.main()

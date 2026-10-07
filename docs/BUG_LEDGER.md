@@ -12751,3 +12751,12 @@ of real storage or hardware certification.
 - Fix: `finish()` loads a `finish-install/reboot_in_progress` note and asks it through debconf before it restarts; without a frontend (a test run) it keeps the pause.
 - Regression: `installer/check.sh` fails unless `finish()` asks that question before `reboot` (seen failing with the reboot moved). `tests/integration/image_install_lab.py single` (QEMU/OVMF, text frontend, lab ISO from `image_iso_lab.py` with the dev.293 release): the install stopped on "Installation complete … Nex Core is installed on /dev/vda", the lab answered Continue, the host restarted and booted (erofs root, dm-verity, `/etc` overlay, API sign-in). The GTK page itself was not driven in the lab.
 - Avoid: restarting from the image installer without the completion question; reading the X error at shutdown as an install failure.
+
+## BUG-1938 — Installed image could not find its disk: the initrd carried only 14 modules
+
+- Date: 2026-10-08.
+- Symptom: the `image.yml` "Boot the installed image under QEMU" step, which took about 4.5 minutes, timed out after 32 minutes without the probe marker (run 5099); the same initrd change would leave a real host unable to find its root disk. Booting the published dev.301 image under KVM stopped in the initrd with "Timed out waiting for device /dev/disk/by-partuuid/...".
+- Root cause: commit 36ed258 replaced the explicit `/virtio_blk.ko`, `/sd_mod.ko`, ... entries of `KernelModulesInitrdInclude` with directory patterns such as `/drivers/block/`. mkosi 25.3 searches the pattern in the path below `kernel/` (`drivers/block/virtio_blk.ko.xz`), which has no leading slash, so no directory pattern matched. The built initrd's modules segment held 14 modules (erofs, dm-verity, overlay, ext4, vfat and their dependencies) and no `virtio_blk`, `sd_mod`, `ahci`, `nvme` or `raid1`. The older `/fs/nls/` entry never matched either. The commit's own lock failure kept CI from booting it.
+- Fix: the directory patterns are anchored without a leading slash (`^drivers/block/`, ...) and the comment states mkosi's rule.
+- Regression: `tests/test_image_composition.py::InitrdModulesTest` applies mkosi's matching rule (`"|".join(patterns)` searched in `drivers/block/virtio_blk.ko.xz` style paths) to the disk drivers and fails on the old patterns; verified failing before and passing after. The image boot step and a real host boot were not re-run.
+- Avoid: writing initrd include patterns from the `kernel/<path>` form the comments used to describe; verifying an initrd change only by building it.
